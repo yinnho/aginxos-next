@@ -9,8 +9,9 @@
 // IS the target).
 //
 // Builtins: bare `aginx` / `aginx help` → menu; `aginx commands
-// [--all|--json|--check]` → listing / D1 envelope / lint gate; the
-// front-desk client `aginx agent send` arrives with the server (N1⑥).
+// [--all|--json|--check]` → listing / D1 envelope / lint gate; `aginx
+// agent send|list|status|create` → front-desk client over the server's
+// UDS (the mother's conversation face, N1⑥).
 // Intercepts (before any target code runs): `--help`/`-h` anywhere in
 // argv prints route help and exits 0 — the target is never executed
 // (the Omarchy `update aur --help` class of incident); a bare call to a
@@ -18,6 +19,7 @@
 // refused with usage, exit 2; unknown commands exit 127 with
 // did-you-mean.
 
+mod agent;
 mod meta;
 mod resolve;
 
@@ -47,6 +49,7 @@ fn run() -> i32 {
         }
         "help" => cmd_help(&argv[1..]),
         "commands" => builtin_commands(&argv[1..]),
+        "agent" => agent::run(&argv[1..]),
         _ if argv.iter().any(|a| is_help_flag(a)) => {
             let words: Vec<String> = argv.iter().filter(|a| !is_help_flag(a)).cloned().collect();
             if words.is_empty() {
@@ -194,6 +197,7 @@ fn print_menu(all: bool) {
     println!("usage: aginx <command> [args…]");
     println!("       aginx <command> --help      command help (flag works anywhere)");
     println!("       aginx commands --all | --json | --check");
+    println!("       aginx agent send [<名字>] <文本…>   跟母体/化身说话（前台）");
     println!();
     let mut by_group: BTreeMap<String, Vec<&Entry>> = BTreeMap::new();
     for e in &t.entries {

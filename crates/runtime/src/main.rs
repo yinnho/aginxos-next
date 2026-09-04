@@ -92,6 +92,13 @@ async fn run(workspace: Option<PathBuf>, session: Option<String>) -> ExitCode {
     let system = avatar::system_prompt(&workspace, &avatar_name);
     let log = workspace.join("sessions").join(format!("{session}.jsonl"));
     let history = avatar::replay_session(&log);
+    // server 先记账再 spawn：本轮 request 已在账上，重放即已含本轮文本，
+    // 别再叠一份。手工管里没有 pre-log，文本照常从帧上进。
+    let user_text = if avatar::trailing_request_logged(&log, &request) {
+        String::new()
+    } else {
+        request.text.clone()
+    };
 
     let tools = match tools::discover_tools(&tools::aginx_bin_from_env()) {
         Ok(t) => t,
@@ -110,7 +117,7 @@ async fn run(workspace: Option<PathBuf>, session: Option<String>) -> ExitCode {
     }
 
     let brain = HttpBrain::new(BrainConfig::from_env());
-    match run_turn(&brain, &tools, &system, history, &request.text, &mut io, &cfg).await {
+    match run_turn(&brain, &tools, &system, history, &user_text, &mut io, &cfg).await {
         Ok(code) => ExitCode::from(code as u8),
         Err(e) => {
             eprintln!("aginx-runtime: frame io failed: {e}");

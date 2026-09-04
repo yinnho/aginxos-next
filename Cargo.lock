@@ -37,6 +37,7 @@ name = "aginx-server"
 version = "0.1.0"
 dependencies = [
  "agi",
+ "aginx-runtime",
  "agio",
  "serde",
  "serde_json",

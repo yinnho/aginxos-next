@@ -35,9 +35,25 @@ pub fn system_prompt(workspace: &Path, avatar: &str) -> String {
     )
 }
 
+/// 账本末行是否就是本轮 request。server 的记账顺序是「先记账、再 spawn」
+/// （D8：模型可见即已记录），所以重放结果已含本轮文本——调用方据此
+/// 不要再叠一份 user 消息。管里（aginx-runtime --session … 手工调试）
+/// 没有 pre-log，此时返回 false，文本照常从帧上进。
+pub fn trailing_request_logged(log_path: &Path, req: &agi::Request) -> bool {
+    let Ok(content) = std::fs::read_to_string(log_path) else { return false };
+    let Some(last) = content.lines().rev().find(|l| !l.trim().is_empty()) else {
+        return false;
+    };
+    match serde_json::from_str::<Frame>(last.trim()) {
+        Ok(Frame::Request(r)) => {
+            r.session == req.session && r.avatar == req.avatar && r.text == req.text
+        }
+        _ => false,
+    }
+}
+
 /// 会话日志 → Message 列表（冷恢复）。文件不存在 = 新会话，空列表。
-pub fn replay_session(log_path: &Path) -> Vec<Message> {
-    let mut messages = Vec::new();
+pub fn replay_session(log_path: &Path) -> Vec<Message> {    let mut messages = Vec::new();
     let mut pending_calls: Vec<MsgToolCall> = Vec::new();
     let file = match File::open(log_path) {
         Ok(f) => f,
@@ -265,6 +281,41 @@ mod tests {
         assert_eq!(m.len(), 2);
         assert_eq!(m[1].content, "改成上海");
         assert_eq!(m[1].role, Role::User);
+    }
+
+    #[test]
+    fn trailing_request_logged_matches_only_the_last_frame() {
+        let dir = std::env::temp_dir().join("aginx-runtime-test-avatar-trailing");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let p = log(
+            &dir,
+            &[
+                Frame::Request(Request { avatar: "a".into(), session: "main".into(), text: "第一问".into() }),
+                Frame::Done(Done::ok("第一答")),
+                Frame::Request(Request { avatar: "a".into(), session: "main".into(), text: "第二问".into() }),
+            ],
+        );
+        // 末行就是本轮 request：不叠份
+        assert!(trailing_request_logged(
+            &p,
+            &Request { avatar: "a".into(), session: "main".into(), text: "第二问".into() }
+        ));
+        // 末行是别的轮：照常从帧上进
+        assert!(!trailing_request_logged(
+            &p,
+            &Request { avatar: "a".into(), session: "main".into(), text: "第一问".into() }
+        ));
+        // session 不同不算（防跨会话误伤）
+        assert!(!trailing_request_logged(
+            &p,
+            &Request { avatar: "a".into(), session: "other".into(), text: "第二问".into() }
+        ));
+        // 没有账本（新会话首播）
+        assert!(!trailing_request_logged(
+            &dir.join("nope.jsonl"),
+            &Request { avatar: "a".into(), session: "main".into(), text: "x".into() }
+        ));
     }
 
     #[test]

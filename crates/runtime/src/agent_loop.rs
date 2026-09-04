@@ -62,7 +62,10 @@ pub async fn run_turn<B: BrainDriver, T: TurnTransport>(
     cfg: &TurnConfig,
 ) -> io::Result<i32> {
     let mut messages = history;
-    messages.push(Message::user(user_text));
+    // 空串 = 本轮文本已在重放历史里（server 先记账再 spawn），不叠份
+    if !user_text.is_empty() {
+        messages.push(Message::user(user_text));
+    }
     let mut state = LoopState::new(cfg.context_window);
 
     loop {
