@@ -1,0 +1,11 @@
+[package]
+name = "agio"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+description = "D1 output contract: the one JSON envelope every aginx-* CLI prints"
+
+[dependencies]
+serde_json.workspace = true

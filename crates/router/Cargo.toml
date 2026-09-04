@@ -1,0 +1,17 @@
+[package]
+name = "aginx-router"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+description = "aginx: the bare command, the mother's face — flat aginx-* universe, file-is-registry, exec dispatch"
+
+[[bin]]
+name = "aginx"
+path = "src/main.rs"
+
+[dependencies]
+agio = { path = "../agio" }
+libc = { workspace = true }
+serde_json = { workspace = true }

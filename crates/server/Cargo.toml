@@ -1,0 +1,19 @@
+[package]
+name = "aginx-server"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+description = "the mother: front-desk registration, session cursor, request routing, session ledger, fast-agi spawn"
+
+[[bin]]
+name = "aginx-server"
+path = "src/main.rs"
+
+[dependencies]
+agi = { path = "../agi" }
+agio = { path = "../agio" }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tokio = { workspace = true }

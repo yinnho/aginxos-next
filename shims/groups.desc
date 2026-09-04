@@ -1,0 +1,7 @@
+# aginx groups.desc — group key = one-line menu description (D13).
+# File-is-registry: a package introduces a new group by appending a line
+# here, no router reflash. Read by `aginx` at menu time; the
+# AGINX_GROUPS_DESC env overrides for tests and the build-time --check
+# gate.
+agent=avatar addressing and conversation (front-desk faces)
+dev=developer and trial-run faces
