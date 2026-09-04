@@ -208,7 +208,7 @@ async fn dispatch_tool_use<T: TurnTransport>(
             .map(|c| MsgToolCall {
                 id: c.id.clone(),
                 name: c.name.clone(),
-                arguments: serde_json::to_string(&c.input).unwrap_or_else(|_| "{}".into()),
+                arguments: crate::message::args_to_wire_string(&c.input),
             })
             .collect(),
     ));

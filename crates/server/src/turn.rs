@@ -46,7 +46,13 @@ pub fn run_avatar_turn(cfg: &ServerCfg, avatar: &str, text: &str) -> Done {
         .spawn()
     {
         Ok(c) => c,
-        Err(e) => return Done::err("spawn", format!("cannot spawn {}: {e}", cfg.runtime_bin)),
+        Err(e) => {
+            // request 已在账上，失败也得让轮次收口（D8：账本永远落在
+            // 合法形状上），否则下一次 send 的重放会撞见孤儿 request
+            let d = Done::err("spawn", format!("cannot spawn {}: {e}", cfg.runtime_bin));
+            let _ = crate::ledger::append(&log, &Frame::Done(d.clone()));
+            return d;
+        }
     };
     let mut stdin = child.stdin.take().expect("runtime stdin");
     let stdout = child.stdout.take().expect("runtime stdout");
@@ -333,12 +339,15 @@ mod tests {
         let done = run_avatar_turn(&cfg, "小满", "你好");
         assert!(!done.ok);
         assert_eq!(done.error.as_ref().unwrap().code, "spawn");
-        // request 已记账：模型可见即已记录，哪怕 spawn 当场失败
+        // request 已记账且轮次收口：模型可见即已记录，spawn 失败也不留孤儿
         let log = crate::ledger::session_log(&cfg.workspaces_root, "小满", "main");
-        let first = std::fs::read_to_string(&log).unwrap();
-        assert!(matches!(
-            serde_json::from_str::<Frame>(first.lines().next().unwrap()).unwrap(),
-            Frame::Request(_)
-        ));
+        let lines: Vec<Frame> = std::fs::read_to_string(&log)
+            .unwrap()
+            .lines()
+            .map(|l| serde_json::from_str(l).unwrap())
+            .collect();
+        assert_eq!(lines.len(), 2); // request + synthetic done(spawn)
+        assert!(matches!(&lines[0], Frame::Request(r) if r.text == "你好"));
+        assert!(matches!(&lines[1], Frame::Done(d) if !d.ok && d.error.as_ref().unwrap().code == "spawn"));
     }
 }

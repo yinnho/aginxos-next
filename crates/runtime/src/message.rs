@@ -80,8 +80,17 @@ pub enum StopReason {
 
 /// 把 agi 帧上的 args（数组=argv / 对象=旗标）编回 OpenAI 的
 /// arguments JSON 字符串。重放与实时路径共用。
+/// 帧上的 args → wire 上 function.arguments 的 JSON 文本。provider 要求
+/// object：数组/标量按 argv 约定包成 {"args": …}，对象原样（--key value
+/// 旗标对），null 给空对象。账本保持模型原形，只有 wire 收敛成这一种。
 pub fn args_to_wire_string(args: &Value) -> String {
-    serde_json::to_string(args).unwrap_or_else(|_| "{}".to_string())
+    let wire = match args {
+        Value::Object(_) => args.clone(),
+        Value::Array(a) => serde_json::json!({"args": a}),
+        Value::Null => serde_json::json!({}),
+        other => serde_json::json!({"args": [other]}),
+    };
+    serde_json::to_string(&wire).unwrap_or_else(|_| "{}".to_string())
 }
 
 #[cfg(test)]
@@ -110,9 +119,13 @@ mod tests {
     fn args_wire_string_roundtrip() {
         let v = serde_json::json!(["北京", "天气"]);
         let s = args_to_wire_string(&v);
-        // serde_json 紧凑形（逗号后无空格）——线上/账本统一这一种
-        assert_eq!(s, r#"["北京","天气"]"#);
+        // 数组按 argv 约定包 {"args": …}——provider 只认 object
+        assert_eq!(s, r#"{"args":["北京","天气"]}"#);
+        assert_eq!(args_to_wire_string(&serde_json::json!({"b": 1})), r#"{"b":1}"#);
+        assert_eq!(args_to_wire_string(&serde_json::Value::Null), "{}");
+        assert_eq!(args_to_wire_string(&serde_json::json!(42)), r#"{"args":[42]}"#);
+        // wire 形状自己能往返（对象无损、数组有壳）
         let back: Value = serde_json::from_str(&s).unwrap();
-        assert_eq!(back, v);
+        assert_eq!(back, serde_json::json!({"args": v}));
     }
 }

@@ -205,7 +205,7 @@ mod tests {
         assert_eq!(m.len(), 4);
         assert_eq!(m[0].role, Role::User);
         assert_eq!(m[1].tool_calls[0].name, "dev-hello");
-        assert_eq!(m[1].tool_calls[0].arguments, r#"["世界"]"#);
+        assert_eq!(m[1].tool_calls[0].arguments, r#"{"args":["世界"]}"#);
         assert_eq!(m[2].tool_call_id.as_deref(), Some("c1"));
         assert_eq!(m[2].content, "hello 世界");
         assert_eq!(m[3].content, "你好，世界");
