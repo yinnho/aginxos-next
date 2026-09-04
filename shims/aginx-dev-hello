@@ -1,0 +1,5 @@
+#!/bin/sh
+# aginx:summary=host gate smoke face — proves the registry lint sees a real command
+# aginx:args=[words…]
+# aginx:group=dev
+echo "hello from the aginx command universe: $*"
