@@ -1,0 +1,5 @@
+#!/bin/sh
+# aginx:summary=加入 Wi-Fi 网络（连上后自动 DHCP 拿地址）
+# aginx:group=net
+# aginx:args=<ssid> <psk>
+exec /bin/wifi-join wlan0 "$@"
