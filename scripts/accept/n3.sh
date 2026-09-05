@@ -2,6 +2,10 @@
 # n3 acceptance — aginx-server 并存包上机（N3：新心脏以 agpkg 包形态住进
 # 现役镜像，与老 carrier 线同机共存，真设备日常验证）。
 #
+# RETIRED at N4: the coexistence package died with the switch (its builder
+# and pkg/ tree are gone). Kept as the N3 receipt's method record — do not
+# run; the N4 line's gate is scripts/accept/n4.sh.
+#
 # 包 = 四件套 files/ 树形态（build-n3-package.sh 产物）：aginx-server /
 # aginx / aginx-runtime / voiced + tools/ 四个薄壳。安装面
 # /var/bin/aginx-server → 包树；单元 /var/lib/agpkg/units/aginx-server.toml

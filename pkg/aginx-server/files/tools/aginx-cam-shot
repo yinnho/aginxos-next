@@ -1,6 +1,0 @@
-#!/bin/sh
-# aginx:summary=后摄拍照出 JPEG（参数原样传给底层相机）
-# aginx:group=cam
-# aginx:args=[flags…]
-# aginx:examples=--stream --rear --frames 3 --jpeg-gray --jpeg-out /tmp/shot.jpg
-exec /bin/cam-shot "$@"

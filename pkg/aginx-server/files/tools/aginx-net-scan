@@ -1,4 +1,0 @@
-#!/bin/sh
-# aginx:summary=扫描周围 Wi-Fi（SSID 按信号强弱排列）
-# aginx:group=net
-exec /bin/nlscan wlan0
