@@ -118,18 +118,19 @@ mkdir -p "${TREE}"
 
 # Mountpoints (and /var/log — the only place boot evidence survives; the
 # kernel has no pstore, so /var/adbd.log is our cross-boot record).
-# /var/power + /var/lib/agpkg/{skills,units,stamps} + /var/lib/ag/done:
-# state-tar members that only existed on the running fs before bake #9 —
-# busybox tar exits 1 on a missing member, which the hardened aginx-update
-# rightly treats as fatal (observed 2026-09-03). /var/lib/ag/done is the
-# aginx-done marker home (M27); provision seeds it at runtime too.
+# /var/power + the seven /var/lib/aginx members (N5③: skills, units,
+# stamps, pkgfiles, done, secret, voice — the single state home; the old
+# agpkg/ag/voiced roots fold in via /etc/init.d/varlib-migrate): state-tar
+# members that must exist on a fresh image — busybox tar exits 1 on a
+# missing member, which the hardened aginx-update rightly treats as fatal
+# (observed 2026-09-03, bake #9). provision seeds them at runtime too;
+# varlib-migrate mkdir's on every boot as the belt to this pair of braces.
 # /var/tmp — NOT tmpfs (only /tmp is), yet nothing created it: bake #10's
 # fresh image shipped without it, provision's `>$LOG` redirect failed and
 # resync reported pkg-fail-with-no-log (observed 2026-09-03). aginx-update
 # also stage-builds its state tar there (M22 note).
 mkdir -p "${TREE}"/{dev,proc,sys,etc,home,media,mnt,opt,root,run,srv,tmp,var/log,var/power,var/tmp}
-mkdir -p "${TREE}"/var/lib/agpkg/{skills,units,stamps}
-mkdir -p "${TREE}"/var/lib/ag/done
+mkdir -p "${TREE}"/var/lib/aginx/{skills,units,stamps,pkgfiles,done,secret,voice}
 
 # Android pieces: /system (adbd + linker config + lib64) and the root-level
 # property/SELinux files adbd reads at startup.

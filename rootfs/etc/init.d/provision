@@ -2,7 +2,7 @@
 # Provision (v2, M27 agpkg→N4 aginx-pkg; docs: SYSTEM.md §9 line): three
 # explicit layers, all idempotent, none of which ever blocks the boot.
 #
-#   seed      — scaffold the state tree /var/lib/ag + aginx-pkg dirs. Pure
+#   seed      — scaffold the state tree /var/lib/aginx (N5③). Pure
 #               mkdir, no markers: a wiped or partial tree just gets
 #               re-created next boot. (The baked image scaffolds these
 #               too — M26 made them state-tar members, and busybox tar
@@ -20,7 +20,7 @@
 #               boots (observed 2026-09-03 on the old line: 5 restarts
 #               -> failed, manual revive).
 #   finalize  — one-shot steps, gated by `aginx-done` markers in
-#               /var/lib/ag/done: run only while unmarked, mark only on
+#               /var/lib/aginx/done: run only while unmarked, mark only on
 #               success, so a failed step retries next boot and a wiped
 #               marker (state-tar loss) means a clean re-run. First
 #               real tenant is M28 (python + pip). Structure here now.
@@ -33,7 +33,7 @@ STATE=/run/boot.state
 say() { echo "$@" >>"$STATE"; }
 
 # ---- seed -----------------------------------------------------------------
-mkdir -p /var/lib/ag/done /var/lib/agpkg/skills /var/lib/agpkg/units /var/lib/agpkg/stamps
+mkdir -p /var/lib/aginx/done /var/lib/aginx/skills /var/lib/aginx/units /var/lib/aginx/stamps
 
 [ -f /etc/agpkg.manifest ] || exit 0
 grep -qE '^[a-z]' /etc/agpkg.manifest || exit 0   # all entries commented
@@ -80,8 +80,8 @@ done
 # ---- finalize (one-shot steps, aginx-done-gated) -------------------------
 # System-level guarantee line (ARCH §13): the phone promises python3,
 # not node. Re-seeded every boot — idempotent overwrite, no marker.
-mkdir -p /var/lib/agpkg/skills/_system
-cat >/var/lib/agpkg/skills/_system/SKILL.md <<'SYSEOF'
+mkdir -p /var/lib/aginx/skills/_system
+cat >/var/lib/aginx/skills/_system/SKILL.md <<'SYSEOF'
 # _system — 系统级保证（provision seed，每靴覆写）
 
 - **python3 保证在**：core tier 四件套（musl CPython 3.12），sync 自愈；
@@ -101,7 +101,7 @@ SYSEOF
 # (bake #9 receipt, 2026-09-03). Trust the artifact, not the mark.
 if ! aginx-done check python-finalize || [ ! -e /lib/ld-musl-aarch64.so.1 ]; then
   if [ -x /var/bin/python3 ]; then
-    LOADER=/var/lib/agpkg/pkgfiles/python3/lib/ld-musl-aarch64.so.1
+    LOADER=/var/lib/aginx/pkgfiles/python3/lib/ld-musl-aarch64.so.1
     if [ -f "$LOADER" ] \
        && ln -sf "$LOADER" /lib/ld-musl-aarch64.so.1 \
        && /var/bin/python3 -c 'import sys,ssl,sqlite3,socket,json; print(sys.version)' >>/var/tmp/python-finalize.log 2>&1 \

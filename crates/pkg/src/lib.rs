@@ -19,13 +19,13 @@
 //! * **四件套 bundle** — when the artifact is a tar (ustar magic at
 //!   offset 257), it must carry `bin/<name>` + `pkg.toml` + `SKILL.md`.
 //!   Missing SKILL.md = install fails: a package without its skill doc
-//!   does not install. SKILL.md lands in /var/lib/agpkg/skills/<name>/,
+//!   does not install. SKILL.md lands in /var/lib/aginx/skills/<name>/,
 //!   a `[service]` table in pkg.toml is written verbatim as an aginx-svc
-//!   overlay unit (/var/lib/agpkg/units/<name>.toml — the channel aginx-svc
+//!   overlay unit (/var/lib/aginx/units/<name>.toml — the channel aginx-svc
 //!   already scans) followed by `aginx-svc reload`. Extra files ride under
 //!   skills/<name>/; a second entry under bin/ is rejected — one
 //!   package, one binary.
-//! * **Stamps** — /var/lib/agpkg/stamps/<name> records the sha256 that
+//! * **Stamps** — /var/lib/aginx/stamps/<name> records the sha256 that
 //!   was installed, so `sync` sees tar-based packages as up-to-date
 //!   (their manifest sha256 pins the tar, not the extracted binary).
 //!   Pre-M26 bare-binary installs are healed by comparing the binary's
@@ -67,10 +67,10 @@ impl Paths {
         Paths {
             bindir: envp("AGINX_PKG_BINDIR", "/var/bin"),
             appdir: envp("AGINX_PKG_APPDIR", "/var/apps"),
-            skills: envp("AGINX_PKG_SKILLS", "/var/lib/agpkg/skills"),
-            units: envp("AGINX_PKG_UNITS", "/var/lib/agpkg/units"),
-            stamps: envp("AGINX_PKG_STAMPS", "/var/lib/agpkg/stamps"),
-            pkgfiles: envp("AGINX_PKG_PKGFILES", "/var/lib/agpkg/pkgfiles"),
+            skills: envp("AGINX_PKG_SKILLS", "/var/lib/aginx/skills"),
+            units: envp("AGINX_PKG_UNITS", "/var/lib/aginx/units"),
+            stamps: envp("AGINX_PKG_STAMPS", "/var/lib/aginx/stamps"),
+            pkgfiles: envp("AGINX_PKG_PKGFILES", "/var/lib/aginx/pkgfiles"),
             dldir: envp("AGINX_PKG_DL", "/var/tmp/agpkg"),
             manifest: envp("AGINX_PKG_MANIFEST", "/etc/agpkg.manifest"),
             downloader: envp("AGINX_PKG_AGDL", "/usr/bin/aginx-download"),
@@ -578,7 +578,7 @@ fn relative_path(link: &Path, to: &Path) -> Option<PathBuf> {
 }
 
 /// Write the aginx-svc overlay unit: [unit] name + the package's [service]
-/// table verbatim (aginx-svcd scans /var/lib/agpkg/units — M16's overlay
+/// table verbatim (aginx-svcd scans /var/lib/aginx/units — M16's overlay
 /// channel, finally written by its intended author).
 fn write_unit(p: &Paths, name: &str, svc: &toml::map::Map<String, toml::Value>) -> Result<(), Fail> {
     let mut doc = toml::map::Map::new();

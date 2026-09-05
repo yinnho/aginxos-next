@@ -1,0 +1,82 @@
+#!/bin/sh
+# varlib-migrate (N5③) — fold the first-gen /var/lib roots into the
+# single state home /var/lib/aginx. rcS runs this right after
+# state-restore (which puts the state tar back — a tar built by the OLD
+# updater still carries the OLD names) and before the chown pass and
+# any service start, so aginx-svcd/aginx-pkg/aginx-voice only ever see
+# the new tree.
+#
+# Union semantics, nothing is ever deleted:
+#   old content moves into the new root; on a same-name collision the
+#   NEW file keeps its ground and the old one is parked under
+#   /var/lib/aginx/.pre-n5/<sub>/<name> for inspection.
+# Idempotent: missing old roots are a no-op, and the seven new members
+# are mkdir'd on every boot (also satisfies the state-tar member
+# contract for the NEXT swap — busybox tar dies on a missing member,
+# bake #9 receipt).
+#
+# Map (device truth, N4 image):
+#   /var/lib/agpkg/{skills,units,stamps,pkgfiles} -> aginx/{...}
+#   /var/lib/ag/done                               -> aginx/done
+#   /var/lib/ag/secret                             -> aginx/secret
+#   /var/lib/voiced/vol (single file)              -> aginx/voice/vol
+#
+# VARLIB_ROOT exists for the host sandbox test only; on device it is
+# unset and everything lives under the real /var/lib.
+set -eu
+
+VL="${VARLIB_ROOT:-/var/lib}"
+NEW="${VL}/aginx"
+LOG="${VL}/../varlib-migrate.log"
+
+log() { echo "$(date +%s) $*" >> "${LOG}"; }
+
+mkdir -p "${NEW}"/skills "${NEW}"/units "${NEW}"/stamps \
+         "${NEW}"/pkgfiles "${NEW}"/done "${NEW}"/secret "${NEW}"/voice \
+  || { echo "varlib-migrate: cannot mkdir ${NEW}" >&2; exit 1; }
+
+# migrate_dir <old-dir> <new-sub>: union-move every entry (dotfiles
+# included). A colliding old entry is parked; a clean one moves in.
+migrate_dir() {
+  _old="${VL}/$1"; _sub="$2"
+  [ -d "${_old}" ] || return 0
+  for _entry in "${_old}"/* "${_old}"/.[!.]*; do
+    [ -e "${_entry}" ] || continue
+    _name="${_entry##*/}"
+    if [ -e "${NEW}/${_sub}/${_name}" ]; then
+      mkdir -p "${NEW}/.pre-n5/${_sub}"
+      mv "${_entry}" "${NEW}/.pre-n5/${_sub}/${_name}"
+      log "parked ${_entry} -> .pre-n5/${_sub}/${_name}"
+    else
+      mv "${_entry}" "${NEW}/${_sub}/${_name}"
+      log "moved ${_entry} -> ${_sub}/${_name}"
+    fi
+  done
+  rmdir "${_old}" 2>/dev/null || log "kept ${_old} (not empty)"
+}
+
+migrate_dir agpkg/skills  skills
+migrate_dir agpkg/units   units
+migrate_dir agpkg/stamps  stamps
+migrate_dir agpkg/pkgfiles pkgfiles
+rmdir "${VL}/agpkg" 2>/dev/null || log "kept ${VL}/agpkg (not empty)"
+
+migrate_dir ag/done    done
+migrate_dir ag/secret  secret
+rmdir "${VL}/ag" 2>/dev/null || log "kept ${VL}/ag (not empty)"
+
+# Single-file special case: the volume knob.
+if [ -f "${VL}/voiced/vol" ]; then
+  if [ -e "${NEW}/voice/vol" ]; then
+    mkdir -p "${NEW}/.pre-n5/voice"
+    mv "${VL}/voiced/vol" "${NEW}/.pre-n5/voice/vol"
+    log "parked voiced/vol"
+  else
+    mv "${VL}/voiced/vol" "${NEW}/voice/vol"
+    log "moved voiced/vol -> voice/vol"
+  fi
+fi
+rmdir "${VL}/voiced" 2>/dev/null || log "kept ${VL}/voiced (not empty)"
+
+log "done"
+echo "varlib-migrate: done (log: ${LOG})"
