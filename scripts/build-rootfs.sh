@@ -35,9 +35,10 @@ test -x "${MKE2FS}" || { echo "mke2fs not found (android-platform-tools provides
 
 # First-gen musl binaries, renamed at install (D13). These are unmodified
 # old-repo build products — the crates themselves stay frozen in the old
-# repo (voiced/wifi-wizard/aterm/agsvc/agpkg were absorbed and 改姓 in the
-# new repo instead; these six had no in-repo consumer to recompile).
-for b in agdl agupd agqr agdone agsecretd agsecret aginxos-init aginxos-agent; do
+# repo (voiced/wifi-wizard/aterm/agsvc/agpkg + N5①'s agdl/agupd were
+# absorbed and 改姓 in the new repo instead; what remains here had no
+# in-repo consumer to recompile).
+for b in agqr agdone agsecretd agsecret aginxos-init aginxos-agent; do
   test -x "${OTARGET}/${b}" \
     || { echo "missing old ${b} — old repo ./scripts/build-phone.sh musl first" >&2; exit 1; }
 done
@@ -68,7 +69,8 @@ test -s "${OCR}/models/det.onnx" && test -s "${OCR}/models/rec.onnx" \
 echo "==> zigbuild 新仓 musl 件（缓存则秒过）"
 (cd "${ROOT}" && cargo zigbuild --release --target aarch64-unknown-linux-musl \
   -p aginx-router -p aginx-server -p aginx-runtime -p aginx-voice \
-  -p aginx-net-wizard -p aginx-term -p aginx-pkg -p aginx-svc)
+  -p aginx-net-wizard -p aginx-term -p aginx-pkg -p aginx-svc \
+  -p aginx-download -p aginx-update)
 
 # Package manifest rides SIGNED: the on-device default path requires a
 # detached sig or every `aginx-pkg sync` refuses (fail-closed). Content-
@@ -314,9 +316,10 @@ install -m 755 "${TARGET}/aginx-voice" "${TARGET}/aginx-net-wizard" \
   "${TARGET}/aginx-term" "${TARGET}/aginx-pkg" "${TREE}/usr/bin/"
 install -m 755 "${TARGET}/aginx-svc" "${TARGET}/aginx-boot-ok" "${TREE}/usr/bin/"
 install -m 755 "${TARGET}/aginx-svcd" "${TREE}/usr/libexec/aginx/"
+# N5① 吸收件：updater/download 改由本仓重编（修了三死路径的活版本），
+# 落位与老资产同名同位（sidecar 已在 usr/bin）。
+install -m 755 "${TARGET}/aginx-download" "${TARGET}/aginx-update" "${TREE}/usr/bin/"
 # First-gen binaries, D13 改姓落位（install 即改名；sidecar 已在 usr/bin）.
-install -m 755 "${OTARGET}/agdl"  "${TREE}/usr/bin/aginx-download"
-install -m 755 "${OTARGET}/agupd" "${TREE}/usr/bin/aginx-update"
 install -m 755 "${OTARGET}/agqr"  "${TREE}/usr/bin/aginx-qr"
 install -m 755 "${OTARGET}/agdone" "${TREE}/usr/bin/aginx-done"
 install -m 755 "${OTARGET}/agsecret" "${TREE}/usr/bin/aginx-secret"

@@ -5,6 +5,8 @@ members = [
     "crates/agio",
     "crates/agqr",
     "crates/sign",
+    "crates/download",
+    "crates/update",
     "crates/router",
     "crates/runtime",
     "crates/server",
