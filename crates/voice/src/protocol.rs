@@ -228,9 +228,11 @@ impl Vm {
                 outs.push(Out::Show);
             }
             Ev::QrDone(r) => {
-                // 第一个可解析的 WIFI: 码直入 confirm。QR 是可信输入（码是
-                // 别人机器生成的，不是耳朵听来的）——不回读 PSK 全文，只报
-                // 位数；全文在屏上（psk() 本来就展示）。
+                // 第一个可解析的 WIFI: 码**直接连**（M42g：扫码即指令）。
+                // 码是别人机器生成的可信输入，不是耳朵听来的；取景器开着
+                // 就是机器在等这个格式（拉式）——到手直接用，不问「连接吗」。
+                // 回读确认只留给噪声通道：语音序数+拼读（WifiConfirm 仍由
+                // 拼读「完了」进入）。QR 的 psk 不上屏不回读。
                 let wifi = match &r {
                     Ok(payloads) => payloads
                         .iter()
@@ -239,20 +241,22 @@ impl Vm {
                 };
                 match wifi {
                     Some(w) => {
+                        self.st = St::Idle;
+                        self.sel = 0;
                         let ask = if w.psk.is_empty() {
-                            format!("扫到网络{}，开放网络，连接吗？", w.ssid)
+                            format!("扫到网络{}，开放网络，连接。", w.ssid)
                         } else {
                             format!(
-                                "扫到网络{}，密码{}位，连接吗？",
+                                "扫到网络{}，密码{}位，连接。",
                                 w.ssid,
                                 w.psk.chars().count()
                             )
                         };
-                        self.st = St::WifiConfirm {
+                        self.say(&mut outs, &ask);
+                        outs.push(Out::Act(Act::Join {
                             ssid: w.ssid,
                             psk: w.psk,
-                        };
-                        self.say(&mut outs, &ask);
+                        }));
                     }
                     None => {
                         self.st = St::Idle;
@@ -1102,38 +1106,35 @@ mod tests {
     }
 
     #[test]
-    fn qr_wifi_flow_to_join() {
+    fn qr_wifi_flow_auto_joins() {
+        // M42g：扫码即指令——WIFI: 码不再过确认，直接 Act::Join
         let mut vm = Vm::new();
         // 多码：跳过非 WIFI 码取第一个 WIFI
         let o = vm.step(Ev::QrDone(Ok(vec![
             "https://aginx.net".into(),
             "WIFI:T:WPA;S:home-ap;P:secret8;;".into(),
         ])));
-        assert_eq!(says(&o), vec!["扫到网络home-ap，密码7位，连接吗？"]);
-        assert_eq!(vm.state_name(), "confirm");
-        assert_eq!(vm.psk(), "secret8"); // 屏显全文（语音只报位数）
-        let o = heard(&mut vm, "对");
+        assert_eq!(says(&o), vec!["扫到网络home-ap，密码7位，连接。"]);
+        assert_eq!(vm.state_name(), "idle"); // 不进 confirm，直接执行
         assert!(o.contains(&Out::Act(Act::Join {
             ssid: "home-ap".into(),
             psk: "secret8".into()
         })));
+        assert_eq!(vm.psk(), ""); // QR 的 psk 不上屏
         let o = vm.step(Ev::JoinDone(Ok("10.0.0.5".into())));
         assert_eq!(says(&o), vec!["连上了，地址10.0.0.5。"]);
         assert_eq!(vm.state_name(), "idle");
     }
 
     #[test]
-    fn qr_open_net_and_deny_to_spell() {
+    fn qr_open_net_auto_joins_empty_psk() {
         let mut vm = Vm::new();
         let o = vm.step(Ev::QrDone(Ok(vec!["WIFI:S:opennet;;".into()])));
-        assert_eq!(says(&o), vec!["扫到网络opennet，开放网络，连接吗？"]);
-        // deny 后 QR 给的 ssid 还在：退到口头拼密码（WPA 网络里开放码可能是
-        // 码旧了/家里加过密码）
-        let o = heard(&mut vm, "不对");
-        assert_eq!(says(&o), vec!["重新说密码。"]);
-        assert_eq!(vm.state_name(), "pwd");
-        heard(&mut vm, "大写X数字9");
-        assert_eq!(vm.psk(), "X9");
+        assert_eq!(says(&o), vec!["扫到网络opennet，开放网络，连接。"]);
+        assert!(o.contains(&Out::Act(Act::Join {
+            ssid: "opennet".into(),
+            psk: "".into()
+        })));
     }
 
     #[test]
@@ -1151,16 +1152,6 @@ mod tests {
         assert_eq!(says(&o), vec!["没拍到二维码，正对着它再说扫码。"]);
         let o = vm.step(Ev::QrDone(Err("cam-shot rc=1".into())));
         assert_eq!(says(&o), vec!["没拍到二维码，正对着它再说扫码。"]);
-        assert_eq!(vm.state_name(), "idle");
-    }
-
-    #[test]
-    fn qr_cancel_during_confirm() {
-        // confirm 是既有面：扫码进 confirm 后取消照常退 idle
-        let mut vm = Vm::new();
-        vm.step(Ev::QrDone(Ok(vec!["WIFI:S:x;P:y;;".into()])));
-        let o = heard(&mut vm, "算了");
-        assert_eq!(says(&o), vec!["已取消。"]);
         assert_eq!(vm.state_name(), "idle");
     }
 
