@@ -139,6 +139,80 @@ pub fn decode_jpeg(jpeg: &[u8]) -> Result<Vec<String>, String> {
     }
 }
 
+// ---------------- AGINXPAIR1 载荷（M42f 一眼配对）----------------
+
+/// 配对码内容：一张码 = 全部身份（M42f，用户拍板 2026-09-05）。
+/// WiFi 进网 + brain 钥匙 + 网关身份 + relay 密，一眼自举。
+#[derive(Debug, Clone, PartialEq)]
+pub struct PairBundle {
+    pub ssid: String,
+    pub psk: String,
+    pub brain_key: String,
+    pub gateway_id: String,
+    pub relay_secret: String,
+}
+
+/// 配对码前缀。AGINXPAIR1 显式带版本位：将来字段增减换 AGINXPAIR2，
+/// 旧解纹丝不动。
+pub const PAIR_PREFIX: &str = "AGINXPAIR1";
+
+impl PairBundle {
+    /// 铸码侧构造（aginx-pair 用）：字段必须全非空、纯 ASCII、不含 `|`
+    /// 与换行——`|` 是分隔符不转义，字段里出现它直接拒收（密钥/SSID 里
+    /// 不会有；有就不铸）。
+    pub fn try_new(
+        ssid: &str,
+        psk: &str,
+        brain_key: &str,
+        gateway_id: &str,
+        relay_secret: &str,
+    ) -> Option<PairBundle> {
+        let fields = [ssid, psk, brain_key, gateway_id, relay_secret];
+        if fields.iter().any(|f| {
+            f.is_empty() || !f.is_ascii() || f.contains('|') || f.contains('\n') || f.contains('\r')
+        }) {
+            return None;
+        }
+        Some(PairBundle {
+            ssid: ssid.to_string(),
+            psk: psk.to_string(),
+            brain_key: brain_key.to_string(),
+            gateway_id: gateway_id.to_string(),
+            relay_secret: relay_secret.to_string(),
+        })
+    }
+
+    /// 序列化为配对码 payload。try_new 已保证合法性，这里断言兜底。
+    pub fn payload(&self) -> String {
+        format!(
+            "{PAIR_PREFIX}|{}|{}|{}|{}|{}",
+            self.ssid, self.psk, self.brain_key, self.gateway_id, self.relay_secret
+        )
+    }
+}
+
+/// 解析 `AGINXPAIR1|<ssid>|<psk>|<brain_key>|<gateway_id>|<relay_secret>`：
+/// 恰五段、全非空、纯 ASCII（SSID 世界有中文，但 join 链 nlscan/wifi-join/
+/// 词表都是 ASCII 世界——wizard 对非 ASCII SSID 标不可连，配对码同样拒）。
+/// 空段=无效：半套身份灌下去比没有更糟。与 `WIFI:` 一样大小写敏感。
+pub fn parse_pair_payload(p: &str) -> Option<PairBundle> {
+    let rest = p.strip_prefix(PAIR_PREFIX)?.strip_prefix('|')?;
+    if !p.is_ascii() || p.contains(['\n', '\r', '\t']) {
+        return None;
+    }
+    let parts: Vec<&str> = rest.split('|').collect();
+    if parts.len() != 5 || parts.iter().any(|f| f.is_empty()) {
+        return None;
+    }
+    Some(PairBundle {
+        ssid: parts[0].to_string(),
+        psk: parts[1].to_string(),
+        brain_key: parts[2].to_string(),
+        gateway_id: parts[3].to_string(),
+        relay_secret: parts[4].to_string(),
+    })
+}
+
 // ---------------- WIFI: 载荷（ZXing Wi-Fi network config 格式）----------------
 
 /// WiFi QR 解析结果。`auth`: "WPA" | "WEP" | "nopass"。
@@ -303,6 +377,55 @@ mod tests {
         assert!(parse_wifi_payload("WIFI:P:only;;").is_none()); // 无 SSID
         assert!(parse_wifi_payload("WIFI:S:;P:x;;").is_none()); // SSID 空
         assert!(parse_wifi_payload("wifi:T:WPA;S:a;P:b;;").is_none()); // 前缀大小写
+    }
+
+    /// M42f 配对码 golden：真形状的 payload（56 位 brain 钥匙 + 64 位
+    /// relay 密，~170B → QR v9-v10）解析逐字段对上。
+    #[test]
+    fn pair_parse_golden() {
+        let p = parse_pair_payload(
+            "AGINXPAIR1|Legrand AP|p4ss w0rd!|sk-1234567890abcdef1234567890abcdef|cf49973e|\
+             0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+        )
+        .unwrap();
+        assert_eq!(p.ssid, "Legrand AP");
+        assert_eq!(p.psk, "p4ss w0rd!");
+        assert_eq!(p.brain_key, "sk-1234567890abcdef1234567890abcdef");
+        assert_eq!(p.gateway_id, "cf49973e");
+        assert_eq!(
+            p.relay_secret,
+            "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+        );
+    }
+
+    #[test]
+    fn pair_parse_rejects() {
+        use parse_pair_payload as parse;
+        assert!(parse("WIFI:T:WPA;S:a;P:b;;").is_none()); // 不是配对码
+        assert!(parse("aginxpair1|a|b|c|d|e").is_none()); // 前缀大小写
+        assert!(parse("AGINXPAIR1|a|b|c|d").is_none()); // 四段
+        assert!(parse("AGINXPAIR1|a|b|c|d|e|f").is_none()); // 六段
+        assert!(parse("AGINXPAIR1|a||c|d|e").is_none()); // 空段=半套身份
+        assert!(parse("AGINXPAIR1|a|b|c|d|e\n").is_none()); // 换行
+        assert!(parse("AGINXPAIR1|局域网|b|c|d|e").is_none()); // 非 ASCII
+    }
+
+    #[test]
+    fn pair_roundtrip_and_try_new() {
+        let b = PairBundle::try_new(
+            "Legrand AP",
+            "p4ss",
+            "sk-abc123",
+            "cf49973e",
+            "0123456789abcdef",
+        )
+        .unwrap();
+        assert_eq!(parse_pair_payload(&b.payload()).unwrap(), b);
+        // try_new 拒收面：空段 / 含 | / 非 ASCII / 换行
+        assert!(PairBundle::try_new("", "p", "b", "g", "r").is_none());
+        assert!(PairBundle::try_new("a|b", "p", "b", "g", "r").is_none());
+        assert!(PairBundle::try_new("网", "p", "b", "g", "r").is_none());
+        assert!(PairBundle::try_new("a\nb", "p", "b", "g", "r").is_none());
     }
 
     #[test]
