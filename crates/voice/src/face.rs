@@ -18,7 +18,7 @@ pub const EYE_JPG: &str = "/run/aginx-voice/eye.jpg";
 
 #[derive(Serialize)]
 pub struct FaceDoc<'a> {
-    /// idle | list | pwd | confirm
+    /// 协议状态名（无驻留态状态机恒 "idle"；留作未来 Choice 等状态的缝）
     pub state: &'a str,
     /// PTT 按住采集中
     pub listening: bool,
@@ -28,16 +28,10 @@ pub struct FaceDoc<'a> {
     pub eye: bool,
     /// 对话行：true=用户说的，false=化身说的
     pub lines: Vec<(bool, String)>,
-    /// 列表态的 SSID 列表
-    pub list: &'a [String],
-    /// 已选序号（1-based，0 未选）
-    pub sel: usize,
-    /// 半成品密码（屏显原样——回读确认需要看得见）
-    pub psk: &'a str,
     pub hint: &'a str,
 }
 
-const HINT: &str = "按住音量下键说：连接无线网络";
+const HINT: &str = "按住音量下说话 · 音量+对码";
 
 pub fn write(vm: &Vm, listening: bool, busy: bool, eye: bool) {
     let _ = fs::create_dir_all(FACE_DIR);
@@ -47,9 +41,6 @@ pub fn write(vm: &Vm, listening: bool, busy: bool, eye: bool) {
         busy,
         eye,
         lines: vm.lines().to_vec(),
-        list: vm.list(),
-        sel: vm.sel(),
-        psk: vm.psk(),
         hint: HINT,
     };
     let tmp = format!("{FACE_FILE}.tmp");

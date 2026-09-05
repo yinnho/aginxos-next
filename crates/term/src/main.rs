@@ -446,12 +446,6 @@ struct FaceDoc {
     #[serde(default)]
     lines: Vec<(bool, String)>,
     #[serde(default)]
-    list: Vec<String>,
-    #[serde(default)]
-    sel: usize,
-    #[serde(default)]
-    psk: String,
-    #[serde(default)]
     hint: String,
 }
 
@@ -553,7 +547,7 @@ impl VoiceView {
     }
 
     /// M47⑤f: the raw-frame fast path — read eye.raw into the reused
-    /// buffer, then 565→888 expand fused with the nearest-neighbor upscale
+    /// buffer, then 565→888 expand fused with the bilinear upscale
     /// straight into `pix` (the DRM back buffer; every dst pixel written,
     /// so no BG clear needed). Returns false when there is no fresh frame
     /// (or a bad one — the next mtime change retries); the caller then
@@ -610,46 +604,170 @@ fn lut565() -> &'static [u32; 65536] {
     })
 }
 
-/// Fused 565→888 expand + nearest-neighbor upscale, the whole display
-/// present in one pass over the destination. Same pixel math as the old
-/// two-step (read_raw_frame's bit replication × voice()'s i*sw/dw map) —
-/// pulled out free so a host unit test can pin it.
+/// Fused 565→888 expand + bilinear upscale (⑤l: nearest left the live view
+/// as a 720-pixel-wide mosaic on the 1080-wide panel — the user saw
+/// 「像素超级低」). All resampling happens AFTER the LUT expand: lerping 565
+/// codes directly would blend code space (5/6-bit bands), not color.
+/// Source-center phase ((i+0.5)·scale − 0.5, Q8 weights); edges replicate
+/// (x1 clamps to the last source column/row). The Q8·Q8 corner products are
+/// Q16 — each shifts to Q6 so the four-term per-channel sum (≤64·255) stays
+/// inside a u16 lane; channels ride split u32 lanes ((b | r<<16) and g) so
+/// packed-RGB math never crosses a byte. The 4-px NEON store discipline is
+/// kept: the back buffer is write-combined scanout memory, store width is
+/// the present budget (M47⑤f device probe 2026-09-05).
 fn upscale565(pix: &mut [u32], pitch: usize, dw: usize, dh: usize, src: &[u8], sw: usize, sh: usize) {
     let lut = lut565();
-    // source column per dst column — ascending, computed once
-    let mut sx = vec![0usize; dw];
-    for (i, s) in sx.iter_mut().enumerate() {
-        *s = i * sw / dw;
+    // per-dst-column taps: x0/x1 source columns and the Q8 weight on x1
+    let mut x0 = vec![0usize; dw];
+    let mut x1 = vec![0usize; dw];
+    let mut wx = vec![0u32; dw];
+    for i in 0..dw {
+        let fx = (i as f64 + 0.5) * sw as f64 / dw as f64 - 0.5;
+        if fx <= 0.0 {
+            continue;
+        }
+        let f = fx.floor();
+        let c = (f as usize).min(sw - 1);
+        x0[i] = c;
+        x1[i] = (c + 1).min(sw - 1);
+        wx[i] = (((fx - f) * 256.0) as u32).min(256);
     }
     for j in 0..dh {
-        let row = (j * sh / dh) * sw;
+        let fy = (j as f64 + 0.5) * sh as f64 / dh as f64 - 0.5;
+        let (y0, y1, wy) = if fy <= 0.0 {
+            (0usize, 0usize, 0u32)
+        } else {
+            let f = fy.floor();
+            let r = (f as usize).min(sh - 1);
+            (r, (r + 1).min(sh - 1), (((fy - f) * 256.0) as u32).min(256))
+        };
+        let r0 = 12 + y0 * sw * 2;
+        let r1 = 12 + y1 * sw * 2;
         let dst = j * pitch;
         let mut i = 0;
-        // 4 px per iteration, stored with one 128-bit NEON store: the back
-        // buffer is write-combined scanout memory — the per-STORE width is
-        // what the bus sees, and 2.5 M scalar 32-bit stores were the whole
-        // present budget (M47⑤f device probe 2026-09-05).
-        while i + 4 <= dw {
-            let mut quad = [0u32; 4];
-            for (k, q) in quad.iter_mut().enumerate() {
-                let o = 12 + (row + sx[i + k]) * 2;
-                *q = lut[u16::from_le_bytes([src[o], src[o + 1]]) as usize];
+        #[cfg(target_arch = "aarch64")]
+        // every aarch64 intrinsic is #[target_feature] = unsafe to call;
+        // the whole quad loop (closures included, edition 2021) rides one
+        // unsafe context
+        unsafe {
+            use core::arch::aarch64::{
+                uint32x4_t, vaddq_u32, vandq_u32, vdupq_n_u32, vld1q_u32,
+                vmulq_u32, vorrq_u32, vshlq_n_u32, vshrq_n_u32, vst1q_u32,
+            };
+            let mask_rb = vdupq_n_u32(0x00FF_00FF);
+            let mask_g = vdupq_n_u32(0x00FF_0000);
+            let bias = vdupq_n_u32(0x0020_0020);
+            // 4 px per iteration, stored with one 128-bit NEON store.
+            while i + 4 <= dw {
+                let mut q00 = [0u32; 4];
+                let mut q01 = [0u32; 4];
+                let mut q10 = [0u32; 4];
+                let mut q11 = [0u32; 4];
+                let mut wa = [0u32; 4];
+                let mut wb = [0u32; 4];
+                let mut wc = [0u32; 4];
+                let mut wd = [0u32; 4];
+                for k in 0..4 {
+                    let c = i + k;
+                    let t0 = x0[c] * 2;
+                    let t1 = x1[c] * 2;
+                    let s = |o: usize| {
+                        lut[u16::from_le_bytes([src[o], src[o + 1]]) as usize]
+                    };
+                    q00[k] = s(r0 + t0);
+                    q01[k] = s(r0 + t1);
+                    q10[k] = s(r1 + t0);
+                    q11[k] = s(r1 + t1);
+                    let w = wx[c];
+                    let iw = 256 - w;
+                    // Q6 corner weights, sum exactly 64
+                    wa[k] = (iw * (256 - wy)) >> 10;
+                    wb[k] = (w * (256 - wy)) >> 10;
+                    wc[k] = (iw * wy) >> 10;
+                    wd[k] = (w * wy) >> 10;
+                }
+                let v00 = vld1q_u32(q00.as_ptr());
+                let v01 = vld1q_u32(q01.as_ptr());
+                let v10 = vld1q_u32(q10.as_ptr());
+                let v11 = vld1q_u32(q11.as_ptr());
+                let vwa = vld1q_u32(wa.as_ptr());
+                let vwb = vld1q_u32(wb.as_ptr());
+                let vwc = vld1q_u32(wc.as_ptr());
+                let vwd = vld1q_u32(wd.as_ptr());
+                // per 16-bit lane: (Σ p·weight + bias) >> 6 — the bias is 32
+                // at EACH lane's own scale (0x20 at bits [5:0] for the b
+                // lane, 0x20<<16 for the r/g lane at [21:16])
+                let mix = |a: uint32x4_t, b: uint32x4_t, c: uint32x4_t,
+                           d: uint32x4_t| {
+                    vshrq_n_u32(
+                        vaddq_u32(
+                            vaddq_u32(vmulq_u32(a, vwa), vmulq_u32(b, vwb)),
+                            vaddq_u32(
+                                vaddq_u32(vmulq_u32(c, vwc), vmulq_u32(d, vwd)),
+                                bias,
+                            ),
+                        ),
+                        6,
+                    )
+                };
+                let lo = |v: uint32x4_t| vandq_u32(v, mask_rb);
+                // G sits at bits [15:8]; shift it up into lane 1 ([31:16])
+                let hi = |v: uint32x4_t| vandq_u32(vshlq_n_u32(v, 8), mask_g);
+                let rb = mix(lo(v00), lo(v01), lo(v10), lo(v11));
+                let gb = mix(hi(v00), hi(v01), hi(v10), hi(v11));
+                let quad = vorrq_u32(
+                    vandq_u32(rb, mask_rb),
+                    vandq_u32(vshrq_n_u32(gb, 8), vdupq_n_u32(0x0000_FF00)),
+                );
+                vst1q_u32(pix[dst + i..].as_mut_ptr(), quad);
+                i += 4;
             }
-            #[cfg(target_arch = "aarch64")]
-            unsafe {
-                let v = core::arch::aarch64::vld1q_u32(quad.as_ptr());
-                core::arch::aarch64::vst1q_u32(pix[dst + i..].as_mut_ptr(), v);
-            }
-            #[cfg(not(target_arch = "aarch64"))]
-            pix[dst + i..dst + i + 4].copy_from_slice(&quad);
-            i += 4;
         }
         while i < dw {
-            let o = 12 + (row + sx[i]) * 2;
-            pix[dst + i] = lut[u16::from_le_bytes([src[o], src[o + 1]]) as usize];
+            let s = |o: usize| lut[u16::from_le_bytes([src[o], src[o + 1]]) as usize];
+            pix[dst + i] = bilerp888(
+                s(r0 + x0[i] * 2),
+                s(r0 + x1[i] * 2),
+                s(r1 + x0[i] * 2),
+                s(r1 + x1[i] * 2),
+                wx[i],
+                wy,
+            );
             i += 1;
         }
     }
+}
+
+/// scalar bilinear on expanded 888 pixels — the tail path (dw % 4) and the
+/// host unit test's reference. Same lane-split Q6 math as the NEON quad.
+#[inline]
+fn bilerp888(p00: u32, p01: u32, p10: u32, p11: u32, wx: u32, wy: u32) -> u32 {
+    let iw = 256 - wx;
+    let jw = 256 - wy;
+    let wa = (iw * jw) >> 10;
+    let wb = (wx * jw) >> 10;
+    let wc = (iw * wy) >> 10;
+    let wd = (wx * wy) >> 10;
+    let mix = |a: u32, b: u32, c: u32, d: u32| {
+        ((a & 0x00FF_00FF) * wa
+            + (b & 0x00FF_00FF) * wb
+            + (c & 0x00FF_00FF) * wc
+            + (d & 0x00FF_00FF) * wd
+            + 0x0020_0020)
+            >> 6
+    };
+    // G sits at bits [15:8]; shift it up into lane 1 ([31:16])
+    let mixh = |a: u32, b: u32, c: u32, d: u32| {
+        (((a << 8) & 0x00FF_0000) * wa
+            + ((b << 8) & 0x00FF_0000) * wb
+            + ((c << 8) & 0x00FF_0000) * wc
+            + ((d << 8) & 0x00FF_0000) * wd
+            + 0x0020_0020)
+            >> 6
+    };
+    let rb = mix(p00, p01, p10, p11);
+    let gb = mixh(p00, p01, p10, p11);
+    (rb & 0x00FF_00FF) | ((gb >> 8) & 0x0000_FF00)
 }
 
 // ---------------- render ----------------
@@ -854,37 +972,18 @@ impl<'a> Render<'a> {
             return;
         }
         // fresh boot, nothing said yet: the one big affordance
-        if d.state == "idle" && d.lines.is_empty() && d.list.is_empty() {
+        if d.state == "idle" && d.lines.is_empty() {
             draw_centered(pix, self.pitch, self.w, self.h, self.font, (self.h as i32 - 8 * 4) / 2, "按住音量下键说：连接无线网络", 4, GREEN);
         }
         let mut y = g.toolbar_h as i32 + 170;
-        // dialog transcript: last 6 lines, user white / agent green — same
-        // scale as the SSID list below (user receipt 2026-09-04: 对话行太小，
-        // 要和扫码出来的 wifi 名称一样大)
+        // dialog transcript: last 6 lines, user white / agent green (user
+        // receipt 2026-09-04: 对话行太小 → scale 4)
         for (is_user, line) in d.lines.iter().rev().take(6).rev() {
             let (c, pfx) = if *is_user { (WHITE, ">") } else { (GREEN, "") };
             let mut s = format!("{pfx}{line}");
             clip_cols(&mut s, 48);
             draw_text(pix, self.pitch, self.w, self.h, self.font, g.m as i32, y, &s, 4, c);
             y += 72;
-        }
-        // SSID list: numbered rows, selection white (voice says 第几个)
-        if !d.list.is_empty() {
-            y = y.max(g.toolbar_h as i32 + 520);
-            for (i, ssid) in d.list.iter().take(10).enumerate() {
-                let n = i + 1;
-                let c = if n == d.sel { WHITE } else { GREEN };
-                let mut s = format!("{n:2}. {ssid}");
-                clip_cols(&mut s, 48);
-                draw_text(pix, self.pitch, self.w, self.h, self.font, g.m as i32, y, &s, 4, c);
-                y += 72;
-            }
-        }
-        // in-progress password — shown verbatim, this is the confirm surface
-        if !d.psk.is_empty() {
-            let mut s = format!("密码 {}", d.psk);
-            clip_cols(&mut s, 48);
-            draw_text(pix, self.pitch, self.w, self.h, self.font, g.m as i32, g.kb_panel_y as i32 - 120, &s, 4, WHITE);
         }
         // hint line (aginx-voice's default: how to talk, how to bail)
         let hint = if d.hint.is_empty() { "按住音量下键说：连接无线网络" } else { d.hint.as_str() };
@@ -2031,10 +2130,12 @@ fn main() {
 mod tests {
     use super::*;
 
-    // M47⑤f: the fused 565→888 + NN-upscale present path, hand-computed.
-    // A 2×2 source of primaries upscaled 1:2 into a 4×4 dst (pitch 5 —
-    // wider than dw, so stride handling is exercised): each dst cell
-    // replicates its source pixel. 5-bit 31 and 6-bit 63 replicate to 255.
+    // M47⑤l: the fused 565→888 + bilinear-upscale present path,
+    // hand-computed. A 2×2 source of primaries upscaled 1:2 into a 4×4 dst
+    // (pitch 5 — wider than dw, so stride handling is exercised).
+    // Source-center phase ((i+0.5)/2 − 0.5) gives taps −0.25/0.25/0.75/1.25:
+    // edge dst pixels land exactly on their source pixel, the two interior
+    // phases blend 1:3. Interior Q6 corner weights at 0.25/0.25: 36/12/12/4.
     #[test]
     fn upscale565_primaries() {
         let px = |r: u16, g: u16, b: u16| ((r << 11) | (g << 5) | b).to_le_bytes();
@@ -2048,17 +2149,35 @@ mod tests {
         let mut pix = [0xDEADBEEFu32; 5 * 4];
         upscale565(&mut pix, 5, 4, 4, &src, 2, 2);
         let at = |x: usize, y: usize| pix[y * 5 + x];
-        assert_eq!(at(0, 0), 0xFF0000, "red");
-        assert_eq!(at(3, 1), 0x00FF00, "green (src col 1, row 0)");
-        assert_eq!(at(0, 3), 0x0000FF, "blue (src col 0, row 1)");
-        assert_eq!(at(3, 3), 0xFFFFFF, "white");
-        // mid green g6=32: (32<<2)|(32>>4) = 130
+        assert_eq!(at(0, 0), 0xFF0000, "red (edge tap = exact source pixel)");
+        assert_eq!(at(0, 3), 0x0000FF, "blue (row edge tap)");
+        assert_eq!(at(3, 3), 0xFFFFFF, "white (corner tap)");
+        // (1,1): quarter-phase both axes — Q6 weights 36/12/12/4:
+        // r=255·40+32>>6=159, g=b=255·16+32>>6=64
+        assert_eq!(at(1, 1), 0x009F4040, "interior red+green+blue+white blend");
+        // (3,1): col taps clamp onto src col 1; rows blend green→white 3:1
+        assert_eq!(at(3, 1), 0x0040FF40, "vertical green→white 1:3 blend");
+        // 1-D pin: 2×1 red|blue → 4×1 — exact / 1:3 / 3:1 / exact
         let mut src2 = Vec::new();
-        src2.extend_from_slice(&[0u8; 12]);
-        src2.extend_from_slice(&px(0, 32, 0));
-        let mut pix2 = [0u32; 1];
-        upscale565(&mut pix2, 1, 1, 1, &src2, 1, 1);
-        assert_eq!(pix2[0], 0x008200, "g6=32 replicates to 130");
+        src2.extend_from_slice(&0x31574752u32.to_le_bytes());
+        src2.extend_from_slice(&2u32.to_le_bytes()); // w
+        src2.extend_from_slice(&1u32.to_le_bytes()); // h
+        src2.extend_from_slice(&px(31, 0, 0));
+        src2.extend_from_slice(&px(0, 0, 31));
+        let mut pix2 = [0u32; 4];
+        upscale565(&mut pix2, 4, 4, 1, &src2, 2, 1);
+        assert_eq!(
+            pix2,
+            [0xFF0000, 0x00BF0040, 0x004000BF, 0x0000FF],
+            "1-D bilinear phases"
+        );
+        // mid green g6=32: (32<<2)|(32>>4) = 130
+        let mut src3 = Vec::new();
+        src3.extend_from_slice(&[0u8; 12]);
+        src3.extend_from_slice(&px(0, 32, 0));
+        let mut pix3 = [0u32; 1];
+        upscale565(&mut pix3, 1, 1, 1, &src3, 1, 1);
+        assert_eq!(pix3[0], 0x008200, "g6=32 replicates to 130");
         // the LUT path and the formula agree at the corners
         let lut = lut565();
         assert_eq!(lut[0xF800], 0xFF0000, "lut red");

@@ -1,0 +1,13 @@
+[package]
+name = "aginx-pair"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "AGINXPAIR1 pair-code minting tool (M42f⑤) — host-only, never shipped to the device"
+
+[dependencies]
+# jpeg 档：铸码测试要过设备同款 decode_jpeg 全链（host-only，无设备体积约束；
+# 设备纪律线在 aginx-voice 的 default-features=false，与本 crate 无关）
+aginx-qr = { path = "../qr", default-features = false, features = ["jpeg"] }
+qrcodegen = "1"
+jpeg-encoder = "0.6"
