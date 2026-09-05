@@ -1,0 +1,16 @@
+[package]
+name = "aginx-sign"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+# N4② 搬入即改姓（D13：aginx- 前缀）。host 侧签名工具 + 验签 lib。
+# 私钥不出开发机/CI；手机只带公钥（编译进 aginx-update/aginx-pkg）。
+# 密钥对与一代 agupd 同对（内容不变，文件改名 aginx.key/.pub）——
+# 设备上的老 agupd/agpkg 二进制验的是公钥内容，不认文件名。
+[dependencies]
+ed25519-dalek = "2"
+rand_core = { version = "0.6", features = ["getrandom"] }
+base64 = "0.22"

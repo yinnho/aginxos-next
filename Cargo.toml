@@ -4,6 +4,7 @@ members = [
     "crates/agi",
     "crates/agio",
     "crates/agqr",
+    "crates/sign",
     "crates/router",
     "crates/runtime",
     "crates/server",
