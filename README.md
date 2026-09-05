@@ -34,6 +34,8 @@ Build entry points:
 - `./scripts/build-rootfs.sh` — bake the flashable image (`out/rootfs.img`;
   first-gen assets referenced via `OLD=`), see `rootfs/README.md`
 - `./scripts/accept/n4.sh` — device acceptance (the N4 switch gate)
+- `./scripts/accept/n5.sh` — device acceptance (N5: absorption, state
+  migration, backup line, remote-channel receipt via host `agc`)
 
 Milestones are the N series (see AGENTS.md). First-generation repo:
 `~/Documents/aginxos` — asset library since N4 (busybox, C tool sources,
