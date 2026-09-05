@@ -1,0 +1,16 @@
+[package]
+name = "agqr"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "QR WIFI: payload parsing (M42b) — decode/jpeg 档留老仓，设备解码二进制取老仓资产"
+
+# N4① 搬入时刻意剥成纯库：老仓 agqr 的 default 带 jpeg 档（quircs +
+# vendored libjpeg-turbo 的 agimg path 依赖），新仓没有 agimg 邻居，
+# workspace 解析不了。新仓只需要 voiced 引用的 WIFI: 载荷解析
+# （default-features=false 那一档）。lib/src 的 decode/jpeg 代码块全在
+# #[cfg(feature)] 门后，特性移除后自然不编译；bin 退化为明确报错垫底
+# （老仓 main.rs 自带）。设备的 /usr/bin/agqr 解码二进制 = 老仓预构建
+# musl target，烤机脚本按资产取——不在新仓重建解码链。
+
+[dependencies]

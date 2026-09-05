@@ -3,9 +3,11 @@ resolver = "2"
 members = [
     "crates/agi",
     "crates/agio",
+    "crates/agqr",
     "crates/router",
     "crates/runtime",
     "crates/server",
+    "crates/voiced",
 ]
 
 [workspace.package]

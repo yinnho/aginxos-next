@@ -1,0 +1,21 @@
+[package]
+name = "voiced"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+# M42a: 语音对话协议 v0 — 无 LLM 的确定性对话守护。
+# protocol.rs 是纯逻辑（词表/序数/拼读/回读/状态机），host 全覆盖测试；
+# 音频件（snd-cap/snd-play 子进程 + brain asr/tts HTTP）全在 audio.rs。
+# 屏显面走 /run/voice/face（原子 JSON，aterm 轮询渲染——脸不归 voiced 画）。
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+ureq = { version = "3", default-features = false, features = ["rustls"] }
+libc = "0.2"
+# M42b: WIFI: 码载荷解析。default-features=false——只拿纯字符串解析，
+# 不把 quircs/agimg 拉进 voiced（解码在独立 agqr 进程里做）。
+agqr = { path = "../agqr", default-features = false }
+
+[dev-dependencies]
