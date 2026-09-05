@@ -66,6 +66,10 @@ const VOICE_FACE: &str = "/run/aginx-voice/face";
 // is the result canvas, not a chat log, so the live frame takes the body
 // and dialog lines demote to a bottom strip.
 const VOICE_EYE: &str = "/run/aginx-voice/eye.jpg";
+// M47⑤c raw fast path: cam-shot --raw-out publishes RGB565 every frame;
+// term blits it with no JPEG decode (the encode+decode round trip stays
+// only for QR, which reads eye.jpg at 2 Hz). Preferred when present.
+const VOICE_EYE_RAW: &str = "/run/aginx-voice/eye.raw";
 
 fn fill_rect(pix: &mut [u32], pitch: usize, w: usize, h: usize, x: i32, y: i32, rw: i32, rh: i32, c: u32) {
     let (mut x, mut y, mut rw, mut rh) = (x, y, rw, rh);
@@ -458,10 +462,19 @@ struct VoiceView {
     alive: bool,
     /// M42g viewfinder frame cache. `poll_eye` gates on eye.jpg mtime; the
     /// decode itself blocks the event loop for a frame the same way the
-    /// photo viewer does (DCT-scaled to the box, ~tens of ms; frames land
-    /// at roughly one per second of cam-shot round).
+    /// photo viewer does (DCT-scaled to the box, ~tens of ms; M47⑤ cam-shot
+    /// runs resident at ~10fps, so the loop picks up every other frame).
     eye_mtime: Option<std::time::SystemTime>,
+    /// M47⑤c: raw-frame mtime gate (the preferred source; eye_mtime/JPEG is
+    /// the fallback when cam-shot runs without --raw-out).
+    raw_mtime: Option<std::time::SystemTime>,
     eye_img: Option<aginx_img::Bitmap>,
+    /// M47⑤f: raw frames no longer build a Bitmap at poll time — the render
+    /// pass blits 565→888 fused with the upscale straight into the back
+    /// buffer. `raw_dirty` marks a fresh frame; `raw_buf` is the reused
+    /// 2.2 MB file buffer (clear + read_to_end keeps the capacity).
+    raw_dirty: bool,
+    raw_buf: Vec<u8>,
 }
 
 impl VoiceView {
@@ -499,14 +512,29 @@ impl VoiceView {
 
     /// M42g: poll the viewfinder frame. eye=false → drop the cached bitmap
     /// (one repaint so the dialog view comes back clean); eye=true → stat
-    /// eye.jpg and decode on mtime change. Returns true when a repaint is
-    /// due. A decode failure keeps the previous frame — voice writes by
-    /// atomic rename, so a whole file that won't decode won't decode again
-    /// for the same mtime; the next frame is a new round anyway.
+    /// the frame file and flag a change. Returns true when a repaint is
+    /// due; the pixel work itself happens at render time (M47⑤f: the raw
+    /// path blits fused straight into the back buffer — a 45 fps publish
+    /// must not pay Bitmap-build + canvas detour per present).
     fn poll_eye(&mut self, max_w: u32, max_h: u32) -> bool {
         if !self.doc.eye {
             self.eye_mtime = None;
+            self.raw_mtime = None;
+            self.raw_dirty = false;
             return self.eye_img.take().is_some();
+        }
+        // M47⑤c: prefer the raw RGB565 frame (published every frame); the
+        // JPEG is the fallback when cam-shot runs without --raw-out.
+        let mtime = std::fs::metadata(VOICE_EYE_RAW)
+            .and_then(|m| m.modified())
+            .ok();
+        if let Some(t) = mtime {
+            if Some(t) != self.raw_mtime {
+                self.raw_mtime = Some(t);
+                self.raw_dirty = true;
+                return true;
+            }
+            return false;
         }
         let mtime = std::fs::metadata(VOICE_EYE)
             .and_then(|m| m.modified())
@@ -522,6 +550,105 @@ impl VoiceView {
             }
         }
         false
+    }
+
+    /// M47⑤f: the raw-frame fast path — read eye.raw into the reused
+    /// buffer, then 565→888 expand fused with the nearest-neighbor upscale
+    /// straight into `pix` (the DRM back buffer; every dst pixel written,
+    /// so no BG clear needed). Returns false when there is no fresh frame
+    /// (or a bad one — the next mtime change retries); the caller then
+    /// runs the normal canvas render (dialog / 取景中 / JPEG fallback).
+    fn blit_eye_raw(&mut self, pix: &mut [u32], pitch: usize, dw: usize, dh: usize) -> bool {
+        if !self.raw_dirty {
+            return false;
+        }
+        self.raw_dirty = false;
+        self.raw_buf.clear();
+        let ok = std::fs::File::open(VOICE_EYE_RAW)
+            .and_then(|mut f| std::io::Read::read_to_end(&mut f, &mut self.raw_buf));
+        if ok.is_err() {
+            return false;
+        }
+        let bytes = &self.raw_buf;
+        if bytes.len() < 12 {
+            return false;
+        }
+        let rd = |r: std::ops::Range<usize>| -> [u8; 4] { bytes[r].try_into().unwrap() };
+        let magic = u32::from_le_bytes(rd(0..4));
+        if magic != 0x31574752 {
+            return false; // "RGW1"
+        }
+        let sw = u32::from_le_bytes(rd(4..8)) as usize;
+        let sh = u32::from_le_bytes(rd(8..12)) as usize;
+        if sw == 0 || sh == 0 || bytes.len() < 12 + sw * sh * 2 || dw == 0 || dh == 0 {
+            return false;
+        }
+        upscale565(pix, pitch, dw, dh, bytes, sw, sh);
+        true
+    }
+}
+
+/// 565→888 bit-replication table, built once (M47⑤f device probe: the
+/// scalar shift chain cost ~35 ms CPU per present at 14.9 presents/s —
+/// a 256 KB LUT turns the inner loop into two loads and a store).
+fn lut565() -> &'static [u32; 65536] {
+    static LUT: std::sync::OnceLock<Box<[u32; 65536]>> = std::sync::OnceLock::new();
+    LUT.get_or_init(|| {
+        let v: Vec<u32> = (0..=u16::MAX)
+            .map(|p5| {
+                let r = ((p5 >> 11) & 0x1f) as u32;
+                let g = ((p5 >> 5) & 0x3f) as u32;
+                let b = (p5 & 0x1f) as u32;
+                // 5/6-bit → 8-bit replication (31→255, 63→255)
+                (((r << 3) | (r >> 2)) << 16) | (((g << 2) | (g >> 4)) << 8) | ((b << 3) | (b >> 2))
+            })
+            .collect();
+        match v.into_boxed_slice().try_into() {
+            Ok(b) => b,
+            Err(_) => unreachable!("65536 entries"),
+        }
+    })
+}
+
+/// Fused 565→888 expand + nearest-neighbor upscale, the whole display
+/// present in one pass over the destination. Same pixel math as the old
+/// two-step (read_raw_frame's bit replication × voice()'s i*sw/dw map) —
+/// pulled out free so a host unit test can pin it.
+fn upscale565(pix: &mut [u32], pitch: usize, dw: usize, dh: usize, src: &[u8], sw: usize, sh: usize) {
+    let lut = lut565();
+    // source column per dst column — ascending, computed once
+    let mut sx = vec![0usize; dw];
+    for (i, s) in sx.iter_mut().enumerate() {
+        *s = i * sw / dw;
+    }
+    for j in 0..dh {
+        let row = (j * sh / dh) * sw;
+        let dst = j * pitch;
+        let mut i = 0;
+        // 4 px per iteration, stored with one 128-bit NEON store: the back
+        // buffer is write-combined scanout memory — the per-STORE width is
+        // what the bus sees, and 2.5 M scalar 32-bit stores were the whole
+        // present budget (M47⑤f device probe 2026-09-05).
+        while i + 4 <= dw {
+            let mut quad = [0u32; 4];
+            for (k, q) in quad.iter_mut().enumerate() {
+                let o = 12 + (row + sx[i + k]) * 2;
+                *q = lut[u16::from_le_bytes([src[o], src[o + 1]]) as usize];
+            }
+            #[cfg(target_arch = "aarch64")]
+            unsafe {
+                let v = core::arch::aarch64::vld1q_u32(quad.as_ptr());
+                core::arch::aarch64::vst1q_u32(pix[dst + i..].as_mut_ptr(), v);
+            }
+            #[cfg(not(target_arch = "aarch64"))]
+            pix[dst + i..dst + i + 4].copy_from_slice(&quad);
+            i += 4;
+        }
+        while i < dw {
+            let o = 12 + (row + sx[i]) * 2;
+            pix[dst + i] = lut[u16::from_le_bytes([src[o], src[o + 1]]) as usize];
+            i += 1;
+        }
     }
 }
 
@@ -693,25 +820,30 @@ impl<'a> Render<'a> {
         } else if d.busy {
             draw_centered(pix, self.pitch, self.w, self.h, self.font, g.toolbar_h as i32 + 90, "处理中", 4, DIM);
         }
-        // M42g 眼取景：成果区——取景帧占主区，人看着画面瞄准
+        // M47⑤b eye=true: fullscreen viewfinder (user receipt 2026-09-05
+        // 「界面要做成全屏」) — the frame fills the whole panel (eye box =
+        // (0,0,w,h)), covering toolbar/title/strips. Nothing else draws
+        // while frames flow; the close keys are physical (音量+ toggles,
+        // 音量下).
         if d.eye {
+            fill_rect(pix, self.pitch, self.w, self.h, 0, 0, self.w as i32, self.h as i32, BG);
             if let Some(b) = &v.eye_img {
-                let top = g.toolbar_h as i32 + 60;
-                let bot = g.kb_panel_y as i32 - 160; // 底部小字条 + hint 保留
-                if bot > top {
-                    let dx = ((self.w as i32 - b.w as i32) / 2).max(0);
-                    let dy = top + ((bot - top) - b.h as i32) / 2;
-                    for j in 0..b.h as usize {
-                        let py = dy + j as i32;
-                        if py < 0 || py >= self.h as i32 {
-                            continue;
-                        }
-                        for i in 0..b.w as usize {
-                            let px = dx + i as i32;
-                            if px < 0 || px >= self.w as i32 {
-                                continue;
-                            }
-                            pix[py as usize * self.pitch + px as usize] = b.pix[j * b.w as usize + i];
+                let (_, _, bw, bh) = g.eye_box();
+                if bh > 0 && b.w > 0 && b.h > 0 {
+                    // aspect-FILL by nearest-neighbor upscale (decode_scaled
+                    // only downscales; 720→1080 upscaling lives here). The
+                    // frame's --aspect already matches the box.
+                    let (dw, dh) = (bw, bh);
+                    let (sw, sh) = (b.w as usize, b.h as usize);
+                    let mut sx = vec![0usize; dw];
+                    for (i, s) in sx.iter_mut().enumerate() {
+                        *s = i * sw / dw;
+                    }
+                    for j in 0..dh {
+                        let row = (j * sh / dh) * sw;
+                        let dst = j * self.pitch;
+                        for i in 0..dw {
+                            pix[dst + i] = b.pix[row + sx[i]];
                         }
                     }
                 }
@@ -719,16 +851,6 @@ impl<'a> Render<'a> {
                 // 第一帧在路上（cam-shot 3 帧曝光要 ~2s）
                 draw_centered(pix, self.pitch, self.w, self.h, self.font, (self.h as i32 - 8 * 4) / 2, "取景中…", 4, GREEN);
             }
-            // 对话行退居底部小字条：最近 2 行（成果区才是主角）
-            let mut y = g.kb_panel_y as i32 - 140;
-            for (is_user, line) in d.lines.iter().rev().take(2).rev() {
-                let (c, pfx) = if *is_user { (WHITE, ">") } else { (GREEN, "") };
-                let mut s = format!("{pfx}{line}");
-                clip_cols(&mut s, 64);
-                draw_text(pix, self.pitch, self.w, self.h, self.font, g.m as i32, y, &s, 2, c);
-                y += 40;
-            }
-            draw_centered(pix, self.pitch, self.w, self.h, self.font, g.kb_panel_y as i32 - 40, "对准码，音量+或音量下关闭取景", 3, UNAVAIL);
             return;
         }
         // fresh boot, nothing said yet: the one big affordance
@@ -1142,6 +1264,61 @@ fn host_ppm(out: &str) {
     println!("wrote {out} and {out}-term");
 }
 
+// ---------------- M47⑤f frame-arrival watch ----------------
+// cam-shot publishes eye.raw (and eye.jpg) by tmp+rename into
+// /run/aginx-voice, so an IN_MOVED_TO watch on the directory fires exactly
+// when a complete frame lands — the loop wakes on the frame itself instead
+// of stat-polling on a timer whose 12 ms cadence misaligned with the 22 ms
+// publish (device probe 2026-09-05). No-op off linux so host tests build.
+
+#[cfg(target_os = "linux")]
+fn ino_init() -> (libc::c_int, libc::c_int) {
+    let fd = unsafe { libc::inotify_init1(libc::IN_NONBLOCK | libc::IN_CLOEXEC) };
+    if fd < 0 {
+        return (-1, -1);
+    }
+    (fd, ino_rearm(fd))
+}
+
+/// (Re)arm the watch — idempotent, safe to retry until the voice daemon
+/// has created the directory (it may not exist when term starts at boot).
+#[cfg(target_os = "linux")]
+fn ino_rearm(fd: libc::c_int) -> libc::c_int {
+    if fd < 0 {
+        return -1;
+    }
+    unsafe {
+        libc::inotify_add_watch(
+            fd,
+            b"/run/aginx-voice\0".as_ptr() as *const _,
+            libc::IN_MOVED_TO,
+        )
+    }
+}
+
+/// Empty the queue — level-triggered poll stays readable until drained.
+#[cfg(target_os = "linux")]
+fn ino_drain(fd: libc::c_int) {
+    let mut buf = [0u8; 1024];
+    loop {
+        let n = unsafe { libc::read(fd, buf.as_mut_ptr() as *mut _, buf.len()) };
+        if n <= 0 {
+            break; // EAGAIN — drained
+        }
+    }
+}
+
+#[cfg(not(target_os = "linux"))]
+fn ino_init() -> (libc::c_int, libc::c_int) {
+    (-1, -1)
+}
+#[cfg(not(target_os = "linux"))]
+fn ino_rearm(_fd: libc::c_int) -> libc::c_int {
+    -1
+}
+#[cfg(not(target_os = "linux"))]
+fn ino_drain(_fd: libc::c_int) {}
+
 // ---------------- main ----------------
 
 fn main() {
@@ -1278,6 +1455,9 @@ fn main() {
     // session as TextInputEvent, verbatim (\r included if written). This
     // is the exact path M18's ASR callback takes, testable without audio.
     let inject_file = std::env::var("AGINX_TERM_INJECT").ok().as_deref() == Some("1");
+    // M47⑤f frame-arrival watch (armed lazily — the directory may not
+    // exist yet when term starts at boot).
+    let (ino_fd, mut ino_wd) = ino_init();
 
     loop {
         // drain pty output
@@ -1313,8 +1493,11 @@ fn main() {
         }
 
         // input (touch / power key / pty)
-        let mut fds = [libc::pollfd { fd: -1, events: libc::POLLIN, revents: 0 }; 3];
+        let mut fds = [libc::pollfd { fd: -1, events: libc::POLLIN, revents: 0 }; 4];
         let mut nfds = 0usize;
+        if ino_fd >= 0 && ino_wd < 0 {
+            ino_wd = ino_rearm(ino_fd);
+        }
         if let Some(t) = touch.as_ref() {
             fds[nfds].fd = t.raw_fd();
             nfds += 1;
@@ -1327,10 +1510,29 @@ fn main() {
             fds[nfds].fd = c.master.as_raw_fd();
             nfds += 1;
         }
+        // M47⑤f: the frame-arrival watch rides the poll set while the
+        // voice view is on screen — every eye.raw / eye.jpg / face publish
+        // then wakes the loop the instant it lands.
+        if ino_wd >= 0 && matches!(mode, Mode::Voice) {
+            fds[nfds].fd = ino_fd;
+            nfds += 1;
+        }
         let timeout: libc::c_int = if redraw {
             0
         } else if held.is_some() || power_down.is_some() {
             30
+        } else if matches!(mode, Mode::Voice) {
+            // M47⑤b: the voice face polls files on this cadence — 400 ms
+            // capped the viewfinder display at 2.5 fps even with cam-shot
+            // publishing ~8 fps (user receipt 2026-09-05 「看起来很卡」).
+            // M47⑤f: with the frame-arrival watch armed, IN_MOVED_TO wakes
+            // the loop the instant a frame or face write lands — the timer
+            // is only a 200 ms safety net. Unarmed (directory absent), the
+            // stat cadence carries it: 12 ms while the eye is live, 30 ms
+            // idle.
+            if ino_wd >= 0 {
+                200
+            } else if voice.doc.eye { 12 } else { 30 }
         } else {
             400
         };
@@ -1420,6 +1622,7 @@ fn main() {
                                             // paints its current frame at entry
                                             voice.mtime = None;
                                             voice.eye_mtime = None;
+                                            voice.raw_mtime = None;
                                             mode = Mode::Voice;
                                             redraw = true;
                                         } else if entries[i2].photos {
@@ -1682,6 +1885,14 @@ fn main() {
                     redraw = true;
                 }
             }
+            // M47⑤f: frame-arrival wake — just drain; the voice poll below
+            // stats and renders if anything actually changed.
+            if ino_wd >= 0 && matches!(mode, Mode::Voice) {
+                let ij = i + if matches!(mode, Mode::Running(_)) { 1 } else { 0 };
+                if ij < nfds && fds[ij].revents & libc::POLLIN != 0 {
+                    ino_drain(ino_fd);
+                }
+            }
         }
 
         // power key held >= POWER_HOLD: shutdown (fires while still down)
@@ -1724,7 +1935,8 @@ fn main() {
         // activity; decode box is the body area under the toolbar.
         if matches!(mode, Mode::Voice) {
             let face = voice.poll();
-            let eye = voice.poll_eye(w as u32, (h - lg.toolbar_h) as u32);
+            let (_, _, eye_w, eye_h) = lg.eye_box();
+            let eye = voice.poll_eye(eye_w as u32, eye_h as u32);
             if face || eye {
                 last_input = Instant::now();
                 if blanked {
@@ -1752,6 +1964,9 @@ fn main() {
             term.dirty = false;
             let r = Render { font: &font, w, h, pitch };
             let buf = &mut canvas[..];
+            // M47⑤f: true when the eye frame went straight into the back
+            // buffer — the canvas copy below is then skipped
+            let mut direct = false;
             match &mode {
                 Mode::Launcher => {
                     // launcher() full-covers the canvas
@@ -1770,8 +1985,17 @@ fn main() {
                     }
                 }
                 Mode::Voice => {
-                    // voice() full-covers the canvas
-                    r.voice(buf, &voice, &lg);
+                    // M47⑤f: a fresh raw viewfinder frame blits fused
+                    // (565→888 + upscale) straight into the back buffer — no
+                    // Bitmap, no canvas detour, no 10 MB copy. Everything
+                    // else (dialog / 取景中… / the JPEG fallback frame)
+                    // renders into the canvas as before.
+                    direct = voice.doc.eye
+                        && voice.blit_eye_raw(d.back_buf(), pitch, w, h);
+                    if !direct {
+                        // voice() full-covers the canvas
+                        r.voice(buf, &voice, &lg);
+                    }
                 }
                 Mode::Running(_) => {
                     r.terminal(buf, &term, area_top, area_bottom(kb_visible) - area_top, scale, blink_on, lg.m);
@@ -1790,7 +2014,9 @@ fn main() {
             }
             term.clear_row_dirty();
             kb_dirty = false;
-            d.back_buf().copy_from_slice(&canvas);
+            if !direct {
+                d.back_buf().copy_from_slice(&canvas);
+            }
             let t0 = Instant::now();
             d.present();
             let el = t0.elapsed();
@@ -1798,5 +2024,45 @@ fn main() {
                 eprintln!("aginx-term: slow present {}ms", el.as_millis());
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // M47⑤f: the fused 565→888 + NN-upscale present path, hand-computed.
+    // A 2×2 source of primaries upscaled 1:2 into a 4×4 dst (pitch 5 —
+    // wider than dw, so stride handling is exercised): each dst cell
+    // replicates its source pixel. 5-bit 31 and 6-bit 63 replicate to 255.
+    #[test]
+    fn upscale565_primaries() {
+        let px = |r: u16, g: u16, b: u16| ((r << 11) | (g << 5) | b).to_le_bytes();
+        let mut src = Vec::new();
+        src.extend_from_slice(&0x31574752u32.to_le_bytes()); // "RGW1" magic
+        src.extend_from_slice(&2u32.to_le_bytes()); // w
+        src.extend_from_slice(&2u32.to_le_bytes()); // h (12-byte header skipped)
+        for p in [px(31, 0, 0), px(0, 63, 0), px(0, 0, 31), px(31, 63, 31)] {
+            src.extend_from_slice(&p);
+        }
+        let mut pix = [0xDEADBEEFu32; 5 * 4];
+        upscale565(&mut pix, 5, 4, 4, &src, 2, 2);
+        let at = |x: usize, y: usize| pix[y * 5 + x];
+        assert_eq!(at(0, 0), 0xFF0000, "red");
+        assert_eq!(at(3, 1), 0x00FF00, "green (src col 1, row 0)");
+        assert_eq!(at(0, 3), 0x0000FF, "blue (src col 0, row 1)");
+        assert_eq!(at(3, 3), 0xFFFFFF, "white");
+        // mid green g6=32: (32<<2)|(32>>4) = 130
+        let mut src2 = Vec::new();
+        src2.extend_from_slice(&[0u8; 12]);
+        src2.extend_from_slice(&px(0, 32, 0));
+        let mut pix2 = [0u32; 1];
+        upscale565(&mut pix2, 1, 1, 1, &src2, 1, 1);
+        assert_eq!(pix2[0], 0x008200, "g6=32 replicates to 130");
+        // the LUT path and the formula agree at the corners
+        let lut = lut565();
+        assert_eq!(lut[0xF800], 0xFF0000, "lut red");
+        assert_eq!(lut[0x07E0], 0x00FF00, "lut green");
+        assert_eq!(lut[0x001F], 0x0000FF, "lut blue");
     }
 }

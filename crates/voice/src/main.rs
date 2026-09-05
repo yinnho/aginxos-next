@@ -35,10 +35,30 @@ const TIMEOUT_SECS: u64 = 45; // 提示后无语音的退出时限
 const JOIN_BUDGET_SECS: u32 = 90;
 /// 母体一轮（真 brain，含工具往返）的等待预算——超了杀掉落地板话。
 const FRONT_BUDGET_SECS: u32 = 90;
-/// 眼取景一帧的预算（cam-shot 3 帧曝光收敛；解码 <300ms 在拍侧已覆盖）。
-const EYE_FRAME_BUDGET_SECS: u32 = 15;
-/// 取景总时长上限：超时闭眼（人对准之前机器不催，但也不能永远开着镜头）。
+/// 眼取景总时长上限：超时闭眼（人对准之前机器不催，但也不能永远开着镜头）。
 const EYE_VIEW_SECS: u64 = 30;
+/// M47⑤ 取景子进程重生预算：rc≠0（含 rc=3 连续 fence 超时）/ 卡帧 / 崩溃
+/// 都杀掉重生，连败这么多次就闭眼报失败。
+const EYE_RETRIES: u8 = 3;
+/// 取景帧卡死判据：mtime 这么久不更新（首帧未落 = 子进程启动后这久还没
+/// 文件）就杀掉重生。
+const EYE_STUCK_SECS: u64 = 5;
+
+/// M47⑤ 眼取景常驻：一个 --forever cam-shot 子进程 + mtime 轮询。子进程
+/// 自己原子发布 eye.jpg（tmp+rename），voice 不再逐帧起停相机——双会话
+/// 撞 sensor 必翻车，相机就这一个持有者。
+struct EyeView {
+    child: std::process::Child,
+    since: Instant,
+    /// 最近一次看到的 eye.jpg mtime（None=还没见过帧）
+    mtime: Option<std::time::SystemTime>,
+    /// 上次 mtime 变化（或 spawn）时刻——卡帧自愈的基准
+    mtime_seen: Instant,
+    /// 上次发起 aginx-qr 解码时刻——解码限频（一次 100-300ms，逐帧跑把
+    /// loop 吃满还抢 cam-shot 编码 CPU；2Hz 对人对准足够）
+    last_qr: Instant,
+    retries: u8,
+}
 
 /// 前台模式开关：VOICED_FRONT=新前台路由器路径（aginx）→ 开。
 /// 只认这个 env，不猜 PATH——试跑期路由器在隔离树里，路径是显式合同。
@@ -78,7 +98,7 @@ fn main() {
             let mut vm = make_vm();
             face::write(&vm, false, false, false);
             let outs = vm.step(Ev::Heard(text));
-            run_outs(&mut vm, outs, None);
+            run_outs(&mut vm, outs, None, false);
         }
         Some("--script") => {
             // 收据阶梯：stdin 每行一条 Heard，同一个 Vm 跨步保持（--inject
@@ -99,7 +119,7 @@ fn main() {
                         }
                         eprintln!("aginx-voice: script {t:?}");
                         let outs = vm.step(Ev::Heard(t.to_string()));
-                        run_outs(&mut vm, outs, brain.as_ref());
+                        run_outs(&mut vm, outs, brain.as_ref(), false);
                     }
                 }
             }
@@ -110,6 +130,24 @@ fn main() {
         },
         _ => daemon(),
     }
+}
+
+/// 眼取景一轮的退出决定（M47⑤）：命中 or 闭眼（带给人一句话）。
+enum EyeExit {
+    Hit(Vec<String>),
+    GiveUp(&'static str),
+}
+
+/// 杀掉旧子进程并在原 EyeView 里重生（retries+1、mtime 清零）。返回 Err
+/// = spawn 失败——下一轮 try_wait 会再走重生/放弃路径，不用在这里叠状态。
+fn eye_respawn(ev: &mut EyeView) -> Result<(), String> {
+    eye_stop(&mut ev.child);
+    ev.retries += 1;
+    ev.mtime = None;
+    ev.mtime_seen = Instant::now();
+    ev.last_qr = Instant::now();
+    ev.child = eye_spawn()?;
+    Ok(())
 }
 
 fn daemon() {
@@ -138,10 +176,11 @@ fn daemon() {
     let mut deadline: Option<Instant> = None;
     // 音量下键按下时刻：短按(<300ms)=音量−10、长按=PTT（M42e 产品面）
     let mut ptt_down: Option<Instant> = None;
-    // 眼取景（M42g）：Some(开始时刻) = 取景中。音量+开/再按关，音量下关。
-    // 取景循环本身就是重试阶梯：逐帧拍→上屏→逐帧解，命中 WIFI: 码直接连
-    // （扫码即指令，拉式——机器开着取景等的就是这个格式）。
-    let mut eye: Option<Instant> = None;
+    // 眼取景（M42g→M47⑤）：Some = 取景中（常驻子进程 + 命中轮询）。音量+
+    // 开/再按关，音量下关。帧由子进程逐张原子发布，这里只轮询 mtime 解码
+    // ——命中 WIFI: 码直接连（扫码即指令，拉式——机器开着取景等的就是
+    // 这个格式）。
+    let mut eye: Option<EyeView> = None;
 
     loop {
         // ---- PTT ----
@@ -151,7 +190,8 @@ fn daemon() {
                     ptt::PttEv::Down => {
                         // 取景中音量下 = 闭眼（吞掉本次按压周期：不开采集，
                         // 后续 Up 因 ptt_down 为空自然空走）
-                        if eye.take().is_some() {
+                        if let Some(mut ev) = eye.take() {
+                            eye_stop(&mut ev.child);
                             let _ = vm.inject_say("取景已关。");
                             face::write(&vm, false, false, false);
                             continue;
@@ -197,7 +237,7 @@ fn daemon() {
                                     Ok(text) => {
                                         eprintln!("aginx-voice: heard {text:?}");
                                         let outs = vm.step(Ev::Heard(text));
-                                        run_outs(&mut vm, outs, brain.as_ref());
+                                        run_outs(&mut vm, outs, brain.as_ref(), eye.is_some());
                                     }
                                     Err(e) => {
                                         eprintln!("aginx-voice: asr {e}");
@@ -221,11 +261,27 @@ fn daemon() {
                     ptt::PttEv::VolUp => {
                         // M42g：音量+ = 眼。再按=闭眼。音量+10 的老义退役
                         //（音量下短按仍减；一屏一键一义，加音量走语音）。
-                        if eye.take().is_some() {
+                        if let Some(mut ev) = eye.take() {
+                            eye_stop(&mut ev.child);
                             let _ = vm.inject_say("取景已关。");
                         } else {
-                            eye = Some(Instant::now());
-                            let _ = vm.inject_say("取景中，对准码。");
+                            match eye_spawn() {
+                                Ok(child) => {
+                                    eye = Some(EyeView {
+                                        child,
+                                        since: Instant::now(),
+                                        mtime: None,
+                                        mtime_seen: Instant::now(),
+                                        last_qr: Instant::now(),
+                                        retries: 0,
+                                    });
+                                    let _ = vm.inject_say("取景中，对准码。");
+                                }
+                                Err(e) => {
+                                    eprintln!("aginx-voice: eye spawn {e}");
+                                    let _ = vm.inject_say("相机没起来，再按一次重试。");
+                                }
+                            }
                         }
                         face::write(&vm, false, false, eye.is_some());
                     }
@@ -235,25 +291,82 @@ fn daemon() {
             std::thread::sleep(Duration::from_millis(200));
         }
 
-        // ---- 眼取景（M42g：一帧一拍，取景循环即重试阶梯）----
-        if let Some(since) = eye {
+        // ---- 眼取景（M47⑤：常驻子进程 + 命中轮询）----
+        let mut eye_exit: Option<EyeExit> = None;
+        if let Some(ev) = eye.as_mut() {
             if capturing.is_some() {
-                // 罕见赛跑：PTT 采集优先，取景帧这轮让路
-            } else if since.elapsed() >= Duration::from_secs(EYE_VIEW_SECS) {
-                eye = None;
-                let _ = vm.inject_say("没拍到码，再按音量上重试。");
-                face::write(&vm, false, false, false);
+                // 罕见赛跑：PTT 采集优先，帧轮询这轮让路（子进程继续跑）
+            } else if ev.since.elapsed() >= Duration::from_secs(EYE_VIEW_SECS) {
+                eye_exit = Some(EyeExit::GiveUp("没拍到码，再按音量上重试。"));
             } else {
-                match eye_round() {
-                    Ok(payloads) if !payloads.is_empty() => {
-                        eye = None;
-                        face::write(&vm, false, false, false);
-                        // 命中即自动走：WIFI: 码直接连、文本码念前 40 字
-                        let outs = vm.step(Ev::QrDone(Ok(payloads)));
-                        run_outs(&mut vm, outs, brain.as_ref());
+                // 子进程死掉（rc=3 连续 fence 超时 / 崩溃）→ 重生 ≤EYE_RETRIES
+                match ev.child.try_wait() {
+                    Ok(Some(st)) => {
+                        eprintln!("aginx-voice: eye cam-shot exit {}", st.code().unwrap_or(-1));
+                        if ev.retries >= EYE_RETRIES {
+                            eye_exit = Some(EyeExit::GiveUp("相机反复掉线，取景关闭。"));
+                        } else if eye_respawn(ev).is_err() {
+                            eye_exit = Some(EyeExit::GiveUp("相机没起来，取景关闭。"));
+                        }
                     }
-                    Err(e) => eprintln!("aginx-voice: eye {e}"), // 冷启动废片等，下一轮
-                    Ok(_) => {}
+                    Err(e) => {
+                        eprintln!("aginx-voice: eye wait {e}");
+                        eye_exit = Some(EyeExit::GiveUp("相机掉线，取景关闭。"));
+                    }
+                    Ok(None) => {
+                        // 帧轮询：mtime 变 → 解码；停滞 → 卡帧自愈重生
+                        let mtime = std::fs::metadata(face::EYE_JPG)
+                            .and_then(|m| m.modified())
+                            .ok();
+                        match mtime {
+                            Some(t) if Some(t) != ev.mtime => {
+                                ev.mtime = Some(t);
+                                ev.mtime_seen = Instant::now();
+                                // 解码限频：帧 ~8fps 全要解的话 aginx-qr
+                                // （100-300ms/次）吃满整个 loop 还���编码
+                                // CPU——2Hz 足够对准
+                                if ev.last_qr.elapsed() >= Duration::from_millis(400) {
+                                    ev.last_qr = Instant::now();
+                                    if let Some(payloads) = eye_decode_qr() {
+                                        eye_exit = Some(EyeExit::Hit(payloads));
+                                    }
+                                }
+                            }
+                            _ => {
+                                // mtime 没动（或首帧未落）超时 → 杀重生。首帧
+                                // 预算放宽一倍（子进程冷启动 + 前 3 帧只统计）
+                                let stuck = if ev.mtime.is_none() {
+                                    2 * EYE_STUCK_SECS
+                                } else {
+                                    EYE_STUCK_SECS
+                                };
+                                if ev.mtime_seen.elapsed() >= Duration::from_secs(stuck) {
+                                    if ev.retries >= EYE_RETRIES {
+                                        eye_exit = Some(EyeExit::GiveUp("取景卡住了，取景关闭。"));
+                                    } else {
+                                        eprintln!("aginx-voice: eye stuck frame, respawn");
+                                        let _ = eye_respawn(ev);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        if let Some(exit) = eye_exit {
+            if let Some(mut ev) = eye.take() {
+                eye_stop(&mut ev.child);
+            }
+            face::write(&vm, false, false, false);
+            match exit {
+                EyeExit::Hit(payloads) => {
+                    // 命中即自动走：WIFI: 码直接连、文本码念前 40 字
+                    let outs = vm.step(Ev::QrDone(Ok(payloads)));
+                    run_outs(&mut vm, outs, brain.as_ref(), false);
+                }
+                EyeExit::GiveUp(msg) => {
+                    let _ = vm.inject_say(msg);
                 }
             }
         }
@@ -265,7 +378,7 @@ fn daemon() {
             if Instant::now() >= dl {
                 deadline = None;
                 let outs = vm.step(Ev::Timeout);
-                run_outs(&mut vm, outs, brain.as_ref());
+                run_outs(&mut vm, outs, brain.as_ref(), false);
             }
         } else {
             deadline = None;
@@ -307,7 +420,9 @@ fn hear(wav: &[u8], brain: Option<&audio::Brain>) -> Result<String, String> {
 
 /// 落地状态机输出。拉式语音：Say 只上脸（行已在 vm.lines 里，末尾统一
 /// face::write），Speak 才走 TTS；Act → 执行并把结果喂回状态机。
-fn run_outs(vm: &mut Vm, outs: Vec<Out>, brain: Option<&audio::Brain>) {
+/// eye_open：取景开着（M47⑤）——Act::QrScan 不再另起 cam-shot（双会话
+/// 撞 sensor 必翻车），取景轮询本来就在逐帧解码。
+fn run_outs(vm: &mut Vm, outs: Vec<Out>, brain: Option<&audio::Brain>, eye_open: bool) {
     let mut followups: Vec<Ev> = Vec::new();
     for o in outs {
         match o {
@@ -333,6 +448,12 @@ fn run_outs(vm: &mut Vm, outs: Vec<Out>, brain: Option<&audio::Brain>) {
                     followups.push(Ev::JoinDone(join_wifi(&ssid, &psk)));
                 }
                 Act::QrScan => {
+                    if eye_open {
+                        // M47⑤ 互斥门：取景轮询已在逐帧解，等命中即可——
+                        // 这里另起 cam-shot 会撞 sensor
+                        let _ = vm.inject_say("取景开着，对准码就行。");
+                        continue;
+                    }
                     face::write(vm, false, true, false);
                     let r = scan_qr();
                     if let Err(e) = &r {
@@ -373,7 +494,7 @@ fn run_outs(vm: &mut Vm, outs: Vec<Out>, brain: Option<&audio::Brain>) {
     face::write(vm, false, false, false);
     for ev in followups {
         let outs = vm.step(ev);
-        run_outs(vm, outs, brain);
+        run_outs(vm, outs, brain, eye_open);
     }
 }
 
@@ -540,43 +661,69 @@ fn scan_qr() -> Result<Vec<String>, String> {
     Err(last_err)
 }
 
-/// 眼取景一帧（M42g）：拍一张**彩色** JPEG 上屏（成果区给人看；解码内部
-/// 自转 luma，灰彩对 QR 等价），再解码。单轮失败（冷启动 IOMMU 间歇
-/// rc!=0 / 没码）直接返回——取景循环本身就是重试阶梯，不内置 scan_qr
-/// 的 4 轮档，每轮都有新帧上屏。
-fn eye_round() -> Result<Vec<String>, String> {
-    let tmp = format!("{}.tmp", face::EYE_JPG);
-    let mut child = Command::new("/usr/bin/aginx-cam-shot")
-        .args(["--stream", "--rear", "--frames", "3", "--jpeg"])
+/// M47⑤ 眼取景常驻子进程：--forever cam-shot，全屏竖帧原子发布（tmp+rename
+/// 由 cam-shot 自己做）。**双产物**（M47⑤c）：--raw-out eye.raw 每帧出
+/// RGB565（term 直读免解码，显示 ~12-15fps）；--jpeg-every-ms 500 把编码
+/// （0.125s/帧@720×1561，实测 2026-09-05——8fps 天花板的全部根因）摊薄成
+/// 慢车道副产物，只剩 QR 在读 eye.jpg（2Hz 限频正好对上）。--aspect
+/// 1080:2340 = 整屏（2026-09-05 用户收据「界面要做成全屏」），与 term 的
+/// launch::VIEWFINDER_ASPECT 钉在一起（那边 host 测试守着）——布局属性由
+/// 本粘合层显式注入，不共享 crate。AEC 状态由 cam-shot 落
+/// /run/aginx-cam/aec.state，下次开眼首帧即正常亮度。
+fn eye_spawn() -> Result<std::process::Child, String> {
+    Command::new("/usr/bin/aginx-cam-shot")
+        .args([
+            "--stream", "--rear", "--forever", "--aec", "--rot", "90",
+            "--aspect", "1080:2340", "--preview", "720", "--jpeg",
+            "--jpeg-every-ms", "500",
+        ])
         .arg("--jpeg-out")
-        .arg(&tmp)
+        .arg(face::EYE_JPG)
+        .arg("--raw-out")
+        .arg("/run/aginx-voice/eye.raw")
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null())
         .spawn()
-        .map_err(|e| format!("cam-shot spawn: {e}"))?;
-    audio::wait_limited(&mut child, EYE_FRAME_BUDGET_SECS)
-        .map_err(|e| format!("cam-shot {e}"))?;
-    if !child.wait().map(|s| s.success()).unwrap_or(false) {
-        return Err("cam-shot rc!=0".into());
+        .map_err(|e| format!("cam-shot spawn: {e}"))
+}
+
+/// 优雅停机（TERM-then-wait，2s 预算）：cam-shot --forever 的退出路径是
+/// SIGTERM → STREAMOFF teardown + aec.state 落盘；超时才 SIGKILL（std 的
+/// Child::kill() 只有 SIGKILL，所以先 libc::kill 发 TERM）。
+fn eye_stop(child: &mut std::process::Child) {
+    let pid = child.id() as i32;
+    if unsafe { libc::kill(pid, libc::SIGTERM) } == 0 {
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while Instant::now() < deadline {
+            match child.try_wait() {
+                Ok(Some(_)) => return,
+                Ok(None) => std::thread::sleep(Duration::from_millis(100)),
+                Err(_) => break,
+            }
+        }
     }
-    // 先上屏再解码：人先看到画面，解码是机器的事。rename 原子换帧，
-    // term 轮询 mtime 重渲染。
-    let _ = std::fs::rename(&tmp, face::EYE_JPG);
+    let _ = child.kill();
+    let _ = child.wait();
+}
+
+/// 取景帧解 QR（aginx-qr 独立进程，100-300ms 纯计算，last_qr 限频 2Hz）。
+/// 全屏裁法（2016×930 vs 旧 1530×1136）横 FOV -18%/纵 +32%，预览缩放
+/// 720/930 反而比旧 720/1136 大 1.22×——M42b 甜点模块在预览里更大，
+/// 仍在 quirc + Bradley 已证域（实测定终）。None = 没码/解码器不在——
+/// 取景继续等下一帧。
+fn eye_decode_qr() -> Option<Vec<String>> {
     let out = Command::new("/usr/bin/aginx-qr")
         .arg(face::EYE_JPG)
         .output()
-        .map_err(|e| format!("aginx-qr spawn: {e}"))?;
+        .ok()?;
     if !out.status.success() {
-        return Err("aginx-qr rc!=0".into()); // exit 1 = 没码，取景下一轮
+        return None; // exit 1 = 没码，取景继续
     }
-    let payloads = String::from_utf8_lossy(&out.stdout)
+    let payloads: Vec<String> = String::from_utf8_lossy(&out.stdout)
         .lines()
         .map(str::to_string)
-        .collect::<Vec<_>>();
-    if payloads.is_empty() {
-        return Err("没找到二维码".into());
-    }
-    Ok(payloads)
+        .collect();
+    (!payloads.is_empty()).then_some(payloads)
 }
 
 /// 拍照念字（M45 眼分支）。同 QR 的冷启动废片收据：默认曝光两轮，末轮
