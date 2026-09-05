@@ -1,6 +1,6 @@
 #!/bin/sh
 # Panel handoff (M11): bootcard -> aginx-term (N4③b 原名 aterm；脚本名
-# aterm-handoff 保留——它是 init.d 的服务面，不是命令).
+# 同步改姓 aginx-term-handoff——init.d 的服务面).
 #
 # bootcard never exits on its own — dropping DRM master lets dsi_backlight's
 # dpms hooks blank the panel. So once boot finishes (a "done ok|fail" line
@@ -9,7 +9,7 @@
 # frame before SETCRTC, so the panel only dips for the modeset itself.
 # The respawn loop keeps the UI alive if aginx-term ever crashes.
 export PATH=/sbin:/bin:/usr/sbin:/usr/bin
-# M17 voice hook: watch /run/aterm.inject (ASR text lands there; aterm
+# M17 voice hook: watch /run/aginx-term.inject (ASR text lands there; aginx-term
 # types it into the pty). Was hand-exported since M18 — baked here in
 # #13 so it survives rootfs swaps.
 export AGINX_TERM_INJECT=1

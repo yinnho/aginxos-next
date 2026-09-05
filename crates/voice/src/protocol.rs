@@ -33,7 +33,7 @@ pub enum Act {
     Scan,
     /// 加入网络（wifi-join wlan0 ssid psk）
     Join { ssid: String, psk: String },
-    /// 拍照解 QR（cam-shot 盲拍 + agqr，M42b 眼分支）
+    /// 拍照解 QR（cam-shot 盲拍 + aginx-qr，M42b 眼分支）
     QrScan,
     /// 拍照念字（cam-shot 盲拍 + ag-ocr，M45 眼分支）
     Ocr,
@@ -234,7 +234,7 @@ impl Vm {
                 let wifi = match &r {
                     Ok(payloads) => payloads
                         .iter()
-                        .find_map(|p| agqr::parse_wifi_payload(p)),
+                        .find_map(|p| aginx_qr::parse_wifi_payload(p)),
                     Err(_) => None,
                 };
                 match wifi {

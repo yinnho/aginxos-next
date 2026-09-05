@@ -10,7 +10,7 @@ file). Committed subset = the files build.rs compiles, no more:
 - `simd/jsimd.h`, `simd/jsimddct.h`, root headers, `jsimd_none.c`
 - aarch64 full NEON-intrinsics set (no `.S`): `simd/arm/*.c` ×16 +
   `simd/arm/aarch64/{jsimd.c,jchuff-neon.c,jccolext-neon.c}`
-- `agimg_shim.c` — our FFI wrapper (the only file not from upstream)
+- `img_shim.c` — our FFI wrapper (the only file not from upstream)
 
 ## generated headers
 

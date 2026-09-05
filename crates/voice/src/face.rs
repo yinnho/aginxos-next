@@ -1,6 +1,6 @@
-//! 屏显对话面（M42a）：voiced 是 /run/aginx-voice/face 的唯一写者，原子换名写；
+//! 屏显对话面（M42a）：aginx-voice 是 /run/aginx-voice/face 的唯一写者，原子换名写；
 //! aterm 轮询 mtime 读（同 /run/aginx-term.inject 的先例）。触摸屏=纯显示器，
-//! 脸不归 voiced 画、也不归 voiced 点——没有可点的东西。
+//! 脸不归 aginx-voice 画、也不归 aginx-voice 点——没有可点的东西。
 
 use crate::protocol::Vm;
 use serde::Serialize;
@@ -51,7 +51,7 @@ pub fn write(vm: &Vm, listening: bool, busy: bool) {
     }
 }
 
-/// aterm/调试读面
+/// aginx-term/调试读面
 pub fn read() -> Option<String> {
     fs::read_to_string(Path::new(FACE_FILE)).ok()
 }

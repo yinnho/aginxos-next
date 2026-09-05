@@ -5,9 +5,10 @@
 # libexec daemons), new-repo musl binaries (zigbuild), and FIRST-GEN
 # ASSETS referenced in place from the old repo (OLD=, single-source
 # discipline — busybox, C tools, vendor ramdisk, voice/OCR stacks,
-# dropbear, radio blobs, fonts). Old-repo binaries land RENAMED per D13
-# (agdl→aginx-download etc.); the old `ag` router, ag-* shims, carrier
-# daemon and relay do NOT enter the image (切净).
+# dropbear, radio blobs, fonts) plus the frozen aginxos trampoline pair
+# (N5②: every renamed-at-install CLI is now rebuilt here instead); the
+# old `ag` router, ag-* shims, carrier daemon and relay do NOT enter
+# the image (切净).
 #
 # Flash with:  fastboot flash userdata out/rootfs.img
 # Boot needs a vendor_boot packed with ROOTFS=1 (old repo pack-vendor-boot.sh).
@@ -33,12 +34,13 @@ MKE2FS="$(command -v mke2fs || true)"
 test -z "${MKE2FS}" && MKE2FS=/opt/homebrew/bin/mke2fs
 test -x "${MKE2FS}" || { echo "mke2fs not found (android-platform-tools provides it)" >&2; exit 1; }
 
-# First-gen musl binaries, renamed at install (D13). These are unmodified
-# old-repo build products — the crates themselves stay frozen in the old
-# repo (voiced/wifi-wizard/aterm/agsvc/agpkg + N5①'s agdl/agupd were
-# absorbed and 改姓 in the new repo instead; what remains here had no
-# in-repo consumer to recompile).
-for b in agqr agdone agsecretd agsecret aginxos-init aginxos-agent; do
+# First-gen musl binaries, renamed at install (D13). N5② emptied this
+# list down to the trampoline pair: every CLI the new repo has source for
+# (download/update/qr/done/secret + the earlier voice/wizard/term/svc/
+# pkg/sign wave) is rebuilt here instead; the trampoline stays frozen
+# deliberately (aginxos-init owns the userdata rootfs swap — swap the
+# swapper and the update flow has no rollback story).
+for b in aginxos-init aginxos-agent; do
   test -x "${OTARGET}/${b}" \
     || { echo "missing old ${b} — old repo ./scripts/build-phone.sh musl first" >&2; exit 1; }
 done
@@ -70,7 +72,22 @@ echo "==> zigbuild 新仓 musl 件（缓存则秒过）"
 (cd "${ROOT}" && cargo zigbuild --release --target aarch64-unknown-linux-musl \
   -p aginx-router -p aginx-server -p aginx-runtime -p aginx-voice \
   -p aginx-net-wizard -p aginx-term -p aginx-pkg -p aginx-svc \
-  -p aginx-download -p aginx-update)
+  -p aginx-download -p aginx-update -p aginx-done -p aginx-secret)
+
+# N5② feature-unification trap: aginx-voice depends aginx-qr with
+# default-features=false (it only links parse_wifi_payload). Selecting
+# aginx-qr/jpeg in the SAME invocation as aginx-voice would unify
+# quircs+aginx-img into the aginx-voice binary — bloat, and the qr
+# decoder would no longer be a separate process. So the device aginx-qr
+# comes from a SECOND, separate invocation. The size tripwire below
+# catches exactly that unification (a relinked voice changes size);
+# if it fires, someone folded the two invocations together.
+VOICE_SZ_BEFORE="$(stat -f%z "${TARGET}/aginx-voice")"
+(cd "${ROOT}" && cargo zigbuild --release --target aarch64-unknown-linux-musl \
+  -p aginx-qr --features aginx-qr/jpeg)
+VOICE_SZ_AFTER="$(stat -f%z "${TARGET}/aginx-voice")"
+[[ "${VOICE_SZ_BEFORE}" == "${VOICE_SZ_AFTER}" ]] \
+  || { echo "FATAL: aginx-voice changed size across the aginx-qr build (${VOICE_SZ_BEFORE} → ${VOICE_SZ_AFTER}) — feature unification leak; keep the two zigbuild invocations separate" >&2; exit 1; }
 
 # Package manifest rides SIGNED: the on-device default path requires a
 # detached sig or every `aginx-pkg sync` refuses (fail-closed). Content-
@@ -169,7 +186,7 @@ mkdir -p "${TREE}/bin" "${TREE}/usr/bin"
 # cam-shot (M19) — the IFE/RDI stills capture tool. Vendor sensor register
 # tables are decoded into the source; vendor module bins stay local and
 # gitignored. N4: the four brain-facing C tools take their D13 /usr/bin
-# names AT BUILD TIME (voiced spawns /usr/bin/aginx-cam-shot; net-bringup
+# names AT BUILD TIME (aginx-voice spawns /usr/bin/aginx-cam-shot; net-bringup
 # and net-rejoin call /usr/bin/aginx-net-join; wizard scans through
 # /usr/bin/aginx-net-scan; reboot is /usr/bin/aginx-reboot). Default flags
 # for a rear shot: --stream --rear --slowrear --rawvendor [--gain N] [--png].
@@ -319,11 +336,12 @@ install -m 755 "${TARGET}/aginx-svcd" "${TREE}/usr/libexec/aginx/"
 # N5① 吸收件：updater/download 改由本仓重编（修了三死路径的活版本），
 # 落位与老资产同名同位（sidecar 已在 usr/bin）。
 install -m 755 "${TARGET}/aginx-download" "${TARGET}/aginx-update" "${TREE}/usr/bin/"
-# First-gen binaries, D13 改姓落位（install 即改名；sidecar 已在 usr/bin）.
-install -m 755 "${OTARGET}/agqr"  "${TREE}/usr/bin/aginx-qr"
-install -m 755 "${OTARGET}/agdone" "${TREE}/usr/bin/aginx-done"
-install -m 755 "${OTARGET}/agsecret" "${TREE}/usr/bin/aginx-secret"
-install -m 755 "${OTARGET}/agsecretd" "${TREE}/usr/libexec/aginx/aginx-secretd"
+# N5② 吸收件：qr/done/secret 全由本仓重编。aginx-qr 是第二次 zigbuild
+# 的产物（feature 陷阱，见上）；aginx-secretd 落 libexec（引擎的家），
+# aginx-secret 是 /usr/bin 的人面。
+install -m 755 "${TARGET}/aginx-qr" "${TARGET}/aginx-done" "${TARGET}/aginx-secret" \
+  "${TREE}/usr/bin/"
+install -m 755 "${TARGET}/aginx-secretd" "${TREE}/usr/libexec/aginx/"
 # Voice/OCR CLIs (bionic-static) + models. TTS: melo (vits-melo-tts-zh_en)
 # is the product mouth; the 170MB fp32 model.onnx is the real weights — the
 # tarball's model.int8.onnx is a 133B git-lfs pointer (release packaging

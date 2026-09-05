@@ -20,8 +20,8 @@
 //!   offset 257), it must carry `bin/<name>` + `pkg.toml` + `SKILL.md`.
 //!   Missing SKILL.md = install fails: a package without its skill doc
 //!   does not install. SKILL.md lands in /var/lib/agpkg/skills/<name>/,
-//!   a `[service]` table in pkg.toml is written verbatim as an agsvc
-//!   overlay unit (/var/lib/agpkg/units/<name>.toml — the channel agsvc
+//!   a `[service]` table in pkg.toml is written verbatim as an aginx-svc
+//!   overlay unit (/var/lib/agpkg/units/<name>.toml — the channel aginx-svc
 //!   already scans) followed by `aginx-svc reload`. Extra files ride under
 //!   skills/<name>/; a second entry under bin/ is rejected — one
 //!   package, one binary.
@@ -399,7 +399,7 @@ fn install_bundle(p: &Paths, name: &str, src: &Path) -> Result<Kind, Fail> {
     // files/ that becomes the /var/bin face as a SYMLINK into the tree —
     // for runtimes whose executable resolves its own libs/stdlib
     // relative to its real path (CPython); [service] (optional) becomes
-    // an agsvc unit.
+    // an aginx-svc unit.
     let doc: toml::Value = toml::from_str(&String::from_utf8_lossy(&pkg_raw))
         .map_err(|e| io_fail("pkg_manifest_parse", format!("pkg.toml: {e}")))?;
     let tbl = doc.as_table().ok_or_else(|| io_fail("pkg_manifest_parse", "pkg.toml: want a table at top level"))?;
@@ -462,7 +462,7 @@ fn install_bundle(p: &Paths, name: &str, src: &Path) -> Result<Kind, Fail> {
         if !cmd.starts_with('/') {
             return Err(io_fail("pkg_service", format!("[service] cmd '{cmd}' is not an absolute path")));
         }
-        // agsvc's unit parser only knows str/bool/str-array values.
+        // aginx-svc's unit parser only knows str/bool/str-array values.
         for (k, v) in svc {
             let ok = v.is_str() || v.is_bool()
                 || v.as_array().map(|a| a.iter().all(|i| i.is_str())).unwrap_or(false);
@@ -577,7 +577,7 @@ fn relative_path(link: &Path, to: &Path) -> Option<PathBuf> {
     Some(PathBuf::from(parts.join("/")))
 }
 
-/// Write the agsvc overlay unit: [unit] name + the package's [service]
+/// Write the aginx-svc overlay unit: [unit] name + the package's [service]
 /// table verbatim (aginx-svcd scans /var/lib/agpkg/units — M16's overlay
 /// channel, finally written by its intended author).
 fn write_unit(p: &Paths, name: &str, svc: &toml::map::Map<String, toml::Value>) -> Result<(), Fail> {
@@ -595,7 +595,7 @@ fn write_unit(p: &Paths, name: &str, svc: &toml::map::Map<String, toml::Value>) 
 }
 
 /// Best-effort `aginx-svc reload`: the unit file is on disk either way and
-/// agsvc rescans on restart — a failed reload is a warning, never a
+/// aginx-svc rescans on restart — a failed reload is a warning, never a
 /// failed install.
 fn reload_units(p: &Paths) {
     match Command::new(&p.svcctl).arg("reload").status() {

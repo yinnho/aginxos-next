@@ -1,14 +1,14 @@
-//! agqr — QR 解码（M42b 眼分支）。
+//! aginx-qr — QR 解码（M42b 眼分支）。
 //!
 //! 产品的眼进第一段：cam-shot 盲拍一张灰 JPEG → 本 CLI 解出 QR payload。
 //! 解码器是 quircs（quirc 的纯 Rust 移植，拉 num-traits/num-derive/
-//! thiserror，全纯 Rust——musl 静态无碍）；JPEG 解码复用 agimg
+//! thiserror，全纯 Rust——musl 静态无碍）；JPEG 解码复用 aginx-img
 //! （vendored libjpeg-turbo，DCT 缩放直出小图）。
 //!
-//! lib 面还给 voiced 复用 `parse_wifi_payload`（WIFI: 载荷解析，纯字符串，
-//! 无重依赖——voiced 以 default-features=false 引本 crate 时不拉 agimg）。
+//! lib 面还给 aginx-voice 复用 `parse_wifi_payload`（WIFI: 载荷解析，纯字符串，
+//! 无重依赖——aginx-voice 以 default-features=false 引本 crate 时不拉 aginx-img）。
 
-/// 送进解码器的图像边长上限。2016×1136 的后摄帧走 agimg DCT 1/2 缩放后
+/// 送进解码器的图像边长上限。2016×1136 的后摄帧走 aginx-img DCT 1/2 缩放后
 /// ~1008×568；QR 占半幅时 ~10px/模块，远超 quirc 的采样需求。
 #[cfg(feature = "jpeg")]
 pub const MAX_DECODE_SIDE: u32 = 1280;
@@ -95,7 +95,7 @@ pub fn bradley_with_half(w: usize, h: usize, luma: &[u8], half: i64) -> Vec<u8> 
     out
 }
 
-/// XRGB8888（0x00RRGGBB，行主序——agimg Bitmap 的布局）→ 8-bit 灰度。
+/// XRGB8888（0x00RRGGBB，行主序——aginx-img Bitmap 的布局）→ 8-bit 灰度。
 /// 整数权重 77/150/29（和 256）：BT.601 luma，无浮点。
 #[cfg(feature = "jpeg")]
 pub fn luma_from_xrgb(w: u32, h: u32, pix: &[u32]) -> Vec<u8> {
@@ -122,7 +122,7 @@ pub fn decode_jpeg(jpeg: &[u8]) -> Result<Vec<String>, String> {
     let mut last = Vec::new();
     let mut decoded_any = false;
     for max_side in [MAX_DECODE_SIDE, 1600, 1008] {
-        if let Some(bm) = agimg::decode_scaled(jpeg, max_side, max_side) {
+        if let Some(bm) = aginx_img::decode_scaled(jpeg, max_side, max_side) {
             decoded_any = true;
             let luma = luma_from_xrgb(bm.w, bm.h, &bm.pix);
             let out = decode_luma(bm.w as usize, bm.h as usize, &luma);

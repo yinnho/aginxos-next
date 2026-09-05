@@ -1,4 +1,4 @@
-//! voiced — 语音对话守护（M42a，产品定义 2026-09-04：手机即智能体）。
+//! aginx-voice — 语音对话守护（M42a，产品定义 2026-09-04：手机即智能体）。
 //!
 //! 产品面唯一的输入是语音（PTT=按住音量下键）和眼（M42b），输出是脸
 //! （/run/aginx-voice/face → aterm 渲染）和嘴（TTS）。**拉式语音**（2026-09-04
@@ -13,10 +13,10 @@
 //! 前台不可达落回地板话。不设此 env = 老行为分毫不动。
 //!
 //! 调试面（收据阶梯，从嘴/耳单器官到全环）：
-//!   voiced --say "文本"          只测嘴（TTS→扬声器）
-//!   voiced --hear <wav文件>      只测耳（WAV→ASR→打印文本）
-//!   voiced --inject "文本"       喂状态机走全流程（不出声，Act 真执行）
-//!   voiced --face                打印当前屏面 JSON
+//!   aginx-voice --say "文本"          只测嘴（TTS→扬声器）
+//!   aginx-voice --hear <wav文件>      只测耳（WAV→ASR→打印文本）
+//!   aginx-voice --inject "文本"       喂状态机走全流程（不出声，Act 真执行）
+//!   aginx-voice --face                打印当前屏面 JSON
 //!
 //! 没有嘴耳同开的回环自检：M18 的硬件收据写明 MM1 边放边采会把放音叠
 //! 进采集（数字回环是失真副本，880Hz 可验、语音不可认，2026-09-04 实测
@@ -58,19 +58,19 @@ fn main() {
     let args: Vec<String> = std::env::args().collect();
     match args.get(1).map(String::as_str) {
         Some("--say") => {
-            let text = args.get(2).expect("usage: voiced --say <text>");
+            let text = args.get(2).expect("usage: aginx-voice --say <text>");
             let brain = audio::Brain::from_env();
             say(text, brain.as_ref());
         }
         Some("--hear") => {
-            let path = args.get(2).expect("usage: voiced --hear <wav>");
+            let path = args.get(2).expect("usage: aginx-voice --hear <wav>");
             let brain = audio::Brain::from_env();
             let wav = std::fs::read(path).expect("read wav");
             let text = hear(&wav, brain.as_ref()).expect("asr failed");
             println!("{text}");
         }
         Some("--inject") => {
-            let text = args.get(2).expect("usage: voiced --inject <text>").clone();
+            let text = args.get(2).expect("usage: aginx-voice --inject <text>").clone();
             let mut vm = make_vm();
             face::write(&vm, false, false);
             let outs = vm.step(Ev::Heard(text));
@@ -93,7 +93,7 @@ fn main() {
                         if t.is_empty() {
                             continue;
                         }
-                        eprintln!("voiced: script {t:?}");
+                        eprintln!("aginx-voice: script {t:?}");
                         let outs = vm.step(Ev::Heard(t.to_string()));
                         run_outs(&mut vm, outs, brain.as_ref());
                     }
@@ -113,11 +113,11 @@ fn daemon() {
     let mut vm = make_vm();
     let mut ptt = ptt::Ptt::open();
     if ptt.is_none() {
-        eprintln!("voiced: no {} — PTT dead, face only", ptt::PTT_DEV);
+        eprintln!("aginx-voice: no {} — PTT dead, face only", ptt::PTT_DEV);
     }
     face::write(&vm, false, false);
     eprintln!(
-        "voiced: up (local={}, brain={}, ptt={})",
+        "aginx-voice: up (local={}, brain={}, ptt={})",
         audio::local_voice_ready(),
         brain.is_some(),
         ptt.as_ref()
@@ -149,7 +149,7 @@ fn daemon() {
                                     deadline = None; // 采集中不计时
                                     face::write(&vm, true, false);
                                 }
-                                Err(e) => eprintln!("voiced: cap start {e}"),
+                                Err(e) => eprintln!("aginx-voice: cap start {e}"),
                             }
                         }
                     }
@@ -165,7 +165,7 @@ fn daemon() {
                             }
                             face::write(&vm, false, false);
                             let v = audio::adjust_vol(-10);
-                            eprintln!("voiced: vol {v}");
+                            eprintln!("aginx-voice: vol {v}");
                             say(&format!("音量{v}"), brain.as_ref());
                             continue;
                         }
@@ -180,12 +180,12 @@ fn daemon() {
                                 face::write(&vm, false, true);
                                 match hear(&wav, brain.as_ref()) {
                                     Ok(text) => {
-                                        eprintln!("voiced: heard {text:?}");
+                                        eprintln!("aginx-voice: heard {text:?}");
                                         let outs = vm.step(Ev::Heard(text));
                                         run_outs(&mut vm, outs, brain.as_ref());
                                     }
                                     Err(e) => {
-                                        eprintln!("voiced: asr {e}");
+                                        eprintln!("aginx-voice: asr {e}");
                                         let outs = vm.step(Ev::Heard("没听懂".into()));
                                         // asr 失败提示本身也要能说——但 asr
                                         // 挂了多半网络不通，TTS 也挂；只刷屏
@@ -205,7 +205,7 @@ fn daemon() {
                     }
                     ptt::PttEv::VolUp => {
                         let v = audio::adjust_vol(10);
-                        eprintln!("voiced: vol {v}");
+                        eprintln!("aginx-voice: vol {v}");
                         say(&format!("音量{v}"), brain.as_ref());
                     }
                 }
@@ -234,15 +234,15 @@ fn say(text: &str, brain: Option<&audio::Brain>) {
     if audio::local_voice_ready() {
         match audio::local_speak(text) {
             Ok(()) => return,
-            Err(e) => eprintln!("voiced: local tts {e}"),
+            Err(e) => eprintln!("aginx-voice: local tts {e}"),
         }
     }
     if let Some(b) = brain {
         if let Err(e) = b.speak(text) {
-            eprintln!("voiced: tts {e}");
+            eprintln!("aginx-voice: tts {e}");
         }
     } else {
-        eprintln!("voiced: (mute) {text}");
+        eprintln!("aginx-voice: (mute) {text}");
     }
 }
 
@@ -252,7 +252,7 @@ fn hear(wav: &[u8], brain: Option<&audio::Brain>) -> Result<String, String> {
     if audio::local_voice_ready() {
         match audio::local_asr(wav) {
             Ok(t) => return Ok(t),
-            Err(e) => eprintln!("voiced: local asr {e}"),
+            Err(e) => eprintln!("aginx-voice: local asr {e}"),
         }
     }
     match brain {
@@ -279,7 +279,7 @@ fn run_outs(vm: &mut Vm, outs: Vec<Out>, brain: Option<&audio::Brain>) {
                     match scan_ssids() {
                         Ok(list) => followups.push(Ev::ScanDone(list)),
                         Err(e) => {
-                            eprintln!("voiced: scan {e}");
+                            eprintln!("aginx-voice: scan {e}");
                             followups.push(Ev::ScanDone(Vec::new()));
                         }
                     }
@@ -292,7 +292,7 @@ fn run_outs(vm: &mut Vm, outs: Vec<Out>, brain: Option<&audio::Brain>) {
                     face::write(vm, false, true);
                     let r = scan_qr();
                     if let Err(e) = &r {
-                        eprintln!("voiced: qr {e}");
+                        eprintln!("aginx-voice: qr {e}");
                     }
                     followups.push(Ev::QrDone(r));
                 }
@@ -300,7 +300,7 @@ fn run_outs(vm: &mut Vm, outs: Vec<Out>, brain: Option<&audio::Brain>) {
                     face::write(vm, false, true);
                     let r = read_text();
                     if let Err(e) = &r {
-                        eprintln!("voiced: ocr {e}");
+                        eprintln!("aginx-voice: ocr {e}");
                     }
                     followups.push(Ev::OcrDone(r));
                 }
@@ -315,7 +315,7 @@ fn run_outs(vm: &mut Vm, outs: Vec<Out>, brain: Option<&audio::Brain>) {
                     let reply = match chat_front(&text) {
                         Ok(r) => r,
                         Err(e) => {
-                            eprintln!("voiced: front {e}");
+                            eprintln!("aginx-voice: front {e}");
                             "现在连不上母体。固定说法还在：连接无线网络，或扫码，或念一下。"
                                 .to_string()
                         }
@@ -438,7 +438,7 @@ fn unescape_hex(s: &str) -> String {
 /// 2026-09-04 设备收据定形：冷启动后头几次 cam-shot 调用整段是废片
 /// （IOMMU/流会话热身——sweep 10 连拍第 3 发才中），同一轮内 --frames 3
 /// 只是帧内曝光收敛，救不了会话级废片，所以要**多次调用**而不是多帧；
-/// 慢门+gain8 档三连败（暗/糊），只配末位。每轮独立留档（voiced-qrN.jpg），
+/// 慢门+gain8 档三连败（暗/糊），只配末位。每轮独立留档（aginx-voice-qrN.jpg），
 /// 收据可逐轮复盘。cam-shot 挂死有预算（wait_limited kill）。
 const QR_BUDGET_SECS: u32 = 15;
 
@@ -447,7 +447,7 @@ fn scan_qr() -> Result<Vec<String>, String> {
     // (轮次从 1 计) — 第 4 轮才是慢门兜底
     for round in 1..=4u32 {
         let t0 = Instant::now();
-        let qr_jpg = format!("/tmp/voiced-qr{round}.jpg");
+        let qr_jpg = format!("/tmp/aginx-voice-qr{round}.jpg");
         let mut cmd = Command::new("/usr/bin/aginx-cam-shot");
         cmd.args(["--stream", "--rear", "--frames", "3", "--jpeg-gray"])
             .arg("--jpeg-out")
@@ -471,7 +471,7 @@ fn scan_qr() -> Result<Vec<String>, String> {
             last_err = "cam-shot rc!=0".into();
             continue;
         }
-        // 解码（agqr 进程，payload 一行一个）。output() 不带超时——解码
+        // 解码（aginx-qr 进程，payload 一行一个）。output() 不带超时——解码
         // 是 <300ms 量级的纯计算，等待预算都在拍照那侧
         let dec = Command::new("/usr/bin/aginx-qr").arg(&qr_jpg).output();
         match dec {
@@ -482,15 +482,15 @@ fn scan_qr() -> Result<Vec<String>, String> {
                     .collect::<Vec<_>>();
                 if !payloads.is_empty() {
                     eprintln!(
-                        "voiced: qr round {round}, {:.1}s",
+                        "aginx-voice: qr round {round}, {:.1}s",
                         t0.elapsed().as_secs_f32()
                     );
                     return Ok(payloads);
                 }
                 last_err = "没找到二维码".into();
             }
-            Ok(_) => last_err = "agqr rc!=0".into(), // exit 1 = 没码，也重试
-            Err(e) => last_err = format!("agqr spawn: {e}"),
+            Ok(_) => last_err = "aginx-qr rc!=0".into(), // exit 1 = 没码，也重试
+            Err(e) => last_err = format!("aginx-qr spawn: {e}"),
         }
     }
     Err(last_err)
@@ -506,7 +506,7 @@ fn read_text() -> Result<Vec<String>, String> {
     use std::io::Read;
     let mut last_err = String::new();
     for round in 1..=3u32 {
-        let jpg = format!("/tmp/voiced-ocr{round}.jpg");
+        let jpg = format!("/tmp/aginx-voice-ocr{round}.jpg");
         let mut cmd = Command::new("/usr/bin/aginx-cam-shot");
         cmd.args(["--stream", "--rear", "--frames", "3", "--jpeg"])
             .arg("--jpeg-out")
@@ -529,7 +529,7 @@ fn read_text() -> Result<Vec<String>, String> {
             continue;
         }
         // ag-ocr：stdout 每行 "text\tconf"，exit 0=有字 / 1=没字 / 2=错误。
-        // 识别要秒级（agqr 的 <300ms 先例不适用），piped + wait_limited 给预算。
+        // 识别要秒级（aginx-qr 的 <300ms 先例不适用），piped + wait_limited 给预算。
         let mut child = match Command::new("/var/bin/aginx-ocr")
             .arg(&jpg)
             .stdout(std::process::Stdio::piped())
@@ -555,7 +555,7 @@ fn read_text() -> Result<Vec<String>, String> {
                     .filter(|l| !l.is_empty())
                     .collect();
                 if !lines.is_empty() {
-                    eprintln!("voiced: ocr round {round}, {} 行", lines.len());
+                    eprintln!("aginx-voice: ocr round {round}, {} 行", lines.len());
                     return Ok(lines);
                 }
                 last_err = "没识别到文字".into();

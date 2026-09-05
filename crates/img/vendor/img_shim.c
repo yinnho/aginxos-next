@@ -1,9 +1,9 @@
-/* agimg_shim.c — the whole libjpeg dance in C so Rust never needs struct
+/* img_shim.c — the whole libjpeg dance in C so Rust never needs struct
  * layouts: jpeg_decompress_struct is opaque to the FFI boundary. Scale
  * selection walks scale_num/8 downward (DCT scaling inside the decoder —
  * the cheap way to fit a 12MP shot into a phone screen). Output pixel
  * format JCS_EXT_BGRX = bytes B,G,R,X = little-endian u32 0x00RRGGBB,
- * exactly aterm's DRM XRGB8888 framebuffers. Errors longjmp back here
+ * exactly aginx-term's DRM XRGB8888 framebuffers. Errors longjmp back here
  * instead of calling exit() (libjpeg default).
  */
 #include <stdio.h>
@@ -22,7 +22,7 @@ static void ag_err_exit(j_common_ptr ci)
     longjmp(e->jb, 1);
 }
 
-unsigned int *agimg_decode(const unsigned char *data, unsigned long len,
+unsigned int *aginx_img_decode(const unsigned char *data, unsigned long len,
                            unsigned max_w, unsigned max_h,
                            unsigned *out_w, unsigned *out_h)
 {

@@ -11,8 +11,8 @@ use aginx_svc::{scan_apps, AppEntry, APPS_DIR};
 
 pub const BIN_SH: &str = "/bin/sh";
 pub const BIN_WIZARD: &str = "/usr/bin/aginx-net-wizard";
-pub const BIN_REBOOT2: &str = "/usr/bin/aginx-reboot";
-pub const BIN_AGPKG: &str = "/usr/bin/aginx-pkg";
+pub const BIN_AGINX_REBOOT: &str = "/usr/bin/aginx-reboot";
+pub const BIN_AGINX_PKG: &str = "/usr/bin/aginx-pkg";
 
 pub struct Entry {
     pub label: String,
@@ -33,7 +33,7 @@ pub struct Entry {
     pub photos: bool,
     /// "VOICE" tile: opens the M42a voice dialog face (Mode::Voice) —
     /// the product's primary input modality. Pure aginx-term state; content
-    /// comes from polling /run/aginx-voice/face (written by the voiced daemon).
+    /// comes from polling /run/aginx-voice/face (written by the aginx-voice daemon).
     pub voice: bool,
 }
 
@@ -63,10 +63,10 @@ fn app_entry(a: AppEntry) -> Entry {
 fn builtins() -> Vec<Entry> {
     let mut v = vec![Entry {
         label: "+".into(),
-        bin: BIN_AGPKG.into(),
+        bin: BIN_AGINX_PKG.into(),
         args: vec![],
         // dimmed if the installer itself is missing
-        avail: std::path::Path::new(BIN_AGPKG).is_file(),
+        avail: std::path::Path::new(BIN_AGINX_PKG).is_file(),
         scale: 5,
         picker: true,
         photos: false,
@@ -78,8 +78,8 @@ fn builtins() -> Vec<Entry> {
             ("PHOTOS", "", &[][..], 5),
             ("SH", BIN_SH, &[][..], 5),
             ("WIFI SETUP", BIN_WIZARD, &[][..], 5),
-            ("RESTART", BIN_REBOOT2, &["reboot"][..], 5),
-            ("POWER OFF", BIN_REBOOT2, &["poweroff"][..], 5),
+            ("RESTART", BIN_AGINX_REBOOT, &["reboot"][..], 5),
+            ("POWER OFF", BIN_AGINX_REBOOT, &["poweroff"][..], 5),
         ]
         .into_iter()
         .map(|(label, bin, args, scale)| Entry {
@@ -92,7 +92,7 @@ fn builtins() -> Vec<Entry> {
             avail: label == "VOICE"
                 || label == "PHOTOS"
                 || bin == BIN_SH
-                || bin == BIN_REBOOT2
+                || bin == BIN_AGINX_REBOOT
                 || std::path::Path::new(bin).is_file(),
             scale,
             picker: false,
@@ -107,7 +107,7 @@ fn builtins() -> Vec<Entry> {
 /// Scale for non-launcher spawns (AGINX_TERM_START debug path, the first-boot
 /// wizard): known phone-native binaries get 5, everything else 3.
 pub fn scale_for(bin: &str) -> usize {
-    if bin == BIN_SH || bin == BIN_WIZARD || bin == BIN_REBOOT2 {
+    if bin == BIN_SH || bin == BIN_WIZARD || bin == BIN_AGINX_REBOOT {
         5
     } else {
         3

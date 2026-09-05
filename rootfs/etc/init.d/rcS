@@ -71,7 +71,7 @@ date > /etc/.rcs-ran
 mkdir -p /run 2>/dev/null
 : > /run/boot.state
 ( exec /bin/bootcard /run/boot.state ) >/var/bootcard.log 2>&1 &
-# aterm-handoff (M11) kills bootcard by this pid once boot finishes.
+# aginx-term-handoff (M11) kills bootcard by this pid once boot finishes.
 echo $! > /run/bootcard.pid
 
 # Touch bring-up (M3) — backgrounded: it waits out the ~60s panel
@@ -161,4 +161,4 @@ fi
 
 # Panel handoff (M11) — when boot finishes, bootcard's panel goes to
 # aginx-term (launcher + shell). Backgrounded: waits on /run/boot.state.
-/etc/init.d/aterm-handoff &
+/etc/init.d/aginx-term-handoff &

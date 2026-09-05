@@ -92,7 +92,7 @@ fn print_out(out: aginx_pkg::CmdOut, json: bool) {
     for l in &out.lines {
         println!("{l}");
     }
-    // empty result prints nothing (v0 behavior — the aterm "+" tile
+    // empty result prints nothing (v0 behavior — the aginx-term "+" tile
     // reads these stdout lines).
 }
 

@@ -40,7 +40,7 @@ fn main() {
     b.include(&vend)
         .include(vend.join("simd"))
         .warnings(false);
-    b.file(vend.join("agimg_shim.c"));
+    b.file(vend.join("img_shim.c"));
     for f in core {
         b.file(vend.join(f));
     }
@@ -57,6 +57,6 @@ fn main() {
     } else {
         b.file(vend.join("jsimd_none.c"));
     }
-    b.compile("agimg_jpeg");
+    b.compile("aginx_img_jpeg");
     println!("cargo:rerun-if-changed=vendor/");
 }

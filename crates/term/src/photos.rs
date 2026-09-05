@@ -1,7 +1,7 @@
 // Photos — the M39 photo viewer state machine. SM7250 has no hardware
 // JPEG decoder (camss cam_jpeg is encode-only, Venus has no JPEG — see
 // HARDWARE.md M39), so decode is vendored libjpeg-turbo with NEON
-// (../agimg), DCT-scaled straight to screen size. Photos live in
+// (../img), DCT-scaled straight to screen size. Photos live in
 // /home/photos (state tar carries /home — they survive reflash);
 // `ag cam-shot --jpeg-out /home/photos/shot.jpg` is the writer today.
 //
@@ -17,7 +17,7 @@ pub struct Photos {
     /// frame counters, not sortable strings)
     pub files: Vec<String>,
     pub sel: usize,
-    pub img: Option<agimg::Bitmap>,
+    pub img: Option<aginx_img::Bitmap>,
     /// false = list screen, true = full-screen image
     pub view: bool,
     /// last open error, shown in the list footer until the next attempt
@@ -74,7 +74,7 @@ impl Photos {
         self.img = None;
         self.err.clear();
         match std::fs::read(&self.files[i]) {
-            Ok(bytes) => match agimg::decode_scaled(&bytes, max_w, max_h) {
+            Ok(bytes) => match aginx_img::decode_scaled(&bytes, max_w, max_h) {
                 Some(b) => {
                     self.img = Some(b);
                     self.view = true;

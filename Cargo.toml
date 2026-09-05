@@ -3,7 +3,7 @@ resolver = "2"
 members = [
     "crates/agi",
     "crates/agio",
-    "crates/agqr",
+    "crates/qr",
     "crates/sign",
     "crates/download",
     "crates/update",
@@ -13,10 +13,12 @@ members = [
     "crates/voice",
     "crates/wizard",
     "crates/svc",
-    "crates/agimg",
+    "crates/img",
     "crates/term",
     "crates/pkg",
     "crates/testkit",
+    "crates/done",
+    "crates/secret",
 ]
 
 [workspace.package]
