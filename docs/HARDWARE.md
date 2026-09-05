@@ -191,3 +191,54 @@ all green. End state: slot _a `a0257a8`, boot_a succ=1 (rcS marked
 success — no try burn), six units ready, pkg ok (stamps survived),
 gateway 11 registration lines across the session, 8443 ESTABLISHED.
 No rollback paths used; insurance tars untouched.
+
+## M47① — camera line moves house, byte-identical proof (2026-09-05, observed)
+
+The camera trio (`cam-shot.c` + `jpegenc.h` + `raw2jpg.c`) copied from
+the first-gen repo into this repo's `rootfs/src/`; `build-rootfs.sh` now
+zig-compiles from the local copy. Zero-semantic-change receipt, on
+device:
+
+- `cmp` on the moved source: byte-identical. The zig cc binaries differ
+  only by the embedded source path (strings diff = 3 path-fragment
+  lines, 32 B size delta) — proven path metadata, not code.
+- A/B on device (same desk scene, `--stream --rear --frames 3 --jpeg`):
+  old build 2 shots rc=0 (34,960 / 34,986 B), new build 2 shots rc=0
+  (34,480 / 35,693 B) — same size band, pulled frames show the same
+  composition pixel-for-pixel. Frame-to-frame sensor noise dominates the
+  spread.
+
+These two frames double as the **M47 quality baseline**: default-mode
+rear JPEG is dark (YAVG ~19/255 lineage), gray-green, washed out — the
+three defects (横放/不满屏/暗) this milestone exists to fix.
+
+## M47② — black level + gamma land in the pixel chain (2026-09-05, observed)
+
+`campix.h` (host-testable pure pixel library, `campix_test.c` now a
+`check.sh` gate) replaces the old chain inside `dump_jpeg`: RAW10 → crop
+extract through the LINEAR LUT (bl subtract + renormalize; WB/AEC stats
+live there) → gray-world WB → debayer/rotate/scale single pass with the
+gamma display LUT at the tail. JPEGs publish by `<path>.tmp` +
+rename(2) — mtime-polling readers (term eye) never see half a frame.
+New args: `--bl N` `--gamma E` `--rot 0|90|270`. Device receipts:
+
+- **bl pinned at 16.** Near-black scene (default mode exposure, yavg
+  print): linear yavg = **1.7** with bl=16 → raw black ≈ 17.6 → residual
+  sits inside the 0–2 acceptance band. `--bl 16` stays the default.
+- **Domains cross-check.** Same scene boosted (`--gain 16 --dgain 2`):
+  old-chain emulation (`--bl 0 --gamma 1`) reports raw yavg **47.9**;
+  new chain reports linear yavg **33.5**; conversion
+  (47.9−16)×255/239 = **34.0** — the two domains agree to measurement
+  noise.
+- **对拍 (the defect this step exists for).** Same dark scene, gain
+  16/dgain 2: old-look frame (`--bl 0 --gamma 1`) shows the black level
+  as a gray-green veil over every dark area; new-look frame (defaults)
+  has true-black darks, a correctly colored door-light strip, and no
+  green cast — WB gains (r=1.87/b=2.64 at this scene) finally act on a
+  blacked base. Frames: `/tmp/m47b-old16.jpg` vs `/tmp/m47b-def16.jpg`
+  (host copies).
+- Gray path (QR/scan) rides the same LUTs — monotonic map, Bradley's
+  adaptive threshold is invariant to it; full camera-QR round-trip
+  receipt lands with M47⑤.
+- host: `check.sh` all green incl. new campix gate
+  (luts/extract/wb/debayer-rot-scale/crop).
