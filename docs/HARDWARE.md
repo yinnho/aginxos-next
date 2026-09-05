@@ -82,3 +82,71 @@ net-bringup fix, first fresh-boot proof), send+face pass again.
 library (its HARDWARE.md carries the closing entry). Rollback paths
 unused: trampoline 32 GiB pre-swap copy intact, slot retry counter
 untouched (boots marked ok), `.factory/` untouched.
+
+## N5 — absorption + remote channel + backup line (2026-09-05, observed)
+
+**Artifacts.** `aginxos 6c1ee86 2026-09-05`, rootfs 2147483648 B, sha256
+`567773febd1362ffd566c9ca0348e0389839a2da6f1acb12b24fcccbc84a096b`;
+boot/vendor_boot reused the in-service pair unchanged (`e2ce2f17…` /
+`d80b8098…`). Bundle `out/update-n5/`, manifest signed with
+`.local/keys/aginx.key`.
+
+**Pre-gate (updater first).** The fixed `aginx-update` was pushed onto the
+running N4 form before any pour; its `status` printed the full
+boot-control table — the `aginx-boot-ok` spawn path where the frozen
+first-gen binary died. This is now a standing flash-day rule.
+
+**Pour + apply.** Insurance: /etc /home /var/lib tars, dual-side sha,
+`.local/backup-n5/`. rootfs pushed over USB 6.8 s (303 MB/s), device sha
+== manifest, poured device-local `dd bs=4096 seek=2097153` (7.1 s,
+289 MB/s). `aginx-update apply --no-reboot` all green, ending
+`aginx-boot-ok: slot _b set active on 4 disks` — the _a→_b flip the
+milestone was named for. `aginx-reboot reboot`.
+
+**First boot.** Trampoline swapped; state tar restored (wifi → Legrand,
+dhcp 192.168.0.166, ntpd clock gate, /etc/aginx). varlib-migrate done:
+`/var/lib/ag/secret/store` and `voiced/vol` re-homed under
+`/var/lib/aginx`, old roots gone, seven members present, stamps/done
+markers alive (provision skipped re-downloads — `pkg ok` within ~10 min).
+Five units self-started; aginx-gateway failed-by-design (no id yet),
+restart-looped 5× until infusion.
+
+**Trap 1 — state tar is an overlay.** state-restore extracts the whole
+tar over the new rootfs, so the N4 tar's `/etc/aginx/secret.policy` and
+`groups.desc` clobbered the N5-baked ones (svc.d/gateway.toml survived
+only because the old tar didn't contain those names). Symptom: secretd
+denied the gateway's `get relay.primary` every 5 s ("waiting for relay
+secret") though the value was in the store. Fixed on device by pushing
+the N5 files; class fix = `STATE_TAR_EXCLUDES` in the updater (four
+image-owned members excluded, busybox `--exclude` verified on device) —
+commit 128420d, effective at the next apply.
+
+**Trap 2 — bake gap.** `n5-qr.jpg` sat in the recipe but build-rootfs.sh
+never installed it (first suite run failed the QR decode with ENOENT).
+Fixture pushed to `/usr/share/aginx/`; install line added (128420d).
+
+**Identity + remote channel.** `AGINX_GATEWAY_ID` appended to
+/etc/aginx/env via stdin (never echoed); `relay.primary` poured into the
+sidecar via stdin; `aginx-svc restart aginx-gateway` →
+`registered id=cf49973e url=agent://cf49973e.relay.aginx.net`, 8443
+ESTABLISHED (/proc/net/tcp `:20FB 01`). Host side had a stale first-gen
+agc token for this device id (`owner·mac-path-probe`) — `--logout`
+cleared it; then the true roundtrip: reply 「AginxOS 是一台有自我的机器
+操作系统——我 me 就是它的前台…」, negative `-32601: unknown avatar
+'不存在的化身'`. **First remote receipt of the N line.**
+
+**Suite.** First run 38/45: 2 device gaps (traps above) + 3 suite
+expectation bugs (migrate-log wording; backup filename is `-` not `T`;
+secret-get for a probe scope is policy-denied BY DESIGN — now asserted
+as a positive) + the stale token + 1 cascade. After fixes: 44/45 (last
+one an ERE `\{8\}` vs `{8}` bug — expect_out runs grep -E). **Final:
+45 passed, 0 failed** across H migration / I absorption / J backup /
+K gateway / L remote / M second boot.
+
+**End state.** `slot _b`, `aginxos 6c1ee86 2026-09-05`, six units ready
+(server/voice/browser/secretd/net-watch/gateway), gateway registered
+(7 registration lines across the session's reboots — reconnect loop
+proven), voice floor alive. Device carries the two trap-file pushes
+(policy/groups.desc/n5-qr.jpg — byte-identical to the 128420d recipe);
+the on-device updater is the 6c1ee86 build, so the state-tar exclusion
+ships with the next flash-day updater push. Rollback paths unused.
