@@ -14,7 +14,20 @@ router). The constitution lives in `docs/ARCH.md` (local only).
 | `crates/runtime` | `aginx-runtime` | fast-agi engine: runs an avatar folder |
 | `crates/agi` | — | fast-agi v0 frame types |
 | `crates/agio` | — | D1 output envelope for every CLI |
+| `crates/voice` | `aginx-voice` | voice dialog daemon — PTT input, closed-vocab protocol, face writer |
+| `crates/wizard` | `aginx-net-wizard` | first-boot Wi-Fi setup TUI |
+| `crates/term` | `aginx-term` | on-device terminal UI (launcher + pty shell on the panel) |
+| `crates/pkg` | `aginx-pkg` | package manager — signed manifest, 四件套 tars |
+| `crates/svc` | `aginx-svcd`/`aginx-svc`/`aginx-boot-ok` | supervisor, control client, A/B slot marker |
+| `crates/sign` | `aginx-sign` | host-side ed25519 signer/verifier |
 
-Host gate: `./scripts/check.sh`. Milestones are the N series (see
-AGENTS.md). First-generation repo: `~/Documents/aginxos` (asset library
-+ running device line until N4).
+Build entry points:
+
+- `./scripts/check.sh` — host gate (tests + registry lint), before every commit
+- `./scripts/build-rootfs.sh` — bake the flashable image (`out/rootfs.img`;
+  first-gen assets referenced via `OLD=`), see `rootfs/README.md`
+- `./scripts/accept/n4.sh` — device acceptance (the N4 switch gate)
+
+Milestones are the N series (see AGENTS.md). First-generation repo:
+`~/Documents/aginxos` — asset library since N4 (busybox, C tool sources,
+vendor ramdisk, voice/OCR builds, blobs, pre-N4 receipts).
