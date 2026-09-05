@@ -128,9 +128,9 @@ echo $! > /run/bootcard.pid
 # it after aginx-pkg installs.
 /etc/init.d/app-registry
 
-# crond — busybox crond reads /etc/crontabs/root. N4 切净: the #86 daily
-# backup line is gone with carrier.db (channel rebuilds in N5); the
-# daemon stays so the next line is a crontab edit, not a re-bake.
+# crond — busybox crond reads /etc/crontabs/root. N5④: the #86 daily
+# backup line is BACK on the new local line (aginx-backup v2 — state
+# world snapshot, no carrier.db in this world).
 # -c pins the dir (busybox defaults to /var/spool/cron/crontabs which
 # we don't create). Log at /var/log/crond.log.
 mkdir -p /var/log
