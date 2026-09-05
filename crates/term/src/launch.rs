@@ -33,7 +33,7 @@ pub struct Entry {
     pub photos: bool,
     /// "VOICE" tile: opens the M42a voice dialog face (Mode::Voice) —
     /// the product's primary input modality. Pure aginx-term state; content
-    /// comes from polling /run/voice/face (written by the voiced daemon).
+    /// comes from polling /run/aginx-voice/face (written by the voiced daemon).
     pub voice: bool,
 }
 
@@ -104,7 +104,7 @@ fn builtins() -> Vec<Entry> {
     v
 }
 
-/// Scale for non-launcher spawns (ATERM_START debug path, the first-boot
+/// Scale for non-launcher spawns (AGINX_TERM_START debug path, the first-boot
 /// wizard): known phone-native binaries get 5, everything else 3.
 pub fn scale_for(bin: &str) -> usize {
     if bin == BIN_SH || bin == BIN_WIZARD || bin == BIN_REBOOT2 {

@@ -8,8 +8,8 @@
 ## 目录内容
 
 - `etc/` — 静态系统配置。init.d 全套（rcS/net-bringup/provision/aterm-handoff/
-  app-registry/state-restore + 六个 bringup）、agsvc.d 五单元、aginx/
-  （env 明文环境、groups.desc 命令分组、secret.policy sidecar 放行表）、
+  app-registry/state-restore + 六个 bringup）、aginx/svc.d 五单元、
+  aginx/（env 明文环境、groups.desc 命令分组、secret.policy sidecar 放行表）、
   apps.d 两 tile、crontabs（仅注释，文件在 crond 才有家）、agpkg.manifest
   （N4 切净：8 条，删 aginx/aginx-carrier 两行，sig 由烤机脚本重签）。
 - `libexec/aginx/` — 守护的家（D13：libexec 不进路由器命令扫描）。net-watch/

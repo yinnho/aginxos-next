@@ -384,7 +384,7 @@ impl Kb {
         self.pinyin
     }
 
-    /// Host --ppm demo path (ATERM_IME_DEMO): latch 拼 without a touch.
+    /// Host --ppm demo path (AGINX_TERM_IME_DEMO): latch 拼 without a touch.
     pub fn set_pinyin(&mut self, on: bool) {
         self.pinyin = on;
     }
@@ -501,7 +501,7 @@ impl TouchReader {
                 }
                 (EV_ABS, ABS_MT_TRACKING_ID) => {
                     if ev.value == -1 {
-                        if std::env::var("ATERM_DEBUG").is_ok() {
+                        if std::env::var("AGINX_TERM_DEBUG").is_ok() {
                             eprintln!("aginx-term: lift: down={} dragged={}", self.down, self.dragged);
                         }
                         // finger up — ALWAYS reported (hold-repeat cleanup

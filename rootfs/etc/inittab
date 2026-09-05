@@ -5,7 +5,7 @@
 # respawn is what brings the console back (~12s to re-enumerate).
 ::respawn:/etc/init.d/adbd
 # Service supervisor (M16 agsvc, N4③b 改姓 aginx-svcd) — owns every
-# non-console daemon (units in /etc/agsvc.d + /var/lib/agpkg/units;
+# non-console daemon (units in /etc/aginx/svc.d + /var/lib/agpkg/units;
 # control via aginx-svc). busybox respawns aginx-svcd if it dies; its
 # children carry PDEATHSIG so they go down with it — no double-spawn
 # window. Lives in /usr/libexec/aginx/ (out of the router's command

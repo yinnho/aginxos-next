@@ -1,5 +1,5 @@
-//! 屏显对话面（M42a）：voiced 是 /run/voice/face 的唯一写者，原子换名写；
-//! aterm 轮询 mtime 读（同 /run/aterm.inject 的先例）。触摸屏=纯显示器，
+//! 屏显对话面（M42a）：voiced 是 /run/aginx-voice/face 的唯一写者，原子换名写；
+//! aterm 轮询 mtime 读（同 /run/aginx-term.inject 的先例）。触摸屏=纯显示器，
 //! 脸不归 voiced 画、也不归 voiced 点——没有可点的东西。
 
 use crate::protocol::Vm;
@@ -7,8 +7,8 @@ use serde::Serialize;
 use std::fs;
 use std::path::Path;
 
-pub const FACE_DIR: &str = "/run/voice";
-pub const FACE_FILE: &str = "/run/voice/face";
+pub const FACE_DIR: &str = "/run/aginx-voice";
+pub const FACE_FILE: &str = "/run/aginx-voice/face";
 
 #[derive(Serialize)]
 pub struct FaceDoc<'a> {

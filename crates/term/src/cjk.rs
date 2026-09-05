@@ -24,10 +24,10 @@ const FONT_PATH: &str = "/usr/share/fonts/agterm-cjk.otf";
 const CACHE_CAP: usize = 1024;
 
 /// Override for the host/adb dev loop (`aginx-term --ppm`, pre-rebake pushes):
-/// ATERM_CJK_FONT=/path/to/agterm-cjk.otf. On device the baked rootfs path
+/// AGINX_TERM_CJK_FONT=/path/to/agterm-cjk.otf. On device the baked rootfs path
 /// above is the truth.
 fn font_path() -> String {
-    std::env::var("ATERM_CJK_FONT").unwrap_or_else(|_| FONT_PATH.to_string())
+    std::env::var("AGINX_TERM_CJK_FONT").unwrap_or_else(|_| FONT_PATH.to_string())
 }
 
 /// Terminal cell width of `ch` in 6x8-cell units: 2 for CJK / fullwidth

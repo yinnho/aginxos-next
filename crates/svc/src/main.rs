@@ -11,7 +11,7 @@
 // pipe write end as fd 3 + env AGINX_SVC_NOTIFY=3; one byte written = ready,
 // EOF = died before ready. Foreign binaries (gateway/carrier/browser)
 // use `type = simple` (alive + grace = ready) until they adopt the
-// /run/svc/<name>.sock contract (§12.2).
+// /run/aginx-svc/<name>.sock contract (§12.2).
 //
 // Restart policy: exponential backoff 100 ms -> 10 s; circuit breaker
 // parks the unit in `failed` after 5 exits within 60 s until an explicit
@@ -783,7 +783,7 @@ impl Wdt {
 
 fn main() {
     setup_signals();
-    std::fs::create_dir_all("/run/svc").ok();
+    std::fs::create_dir_all("/run/aginx-svc").ok();
     std::fs::create_dir_all(LOG_DIR).ok();
     let _ = std::fs::remove_file(CTL_SOCK);
     let listener = match UnixListener::bind(CTL_SOCK) {

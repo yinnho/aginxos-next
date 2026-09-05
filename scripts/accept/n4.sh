@@ -24,7 +24,7 @@ NROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 STAMP="${N4_STAMP:-}"
 
 SOCK=/run/aginx.sock
-FACE=/run/voice/face
+FACE=/run/aginx-voice/face
 FACEBAK=/tmp/n4-face.bak
 KEYVAR=AGINXBRAIN_API_KEY
 

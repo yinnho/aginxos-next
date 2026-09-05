@@ -1,4 +1,4 @@
-# aginx:summary=service control: list/status/start/stop/restart/reload/logs over /run/svc/ctl.sock
+# aginx:summary=service control: list/status/start/stop/restart/reload/logs over /run/aginx-svc/ctl.sock
 # aginx:args=list | status <name> | start|stop|restart <name> | reload | logs <name>
 # aginx:examples=list
 # aginx:examples=status aginx-server

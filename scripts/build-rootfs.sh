@@ -292,7 +292,7 @@ else
   echo "NOTE: .local/radio incomplete — radio-bringup will fail; run scripts/build-radio-blobs.sh" >&2
 fi
 
-# Recipe: etc (init.d/agsvc.d/aginx/apps.d/crontabs + manifest+sig),
+# Recipe: etc (init.d/aginx/svc.d units/aginx conf/apps.d/crontabs + manifest+sig),
 # usr/bin (bridge sh faces + .aginxmd sidecars), libexec/aginx
 # (net-watch/net-rejoin), var/bin sidecars. All D13 knowledge lives here.
 mkdir -p "${TREE}/bin" "${TREE}/sbin" "${TREE}/aginxos" "${TREE}/usr/libexec/aginx" "${TREE}/var/bin"
