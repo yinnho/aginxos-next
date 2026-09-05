@@ -1,0 +1,18 @@
+# aginx-gateway (N5⑤) — the remote channel: persistent register to
+# relay.aginx.net:8443 (relay_secret single gate, layer 0) and collapse
+# of external JSON-RPC onto the aginx-server UDS front (layer 1).
+# Engine home /usr/libexec/aginx/ (D13: libexec 是引擎的家). id is
+# device state, NOT in the unit or gateway.toml: env_file=/etc/aginx/env
+# injects AGINX_GATEWAY_ID (a state-tar member, survives re-flash).
+# requires_weak only delays start until secretd is up (weak = secretd
+# dying later never blocks us); the sidecar secret is re-read only on
+# restart. type = simple: no notify protocol, no supervisor channel.
+[unit]
+name = aginx-gateway
+
+[service]
+cmd = /usr/libexec/aginx/aginx-gateway
+args = []
+type = simple
+env_file = /etc/aginx/env
+requires_weak = ["aginx-secretd"]

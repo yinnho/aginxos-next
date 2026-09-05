@@ -26,6 +26,7 @@ router). The constitution lives in `docs/ARCH.md` (local only).
 | `crates/update` | `aginx-update` | signed A/B rootfs updater — swap + state tar |
 | `crates/done` | `aginx-done` | provision done markers |
 | `crates/secret` | `aginx-secretd`/`aginx-secret` | secret sidecar daemon + admin face |
+| `crates/gateway` | `aginx-gateway` | remote channel — registers to relay.aginx.net, collapses external JSON-RPC onto the server's UDS front |
 
 Build entry points:
 

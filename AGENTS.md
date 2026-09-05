@@ -88,6 +88,7 @@ from the old repo's sources at bake.
 | `crates/download`, `crates/update` | `aginx-download`/`aginx-update` — HTTPS fetch + signed A/B rootfs updater |
 | `crates/done` | `aginx-done` — provision done-marker discipline |
 | `crates/secret` | `aginx-secretd`/`aginx-secret` — the secret sidecar + its admin face |
+| `crates/gateway` | `aginx-gateway` — remote channel daemon: registers to relay.aginx.net, collapses external JSON-RPC onto the server's UDS front (ACP.md wire authority = ecosystem repo) |
 | `crates/testkit` | test helpers |
 | `rootfs/` | the image recipe — see `rootfs/README.md` (placement matrix, asset split) |
 | `scripts/build-rootfs.sh` | the bake: recipe + zigbuild + OLD= assets → `out/rootfs.img` |

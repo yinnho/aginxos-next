@@ -1,0 +1,16 @@
+# aginx-gateway shape params (N5⑥). Precedence: file < env overlay
+# (AGINX_GATEWAY_HOST/PORT/TURN_TIMEOUT_S, debug channel). NO id in this
+# file on purpose: id is device identity — AGINX_GATEWAY_ID rides
+# /etc/aginx/env (env_file in the svc.d unit), a state-tar member, so
+# the gateway keeps its identity across re-flash; this file only carries
+# image-shaped parameters. Iron rule: dial the BARE relay host (SNI =
+# host); id routing is logical addressing — never DNS the
+# <id>.relay.<domain> subdomain. turn_timeout_s 110 = agc RPC_TIMEOUT
+# 120s minus 10s headroom: our error frame leaves before the client's
+# own timeout fires.
+host = "relay.aginx.net"
+port = 8443
+tls = true
+heartbeat_s = 30
+reconnect_s = 10
+turn_timeout_s = 110
