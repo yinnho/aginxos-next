@@ -343,6 +343,9 @@ install -m 755 "${TARGET}/aginx-download" "${TARGET}/aginx-update" "${TREE}/usr/
 # aginx-secret 是 /usr/bin 的人面。
 install -m 755 "${TARGET}/aginx-qr" "${TARGET}/aginx-done" "${TARGET}/aginx-secret" \
   "${TREE}/usr/bin/"
+# N5⑨ 定数收据件：QR fixture 进镜像（首烤漏装——套件 I 段靠它出定数）。
+mkdir -p "${TREE}/usr/share/aginx"
+install -m 644 "${RECIPE}/usr/share/aginx/n5-qr.jpg" "${TREE}/usr/share/aginx/"
 install -m 755 "${TARGET}/aginx-secretd" "${TREE}/usr/libexec/aginx/"
 # N5⑥ 网关：远端通道守护落 libexec（引擎的家）；id/secret 都不进镜像——
 # env_file 与 sidecar 在刷机日灌注（runbook 步 11）。
