@@ -1,5 +1,5 @@
 // aginx-svc — control client for the supervisor (M16, docs/SYSTEM.md
-// §12.2). One command per connection over /run/svc/ctl.sock; `logs` tails
+// §12.2). One command per connection over /run/aginx-svc/ctl.sock; `logs` tails
 // the unit's log file locally instead of round-tripping it.
 use std::io::{Read, Write};
 use std::os::unix::net::UnixStream;

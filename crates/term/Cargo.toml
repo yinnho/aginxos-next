@@ -18,7 +18,7 @@ agimg = { path = "../agimg" }
 # lives in the aginx-svc crate (N4③b ../svc) so the format has one definition.
 aginx-svc = { path = "../svc" }
 # M42a: the voice dialog face — voiced (the daemon) is the sole writer of
-# /run/voice/face; aterm parses the JSON to render it. Display-only: the
+# /run/aginx-voice/face; aginx-term parses the JSON to render it. Display-only: the
 # screen has no touch targets in that mode beyond the BACK affordance.
 serde = { workspace = true }
 serde_json = { workspace = true }

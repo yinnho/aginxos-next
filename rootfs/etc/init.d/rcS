@@ -112,11 +112,11 @@ echo $! > /run/bootcard.pid
 
 # Service layer (M16 agsvc → N4 aginx-svcd) — inittab respawns
 # /usr/libexec/aginx/aginx-svcd once rcS finishes, which starts the N4
-# units from /etc/agsvc.d (aginx-server, aginx-voice, aginxbrowser,
+# units from /etc/aginx/svc.d (aginx-server, aginx-voice, aginxbrowser,
 # aginx-secretd, net-watch), restarts them on crash with backoff, and
 # re-checks absent binaries every 30 s so first provisioning lands
 # without a reboot. Control: aginx-svc list|status|start|stop|restart|
-# reload over /run/svc/ctl.sock.
+# reload over /run/aginx-svc/ctl.sock.
 
 # Launcher app registry (M16) — seed /var/apps from /etc/apps.d so new
 # binaries appear on the launcher. Cheap and idempotent; provision re-runs

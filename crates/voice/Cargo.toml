@@ -7,7 +7,7 @@ license.workspace = true
 # M42a→N4②b：语音对话守护（D13 改姓 aginx-voice）。
 # protocol.rs 是纯逻辑（词表/序数/拼读/回读/状态机），host 全覆盖测试；
 # 音频件（snd-cap/snd-play 子进程 + brain asr/tts HTTP）全在 audio.rs。
-# 屏显面走 /run/voice/face（原子 JSON，aterm 轮询渲染——脸不归 voiced 画）。
+# 屏显面走 /run/aginx-voice/face（原子 JSON，aginx-term 轮询渲染——脸不归 voiced 画）。
 
 [dependencies]
 serde = { version = "1", features = ["derive"] }

@@ -16,7 +16,7 @@
 // M17 input split: the keyboard hit tests return typed InputEvents
 // (KeyEvent vs TextInputEvent, input.rs) and EVERY write to the pty goes
 // through inject() — the same entry point M18's voice input will call
-// with recognized text. ATERM_INJECT=1 watches /run/aterm.inject: any
+// with recognized text. AGINX_TERM_INJECT=1 watches /run/aginx-term.inject: any
 // process drops text there, it types into the session verbatim (that's
 // the voice path, testable without audio).
 //
@@ -60,7 +60,7 @@ const IDLE_BLANK: Duration = Duration::from_secs(60);
 
 // M42a voice face: sole writer is the voiced daemon (atomic tmp+rename);
 // aginx-term only polls mtime and renders. Display-only modality.
-const VOICE_FACE: &str = "/run/voice/face";
+const VOICE_FACE: &str = "/run/aginx-voice/face";
 
 fn fill_rect(pix: &mut [u32], pitch: usize, w: usize, h: usize, x: i32, y: i32, rw: i32, rh: i32, c: u32) {
     let (mut x, mut y, mut rw, mut rh) = (x, y, rw, rh);
@@ -373,7 +373,7 @@ fn child_exited(pid: libc::pid_t) -> bool {
 /// here; nothing else writes typed input to the pty.
 fn inject(mode: &mut Mode, term: &mut Term, parser: &mut vte::Parser, ev: &InputEvent) {
     let bytes = input::encode(ev, term.app_cursor);
-    if std::env::var("ATERM_DEBUG").is_ok() {
+    if std::env::var("AGINX_TERM_DEBUG").is_ok() {
         eprintln!("aginx-term: inject {:?} appcur={} -> {} bytes {:?}", ev, term.app_cursor, bytes.len(), String::from_utf8_lossy(&bytes));
     }
     if bytes.is_empty() {
@@ -412,14 +412,14 @@ enum Mode {
     /// Decode is libjpeg-turbo (no JPEG decode hardware on SM7250).
     Photos(photos::Photos),
     /// Voice dialog face (launcher VOICE tile, M42a): display-only
-    /// rendering of /run/voice/face, written by the voiced daemon.
+    /// rendering of /run/aginx-voice/face, written by the voiced daemon.
     /// No pty, no keyboard — PTT (volume-down) is the input path.
     Voice,
 }
 
 // ---------------- voice face ----------------
 
-/// M42a: the JSON voiced writes to /run/voice/face. Every field defaults
+/// M42a: the JSON voiced writes to /run/aginx-voice/face. Every field defaults
 /// so a partially-written doc never kills the renderer; `alive` lives on
 /// VoiceView, not here — it means "the file read+parsed at least once".
 #[derive(serde::Deserialize, Default)]
@@ -449,7 +449,7 @@ struct VoiceView {
 }
 
 impl VoiceView {
-    /// mtime-gated poll (same pattern as the /run/aterm.inject watch):
+    /// mtime-gated poll (same pattern as the /run/aginx-term.inject watch):
     /// stat is one syscall per loop pass, parse only on change. Returns
     /// true when the view changed and needs a repaint. Setting mtime to
     /// None forces the next poll to re-read (mode entry).
@@ -627,7 +627,7 @@ impl<'a> Render<'a> {
     }
 
     /// Voice dialog face (M42a, launcher VOICE tile): pure rendering of
-    /// the doc voiced writes to /run/voice/face. Phosphor rules — agent
+    /// the doc voiced writes to /run/aginx-voice/face. Phosphor rules — agent
     /// lines green, user lines white (prefixed ">"), selected SSID white,
     /// psk shown verbatim (read-back confirmation needs to be visible).
     /// No touch targets below the BACK toolbar: the screen is a display.
@@ -977,13 +977,13 @@ fn host_ppm(out: &str) {
 
     // second frame: terminal view with a fake session (M38a: includes a
     // UTF-8 Chinese line so the wide-cell put + ab_glyph render path is
-    // exercised on the host — ATERM_CJK_FONT points at the subset)
+    // exercised on the host — AGINX_TERM_CJK_FONT points at the subset)
     let area_top0 = lg.toolbar_h + 20;
     let area_h0 = kg.extra_y - area_top0;
     let sc0 = 6usize;
     let mut t = Term::new((w - 2 * kb::KB_M) / (6 * sc0), area_h0 / (8 * sc0));
     let mut parser = vte::Parser::new();
-    let demo_owned = std::env::var("ATERM_PPM_DEMO").unwrap_or_else(|_| {
+    let demo_owned = std::env::var("AGINX_TERM_PPM_DEMO").unwrap_or_else(|_| {
         "root@aginxos:~# uname -a\r\nLinux aginxos 5.4.61-android13 aarch64\r\nroot@aginxos:~# \x1b[1mecho '你好，世界'\x1b[0m\r\n你好，世界 — 化身·互联·记忆在线\r\nroot@aginxos:~# ".to_string()
     });
     let demo: &[u8] = demo_owned.as_bytes();
@@ -1003,10 +1003,10 @@ fn host_ppm(out: &str) {
         eprintln!("ppm: {e}");
     }
 
-    // third frame (M39): photo view — ATERM_PHOTOS_DEMO=<file.jpg> decodes
+    // third frame (M39): photo view — AGINX_TERM_PHOTOS_DEMO=<file.jpg> decodes
     // through agimg (DCT-scaled to the panel box) and renders the real
     // viewer screen, so the decode+blit path is host-verifiable.
-    if let Ok(demo) = std::env::var("ATERM_PHOTOS_DEMO") {
+    if let Ok(demo) = std::env::var("AGINX_TERM_PHOTOS_DEMO") {
         let bytes = std::fs::read(&demo).unwrap_or_default();
         let mut p = photos::Photos {
             files: vec![demo.clone()],
@@ -1032,10 +1032,10 @@ fn host_ppm(out: &str) {
         println!("wrote {photo_path}");
     }
 
-    // fourth frame (M40): pinyin IME — ATERM_IME_DEMO=<syllable> latches
+    // fourth frame (M40): pinyin IME — AGINX_TERM_IME_DEMO=<syllable> latches
     // 拼 on, types the syllable into the buffer and renders the strip over
     // the demo session, so the candidate row is host-verifiable.
-    if let Ok(syl) = std::env::var("ATERM_IME_DEMO") {
+    if let Ok(syl) = std::env::var("AGINX_TERM_IME_DEMO") {
         let mut k = kb0();
         k.set_pinyin(true);
         let mut ime = pinyin::Ime::new();
@@ -1103,11 +1103,11 @@ fn main() {
     let mut term = Term::new(term_cols, rows_for(kb_visible, scale));
     let mut parser = vte::Parser::new();
     let mut mode = Mode::Launcher;
-    // M42a: voice dialog face view (polled from /run/voice/face)
+    // M42a: voice dialog face view (polled from /run/aginx-voice/face)
     let mut voice = VoiceView::default();
-    // Debug/headless path: ATERM_START=<bin> skips the launcher and spawns
-    // the program immediately (e.g. ATERM_START=/bin/sh).
-    if let Ok(prog) = std::env::var("ATERM_START") {
+    // Debug/headless path: AGINX_TERM_START=<bin> skips the launcher and spawns
+    // the program immediately (e.g. AGINX_TERM_START=/bin/sh).
+    if let Ok(prog) = std::env::var("AGINX_TERM_START") {
         // leak: aginx-term is a forever-process
         let prog: &'static str = Box::leak(prog.into_boxed_str());
         scale = launch::scale_for(prog);
@@ -1115,7 +1115,7 @@ fn main() {
         term = Term::new(term_cols, rows_for(kb_visible, scale));
         match spawn_shell(term_cols as u16, rows_for(kb_visible, scale) as u16, &[prog]) {
             Ok(c) => mode = Mode::Running(c),
-            Err(e) => eprintln!("aginx-term: ATERM_START spawn: {e}"),
+            Err(e) => eprintln!("aginx-term: AGINX_TERM_START spawn: {e}"),
         }
     } else if !std::path::Path::new("/etc/wifi.conf").exists()
         && std::path::Path::new(launch::BIN_WIZARD).is_file()
@@ -1188,11 +1188,11 @@ fn main() {
     // deadline. Repeats go through inject() like every other input.
     let mut held: Option<(InputEvent, Instant)> = None;
     let mut down_y = 0usize; // where the current touch started
-    // M17 debug/voice hook: ATERM_INJECT=1 watches /run/aterm.inject —
+    // M17 debug/voice hook: AGINX_TERM_INJECT=1 watches /run/aginx-term.inject —
     // any process can drop text there and it types into the running
     // session as TextInputEvent, verbatim (\r included if written). This
     // is the exact path M18's ASR callback takes, testable without audio.
-    let inject_file = std::env::var("ATERM_INJECT").ok().as_deref() == Some("1");
+    let inject_file = std::env::var("AGINX_TERM_INJECT").ok().as_deref() == Some("1");
 
     loop {
         // drain pty output
@@ -1270,7 +1270,7 @@ fn main() {
                         // keystroke — the main source of "typing lag".
                         Touch::Down(x, y) => {
                             down_y = y;
-                            if std::env::var("ATERM_DEBUG").is_ok() {
+                            if std::env::var("AGINX_TERM_DEBUG").is_ok() {
                                 eprintln!("aginx-term: touch down {x},{y} kbvis={kb_visible} mode={}", matches!(mode, Mode::Running(_)));
                             }
                             if y < lg.toolbar_h {
@@ -1496,7 +1496,7 @@ fn main() {
                                 kb_dirty = true;
                                 redraw = true;
                             }
-                            if std::env::var("ATERM_DEBUG").is_ok() {
+                            if std::env::var("AGINX_TERM_DEBUG").is_ok() {
                                 eprintln!("aginx-term: touch tap y={y} kbvis={kb_visible}");
                             }
                             let kb_bot = if kb_visible { kg.extra_y } else { h };
@@ -1618,8 +1618,8 @@ fn main() {
 
         // voice-path hook: file content types into the session, consumed
         if inject_file {
-            if let Ok(s) = std::fs::read_to_string("/run/aterm.inject") {
-                let _ = std::fs::remove_file("/run/aterm.inject");
+            if let Ok(s) = std::fs::read_to_string("/run/aginx-term.inject") {
+                let _ = std::fs::remove_file("/run/aginx-term.inject");
                 if !s.is_empty() {
                     last_input = Instant::now();
                     inject(&mut mode, &mut term, &mut parser, &InputEvent::Text(s));

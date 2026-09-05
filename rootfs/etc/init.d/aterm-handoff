@@ -12,7 +12,7 @@ export PATH=/sbin:/bin:/usr/sbin:/usr/bin
 # M17 voice hook: watch /run/aterm.inject (ASR text lands there; aterm
 # types it into the pty). Was hand-exported since M18 — baked here in
 # #13 so it survives rootfs swaps.
-export ATERM_INJECT=1
+export AGINX_TERM_INJECT=1
 
 n=0
 while ! grep -q '^done ' /run/boot.state 2>/dev/null && [ $n -lt 150 ]; do
@@ -27,7 +27,7 @@ pidof bootcard >/dev/null 2>&1 && kill $(pidof bootcard) 2>/dev/null
 sleep 1
 
 ( while :; do
-    echo "=== aginx-term start $(date) ===" >> /var/aterm.log
-    /usr/bin/aginx-term >> /var/aterm.log 2>&1
+    echo "=== aginx-term start $(date) ===" >> /var/aginx-term.log
+    /usr/bin/aginx-term >> /var/aginx-term.log 2>&1
     sleep 2
   done ) &
