@@ -192,12 +192,15 @@ mkdir -p "${TREE}/bin" "${TREE}/usr/bin"
 # and net-rejoin call /usr/bin/aginx-net-join; wizard scans through
 # /usr/bin/aginx-net-scan; reboot is /usr/bin/aginx-reboot). Default flags
 # for a rear shot: --stream --rear --slowrear --rawvendor [--gain N] [--png].
+# M47①: the camera trio (cam-shot.c + jpegenc.h + raw2jpg.c) moved into
+# THIS repo's rootfs/src — the camera line is owned here now; the old-repo
+# copies are frozen history.
 "${ZIG}" cc -target aarch64-linux-musl -static -O2 \
-  -o "${TREE}/usr/bin/aginx-cam-shot" "${ORECIPE}/src/cam-shot.c"
+  -o "${TREE}/usr/bin/aginx-cam-shot" "${RECIPE}/src/cam-shot.c"
 # raw2jpg (M19c) — RAW10 dump -> JPEG converter, companion to cam-shot's
 # native --jpeg (for converting already-captured dumps).
 "${ZIG}" cc -target aarch64-linux-musl -static -O2 \
-  -o "${TREE}/bin/raw2jpg" "${ORECIPE}/src/raw2jpg.c"
+  -o "${TREE}/bin/raw2jpg" "${RECIPE}/src/raw2jpg.c"
 
 # Bionic LD_PRELOAD helpers (M3d). These load into vendor binaries, so they
 # must be NDK/bionic shared objects, not musl. trace_open.so mirrors file
