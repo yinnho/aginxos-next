@@ -150,3 +150,44 @@ proven), voice floor alive. Device carries the two trap-file pushes
 (policy/groups.desc/n5-qr.jpg — byte-identical to the 128420d recipe);
 the on-device updater is the 6c1ee86 build, so the state-tar exclusion
 ships with the next flash-day updater push. Rollback paths unused.
+
+## N5b — re-bake, 128420d lineage in service (2026-09-05, observed)
+
+Purpose: N5⑨ left three fixes as hand-pushes on a 6c1ee86 image. This
+flash bakes them in, so the image is the single source again and the
+STATE_TAR_EXCLUDES class fix takes its first live ride.
+
+**Artifacts.** `aginxos a0257a8 2026-09-05` — the local tree = pushed
+128420d (updater excludes + suite fixes + QR install line) + the N5⑨
+receipt commit; docs/ never enters the image, so image content is the
+128420d lineage exactly, only the version string names the local sha.
+rootfs 2147483648 B, sha256 `6e33504a3c0a0ecc2df85e219627ed8f0b48db74b786118effd105d5bf18a3dd`;
+boot/vendor_boot reused the in-service pair (`e2ce2f17…` / `d80b8098…`).
+Bundle `out/update-n5b/`, signed.
+
+**Sequence.** Updater-first gate: the 128420d-lineage `aginx-update`
+pushed onto the running N5 form — `status` printed the full boot table
+(state tar capture for THIS flash ran with excludes). Insurance tars
+`.local/backup-n5b/` (etc 149K / home 387K / varlib 17.8M gz). Push
+(rootfs 24 s over USB this time — transport variance, hash proves the
+bytes), device-side triple sha == manifest, pour `dd bs=4096
+seek=2097153`, apply `--no-reboot` → **slot _b → _a flip**. Mid-run the
+host adb daemon died and swallowed apply's stdout — the boot table
+proved the commit anyway; check evidence, not echoes.
+
+**Exclusion verified on the wire, pre-reboot.** The staged state tar at
+64 GiB (54,934,528 B) was listed before reboot: secret.policy 0,
+groups.desc 0, svc.d 0, gateway.toml 0 — while wifi.conf 1 and env
+rides. The overlay trap is dead end-to-end: first boot came up with the
+BAKED policy (relay.primary line present), groups.desc with backup, and
+the gateway self-registered `id=cf49973e` with **zero hand infusion**
+(the id rode /etc/aginx/env through the state tar). n5-qr.jpg decoded
+from its baked path.
+
+**Suite.** `n5.sh` **45/45 on the first run** — first flash in the
+project's history with zero post-flash fixes: L-section remote roundtrip
+(agc, reply mentions AginxOS) + negative avatar, M-section second boot
+all green. End state: slot _a `a0257a8`, boot_a succ=1 (rcS marked
+success — no try burn), six units ready, pkg ok (stamps survived),
+gateway 11 registration lines across the session, 8443 ESTABLISHED.
+No rollback paths used; insurance tars untouched.
