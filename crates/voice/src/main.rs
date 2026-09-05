@@ -671,6 +671,7 @@ fn join_wifi(ssid: &str, psk: &str) -> Result<String, String> {
                 if let Some(rest) = line.strip_prefix("inet ") {
                     if let Some(ip) = rest.split_whitespace().next() {
                         if ip != "127.0.0.1" {
+                            persist_wifi(ssid, psk);
                             return Ok(ip.to_string());
                         }
                     }
@@ -680,6 +681,30 @@ fn join_wifi(ssid: &str, psk: &str) -> Result<String, String> {
         std::thread::sleep(Duration::from_millis(500));
     }
     Err("没拿到地址".into())
+}
+
+/// 连上网后落 /etc/wifi.conf（M42g③）：0600、`ssid=`/`psk=` KEY=VALUE——
+/// 开机 net-bringup 与 net-watch 自愈都读它。语音序数/拼读、WIFI: 码、
+/// 眼取景三条连网路从此持久，重启不丢网。**失败不写**：坏密钥不落盘
+/// （wizard 撤回语义）；同网重连写同值幂等。
+fn persist_wifi(ssid: &str, psk: &str) {
+    use std::io::Write;
+    use std::os::unix::fs::OpenOptionsExt;
+    let conf = format!("ssid={ssid}\npsk={psk}\n");
+    let tmp = "/etc/wifi.conf.tmp";
+    let ok = std::fs::OpenOptions::new()
+        .write(true)
+        .create(true)
+        .truncate(true)
+        .mode(0o600)
+        .open(tmp)
+        .and_then(|mut f| f.write_all(conf.as_bytes()))
+        .is_ok();
+    if ok {
+        let _ = std::fs::rename(tmp, "/etc/wifi.conf");
+    } else {
+        eprintln!("aginx-voice: persist wifi.conf failed");
+    }
 }
 
 /// 状态一句话：时间 + 电池 + 网络。
