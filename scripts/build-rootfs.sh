@@ -195,12 +195,13 @@ mkdir -p "${TREE}/bin" "${TREE}/usr/bin"
 # M47①: the camera trio (cam-shot.c + jpegenc.h + raw2jpg.c) moved into
 # THIS repo's rootfs/src — the camera line is owned here now; the old-repo
 # copies are frozen history.
-"${ZIG}" cc -target aarch64-linux-musl -static -O2 \
-  -o "${TREE}/usr/bin/aginx-cam-shot" "${RECIPE}/src/cam-shot.c"
+# M47⑤d: encoder = vendored libjpeg-turbo (NEON); the build command (and the
+# source lists it mirrors) lives in build-cam.sh — this script just runs it.
+"${ROOT}/scripts/build-cam.sh"
+install -m 755 "${ROOT}/out/cam/aginx-cam-shot" "${TREE}/usr/bin/aginx-cam-shot"
 # raw2jpg (M19c) — RAW10 dump -> JPEG converter, companion to cam-shot's
 # native --jpeg (for converting already-captured dumps).
-"${ZIG}" cc -target aarch64-linux-musl -static -O2 \
-  -o "${TREE}/bin/raw2jpg" "${RECIPE}/src/raw2jpg.c"
+install -m 755 "${ROOT}/out/cam/raw2jpg" "${TREE}/bin/raw2jpg"
 
 # Bionic LD_PRELOAD helpers (M3d). These load into vendor binaries, so they
 # must be NDK/bionic shared objects, not musl. trace_open.so mirrors file
