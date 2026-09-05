@@ -1,11 +1,16 @@
-//! aginx-voice — 语音对话守护（M42a，产品定义 2026-09-04：手机即智能体）。
+//! aginx-voice — 语音对话守护（M42a，产品定义 2026-09-05：手机即智能体）。
 //!
-//! 产品面唯一的输入是语音（PTT=按住音量下键）和眼（M42b），输出是脸
+//! 产品面唯一的输入是语音（PTT=按住音量下键）和眼（M42b/M42g），输出是脸
 //! （/run/aginx-voice/face → aterm 渲染）和嘴（TTS）。**拉式语音**（2026-09-04
 //! 用户收据：识别和回应都是毫秒级，唯独嘴是慢车道）——回应默认只上脸，
-//! 用户点名（「你说给我听」「念一下」「再念一遍」）才出声。协议是封闭
-//! 词表的确定性状态机（protocol.rs），没有 LLM——WiFi 必须在 LLM 可用
-//! 之前连得上。
+//! 用户点名（「你说给我听」「念一下」「再念一遍」）才出声。协议是**命令
+//! 优先**的封闭词表状态机（protocol.rs，2026-09-06 重设计：无驻留态，机器
+//! 缺什么自己补什么——连网先查现状再试记忆，最后才睁眼等码），没有 LLM
+//! ——WiFi 必须在 LLM 可用之前连得上。
+//!
+//! **一眼自举（M42c）**：AGINXPAIR1 配对码是 WiFi+身份的超集，眼取景命中
+//! 即 Act::PairApply——连网 + 身份三件进 /etc/aginx/env + 快速校时 + 拉起
+//! 母体两单元，不回读不确认。秘密只在 env 文件里，永不上脸/日志。
 //!
 //! **前台模式（N2②）**：env `VOICED_FRONT=<aginx 路由器路径>` 时自由文本
 //! （封闭词表 miss）改投新前台——`aginx agent send`（母体/化身光标，
@@ -27,11 +32,10 @@ mod face;
 mod protocol;
 mod ptt;
 
-use protocol::{Act, Ev, Out, Vm};
+use protocol::{Act, Ev, NetState, Out, Vm};
 use std::process::Command;
 use std::time::{Duration, Instant};
 
-const TIMEOUT_SECS: u64 = 45; // 提示后无语音的退出时限
 const JOIN_BUDGET_SECS: u32 = 90;
 /// 母体一轮（真 brain，含工具往返）的等待预算——超了杀掉落地板话。
 const FRONT_BUDGET_SECS: u32 = 90;
@@ -98,7 +102,7 @@ fn main() {
             let mut vm = make_vm();
             face::write(&vm, false, false, false);
             let outs = vm.step(Ev::Heard(text));
-            run_outs(&mut vm, outs, None, false);
+            run_outs(&mut vm, outs, None, &mut None);
         }
         Some("--script") => {
             // 收据阶梯：stdin 每行一条 Heard，同一个 Vm 跨步保持（--inject
@@ -119,7 +123,7 @@ fn main() {
                         }
                         eprintln!("aginx-voice: script {t:?}");
                         let outs = vm.step(Ev::Heard(t.to_string()));
-                        run_outs(&mut vm, outs, brain.as_ref(), false);
+                        run_outs(&mut vm, outs, brain.as_ref(), &mut None);
                     }
                 }
             }
@@ -173,7 +177,6 @@ fn daemon() {
     }
 
     let mut capturing: Option<std::process::Child> = None;
-    let mut deadline: Option<Instant> = None;
     // 音量下键按下时刻：短按(<300ms)=音量−10、长按=PTT（M42e 产品面）
     let mut ptt_down: Option<Instant> = None;
     // 眼取景（M42g→M47⑤）：Some = 取景中（常驻子进程 + 命中轮询）。音量+
@@ -190,9 +193,9 @@ fn daemon() {
                     ptt::PttEv::Down => {
                         // 取景中音量下 = 闭眼（吞掉本次按压周期：不开采集，
                         // 后续 Up 因 ptt_down 为空自然空走）
-                        if let Some(mut ev) = eye.take() {
-                            eye_stop(&mut ev.child);
-                            let _ = vm.inject_say("取景已关。");
+                        let had_eye = eye.is_some();
+                        eye_shut(&mut vm, &mut eye);
+                        if had_eye {
                             face::write(&vm, false, false, false);
                             continue;
                         }
@@ -201,7 +204,6 @@ fn daemon() {
                             match audio::capture_start() {
                                 Ok(c) => {
                                     capturing = Some(c);
-                                    deadline = None; // 采集中不计时
                                     face::write(&vm, true, false, false);
                                 }
                                 Err(e) => eprintln!("aginx-voice: cap start {e}"),
@@ -237,7 +239,7 @@ fn daemon() {
                                     Ok(text) => {
                                         eprintln!("aginx-voice: heard {text:?}");
                                         let outs = vm.step(Ev::Heard(text));
-                                        run_outs(&mut vm, outs, brain.as_ref(), eye.is_some());
+                                        run_outs(&mut vm, outs, brain.as_ref(), &mut eye);
                                     }
                                     Err(e) => {
                                         eprintln!("aginx-voice: asr {e}");
@@ -259,29 +261,13 @@ fn daemon() {
                         }
                     }
                     ptt::PttEv::VolUp => {
-                        // M42g：音量+ = 眼。再按=闭眼。音量+10 的老义退役
-                        //（音量下短按仍减；一屏一键一义，加音量走语音）。
-                        if let Some(mut ev) = eye.take() {
-                            eye_stop(&mut ev.child);
-                            let _ = vm.inject_say("取景已关。");
+                        // M42g：音量+ = 眼开关（音量+10 的老义退役；一屏一键
+                        // 一义，加音量走语音）。协议的 Act::Eye/EyeClose 走
+                        // 同两个助手——键是手动挡，机器会自己睁眼/闭眼。
+                        if eye.is_some() {
+                            eye_shut(&mut vm, &mut eye);
                         } else {
-                            match eye_spawn() {
-                                Ok(child) => {
-                                    eye = Some(EyeView {
-                                        child,
-                                        since: Instant::now(),
-                                        mtime: None,
-                                        mtime_seen: Instant::now(),
-                                        last_qr: Instant::now(),
-                                        retries: 0,
-                                    });
-                                    let _ = vm.inject_say("取景中，对准码。");
-                                }
-                                Err(e) => {
-                                    eprintln!("aginx-voice: eye spawn {e}");
-                                    let _ = vm.inject_say("相机没起来，再按一次重试。");
-                                }
-                            }
+                            eye_start(&mut vm, &mut eye);
                         }
                         face::write(&vm, false, false, eye.is_some());
                     }
@@ -361,27 +347,15 @@ fn daemon() {
             face::write(&vm, false, false, false);
             match exit {
                 EyeExit::Hit(payloads) => {
-                    // 命中即自动走：WIFI: 码直接连、文本码念前 40 字
+                    // 命中即自动走：配对码（超集，PairApply）/ WIFI: 码直连 /
+                    // 文本码念前 40 字——拉式，码到手就用
                     let outs = vm.step(Ev::QrDone(Ok(payloads)));
-                    run_outs(&mut vm, outs, brain.as_ref(), false);
+                    run_outs(&mut vm, outs, brain.as_ref(), &mut eye);
                 }
                 EyeExit::GiveUp(msg) => {
                     let _ = vm.inject_say(msg);
                 }
             }
-        }
-
-        // ---- 超时 ----
-        if capturing.is_none() && !matches!(vm.state_name(), "idle") {
-            let dl =
-                *deadline.get_or_insert_with(|| Instant::now() + Duration::from_secs(TIMEOUT_SECS));
-            if Instant::now() >= dl {
-                deadline = None;
-                let outs = vm.step(Ev::Timeout);
-                run_outs(&mut vm, outs, brain.as_ref(), false);
-            }
-        } else {
-            deadline = None;
         }
     }
 }
@@ -419,36 +393,42 @@ fn hear(wav: &[u8], brain: Option<&audio::Brain>) -> Result<String, String> {
 }
 
 /// 落地状态机输出。拉式语音：Say 只上脸（行已在 vm.lines 里，末尾统一
-/// face::write），Speak 才走 TTS；Act → 执行并把结果喂回状态机。
-/// eye_open：取景开着（M47⑤）——Act::QrScan 不再另起 cam-shot（双会话
-/// 撞 sensor 必翻车），取景轮询本来就在逐帧解码。
-fn run_outs(vm: &mut Vm, outs: Vec<Out>, brain: Option<&audio::Brain>, eye_open: bool) {
+/// face::write），Speak 才走 TTS；Act → 执行并把结果喂回状态机。eye：
+/// 眼取景所有权借用——Act::Eye/EyeClose 由协议出生（缺网自动睁眼、取消
+/// 自动闭眼），VolUp/音量下走同两个助手。
+fn run_outs(
+    vm: &mut Vm,
+    outs: Vec<Out>,
+    brain: Option<&audio::Brain>,
+    eye: &mut Option<EyeView>,
+) {
     let mut followups: Vec<Ev> = Vec::new();
     for o in outs {
         match o {
             Out::Say(_) => {}
             Out::Speak(s) => {
-                face::write(vm, false, true, false);
+                face::write(vm, false, true, eye.is_some());
                 say(&s, brain);
             }
             Out::Show => {}
             Out::Act(a) => match a {
-                Act::Scan => {
-                    face::write(vm, false, true, false);
-                    match scan_ssids() {
-                        Ok(list) => followups.push(Ev::ScanDone(list)),
-                        Err(e) => {
-                            eprintln!("aginx-voice: scan {e}");
-                            followups.push(Ev::ScanDone(Vec::new()));
-                        }
-                    }
+                Act::NetConnect => {
+                    // 机器干活：先看现状，再试记忆里的网，都不行才睁眼要码
+                    face::write(vm, false, true, eye.is_some());
+                    followups.push(Ev::NetState(net_check()));
                 }
                 Act::Join { ssid, psk } => {
-                    face::write(vm, false, true, false);
+                    face::write(vm, false, true, eye.is_some());
                     followups.push(Ev::JoinDone(join_wifi(&ssid, &psk)));
                 }
+                Act::PairApply { bundle } => {
+                    face::write(vm, false, true, eye.is_some());
+                    followups.push(Ev::PairDone(pair_apply(&bundle)));
+                }
+                Act::Eye => eye_start(vm, eye),
+                Act::EyeClose => eye_shut(vm, eye),
                 Act::QrScan => {
-                    if eye_open {
+                    if eye.is_some() {
                         // M47⑤ 互斥门：取景轮询已在逐帧解，等命中即可——
                         // 这里另起 cam-shot 会撞 sensor
                         let _ = vm.inject_say("取景开着，对准码就行。");
@@ -462,7 +442,7 @@ fn run_outs(vm: &mut Vm, outs: Vec<Out>, brain: Option<&audio::Brain>, eye_open:
                     followups.push(Ev::QrDone(r));
                 }
                 Act::Ocr => {
-                    face::write(vm, false, true, false);
+                    face::write(vm, false, true, eye.is_some());
                     let r = read_text();
                     if let Err(e) = &r {
                         eprintln!("aginx-voice: ocr {e}");
@@ -476,7 +456,7 @@ fn run_outs(vm: &mut Vm, outs: Vec<Out>, brain: Option<&audio::Brain>, eye_open:
                     }
                 }
                 Act::Chat(text) => {
-                    face::write(vm, false, true, false);
+                    face::write(vm, false, true, eye.is_some());
                     let reply = match chat_front(&text) {
                         Ok(r) => r,
                         Err(e) => {
@@ -491,10 +471,44 @@ fn run_outs(vm: &mut Vm, outs: Vec<Out>, brain: Option<&audio::Brain>, eye_open:
             },
         }
     }
-    face::write(vm, false, false, false);
+    face::write(vm, false, false, eye.is_some());
     for ev in followups {
         let outs = vm.step(ev);
-        run_outs(vm, outs, brain, eye_open);
+        run_outs(vm, outs, brain, eye);
+    }
+}
+
+/// 开眼（VolUp 与协议 Act::Eye 同一条路）。已开=守门话不双开——双会话
+/// 撞 sensor 必翻车，相机就这一个持有者。
+fn eye_start(vm: &mut Vm, eye: &mut Option<EyeView>) {
+    if eye.is_some() {
+        let _ = vm.inject_say("取景开着，对准码。");
+        return;
+    }
+    match eye_spawn() {
+        Ok(child) => {
+            *eye = Some(EyeView {
+                child,
+                since: Instant::now(),
+                mtime: None,
+                mtime_seen: Instant::now(),
+                last_qr: Instant::now(),
+                retries: 0,
+            });
+            let _ = vm.inject_say("取景中，对准码。");
+        }
+        Err(e) => {
+            eprintln!("aginx-voice: eye spawn {e}");
+            let _ = vm.inject_say("相机没起来，再按一次重试。");
+        }
+    }
+}
+
+/// 闭眼（VolUp 再按、音量下、协议 Act::EyeClose=取消的落地点）。没开=空转。
+fn eye_shut(vm: &mut Vm, eye: &mut Option<EyeView>) {
+    if let Some(mut ev) = eye.take() {
+        eye_stop(&mut ev.child);
+        let _ = vm.inject_say("取景已关。");
     }
 }
 
@@ -529,73 +543,189 @@ fn chat_front(text: &str) -> Result<String, String> {
     Ok(reply)
 }
 
-/// nlscan wlan0 → 去重（保信号最强）、滤 hidden、按信号排序，cap 10（序数上限）。
-fn scan_ssids() -> Result<Vec<String>, String> {
-    let out = Command::new("/usr/bin/aginx-net-scan")
-        .arg("wlan0")
-        .output()
-        .map_err(|e| format!("spawn: {e}"))?;
-    let txt = String::from_utf8_lossy(&out.stdout);
-    // 行形状: "<mac>  ch=<n>  -68.00  dBm  <ssid 可能 \xNN 转义>" — dBm 是
-    // 独立 token，SSID 从它之后开始（2026-09-04 设备定格；此前把 dBm 当
-    // SSID 前缀，列表全是 "dBm xxx"）。
-    let mut seen: Vec<(String, f32)> = Vec::new();
-    for line in txt.lines() {
-        let line = line.trim_end();
-        let toks: Vec<&str> = line.split_whitespace().collect();
-        // mac, ch=, dbm 数值, "dBm", ssid...（ssid 可含空格，join 回去）
-        let dbm = match toks
-            .get(2)
-            .and_then(|d| d.trim_end_matches("dBm").parse::<f32>().ok())
-        {
-            Some(v) => v,
-            None => continue,
-        };
-        let ssid_start = if toks.get(3) == Some(&"dBm") { 4 } else { 3 };
-        let ssid_esc: String = toks
-            .iter()
-            .skip(ssid_start)
-            .copied()
-            .collect::<Vec<_>>()
-            .join(" ");
-        if ssid_esc.is_empty() || ssid_esc.contains("<hidden>") {
-            continue;
-        }
-        let ssid = unescape_hex(&ssid_esc);
-        // 邻居 AP 会有二进制 SSID（\x04\x00…）——念不出来也画不出来，滤掉
-        if ssid.is_empty() || ssid.chars().any(|c| c.is_control()) {
-            continue;
-        }
-        if let Some(slot) = seen.iter_mut().find(|(s, _)| *s == ssid) {
-            if dbm > slot.1 {
-                slot.1 = dbm;
-            }
-        } else {
-            seen.push((ssid, dbm));
-        }
+/// Act::NetConnect 判定（命令优先 2026-09-06）：有 IP=Up；无 IP 先试
+/// /etc/wifi.conf 记忆（net-bringup 同形 KEY=VALUE），连上=Up、连不上=
+/// ConfFail；没记录=NoConf。ConfFail/NoConf 由协议接 Act::Eye——机器自
+/// 己把下一步走完，人只管对准码。
+fn net_check() -> NetState {
+    if wlan0_ip().is_some() {
+        return NetState::Up;
     }
-    seen.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
-    Ok(seen.into_iter().take(10).map(|(s, _)| s).collect())
+    match read_wifi_conf() {
+        Some((ssid, psk)) => match join_wifi(&ssid, &psk) {
+            Ok(_) => NetState::Up,
+            Err(e) => {
+                eprintln!("aginx-voice: conf join {ssid}: {e}");
+                NetState::ConfFail
+            }
+        },
+        None => NetState::NoConf,
+    }
 }
 
-/// busybox 输出把非 ASCII 打成 \xe5\x87 字样；解回 UTF-8。
-fn unescape_hex(s: &str) -> String {
-    let bytes = s.as_bytes();
-    let mut out = Vec::new();
-    let mut i = 0;
-    while i < bytes.len() {
-        if i + 3 < bytes.len() + 1 && bytes[i] == b'\\' && bytes[i + 1] == b'x' {
-            let hex = |c: u8| (c as char).to_digit(16);
-            if let (Some(h), Some(l)) = (hex(bytes[i + 2]), hex(bytes[i + 3])) {
-                out.push((h * 16 + l) as u8);
-                i += 4;
-                continue;
+/// wlan0 的 IPv4（回环除外）。None = 没网。
+fn wlan0_ip() -> Option<String> {
+    let out = Command::new("ip")
+        .args(["-4", "addr", "show", "wlan0"])
+        .output()
+        .ok()?;
+    for line in String::from_utf8_lossy(&out.stdout).lines() {
+        if let Some(rest) = line.trim().strip_prefix("inet ") {
+            if let Some(ip) = rest.split_whitespace().next() {
+                if ip != "127.0.0.1" {
+                    return Some(ip.to_string());
+                }
             }
         }
-        out.push(bytes[i]);
-        i += 1;
     }
-    String::from_utf8_lossy(&out).into_owned()
+    None
+}
+
+/// /etc/wifi.conf 读取（net-bringup 同形：ssid=/psk=，容忍 CR）。None =
+/// 没有身份记录。
+fn read_wifi_conf() -> Option<(String, String)> {
+    let txt = std::fs::read_to_string("/etc/wifi.conf").ok()?;
+    let mut ssid = None;
+    let mut psk = String::new();
+    for line in txt.lines() {
+        let line = line.trim_end_matches('\r');
+        if let Some(v) = line.strip_prefix("ssid=") {
+            ssid = Some(v.to_string());
+        } else if let Some(v) = line.strip_prefix("psk=") {
+            psk = v.to_string();
+        }
+    }
+    Some((ssid?, psk))
+}
+
+/// Act::PairApply（M42c 一眼自举的机器侧全流程）：连网 → 身份三件进
+/// /etc/aginx/env → 快速校时 → 拉起母体两单元。结果全部进报告话。秘密
+/// 只进 env 文件（0600），永不出现在日志/脸/报告。svc 每次 spawn 重读
+/// env_file，restart 即生效；failed（熔断）单元 restart 同样能救（M42e
+/// 收据）。**不重启 aginx-voice**——重启=自杀，本地语音离线路径不依赖
+/// env，下次 boot 自然带上。
+fn pair_apply(bundle: &aginx_qr::PairBundle) -> Result<String, String> {
+    join_wifi(&bundle.ssid, &bundle.psk)?;
+    write_env_keys(&[
+        ("AGINXBRAIN_API_KEY", &bundle.brain_key),
+        ("AGINX_GATEWAY_ID", &bundle.gateway_id),
+        ("AGINX_RELAY_SECRET", &bundle.relay_secret),
+    ])?;
+    let clock_ok = quick_clock();
+    let up = svc_ready_after_restart("aginx-gateway") && svc_ready_after_restart("aginx-server");
+    let mut msg = String::from("网已连");
+    if !clock_ok {
+        msg.push_str("，时钟没同步");
+    }
+    msg.push_str(if up { "，母体在线" } else { "，母体没起来" });
+    Ok(msg)
+}
+
+/// 身份键并入 /etc/aginx/env（KEY=VALUE、# 注释——svc spawn 重读的同一
+/// 形状）。保留既有行（HOME 等），同名键原地替换，缺的尾部追加。0600
+/// tmp+rename（persist_wifi 同法）。
+fn write_env_keys(kvs: &[(&str, &str)]) -> Result<(), String> {
+    use std::io::Write;
+    use std::os::unix::fs::OpenOptionsExt;
+    let existing = std::fs::read_to_string("/etc/aginx/env").unwrap_or_default();
+    let has_key = |k: &str| {
+        existing
+            .lines()
+            .any(|l| l.split_once('=').map(|(ek, _)| ek == k).unwrap_or(false))
+    };
+    let mut out = String::new();
+    for line in existing.lines() {
+        let t = line.trim();
+        if t.is_empty() || t.starts_with('#') {
+            out.push_str(line);
+            out.push('\n');
+            continue;
+        }
+        match line.split_once('=') {
+            Some((k, _)) if kvs.iter().any(|(nk, _)| *nk == k) => {
+                let v = &kvs.iter().find(|(nk, _)| *nk == k).unwrap().1;
+                out.push_str(&format!("{k}={v}\n"));
+            }
+            _ => {
+                out.push_str(line);
+                out.push('\n');
+            }
+        }
+    }
+    for (k, v) in kvs {
+        if !has_key(k) {
+            out.push_str(&format!("{k}={v}\n"));
+        }
+    }
+    let tmp = "/etc/aginx/env.tmp";
+    std::fs::OpenOptions::new()
+        .write(true)
+        .create(true)
+        .truncate(true)
+        .mode(0o600)
+        .open(tmp)
+        .and_then(|mut f| f.write_all(out.as_bytes()))
+        .map_err(|e| format!("env write: {e}"))?;
+    std::fs::rename(tmp, "/etc/aginx/env").map_err(|e| format!("env rename: {e}"))
+}
+
+/// 快速校时（net-bringup:111-136 律的短版）：TLS 验证书要近似正确的钟，
+/// 不然 gateway 连 relay 全被拒。两次×10s 交替双 NTP，`date +%Y≥2026`
+/// 判定；失败不致命——进报告话，net-watch/下次 bringup 会补。
+fn quick_clock() -> bool {
+    for server in ["ntp.aliyun.com", "cn.pool.ntp.org"] {
+        if let Ok(mut child) = Command::new("ntpd")
+            .args(["-q", "-n", "-p", server])
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+        {
+            let _ = audio::wait_limited(&mut child, 10);
+            let _ = child.wait();
+        }
+        let ok = Command::new("date")
+            .arg("+%Y")
+            .output()
+            .ok()
+            .and_then(|o| String::from_utf8(o.stdout).ok())
+            .and_then(|s| s.trim().parse::<i32>().ok())
+            .map(|y| y >= 2026)
+            .unwrap_or(false);
+        if ok {
+            return true;
+        }
+    }
+    false
+}
+
+/// restart 一个 unit 并回查到 ready（simple 型 spawn 即 ready；熔断
+/// failed 单元 restart 照样救活）。restart 失败或 10s 内仍 failed = false。
+fn svc_ready_after_restart(unit: &str) -> bool {
+    let st = Command::new("/usr/bin/aginx-svc")
+        .args(["restart", unit])
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status();
+    if !st.map(|s| s.success()).unwrap_or(false) {
+        eprintln!("aginx-voice: svc restart {unit} failed");
+        return false;
+    }
+    for _ in 0..20 {
+        std::thread::sleep(Duration::from_millis(500));
+        if let Ok(o) = Command::new("/usr/bin/aginx-svc")
+            .args(["status", unit])
+            .output()
+        {
+            let txt = String::from_utf8_lossy(&o.stdout);
+            if txt.lines().any(|l| l.trim() == "state   ready") {
+                return true;
+            }
+            if txt.lines().any(|l| l.trim() == "state   failed") {
+                return false;
+            }
+        }
+    }
+    false
 }
 
 /// 拍照解 QR（M42b 眼分支）。尝试阶梯：默认曝光 ×3 → 慢模式+增益兜底。
@@ -808,22 +938,9 @@ fn join_wifi(ssid: &str, psk: &str) -> Result<String, String> {
     audio::wait_limited(&mut child, JOIN_BUDGET_SECS).map_err(|e| format!("wifi-join {e}"))?;
     // dhcp 在 wifi-join 里；地址落不落直接看
     for _ in 0..10 {
-        if let Ok(out) = Command::new("ip")
-            .args(["-4", "addr", "show", "wlan0"])
-            .output()
-        {
-            let txt = String::from_utf8_lossy(&out.stdout);
-            for line in txt.lines() {
-                let line = line.trim();
-                if let Some(rest) = line.strip_prefix("inet ") {
-                    if let Some(ip) = rest.split_whitespace().next() {
-                        if ip != "127.0.0.1" {
-                            persist_wifi(ssid, psk);
-                            return Ok(ip.to_string());
-                        }
-                    }
-                }
-            }
+        if let Some(ip) = wlan0_ip() {
+            persist_wifi(ssid, psk);
+            return Ok(ip);
         }
         std::thread::sleep(Duration::from_millis(500));
     }
@@ -871,13 +988,6 @@ fn status_text() -> String {
         .and_then(|s| s.trim().parse::<u8>().ok())
         .unwrap_or(0);
     // 只报连没连——IP 逐位念出来又长又难听（数字展开还多 10s 合成+播放）
-    let net = Command::new("ip")
-        .args(["-4", "addr", "show", "wlan0"])
-        .output()
-        .ok()
-        .and_then(|o| String::from_utf8(o.stdout).ok())
-        .map(|t| t.lines().any(|l| l.trim().starts_with("inet ")))
-        .unwrap_or(false);
-    let net = if net { "网已连" } else { "没联网" };
+    let net = if wlan0_ip().is_some() { "网已连" } else { "没联网" };
     format!("{time}，电池{bat}%，{net}。")
 }

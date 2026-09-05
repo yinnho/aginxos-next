@@ -20,6 +20,7 @@ members = [
     "crates/done",
     "crates/secret",
     "crates/gateway",
+    "crates/pair",
 ]
 
 [workspace.package]
