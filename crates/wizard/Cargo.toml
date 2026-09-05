@@ -1,0 +1,17 @@
+[package]
+name = "aginx-net-wizard"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "AginxOS first-boot Wi-Fi setup wizard — scan, pick AP, enter password"
+publish = false
+
+# N4③ 搬入即改姓（D13，net 域）。零依赖（纯 std TUI）。
+# 切净决策随迁删除：连上网后对 aginx/aginx-carrier 两个老单元的
+# agctl restart 空点名（N4 镜像无此单元）。扫描经 /usr/bin/aginx-net-scan
+# （原 /bin/nlscan 的 D13 落位名），连网走 /etc/init.d/net-bringup。
+[[bin]]
+name = "aginx-net-wizard"
+path = "src/main.rs"
+
+[dependencies]

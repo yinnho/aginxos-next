@@ -9,6 +9,7 @@ members = [
     "crates/runtime",
     "crates/server",
     "crates/voice",
+    "crates/wizard",
 ]
 
 [workspace.package]
