@@ -124,10 +124,12 @@ pub struct Geom {
     pub kb_panel_y: usize,
     pub m: usize, // global side margin (matches kb::KB_M)
     pub w: usize,
+    /// full panel height — the M47⑤ fullscreen eye box needs it
+    pub h: usize,
 }
 
 impl Geom {
-    pub fn new(w: usize, _h: usize, kb_panel_y: usize, n: usize) -> Geom {
+    pub fn new(w: usize, h: usize, kb_panel_y: usize, n: usize) -> Geom {
         let m = 90;
         let toolbar_h = 72;
         let avail_h = kb_panel_y - toolbar_h;
@@ -144,7 +146,20 @@ impl Geom {
             kb_panel_y,
             m: 28,
             w,
+            h,
         }
+    }
+
+    /// M47⑤b eye viewfinder box (x, y, w, h) = the WHOLE panel. User
+    /// receipt 2026-09-05 「界面要做成全屏」: while the eye is open the
+    /// frame fills 1080×2340 — no toolbar, no title, no bottom strip; the
+    /// close keys are physical (音量+ toggles, 音量下 closes). This is the
+    /// ONE layout authority — voice() blits into it and poll_eye decodes
+    /// against it. The aspect must stay what aginx-voice spawns cam-shot
+    /// with (`--aspect 1080:2340`, hardcoded in the glue layer — no shared
+    /// crate); VIEWFINDER_ASPECT + the test below pin the two sides.
+    pub fn eye_box(&self) -> (usize, usize, usize, usize) {
+        (0, 0, self.w, self.h)
     }
 
     pub fn button_at(&self, x: usize, y: usize, n: usize) -> Option<usize> {
@@ -174,7 +189,34 @@ impl Geom {
     }
 }
 
+/// cam-shot is spawned with --aspect 1080:2340 (aginx-voice, fullscreen
+/// viewfinder); term's eye box must match — assert via Geom in tests, not
+/// by copying numbers into render.
+pub const VIEWFINDER_ASPECT: f64 = 1080.0 / 2340.0;
+
 #[derive(PartialEq)]
 pub enum Toolbar {
     Back,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Real device numbers (redfin 1080x2340): the fullscreen eye box must
+    /// land exactly on the aspect cam-shot is spawned with. If the panel
+    /// geometry ever changes, this test goes red and voice's hardcoded
+    /// `--aspect 1080:2340` must move with it.
+    #[test]
+    fn eye_box_matches_viewfinder_aspect() {
+        let g = Geom::new(1080, 2340, 1748, 5);
+        let (x, y, w, h) = g.eye_box();
+        assert_eq!((x, y), (0, 0));
+        assert_eq!((w, h), (1080, 2340));
+        let aspect = w as f64 / h as f64;
+        assert!(
+            (aspect - VIEWFINDER_ASPECT).abs() < 1e-9,
+            "eye box aspect {aspect} != VIEWFINDER_ASPECT {VIEWFINDER_ASPECT}"
+        );
+    }
 }
