@@ -1,0 +1,63 @@
+#!/bin/sh
+# Battery bring-up (M3c, live-proven 2026-08-27 — see HARDWARE.md).
+# Loads the Google/QCOM battery stack the vendor_boot base doesn't:
+#   google-bms -> at24 -> qpnp-qgauge -> sm7250_bms -> google-battery
+#   -> google_charger (+ qti_qmi_sensor when qmi_helpers is up).
+# The one non-obvious dependency: qpnp-qgauge's first probe call is
+# gbms_storage_read("batt_eeprom"), and the EEPROM driver is at24 —
+# without it the probe defers forever (rc=-517, no other print) and
+# nothing ever registers the "bms" psy google_battery waits on. The
+# m24c08@50 sits on i2c 98c000, which the modules.usb base already
+# brings up (p9221 shares that bus). Once at24 registers the storage
+# entry, the kernel retries the deferred qg probe by itself — observed
+# live: "eeprom ID=82300172012" followed seconds later by capacity=100.
+# After that google_battery provides /sys/class/power_supply/battery
+# (capacity/status/current_now) and drives its MSC charge policy.
+export PATH=/sbin:/bin:/usr/sbin:/usr/bin
+LOG=/var/battery.log
+exec >>"$LOG" 2>&1
+echo "=== battery bring-up $(date) ==="
+
+R=/lib/modules            # staged by build-rootfs.sh, same origin as the
+                          # touch chain (the vendor_boot ramdisk unpack)
+M=/vendor_a/lib/modules   # qmi_helpers lives here (touch-bringup loads it
+                          # too; a duplicate insmod just fails and is
+                          # ignored, order between the two scripts is free)
+
+# google-bms must precede everything: it provides gbms_storage_*.
+# at24 precedes qpnp-qgauge: qg's probe reads the battery type from the
+# batt_eeprom storage entry at24 registers.
+for m in google-bms at24 qpnp-qgauge sm7250_bms google-battery google_charger; do
+  insmod "$R/$m.ko" 2>/dev/null && echo "insmod $m ok"
+done
+insmod "$M/qmi_helpers.ko" 2>/dev/null
+insmod "$R/qti_qmi_sensor.ko" 2>/dev/null && echo "insmod qti_qmi_sensor ok"
+
+# Wait for the userspace-facing psy, then record one reading so the log
+# holds the proof even if adb comes up late.
+n=0
+while [ $n -lt 60 ]; do
+  n=$((n+1))
+  if [ -r /sys/class/power_supply/battery/capacity ]; then
+    echo "battery psy up (t+$((n*2))s) $(date)"
+    # capacity can read empty on the very first poll after the psy appears
+    # (observed on the 2026-08-28 M5 cold boot: card showed "battery ok %")
+    CAP=$(cat /sys/class/power_supply/battery/capacity 2>/dev/null)
+    m=0
+    while [ -z "$CAP" ] && [ $m -lt 10 ]; do
+      sleep 1; m=$((m+1))
+      CAP=$(cat /sys/class/power_supply/battery/capacity 2>/dev/null)
+    done
+    for p in capacity status voltage_now current_now temp health charge_counter; do
+      printf '%s=%s ' "$p" "$(cat /sys/class/power_supply/battery/$p 2>/dev/null)"
+    done
+    echo
+    echo "battery ok ${CAP}%" >>/run/boot.state   # boot card row (M5)
+    echo "=== done $(date) ==="
+    exit 0
+  fi
+  sleep 2
+done
+echo "battery psy never appeared $(date)"
+echo "battery fail" >>/run/boot.state
+dmesg | grep -E "QG-K|google_battery" | tail -8

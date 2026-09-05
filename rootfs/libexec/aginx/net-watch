@@ -1,0 +1,83 @@
+#!/bin/sh
+# net-watch (M20b) — steady-state network healer.
+#
+# aginx-svcd unit (inittab -> aginx-svcd -> this). Watches the WLAN link that
+# net-bringup established and, when it dies — the Legrand AP drops the
+# association under sustained transfers (observed 3x on 2026-09-02,
+# killing a 223 MB provision download twice) — rejoins IN PLACE via
+# net-rejoin instead of waiting for a human. WAN-side outages (gateway
+# answers, internet gone) are logged but not rejoined: that is not ours
+# to fix.
+#
+# Probe: every 15 s ping the default gateway (link-local truth, no DNS
+# involved). 3 consecutive fails -> net-rejoin. Rejoin blocks the loop
+# for its own duration (up to ~1 min); the failure counter resets after
+# an attempt either way, so a persistently dead AP means one rejoin
+# attempt per ~45 s, not a tight spin.
+#
+# Boot race: net-bringup owns the FIRST join (its 2-attempt pair with
+# boot.state reporting). We stay hands-off until it has written its
+# `done` verdict (ok or fail), up to 10 min. No /etc/wifi.conf yet
+# (first boot, wizard not run): idle in a slow loop instead of
+# attempting anything.
+export PATH=/sbin:/bin:/usr/sbin:/usr/bin
+
+IF=${IF:-wlan0}
+WAN_PROBE=223.5.5.5   # anycast IP — deliberately DNS-free
+FAILS_TRIP=3
+LOG=/var/log/net-watch.log
+STATE=/run/boot.state
+
+log() { echo "$(date +%m%d-%H:%M:%S) $*" >>"$LOG"; }
+
+log "net-watch start (pid $$)"
+n=0
+while [ $n -lt 600 ]; do
+  grep -q '^done' "$STATE" 2>/dev/null && break
+  sleep 1; n=$((n+1))
+done
+[ $n -lt 600 ] || log "no boot verdict after 600s — taking over anyway"
+
+idle=0
+fail=0
+wanfail=0
+while :; do
+  if [ ! -f /etc/wifi.conf ]; then
+    # nothing to rejoin against; the wizard will write the conf
+    [ $idle -eq 0 ] && { log "no /etc/wifi.conf — idling"; idle=1; }
+    sleep 60
+    continue
+  fi
+  idle=0
+  # busybox awk segfaults on this device (case file in net-bringup) —
+  # sed parse, or gw is always empty and we rejoin a healthy net every 45 s.
+  gw=$(ip route 2>/dev/null | sed -n 's/^default via \([0-9.][0-9.]*\) .*/\1/p' | head -n 1)
+  if [ -n "$gw" ] && ping -c1 -W3 "$gw" >/dev/null 2>&1; then
+    wanfail=$(( wanfail + 1 ))
+    if [ $wanfail -eq 8 ]; then
+      log "wan down 8 probes (gateway ok) — ap-side, not rejoining"
+    elif ping -c1 -W3 "$WAN_PROBE" >/dev/null 2>&1; then
+      wanfail=0
+    fi
+  else
+    wanfail=0
+    fail=$((fail+1))
+    if [ $fail -ge $FAILS_TRIP ]; then
+      carrier=$(cat /sys/class/net/$IF/carrier 2>/dev/null || echo '?')
+      log "link lost ($fail probes, carrier=$carrier gw=${gw:-none}) — rejoining"
+      if /usr/libexec/aginx/net-rejoin >>"$LOG" 2>&1; then
+        log "rejoin ok"
+      else
+        log "rejoin failed — retrying next window"
+      fi
+      fail=0
+    else
+      log "probe fail $fail/$FAILS_TRIP (gw=${gw:-none})"
+    fi
+  fi
+  # keep the log bounded (no logd here)
+  if [ "$(wc -c <"$LOG" 2>/dev/null || echo 0)" -gt 65536 ]; then
+    tail -n 300 "$LOG" >"$LOG.t" 2>/dev/null && mv "$LOG.t" "$LOG"
+  fi
+  sleep 15
+done

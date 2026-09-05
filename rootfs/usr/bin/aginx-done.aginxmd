@@ -1,0 +1,6 @@
+# aginx:summary=provision done-markers: check/mark/ensure/reset one-shot boot steps
+# aginx:args=check <name> | mark <name> | ensure <name> | reset <name>|reset --all | list
+# aginx:examples=list
+# aginx:examples=check python-finalize
+# aginx:group=sys
+# 原名 agdone。

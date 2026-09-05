@@ -1,0 +1,5 @@
+# grok — grok-build source-built musl binary (M13). See aclone.toml for
+# the registry seeding contract.
+name = GROK
+binary = /var/bin/grok
+scale = 3

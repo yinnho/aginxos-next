@@ -1,0 +1,24 @@
+#!/bin/sh
+# Launcher app-registry seeder (M16, docs/SYSTEM.md §12.3). Copies seeds
+# from /etc/apps.d/*.toml into /var/apps/<id>/app.toml while the binary
+# they point at exists, and prunes entries whose binary went missing.
+# aginx-term scans /var/apps at every launcher draw, so a newly installed
+# binary shows up on returning from the next app — no OS source change.
+# aginx-pkg/native installs can take over by writing /var/apps directly;
+# until then this is the bridge from manifest installs to the launcher.
+export PATH=/sbin:/bin:/usr/sbin:/usr/bin:/var/bin
+
+mkdir -p /var/apps
+for seed in /etc/apps.d/*.toml; do
+  [ -f "$seed" ] || continue
+  id=$(basename "$seed" .toml)
+  bin=$(sed -n 's/^binary *= *//p' "$seed" | head -1 | tr -d '"')
+  if [ -n "$bin" ] && [ -x "$bin" ]; then
+    mkdir -p "/var/apps/$id"
+    cp "$seed" "/var/apps/$id/app.toml"
+  else
+    rm -f "/var/apps/$id/app.toml"
+    rmdir "/var/apps/$id" 2>/dev/null
+  fi
+done
+exit 0

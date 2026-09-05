@@ -1,0 +1,5 @@
+# aginx:summary=decode QR codes from a camera JPEG; WIFI: payloads feed aginx-voice's join flow (M42b)
+# aginx:args=<jpeg>
+# aginx:examples=/tmp/voiced-qr.jpg
+# aginx:group=cam
+# 原名 agqr（老仓预构建资产）。

@@ -1,0 +1,6 @@
+# aginx:summary=local TTS (melo vits zh_en default; kokoro alt) — voice mouth
+# aginx:args=[--kind melo|kokoro] <text...>
+# aginx:group=snd
+# aginx:hidden=true
+# 原名 ag-tts（老仓 out/voice/bin 预构建资产）。voiced-internal mouth
+# (voice/src/audio.rs spawns it); models live in /var/models/tts.

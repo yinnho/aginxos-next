@@ -1,0 +1,11 @@
+#!/bin/sh
+# aginx:summary=browser/search/fetch tool face (bridges /var/bin/agb — D12 外部件 CLI)
+# aginx:group=web
+# aginx:args=<subcommand> [args…]
+# aginx:examples=fetch https://example.com
+# aginx:examples=search oranges
+# N4 bridge shell: the agb package (provision, /var/bin) keeps its
+# first-gen name until N5 re-cuts it under aginx-; the brain reaches it
+# through this router face. No aginx:exec — the target only exists
+# after the first provision sync (bake-time lint would fail on it).
+exec /var/bin/agb "$@"

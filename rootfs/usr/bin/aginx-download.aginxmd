@@ -1,0 +1,5 @@
+# aginx:summary=the phone's HTTPS fetcher (rustls, no CA deps) — used by aginx-pkg sync
+# aginx:args=<url> <dest>
+# aginx:examples=https://pkgs.aginx.net/… /var/tmp/pkg.bin
+# aginx:group=pkg
+# 原名 agdl。

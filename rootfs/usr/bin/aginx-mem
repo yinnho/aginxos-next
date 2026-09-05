@@ -1,0 +1,8 @@
+#!/bin/sh
+# aginx:summary=memory tool face: kv/tree/knowledge/flows (bridges /var/bin/agmem)
+# aginx:group=mem
+# aginx:args=<subcommand> [args…]
+# aginx:examples=kv get demo
+# aginx:examples=tree ls /
+# N4 bridge shell to the agmem package (provision, /var/bin); see aginx-web.
+exec /var/bin/agmem "$@"

@@ -1,0 +1,8 @@
+# aginx unit env (N4 切净版). Read via env_file by the aginx-server and
+# aginx-voice units; secrets belong on the device only, never in this
+# file — the real /etc/aginx/env (with AGINXBRAIN_API_KEY) rides the
+# aginx-update state tar from the running device, not the bake. HOME is the
+# avatar home (D5: workspaces folder + runtime engine state under it).
+# If a unit needs more vars later, add them here or put them in the
+# sidecar store (/usr/bin/aginx-secret) and read them over the socket.
+HOME=/home

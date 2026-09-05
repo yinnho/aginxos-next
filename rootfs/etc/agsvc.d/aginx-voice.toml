@@ -1,0 +1,18 @@
+# aginx-voice (M42a voiced, N4②b 改姓) — the voice dialog daemon:
+# product definition 2026-09-04, the phone's primary input is voice
+# (PTT = hold volume-down) and the screen is a display. Closed-
+# vocabulary deterministic protocol — Wi-Fi must connect before any LLM
+# exists. Owns /run/voice/face (aginx-term renders it); spawns
+# snd-cap/snd-play for ears and mouth. VOICED_FRONT points free text at
+# the new router (N2② contract: spawn `aginx agent send`). Reads the
+# brain key from the plain env file like aginx-server (sidecar policy
+# keeps brain.primary for the engine only). type = simple.
+[unit]
+name = aginx-voice
+
+[service]
+cmd = /usr/bin/aginx-voice
+args = []
+type = simple
+envs = ["VOICED_FRONT=/usr/bin/aginx"]
+env_file = /etc/aginx/env

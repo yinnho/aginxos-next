@@ -1,0 +1,157 @@
+#!/bin/sh
+# Network bring-up (M5) — the Wi-Fi half of the boot card.
+# Waits for radio-bringup's wlan0, joins the AP from /etc/wifi.conf with
+# our own supplicant (aginx-net-join, 原名 wifi-join: scan -> assoc ->
+# WPA2-PSK 4-way handshake -> key install, M4), gets a lease with udhcpc
+# (default.script applies it
+# and writes /etc/resolv.conf), then proves DNS + TCP + HTTP by fetching
+# http://www.baidu.com with busybox wget.
+# Every milestone is reported to /run/boot.state for the boot card:
+#   wifi run|ok|fail [ssid]
+#   dhcp run|ok|fail [ip]
+#   internet run|ok|fail [detail]
+#   done ok            <- only on full success; bootcard shows the banner
+# /etc/wifi.conf is KEY=VALUE (ssid=/psk=) and lives on the device only —
+# the repo ships etc/wifi.conf.example; credentials never get committed.
+export PATH=/sbin:/bin:/usr/sbin:/usr/bin
+LOG=/var/net.log
+exec >>"$LOG" 2>&1
+echo "=== net bring-up $(date) ==="
+
+STATE=/run/boot.state
+say() { echo "$1 $2 $3" >>"$STATE"; echo "net: $1 $2 $3"; }
+
+# radio-bringup gets here eventually (modem PIL ~10 s, driver+FW after);
+# poll long enough that a slow boot is a late ok, not a false fail.
+n=0
+while [ ! -e /sys/class/net/wlan0 ] && [ $n -lt 240 ]; do
+  sleep 2; n=$((n+1))
+done
+if [ ! -e /sys/class/net/wlan0 ]; then
+  say wlan fail "no netdev"
+  say done fail
+  dmesg | grep -ai "icnss\|wlan" | tail -8
+  exit 1
+fi
+echo "wlan0 present after $((n*2))s $(date)"
+
+# Credentials. Missing config is a clean fail, not a guess.
+if [ ! -f /etc/wifi.conf ]; then
+  say wifi fail "no /etc/wifi.conf"
+  say done fail
+  exit 1
+fi
+SSID=; PSK=
+while IFS='=' read -r k v; do
+  case "$k" in
+    ssid) SSID=$v ;;
+    psk)  PSK=$v ;;
+  esac
+done < /etc/wifi.conf
+# strip a trailing CR, in case the file was edited on a Windows host
+SSID=$(printf '%s' "$SSID" | tr -d '\r')
+PSK=$(printf '%s' "$PSK" | tr -d '\r')
+if [ -z "$SSID" ] || [ -z "$PSK" ]; then
+  say wifi fail "wifi.conf incomplete"
+  say done fail
+  exit 1
+fi
+echo "joining ssid '$SSID' $(date)"
+
+# --- association + 4-way handshake + DHCP ------------------------------
+# Up to 2 attempts for the pair: a join that succeeds but DHCP that gets
+# no answer happened live (2026-08-28 recording session — AP busy for the
+# ~30 s udhcpc window); re-joining resets the link cleanly.
+say wifi run
+attempt=0
+IP=
+rc=1
+while [ $attempt -lt 2 ]; do
+  attempt=$((attempt+1))
+  echo "--- join attempt $attempt $(date)"
+  if /usr/bin/aginx-net-join wlan0 "$SSID" "$PSK"; then
+    say wifi ok "$SSID"
+  else
+    jrc=$?
+    if [ $attempt -ge 2 ]; then
+      say wifi fail "join rc=$jrc"
+      say done fail
+      exit 1
+    fi
+    say wifi run "retry"
+    continue
+  fi
+  say dhcp run
+  udhcpc -i wlan0 -n -q -t 10 -T 3 >/tmp/udhcpc.log 2>&1
+  rc=$?
+  [ $rc -eq 0 ] || tail -5 /tmp/udhcpc.log
+  IP=$(ip addr show wlan0 2>/dev/null | sed -n 's/.*inet \([0-9.]*\).*/\1/p' | head -1)
+  [ -n "$IP" ] && break
+  echo "attempt $attempt: dhcp rc=$rc — re-joining"
+  say wifi run "retry"
+done
+if [ -z "$IP" ]; then
+  say dhcp fail "rc=$rc"
+  say done fail
+  exit 1
+fi
+say dhcp ok "$IP"
+echo "lease $IP applied $(date)"
+
+# --- internet: DNS + TCP + HTTP via www.baidu.com ------------------------
+# /bin/httpget, not busybox wget — this busybox's wget applet segfaults
+# (observed 2026-08-28, raw-IP URLs too; DNS via nslookup is fine).
+say internet run
+rm -f /tmp/baidu.html
+if HTTP=$(/bin/httpget http://www.baidu.com/ /tmp/baidu.html 2>&1); then
+  set -- $HTTP          # "HTTP <code> <n> bytes" — no awk: it segfaults here
+  BYTES=$3
+  echo "baidu fetch ok ($HTTP) $(date)"
+  say internet ok "www.baidu.com ${BYTES}B"
+  # Clock sync (M10) — TLS certificate validation needs a roughly-correct
+  # clock, and this kernel boots at the build epoch (observed 1970/2029
+  # drift). busybox date -s misparses GNU formats, so ntpd is the only
+  # trusted path. Best-effort: a failed sync must not fail the boot.
+  # N4④ 真修 (#112 立案的邻居): one-shot ntpd is a coin flip when the
+  # AP's DNS/pass-through lags the link — bounded retry instead: up to
+  # 12 tries x 10 s alternating ntp.aliyun.com / cn.pool.ntp.org, gated
+  # on the wall clock actually landing in the present (date is the only
+  # verdict a 1970 boot clock can't fake). Budget ~120 s stays inside
+  # provision's 180 s clock-gate wait, and time run/ok/fail + done 行序
+  # 不变 (net-bringup 写完 done 才轮到 provision 的 pkg 线).
+  say time run
+  TSYNCED=1
+  t=0
+  while [ $t -lt 12 ]; do
+    t=$((t+1))
+    case $((t % 2)) in
+      0) NTPS=cn.pool.ntp.org ;;
+      *) NTPS=ntp.aliyun.com ;;
+    esac
+    if ntpd -q -n -p "$NTPS" >/dev/null 2>&1 && [ "$(date +%Y)" -ge 2026 ]; then
+      TSYNCED=0
+      break
+    fi
+    sleep 10
+  done
+  if [ "$TSYNCED" -eq 0 ]; then
+    say time ok "$(date +%Y-%m-%d)"
+    echo "clock synced: $(date)"
+    # M23b: push the corrected clock into the PMIC RTC. It lives on its own
+    # -53y scale until this runs, so early-boot wall time is 1970 and RTC
+    # alarm math needs the offset carried around. Best-effort like ntpd.
+    if [ -x /bin/rtcal ]; then
+      /bin/rtcal sync && echo "rtc synced to system time"
+    fi
+  else
+    say time fail "ntpd"
+    echo "ntpd failed after bounded retry — TLS validation may break until the clock is fixed"
+  fi
+  say done ok
+  echo "=== net up: $IP via $SSID $(date) ==="
+  exit 0
+fi
+say internet fail "$HTTP"
+say done fail
+echo "=== internet check failed: $HTTP $(date) ==="
+exit 1

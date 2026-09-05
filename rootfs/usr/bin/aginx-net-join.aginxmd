@@ -1,0 +1,6 @@
+# aginx:summary=join a WPA2-PSK network (supplicant + EAPOL, then udhcpc)
+# aginx:args=<ifname> <ssid> <passphrase>
+# aginx:examples=wlan0 MyNet 'the passphrase'
+# aginx:group=net
+# aginx:requires-sudo=true
+# 原名 /bin/wifi-join。

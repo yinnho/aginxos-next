@@ -1,0 +1,5 @@
+# aginx:summary=trigger an nl80211 scan and dump results (WLAN operability, M3f)
+# aginx:args=<ifname>
+# aginx:examples=wlan0
+# aginx:group=net
+# 原名 /bin/nlscan。

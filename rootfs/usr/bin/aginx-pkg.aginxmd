@@ -1,0 +1,7 @@
+# aginx:summary=package manager: install/sync/available/opt-in/rollback/list (signed manifest, 四件套 tars)
+# aginx:args=install <name> <src> <sha256> | sync [manifest] | available [manifest] [--json] | opt-in <name> | rollback <name> | list [--json]
+# aginx:examples=list
+# aginx:examples=list --json
+# aginx:examples=available
+# aginx:group=pkg
+# 原名 agpkg（N4③b 改姓）。

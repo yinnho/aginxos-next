@@ -1,0 +1,10 @@
+#!/bin/sh
+# aginx:summary=系统状态：日期时间、电池电量、wlan0 地址
+# aginx:group=sys
+date '+%Y-%m-%d %H:%M'
+if [ -r /sys/class/power_supply/battery/capacity ]; then
+  printf '电池 %s%%\n' "$(cat /sys/class/power_supply/battery/capacity)"
+else
+  echo '电池：未知'
+fi
+ip -4 addr show wlan0 2>/dev/null | sed -n 's/.*inet \([0-9.]*\).*/wlan0 \1/p'

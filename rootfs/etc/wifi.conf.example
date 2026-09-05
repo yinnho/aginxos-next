@@ -1,0 +1,8 @@
+# AginxOS Wi-Fi configuration template (M5).
+# Copy to /etc/wifi.conf on the device and fill in your real credentials:
+#   adb -s aginxosredfin push wifi.conf /etc/wifi.conf
+# /etc/init.d/net-bringup reads it at boot and joins with aginx-net-join (原名 wifi-join)..
+# The file with the real passphrase lives on the device only — it is
+# never committed to this repo (same rule as vendor blobs, DECISIONS §7).
+ssid=YourNetworkName
+psk=YourPassphrase

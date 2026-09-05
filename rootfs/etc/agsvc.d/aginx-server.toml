@@ -1,0 +1,14 @@
+# aginx-server (N4) — the platform heart, baked: D10 前台登记/光标,
+# D8 会话账, routes every agent turn through aginx-runtime. Engines live
+# in /usr/libexec/aginx/ (out of the router's command universe, D13);
+# the router face is /usr/bin/aginx. type = simple until the server
+# adopts the svcd notify contract (§12.2 successor note).
+[unit]
+name = aginx-server
+
+[service]
+cmd = /usr/libexec/aginx/aginx-server
+args = []
+type = simple
+envs = ["AGINX_HOME=/home/.aginx", "AGINX_BIN=/usr/bin/aginx", "AGINX_RUNTIME_BIN=/usr/libexec/aginx/aginx-runtime"]
+env_file = /etc/aginx/env

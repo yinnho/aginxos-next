@@ -1,0 +1,8 @@
+#!/bin/sh
+# aginx:summary=file read/write/list/convert tool face (bridges /var/bin/agf)
+# aginx:group=files
+# aginx:args=<subcommand> [args…]
+# aginx:examples=read /etc/hostname
+# aginx:examples=ls /home
+# N4 bridge shell to the agf package (provision, /var/bin); see aginx-web.
+exec /var/bin/agf "$@"

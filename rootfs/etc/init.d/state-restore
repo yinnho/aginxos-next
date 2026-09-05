@@ -1,0 +1,71 @@
+#!/bin/sh
+# state-restore (M22) — put back what aginx-update (原名 agupd) captured
+# before a rootfs swap.
+#
+# A rootfs update replaces the WHOLE userdata ext4, so the irreplaceable
+# device state (Wi-Fi psk, relay identity in /home/.aginx, logs) would
+# die with it. aginx-update tars that set to 64 GiB on the same partition with
+# an ASCII marker (magic AGXSTATE + 16 decimal length digits); rcS runs
+# THIS on the fresh rootfs before any service starts, then clears the
+# marker in place (conv=notrunc — never truncate the partition).
+#
+# Marker layout (must match aginx-update STATE_OFF): block 16777216 (64 GiB in
+# 4K blocks) holds the header; the tar follows at block 16777217.
+#
+# Logging contract: this runs BEFORE rcS mounts devtmpfs (line ~25), and
+# at that point /dev is still the initramfs bind — which has console,
+# null and the block nodes but NO /dev/kmsg. A bare `echo > /dev/kmsg`
+# redirect failure ABORTS the whole script in busybox ash: the first
+# swap boot (2026-09-02) died exactly there — "marker found" never
+# printed, the tar was never extracted, the marker survived the boot.
+# So every message goes through kmsg(), which picks a writable sink.
+kmsg() {
+  if [ -w /dev/kmsg ]; then echo "state-restore: $*" > /dev/kmsg
+  else echo "state-restore: $*" >> /var/state-restore.log 2>/dev/null || true
+  fi
+}
+
+UD=/dev/block/by-name/userdata
+BLK=16777216   # 64 GiB / 4096 — aginx-update STATE_OFF
+
+# Full self-capture: swap boots are rare and the kernel ring may be long
+# gone by the time anyone looks — this file is the durable receipt (ash's
+# own error lines land here too; they are what cracked the 2026-09-02
+# octal-abort mystery). Grows a few lines per swap boot only.
+exec >> /var/state-restore.log 2>&1
+echo "=== state-restore start $(date +%H:%M:%S) up=$(cut -d. -f1 /proc/uptime) ==="
+
+[ -b "$UD" ] || { kmsg "no $UD node — skipping"; exit 0; }
+# tr -d '\0' first: $( ) drops NUL bytes, which would shift every
+# following byte and corrupt the cut offsets below.
+hdr=$(dd if="$UD" bs=4096 skip=$BLK count=1 2>/dev/null | tr -d '\000')
+magic=$(printf '%s' "$hdr" | head -c 8)
+[ "$magic" = "AGXSTATE" ] || { kmsg "no marker (magic='${magic:-empty}') — fresh boot"; exit 0; }
+len=$(printf '%s' "$hdr" | cut -c9-24 | tr -d ' ')
+# busybox ash $(( )) parses leading-zero numbers as OCTAL — the marker
+# stores the length zero-padded to 16 digits, so the unstripped value
+# aborts this script with "arithmetic syntax error" at the first $(( ))
+# (proven on device 2026-09-02: three silent no-restore boots; the
+# manual runs that "worked" all went through toybox sh, which is
+# decimal-tolerant). Strip the padding before any arithmetic touches it.
+while [ "$len" != "${len#0}" ]; do len=${len#0}; done
+[ -n "$len" ] || len=0
+case "$len" in
+  ''|*[!0-9]*) kmsg "bad length field — keeping marker for manual retry"; exit 1 ;;
+esac
+[ "$len" -gt 0 ] || { kmsg "zero length — keeping marker"; exit 1; }
+
+nblk=$(( (len + 4095) / 4096 ))
+kmsg "marker found (${len} B tar) — restoring"
+dd if="$UD" of=/tmp/state.tar bs=4096 skip=$((BLK + 1)) count=$nblk 2>/dev/null
+truncate -s "$len" /tmp/state.tar 2>/dev/null || dd if=/dev/zero of=/tmp/state.tar bs=1 seek="$len" count=0 2>/dev/null
+if tar -xf /tmp/state.tar -C / 2>/dev/null; then
+  kmsg "ok"
+else
+  kmsg "tar extract FAILED — keeping marker for manual retry"
+  rm -f /tmp/state.tar
+  exit 1
+fi
+rm -f /tmp/state.tar
+dd if=/dev/zero of="$UD" bs=4096 seek=$BLK count=1 conv=notrunc 2>/dev/null
+kmsg "marker cleared"

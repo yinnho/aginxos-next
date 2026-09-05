@@ -1,0 +1,98 @@
+#!/bin/sh
+# Touch bring-up (M3, live-proven 2026-08-27 — see HARDWARE.md).
+# Loads the whole chain itself: the ramdisk half (spi-geni, qrtr stack,
+# display stack through msm_drm) is staged into /lib/modules by
+# scripts/build-rootfs.sh, and the late half comes from /vendor_a (mounted by
+# aginxos-init, carried across the switch). The vendor_boot base loads only
+# the 64-module USB/storage set — full modules.load loading panics this
+# kernel (2026-08-27: retry counter burned, fastboot fallback). This script
+# also parks the pieces userspace owns:
+#   - firmware search path (s6sy79x.bin lives in /vendor_a/firmware);
+#   - the firmware feeder: sec_ts requests its fw through the sysfs fallback
+#     (the direct path never fires on this kernel) and its post-probe update
+#     must complete, not time out — the timeout path is our prime suspect for
+#     the 2026-08-27 panel-black-screen scare (later attributed to a dead
+#     battery, but a completed fw update is correct either way);
+#   - /dev/input nodes: nothing udevs in our world; mdev creates them.
+# No sleeps against kernel state: sec_touch insmod defers (-517) until the
+# panel registers (dsi_prop fw fallback, ~60s after msm_drm) and the kernel
+# retries it by itself.
+export PATH=/sbin:/bin:/usr/sbin:/usr/bin:/system/bin
+LOG=/var/touch.log
+exec >>"$LOG" 2>&1
+echo "=== touch bring-up $(date) ==="
+
+[ -d /vendor_a/lib/modules ] || /aginxos/aginxos-init mount-super
+[ -d /vendor_a/lib/modules ] || { echo "no /vendor_a - touch cannot come up"; exit 1; }
+
+R=/lib/modules            # ramdisk-origin half, staged by build-rootfs.sh
+M=/vendor_a/lib/modules   # late half from the vendor partition
+
+# Firmware search path first — sec_ts requests s6sy79x.bin at probe and
+# /vendor_a/firmware holds it.
+echo /vendor_a/firmware > /sys/module/firmware_class/parameters/path 2>/dev/null
+
+# Ramdisk half. qrtr BEFORE sec_touch is mandatory: qmi_handle_init without
+# it returns -97 and sec_ts then derefs the ERR_PTR → kernel OOPS (2026-08-27).
+# qpnp-amoled-regulator + dispcc-lito BEFORE msm_drm: panel rails + clocks —
+# without them dsi_display defers forever and sec_ts dies at parse dt.
+for m in spi-geni-qcom rpmsg_core qrtr qrtr-smd ion-alloc qseecom \
+         hdcp_qseecom msm_hdcp msm_ext_display llcc-slice dispcc-lito \
+         qpnp-amoled-regulator; do
+  insmod "$R/$m.ko" 2>/dev/null && echo "insmod $m (ramdisk half) ok"
+done
+
+# msm_drm with the panel variant the bootloader detected (dvt): the
+# cmdline param (msm_drm.dsi_display0=...dvt..._cmd:) never matches a DT
+# node — driver falls back to the PLAIN s6e3hc2 node, which lacks the
+# google,mdss-dsi-te2-* TE2 config the dvt panel needs → panel never
+# asserts TE (TE_GPIO irq count stays 0) → ESD check kills it at the first
+# mode set (PANEL_DEAD, 2026-08-27). Pass the node with an explicit config
+# index at insmod so the dvt node binds.
+insmod "$R/msm_drm.ko" \
+  dsi_display0=qcom,mdss_dsi_s6e3hc2_dvt_dsc_1080p_cmd:0 2>/dev/null \
+  && echo "insmod msm_drm (ramdisk half, dvt panel) ok"
+
+for m in qmi_helpers touch_offload heatmap touchscreen_tbn; do
+  insmod "$M/$m.ko" 2>/dev/null
+done
+
+# Firmware feeder: satisfy the pending request the moment it appears.
+(
+  n=0
+  while [ $n -lt 150 ]; do
+    n=$((n+1))
+    if [ -d /sys/class/firmware/s6sy79x.bin ]; then
+      echo 1 > /sys/class/firmware/s6sy79x.bin/loading
+      cat /vendor_a/firmware/s6sy79x.bin > /sys/class/firmware/s6sy79x.bin/data
+      echo 0 > /sys/class/firmware/s6sy79x.bin/loading
+      echo "feeder: s6sy79x.bin fed (try $n)"
+      break
+    fi
+    sleep 1
+  done
+) &
+
+insmod "$M/sec_touch.ko" 2>/dev/null
+echo "sec_touch loaded $(date)"
+
+# Wait for the touchscreen to register, then create its event node.
+n=0
+while [ $n -lt 120 ]; do
+  n=$((n+1))
+  if grep -q sec_touchscreen /proc/bus/input/devices 2>/dev/null; then
+    mdev -s
+    echo "touchscreen registered + nodes created (t+$((n*2))s) $(date)"
+    grep -A1 sec_touchscreen /proc/bus/input/devices
+    # Report to the boot card (M5) — bootcard owns the panel now; the M3
+    # green splash is gone. It paints from /run/boot.state, so touch just
+    # becomes a row that flips to ok.
+    echo "touch ok" >>/run/boot.state
+    echo "=== done $(date) ==="
+    exit 0
+  fi
+  sleep 2
+done
+echo "touchscreen never registered $(date)"
+echo "touch fail" >>/run/boot.state
+dmesg | grep -E "sec_ts|sec_input" | tail -8

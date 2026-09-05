@@ -1,0 +1,5 @@
+# aginx:summary=first-boot Wi-Fi setup TUI: scan, pick AP, enter password (M10)
+# aginx:group=net
+# aginx:hidden=true
+# 原名 wifi-wizard（N4③ 改姓）。Auto-started by aginx-term when
+# /etc/wifi.conf is missing; interactive face, no useful argv.

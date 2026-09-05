@@ -1,0 +1,5 @@
+# aginx:summary=后摄拍照出 JPEG（M19 IFE/RDI 路线；参数原样传给底层相机）
+# aginx:args=[--stream] [--rear|--uw] [--slowrear] [--rawvendor] [--gain N] [--png] [--jpeg] [--out FILE]
+# aginx:examples=--stream --rear --rawvendor --jpeg --jpeg-out /tmp/shot.jpg
+# aginx:group=cam
+# 原名 /bin/cam-shot（zig cc 静态，老仓 rootfs/src/cam-shot.c）。

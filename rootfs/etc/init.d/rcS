@@ -1,0 +1,164 @@
+#!/bin/sh
+# AginxOS rcS - one-shot setup, runs before the respawns in inittab.
+export PATH=/sbin:/bin:/usr/sbin:/usr/bin:/system/bin
+
+# Fill in the full applet set (image ships only a curated symlink list),
+# then populate /dev from sysfs — nothing udevs in our world, so input event
+# nodes and friends only exist after mdev runs.
+/bin/busybox --install -s /bin 2>/dev/null
+mdev -s 2>/dev/null
+
+# M22: restore state captured before a rootfs swap (no-op on normal
+# boots; must run before chown and before any service needs /home,
+# /etc/wifi.conf or /var).
+/etc/init.d/state-restore
+
+# Host mke2fs -d stored the macOS build user (uid 501) as owner - the
+# filesystem is rw, so the first boot normalizes it for good.
+chown -R 0:0 /bin /sbin /etc /aginxos /system /home /root /var /opt /srv /media 2>/dev/null
+chown 0:0 /default.prop /prop.default /*_contexts 2>/dev/null
+
+# /proc, /sys and /dev were carried in by aginxos-init before chroot;
+# these only run if something is missing (idempotent).
+mount -t proc proc /proc 2>/dev/null
+mount -t sysfs sysfs /sys 2>/dev/null
+mount -t devtmpfs devtmpfs /dev 2>/dev/null
+mount -t tmpfs tmpfs /tmp 2>/dev/null
+
+hostname aginxos
+ifconfig lo 127.0.0.1 netmask 255.0.0.0 up 2>/dev/null
+
+# cpufreq (M42e) — qcom-cpufreq-hw 不加载时两组核心都停在 RPMh 遗留的低频
+# （A76 钉核 TTS 22.9s；驱动加载升频后同句 8.7s，收据 HARDWARE.md M42e）。
+# 越早加载越好：下面所有 bring-up 脚本都吃满频。governor 用 schedutil——
+# 负载升频、空闲落回 300MHz，性能与 performance 无差而待机不烧。
+if [ -e /vendor_a/lib/modules/qcom-cpufreq-hw.ko ]; then
+  insmod /vendor_a/lib/modules/qcom-cpufreq-hw.ko 2>/dev/null
+  for P in /sys/devices/system/cpu/cpufreq/policy*; do
+    echo schedutil > "$P/scaling_governor" 2>/dev/null
+  done
+fi
+
+# Cross-boot forensics: the kernel has no pstore, so a death (PMIC power cut
+# vs kernel hang) leaves evidence only if something was already writing it
+# to the ext4 /var. The 2026-08-27 morning deaths were diagnosed as UVLO
+# power cuts exactly because a kmsg follower was running (last line:
+# "PMIC input: code=116"). Heartbeat stamps uptime every 5s — where it
+# stops vs when USB died discriminates hang-vs-power on the next death.
+# Bounded: 387 MB of kmsg filled the 2 GB rootfs on 2026-09-01 (adb push
+# ENOSPC). head -c caps each file at 32 MB (cat dies on SIGPIPE), the
+# loop rotates to .old — the record is always the most recent ~64 MB.
+(while :; do
+  mv -f /var/kmsg-follow.log /var/kmsg-follow.old 2>/dev/null
+  cat /dev/kmsg 2>/dev/null | head -c 33554432 > /var/kmsg-follow.log
+  sleep 5
+done) &
+(while :; do
+  echo "$(date +%H%M%S) up=$(cut -d. -f1 /proc/uptime)" >> /var/heartbeat.log
+  sleep 5
+done) &
+
+echo "aginxos: rcS done, rootfs up on userdata" > /dev/kmsg
+date > /etc/.rcs-ran
+
+# Boot card (M5) — the panel UI: AginxOS wordmark + a live checklist of
+# every bring-up stage, fed by /run/boot.state. Starts FIRST because it
+# must own DRM master as soon as the panel registers (it retries until
+# then — msm_drm + panel take ~60 s, loaded by touch-bringup below). It
+# replaces the M3 green splash: bring-up scripts report into the state
+# file instead of painting, and bootcard never exits (dropping master
+# would let dsi_backlight's dpms hooks blank the panel).
+mkdir -p /run 2>/dev/null
+: > /run/boot.state
+( exec /bin/bootcard /run/boot.state ) >/var/bootcard.log 2>&1 &
+# aterm-handoff (M11) kills bootcard by this pid once boot finishes.
+echo $! > /run/bootcard.pid
+
+# Touch bring-up (M3) — backgrounded: it waits out the ~60s panel
+# registration, and the console must not block on it. Loads the display
+# chain and reports touch ok/fail into /run/boot.state.
+/etc/init.d/touch-bringup &
+
+# Battery bring-up (M3c) — backgrounded: google-battery keeps retrying
+# until the psy appears, so this script just feeds modules and waits.
+/etc/init.d/battery-bringup &
+
+# Radio bring-up (M3d) — backgrounded: stands up the QRTR service stack,
+# boots the modem (its own watchdog kills it in 65 s without the services)
+# and loads the WLAN driver. Ordering vs touch-bringup is race-tolerant:
+# both chains re-insmod with 2>/dev/null.
+/etc/init.d/radio-bringup &
+
+# Audio bring-up (M18) — backgrounded: waits for radio-bringup's ADSP ONLINE
+# + "Q6 is Up" (apr's of_platform_populate creating the sound subtree), then
+# loads the codec chain in dependency order and reports into boot.state.
+/etc/init.d/audio-bringup &
+
+# Camera bring-up (M19) — backgrounded: loads the Qualcomm cam_req_mgr
+# stack for the IFE route. cam_req_mgr_late must be the LAST module (it
+# seals the subdev registry); camera-bringup encodes that order.
+/etc/init.d/camera-bringup &
+
+# Network bring-up (M5) — backgrounded: waits for wlan0 from radio-bringup,
+# joins /etc/wifi.conf, DHCP, then fetches http://www.baidu.com; every step
+# lands in /run/boot.state and the card flips to the BOOT COMPLETE banner.
+/etc/init.d/net-bringup &
+
+# First-boot provisioning (M10) — waits for net-bringup's internet verdict,
+# then aginx-pkg syncs the required-tier manifest. Also the self-heal path: a
+# missing/corrupt /var/bin binary is re-downloaded on the next networked
+# boot. Backgrounded; a no-op when the manifest has no active entries.
+/etc/init.d/provision &
+
+# Service layer (M16 agsvc → N4 aginx-svcd) — inittab respawns
+# /usr/libexec/aginx/aginx-svcd once rcS finishes, which starts the N4
+# units from /etc/agsvc.d (aginx-server, aginx-voice, aginxbrowser,
+# aginx-secretd, net-watch), restarts them on crash with backoff, and
+# re-checks absent binaries every 30 s so first provisioning lands
+# without a reboot. Control: aginx-svc list|status|start|stop|restart|
+# reload over /run/svc/ctl.sock.
+
+# Launcher app registry (M16) — seed /var/apps from /etc/apps.d so new
+# binaries appear on the launcher. Cheap and idempotent; provision re-runs
+# it after aginx-pkg installs.
+/etc/init.d/app-registry
+
+# crond — busybox crond reads /etc/crontabs/root. N4 切净: the #86 daily
+# backup line is gone with carrier.db (channel rebuilds in N5); the
+# daemon stays so the next line is a crontab edit, not a re-bake.
+# -c pins the dir (busybox defaults to /var/spool/cron/crontabs which
+# we don't create). Log at /var/log/crond.log.
+mkdir -p /var/log
+if [ -x /bin/crond ]; then
+  /bin/crond -b -c /etc/crontabs -L /var/log/crond.log
+fi
+
+# Ops channel sshd (#142) — the maintenance face: ssh in over Wi-Fi, or
+# `adb forward tcp:2222 tcp:22` when the dev box sits on another subnet.
+# Key-only (-s: passwords off); host key lives under /root/.ssh so the
+# state tar carries it across system updates (first boot generates it).
+# Client keys are NOT baked — push your pubkey to /root/.ssh/authorized_keys.
+# -E logs to stderr (no syslogd here) → /var/log/dropbear.log.
+mkdir -p /root/.ssh
+if [ -x /bin/dropbear ]; then
+  [ -f /root/.ssh/dropbear_ed25519_host_key ] || \
+    /bin/dropbearkey -t ed25519 -f /root/.ssh/dropbear_ed25519_host_key >/dev/null 2>&1
+  /bin/dropbear -p 22 -s -r /root/.ssh/dropbear_ed25519_host_key -E \
+    >>/var/log/dropbear.log 2>&1
+fi
+
+# Boot-successful marker (M16) — ABL drains the GPT slot-retry attribute
+# on every unmarked boot and the phone ends up in fastboot (or falls
+# through to slot b's stock bootloader, which would format our userdata).
+# Wait for boot.state's final verdict (net-bringup writes it), then flag
+# the active slot successful in every LUN's GPT.
+( n=0
+  while [ $n -lt 150 ]; do
+    grep -q '^done ok' /run/boot.state 2>/dev/null && break
+    sleep 2; n=$((n+1))
+  done
+  /usr/bin/aginx-boot-ok ) &
+
+# Panel handoff (M11) — when boot finishes, bootcard's panel goes to
+# aginx-term (launcher + shell). Backgrounded: waits on /run/boot.state.
+/etc/init.d/aterm-handoff &

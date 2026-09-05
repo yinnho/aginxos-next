@@ -1,0 +1,117 @@
+#!/bin/sh
+# Provision (v2, M27 agpkg→N4 aginx-pkg; docs: SYSTEM.md §9 line): three
+# explicit layers, all idempotent, none of which ever blocks the boot.
+#
+#   seed      — scaffold the state tree /var/lib/ag + aginx-pkg dirs. Pure
+#               mkdir, no markers: a wiped or partial tree just gets
+#               re-created next boot. (The baked image scaffolds these
+#               too — M26 made them state-tar members, and busybox tar
+#               exits 1 on a missing member. Seed is the runtime half
+#               of that belt-and-braces.)
+#   resync    — aginx-pkg sync EVERY boot (first install and self-heal are
+#               one path: an entry whose installed sha256 differs gets
+#               re-downloaded atomically). Output goes to a log, not
+#               boot.state — the boot line only records ok/fail.
+#               app-registry always runs after it (launcher entries for
+#               whatever is installed, even if sync failed on one
+#               package), and any unit whose binary THIS boot installed
+#               gets `aginx-svc restart` — the supervisor restart-
+#               exhausted it during the empty-/var/bin window of earlier
+#               boots (observed 2026-09-03 on the old line: 5 restarts
+#               -> failed, manual revive).
+#   finalize  — one-shot steps, gated by `aginx-done` markers in
+#               /var/lib/ag/done: run only while unmarked, mark only on
+#               success, so a failed step retries next boot and a wiped
+#               marker (state-tar loss) means a clean re-run. First
+#               real tenant is M28 (python + pip). Structure here now.
+#
+# net-bringup writes "internet ok|fail ..." and finally "done ok|fail" —
+# this script writes ONLY the pkg lines.
+export PATH=/sbin:/bin:/usr/sbin:/usr/bin:/var/bin
+
+STATE=/run/boot.state
+say() { echo "$@" >>"$STATE"; }
+
+# ---- seed -----------------------------------------------------------------
+mkdir -p /var/lib/ag/done /var/lib/agpkg/skills /var/lib/agpkg/units /var/lib/agpkg/stamps
+
+[ -f /etc/agpkg.manifest ] || exit 0
+grep -qE '^[a-z]' /etc/agpkg.manifest || exit 0   # all entries commented
+
+# ---- wait for internet (resync + finalize both need it) -------------------
+# Give net-bringup up to 6 minutes (radio + join + dhcp on a cold boot).
+n=0
+while [ $n -lt 180 ]; do
+  grep -q '^internet ok' "$STATE" 2>/dev/null && break
+  grep -q '^done fail' "$STATE" 2>/dev/null && exit 0
+  sleep 2; n=$((n+1))
+done
+grep -q '^internet ok' "$STATE" || exit 0
+
+# Clock gate (bake #11 receipt, 2026-09-03): a TLS download before ntpd
+# sets the wall clock dies on cert validation ("not valid yet" vs the
+# 1970 boot clock) — a fresh /var/bin after a rootfs swap made every
+# mirror fetch fail this way while sync raced ahead of net-bringup's
+# ntpd. net-bringup writes `time ok|fail` synchronously before `done`,
+# so this wait is bounded by the boot itself; on time fail we still
+# try (the RTC may be right — failure is then honest and logged).
+n=0
+while [ $n -lt 90 ]; do
+  grep -qE '^time (ok|fail)' "$STATE" 2>/dev/null && break
+  sleep 2; n=$((n+1))
+done
+
+# ---- resync ---------------------------------------------------------------
+LOG=/var/tmp/aginx-pkg-sync.log
+say pkg run
+if aginx-pkg sync >"$LOG" 2>&1; then
+  say pkg ok
+else
+  say pkg fail "see $LOG"
+fi
+# launcher entries for whatever is installed — even a partial sync
+/etc/init.d/app-registry
+# a binary installed this boot may belong to a unit that already gave up
+# restarting during the empty-/var/bin window; revive what we refreshed
+for u in $(sed -n 's/^aginx-pkg: installed \([^ ]*\).*/\1/p' "$LOG" 2>/dev/null); do
+  aginx-svc restart "$u" 2>/dev/null
+done
+
+# ---- finalize (one-shot steps, aginx-done-gated) -------------------------
+# System-level guarantee line (ARCH §13): the phone promises python3,
+# not node. Re-seeded every boot — idempotent overwrite, no marker.
+mkdir -p /var/lib/agpkg/skills/_system
+cat >/var/lib/agpkg/skills/_system/SKILL.md <<'SYSEOF'
+# _system — 系统级保证（provision seed，每靴覆写）
+
+- **python3 保证在**：core tier 四件套（musl CPython 3.12），sync 自愈；
+  `python3 -m pip` 装 musllinux aarch64 wheel。细节见 skills/python3/。
+- **node 不保证**：要 JS 运行时自己装（opt tier 或 wheel 生态替代）。
+- 其余系统工具面以 `aginx commands --all` 为准（D13 路由器，文件即注册表）。
+SYSEOF
+
+# python3 loader link + pip sanity — the FIRST aginx-done tenant (M28).
+# CPython musl builds exec via /lib/ld-musl-aarch64.so.1 (kernel ELF
+# interpreter path, hardcoded); the loader rides the package tree, this
+# step links it into /lib. python3 absent (sync failed/offline) => no
+# mark, retried next boot — the M27 discipline.
+# The `-e /lib/...` re-check: the marker lives in /var/lib (state tar,
+# survives rootfs swaps) but the link itself does not — after a swap the
+# marker would lie and python3 would die on a missing musl interpreter
+# (bake #9 receipt, 2026-09-03). Trust the artifact, not the mark.
+if ! aginx-done check python-finalize || [ ! -e /lib/ld-musl-aarch64.so.1 ]; then
+  if [ -x /var/bin/python3 ]; then
+    LOADER=/var/lib/agpkg/pkgfiles/python3/lib/ld-musl-aarch64.so.1
+    if [ -f "$LOADER" ] \
+       && ln -sf "$LOADER" /lib/ld-musl-aarch64.so.1 \
+       && /var/bin/python3 -c 'import sys,ssl,sqlite3,socket,json; print(sys.version)' >>/var/tmp/python-finalize.log 2>&1 \
+       && /var/bin/python3 -m pip --version >>/var/tmp/python-finalize.log 2>&1; then
+      aginx-done mark python-finalize
+      say py ok "$(cat /var/tmp/python-finalize.log | head -1 | cut -c1-40)"
+    else
+      say py fail "see /var/tmp/python-finalize.log"
+    fi
+  fi
+fi
+
+exit 0

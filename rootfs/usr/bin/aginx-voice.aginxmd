@@ -1,0 +1,7 @@
+# aginx:summary=voice dialog daemon (PTT=volume-down); also --inject to drive its state machine headless
+# aginx:args=[--inject <text>]
+# aginx:examples=--inject 你好
+# aginx:group=snd
+# aginx:hidden=true
+# 原名 voiced（M42a，N4②b 改姓）。Runs as an aginx-svcd unit; the CLI
+# entry exists for --inject diagnostics (n4.sh F 段).

@@ -1,0 +1,5 @@
+# codex — official musl binary (M12). Registry seeding contract: /etc/init.d/app-registry
+# copies this into /var/apps/<id>/app.toml while the binary exists.
+name = CODEX
+binary = /var/bin/codex
+scale = 3

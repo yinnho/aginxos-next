@@ -1,0 +1,7 @@
+# aginx:summary=local ASR (sherpa-onnx int8 zipformer) — voice ears, bionic-static
+# aginx:args=<wav16k-mono>  (stdin wav also works)
+# aginx:group=snd
+# aginx:hidden=true
+# 原名 ag-asr（老仓 out/voice/bin 预构建资产）。voiced-internal: the
+# audio path spawns it directly (/var/bin/aginx-asr in voice/src/audio.rs);
+# not a brain-facing face.

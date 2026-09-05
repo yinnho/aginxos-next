@@ -1,0 +1,4 @@
+# crond root crontab — busybox crond reads /etc/crontabs/root.
+# N4 切净: the #86 daily ag-backup line is GONE (no carrier.db in this
+# image — the backup channel gets rebuilt on the new line, N5). The
+# file stays so crond has a home; rcS starts crond with -c /etc/crontabs.

@@ -1,0 +1,17 @@
+#!/bin/sh
+# Respawned by busybox init whenever adbd dies. adbd re-opens ep0 on the
+# ffs mount that survived the switch (bind-carried with /dev); its previous
+# death tore the UDC down, so re-bind it - adbd retries FUNCTIONFS_BIND
+# while this happens. Log to ext4: kmsg is unrecoverable (no pstore).
+export PATH=/system/bin:/sbin:/bin
+export LD_LIBRARY_PATH=/system/lib64
+G=/config/usb_gadget/g1
+( sleep 3
+  n=0
+  while [ $n -lt 5 ]; do
+    n=$((n+1))
+    echo "a600000.dwc3" > $G/UDC 2>>/var/adbd.log && break
+    sleep 2
+  done ) &
+exec >>/var/adbd.log 2>&1
+exec /system/bin/adbd

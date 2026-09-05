@@ -1,0 +1,5 @@
+# aginx:summary=on-device terminal UI: launcher + pty shell on the panel (M11)
+# aginx:group=sys
+# aginx:hidden=true
+# 原名 aterm（N4③b 改姓）。rcS's aterm-handoff starts it after boot;
+# --ppm out.ppm renders a host-side snapshot for layout checks.

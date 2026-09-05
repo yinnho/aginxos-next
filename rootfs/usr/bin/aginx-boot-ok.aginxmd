@@ -1,0 +1,6 @@
+# aginx:summary=A/B slot marker: mark the active slot successful / set-active <a|b> (M16/M14)
+# aginx:args=[status] | set-active <a|b> [tries]
+# aginx:examples=status
+# aginx:group=sys
+# aginx:requires-sudo=true
+# 原名 agboot-ok（N4③b 改姓）。rcS calls it bare after `done ok`.

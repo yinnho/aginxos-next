@@ -1,0 +1,7 @@
+# aginx:summary=local OCR (PaddleOCR PP-OCRv4 rec, rot-auto) — 拍照念字 eyes
+# aginx:args=<jpeg...>
+# aginx:group=cam
+# aginx:hidden=true
+# 原名 ag-ocr（老仓 out/ocr/bin 预构建资产）。stdout per line
+# "text\tconf"; exit 0=有字 1=没字 2=错误; voiced's M45 eye branch
+# spawns it after a blind aginx-cam-shot.

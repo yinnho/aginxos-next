@@ -1,0 +1,13 @@
+# net-watch (M20b) — steady-state network self-heal. Rejoins the AP in
+# place when the link dies (net-rejoin), so an unattended device rides
+# out AP flaps without a human. type = simple: a sleeping shell loop is
+# the service; aginx-svcd's init-respawn chain covers the supervisor
+# itself. Script lives in /usr/libexec/aginx/ (N4: internal healer, not
+# a command; unit 名保持 net-watch 便于日志对账).
+[unit]
+name = net-watch
+
+[service]
+cmd = /usr/libexec/aginx/net-watch
+args = []
+type = simple

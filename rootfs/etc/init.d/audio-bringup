@@ -1,0 +1,211 @@
+#!/bin/sh
+# Audio bring-up (M18, first run 2026-08-31 — see HARDWARE.md).
+# Loads the qcom codec/machine chain once radio-bringup has booted the ADSP
+# and apr's of_platform_populate() has created the sound-subtree devices
+# ("Q6 is Up" in dmesg). Before that moment no machine device exists and
+# every module here loads to no effect — that ordering is why this script
+# waits instead of racing radio-bringup.
+#
+# Module order is dependency-proven on device (2026-08-31 session,
+# /proc/modules used-by): swr_ctrl needs msm_pm (needs lpm-stats,
+# event_timer); macros need swr_ctrl + bolero; wcd937x/938x need wcd_core
+# + wcd9xxx + mbhc; machine_dlkm needs all of the above. The external
+# TDM codecs (boot 3, 2026-08-31): the sound node's external-*-dai-link
+# children point at rt5514 (mic) and two cs35l41 amps over I2C — their
+# drivers must be REGISTERED before machine probes or
+# msm_append_ext_codec_component_of_node() fails "error getting codec
+# dai name" and snd_soc_register_card returns -22 (kona-asoc-snd has
+# suppress_bind_attrs, so a failed probe cannot be retried via sysfs —
+# it has to be right at first probe). rt5514 needs rl6231 + rt5514-qmi +
+# rt5514-spi symbols first; cs35l41 needs wm-adsp. native_dlkm stays out
+# (its q6asm_* symbols never resolved; the q6 FE path does not need it).
+export PATH=/sbin:/bin:/usr/sbin:/usr/bin:/system/bin
+LOG=/var/audio.log
+exec >>"$LOG" 2>&1
+echo "=== audio bring-up $(date) ==="
+M=/vendor_a/lib/modules
+[ -d "$M" ] || { echo "audio fail no-vendor"; echo "audio fail no-vendor" >>/run/boot.state; exit 1; }
+
+# --- wait for radio-bringup: ADSP ONLINE, then apr's populate ------------
+adsp_online() {
+  for s in /sys/bus/msm_subsys/devices/subsys*; do
+    [ "$(cat "$s/name" 2>/dev/null)" = "adsp" ] && { cat "$s/state" 2>/dev/null; return; }
+  done
+  echo OFFLINE
+}
+n=0
+while [ "$(adsp_online)" != "ONLINE" ] && [ $n -lt 90 ]; do sleep 2; n=$((n+1)); done
+echo "adsp $(adsp_online) after $((n*2))s wait"
+if [ "$(adsp_online)" != "ONLINE" ]; then
+  echo "audio fail adsp-offline"; echo "audio fail adsp-offline" >>/run/boot.state; exit 1
+fi
+n=0
+while [ $n -lt 30 ]; do
+  dmesg | grep -q "Q6 is Up" && break
+  sleep 1; n=$((n+1))
+done
+if dmesg | grep -q "Q6 is Up"; then
+  echo "Q6 up (waited ${n}s) — sound subtree populated"
+else
+  # The M18 gate did not fire (servloc enable vs q6_pdr one-shot, radio-
+  # bringup note 7). Loading the chain anyway only burns seconds — bail.
+  echo "audio fail no-q6-up"; echo "audio fail no-q6-up" >>/run/boot.state; exit 1
+fi
+
+# --- ordered load ----------------------------------------------------------
+# 2026-08-31 (boot 4/5 lessons, symbol-level):
+#  - q6_dlkm EXPORTS msm_aud_evt_* and digital_cdc_rsc_mgr_hw_vote_* —
+#    swr_ctrl_dlkm imports them, so swr_ctrl must load AFTER q6 (swr_ctrl
+#    before q6 fails "Unknown symbol" and drags all four macro modules
+#    down with it, they need swrm_wcd_notify from swr_ctrl).
+#  - slimbus chain order is slimbus → of_slimbus (imports
+#    slim_register_board_info) → msm_sps → slim_msm_ngd (imports
+#    of_register_slim_devices) → bluetooth_power. It must be up before the
+#    machine cascade so the first machine probe finds the NGD controller.
+loaded() { grep -q "^$1 " /proc/modules 2>/dev/null; }
+FAILED=0
+load() {  # load <file-stem> — try dash and underscore spellings
+  mn=$(echo "$1" | tr -- '-' '_')
+  loaded "$mn" && { echo "have $mn"; return 0; }
+  for f in "$M/$1.ko" "$M/$mn.ko"; do
+    [ -e "$f" ] || continue
+    insmod "$f" 2>/dev/null && { echo "ok $1"; return 0; }
+  done
+  echo "FAIL $1"; FAILED=$((FAILED+1))
+}
+# Cross-chain deps normally already loaded by touch-bringup (parallel rcS);
+# a missing one makes every dependent insmod fail ENOENT, so ensure first.
+for m in ion-alloc pinctrl-msm pinctrl-lito; do load "$m"; done
+# slimbus bus + SPS + NGD controller before anything q6 (boot-4 order fix).
+for m in slimbus of_slimbus msm_sps slim_msm_ngd bluetooth_power; do load "$m"; done
+for m in event_timer lpm-stats msm-pm swr_dlkm q6_dlkm swr_ctrl_dlkm \
+         wcd_core_dlkm wcd9xxx_dlkm mbhc_dlkm \
+         wcd937x_slave_dlkm wcd938x_slave_dlkm pinctrl_lpi_dlkm \
+         platform_dlkm usf_dlkm bolero_cdc_dlkm \
+         rx_macro_dlkm tx_macro_dlkm va_macro_dlkm wsa_macro_dlkm \
+         wcd937x_dlkm wcd938x_dlkm wsa881x_dlkm wsa883x_dlkm \
+         fsa4480_i2c snd-soc-codec-misc \
+         snd-soc-rl6231 snd-soc-rt5514-spi snd-soc-rt5514-qmi snd-soc-rt5514 \
+         snd-soc-wm-adsp snd-soc-cs35l41 snd-soc-cs35l41-i2c \
+         hdmi_dlkm stub_dlkm machine_dlkm; do
+  load "$m"
+done
+echo "load done, $FAILED failed"
+
+# --- card check ------------------------------------------------------------
+# Nothing udevs in our world and the kernel has no devtmpfs (rcS's
+# `mount -t devtmpfs` returns ENODEV — same reason debugfs is absent), so
+# /dev/snd nodes only exist after mdev cold-pulses sysfs — same trick as
+# touch-bringup. Boot 6 (2026-08-31) "fail no-card" was exactly this: the
+# card and all 53 pcm devices were registered in sysfs while /dev/snd sat
+# empty.
+n=0
+while [ $n -lt 15 ]; do
+  mdev -s 2>/dev/null
+  ls /dev/snd/ 2>/dev/null | grep -q pcm && break
+  sleep 1; n=$((n+1))
+done
+if ls /dev/snd/ 2>/dev/null | grep -q pcm; then
+  echo "audio ok $(head -1 /proc/asound/cards)"
+  echo "audio ok $(head -1 /proc/asound/cards)" >>/run/boot.state
+else
+  echo "audio fail no-card (loaded $FAILED fails)"
+  echo "audio fail no-card" >>/run/boot.state
+  # Evidence for HARDWARE.md — the probe lines that matter.
+  dmesg | grep -iE "Q6 is up|asoc|bolero|wcd9|swr_mstr|snd|soundwire" | tail -40
+  exit 1
+fi
+
+# --- mixer recipe (device-proven 2026-08-31, M18) ---------------------------
+# Playback 说: MM1 → QUIN_TDM_RX_0 → CS35L41 dual amp; levels from the
+# vendor speaker path (AMP PCM Gain 17, Digital PCM Volume 817).
+# Capture 听: MM1 ← PRI_TDM_TX_0 with the rt5514 handset-mic codec route.
+# The rt5514 DSP must be RUNNING for the DMICs to get their clock — write
+# "DSP ADC"=1 boots it (request_firmware rt5514p_dsp_fw1..4.bin from
+# /vendor/firmware, pushed over SPI by snd-soc-rt5514-spi; observed
+# "DSP Firmware Version: 2.1.20.0"). Without it every capture is digital
+# silence with the mic LDO on (2026-08-31 DSP-off windows were exactly
+# 0.0 rms). The fw load rewrites codec regs, so the mic route goes AFTER
+# it. Mux enum is {"DMIC1","DMIC2"} — value 0 is DMIC1, the live handset
+# mic (value 1 gave 0.0 rms; XML string "DMIC1" ≠ index 1).
+# NOTE the loop route "PRI_TDM_TX_0 Audio Mixer MultiMedia1": without vendor
+# ACDB calibration the aDSP tears down codec-TX capture sessions (async READ_DONE
+# size 0 → EPIPE/EIO on READI); with the loop attached the TX COPP opens in
+# loopback mode and sessions run. Playback through MM1 while capturing adds the
+# played audio to the capture — the agent should not play and listen at once.
+# Boot 6 lesson (2026-08-31): the two Channels ctls are load-bearing. They
+# reset to 0 on a fresh card and a 0-channel backend gives healthy sessions
+# that carry all zeros — the loop's tell is an 880 Hz line at FFT peak
+# 6.4e6 with them set, 0.0 rms without. The routing mixer ctls read back
+# "1,0" after writing "1 1" — q6's put only consumes value[0], expected.
+mix() { /bin/snd-mixer "$1" $2 2>/dev/null | tail -1; }
+mix "PRI_TDM_TX_0 Channels" 1
+mix "QUIN_TDM_RX_0 Channels" 2
+mix "QUIN_TDM_RX_0 Audio Mixer MultiMedia1" "1 1"
+mix "Main AMP Enable Switch" 1
+mix "R Main AMP Enable Switch" 1
+mix "AMP PCM Gain" 17
+mix "R AMP PCM Gain" 17
+mix "Digital PCM Volume" 817
+mix "R Digital PCM Volume" 817
+mix "MultiMedia1 Mixer PRI_TDM_TX_0" "1 1"
+mix "PRI_TDM_TX_0 Audio Mixer MultiMedia1" "1 1"
+# --- amp DSP engagement (M43, 2026-09-04) ------------------------------------
+# The M18 recipe left the cs35l41 smart-amp half-configured — protection
+# firmware staged but OUT of the signal path: PCM Source=0 is the ASP bypass
+# (DSP Booted never latched, DRE off, and "R AMP Enable" above was a stale
+# control name so the right amp never enabled — speaker mono + raw). The
+# fix is the vendor crus_sp_cal_mixer_paths.xml dance, device-proven
+# 2026-09-04 (see HARDWARE.md M43):
+#   DRE+VBSTMON on → inject stored speaker calibration into the Protection
+#   algorithm (cd controls, BE u32 in value[0]) → PCM Source=DSP (enum
+#   {0:ASP,1:DSP}) → DSP boots on the next clock. Calibration was measured
+#   once by the full Calibration-firmware dance and lives in
+#   /etc/aginx/spk-cal (state-tarred; absent file ⇒ blind protection, same
+#   as pre-M43). CAL_SET_STATUS latches BE(2) after the first playback.
+mix "DRE DRE Switch" 1
+mix "R DRE DRE Switch" 1
+mix "VBSTMON Output Switch" 1
+mix "R VBSTMON Output Switch" 1
+# Stage the protection firmware explicitly — on a cold card the cd controls
+# (DSP1 Protection cd CAL_*) do not exist until the wmfw registers its
+# coefficients; preload makes that deterministic (~1s per amp, sleep covers).
+mix "DSP1 Preload Switch" 1
+mix "R DSP1 Preload Switch" 1
+sleep 2
+if [ -s /etc/aginx/spk-cal ]; then
+  # lines are "<ctl name> <BE value>" — ctl names CONTAIN spaces, so split
+  # on the last field with parameter expansion (read's two-var form would
+  # hand the whole tail to $val — the boot-1 trap that left CAL_R=0).
+  while read -r line; do
+    case "$line" in ''|'#'*) continue ;; esac
+    val=${line##* }
+    ctl=${line% *}
+    mix "$ctl" "$val"
+  done < /etc/aginx/spk-cal
+fi
+mix "PCM Source" 1
+mix "R PCM Source" 1
+# Boot the rt5514 DSP first (fw load, a few seconds), then the mic route —
+# see the comment block above for why the order matters.
+mix "DSP ADC" 1
+sleep 4
+mix "Stereo1 DMIC Mux" 0
+mix "Sto1 ADC MIXL DMIC Switch" 1
+mix "ADC1 Capture Volume" "60 60"
+echo "mixer done"
+
+# --- aDSP warm-up pass (boot 7, 2026-08-31) ---------------------------------
+# On a freshly built card the FIRST session cycle after the mixer writes
+# runs healthy but carries all zeros — the aDSP wires the TX loopback graph
+# one session late. Proven twice (boot 6 manual, boot 7 script-only): run 1
+# silent, identical run 2 carries the loop (880 Hz FFT peak 6.2e6). Burn the
+# cold cycle here at volume 0 so the agent's first real session is hot.
+dd if=/dev/zero of=/tmp/.awarm.pcm bs=1000 count=192 2>/dev/null
+/bin/snd-play /dev/snd/pcmC0D0p /tmp/.awarm.pcm 48000 2 0 >/dev/null 2>&1
+/bin/snd-cap /dev/snd/pcmC0D0c 1 /dev/null 48000 1 >/dev/null 2>&1
+rm -f /tmp/.awarm.pcm
+echo "warm-up done"
+
+# Evidence for HARDWARE.md — the probe lines that matter.
+dmesg | grep -iE "Q6 is up|asoc|bolero|wcd9|swr_mstr|snd|soundwire" | tail -40

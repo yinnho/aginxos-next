@@ -1,0 +1,62 @@
+# aginx-pkg manifest — required-tier software (docs: SYSTEM.md §6.1 line).
+# Format per line: <name> <url> <sha256> [core|opt] — 4th field optional,
+# absent = core. core self-heals via `aginx-pkg sync`; opt is user-picked
+# (launcher "+" tile -> `aginx-pkg opt-in`). ('#' comments, blank lines ok)
+#
+# M26: the default manifest is SIGNED — /etc/agpkg.manifest.sig holds a
+# detached ed25519 sig over these raw bytes (same key/chain as aginx-update
+# updates). sync/available/opt-in refuse an unsigned or tampered file;
+# an explicit path argument stays unsigned (adb dev loop). Edit here =>
+# re-sign on the host: aginx-sign sign .local/keys/aginx.key <this file>
+# (scripts/build-rootfs.sh does it automatically when the sig is stale).
+#
+# The sha256 pins content, so transport honesty is not load-bearing — but
+# the canonical source is GitHub releases. On networks where GitHub stalls,
+# prefix the URL with https://gh-proxy.com/ (sha256 still verified).
+#
+# #87 (2026-09-03): the canonical DOWNLOAD source is our own mirror,
+# https://pkgs.aginx.net (nginx on 86quan, /data/pkgs.aginx.net). GitHub
+# releases stay the upstream of record — the mirror is refilled from there
+# by /data/pkgs.aginx.net/sync.sh (socks5 127.0.0.1:8800, sha-gated, retry
+# loop: release-assets' Azure blob throttles bursts with 200+XML bodies).
+# Same files, same sha256 pins — the phone saw GitHub stall dead on this
+# network (bake #10 recovery: 39MB of 64MB then silence), the mirror is
+# domestic and fast. gh-proxy stays the documented emergency fallback.
+#
+# An artifact may be a bare musl binary (v0 path) or a 四件套 tar
+# (bin/<name> + pkg.toml + SKILL.md, required) — aginx-pkg tells them
+# apart by the ustar magic.
+#
+# N4 切净 (2026-09-05): the first-gen `aginx` (relay/gateway daemon) and
+# `aginx-carrier` entries are DELETED — the N4 image carries no carrier
+# daemon and no relay; the remote channel rebuilds as aginx-gateway in N5.
+# The tool packages below keep their package/bin names for now: the brain
+# reaches them through the /usr/bin bridge shells (aginx-web -> agb,
+# aginx-file -> agf, aginx-mem -> agmem); re-cutting the packages under
+# aginx- names is N5 packaging work.
+#
+# codex/grok have no usable upstream raw-musl asset (codex ships a tarball,
+# grok has no musl release at all) — mirrored as raw binaries under
+# yinnho/aginxos releases. aginxbrowser's UPSTREAM v0.2.5 musl asset
+# segfaults on device (their CI zig was broken at tag time; fixed in
+# b0315d7 after the tag) — same mirror treatment, device-verified rebuild
+# (M10, /health + /fetch ok). All sha256 match the on-device installs.
+
+aginxbrowser   https://pkgs.aginx.net/aginxbrowser/v0.2.5/aginxbrowser-v0.2.5-aarch64-unknown-linux-musl 5561e6287d6b146a94170bb71fc2c5b0ff0e9e6cfd0aa0a8ea84a21d630a99e6
+# python3 (M28) — first TREE bundle: musl CPython 3.12.14 (python-build-
+# standalone 20260901 install_only_stripped) + Alpine musl 1.2.5 ld.so;
+# pkg.toml exec faces /var/bin/python3 as a symlink into
+# /var/lib/agpkg/pkgfiles/python3/. Provision finalize links the loader
+# to /lib/ld-musl-aarch64.so.1 (kernel interp path) and marks it done.
+python3        https://pkgs.aginx.net/python3/v3.12.14/python3-v3.12.14-4pc.tar 23923ffe46c3562d3801b742fea02ccc7f0aaddd91d7a40a66e4a6ee7a6beb73
+codex          https://pkgs.aginx.net/codex/v0.151.0/codex-v0.151.0-aarch64-unknown-linux-musl 56f026015ccc3ebc12895282200d89c216892bf6fa15fa7f228e6e0c6ad6ce76
+# M30–M35 tool packages (2026-09-03 推送): the runtime's browser/web,
+# filesystem, memory and clone bridges spawn these CLIs — core tier, a
+# rootfs without them has an agent that cannot browse/read/remember.
+dup            https://pkgs.aginx.net/dup/v0.2.0/dup-v0.2.0-4pc.tar 652f9d583611826cdb3c5c02ee62a07b3e710df786c914f3a0e2629173c32a82
+agb            https://pkgs.aginx.net/agb/v0.2.0/agb-v0.2.0-4pc.tar c960cab30828caec70452526001c0e808c7df7fdaa2002b9c631b4ef90ad5b02
+agf            https://pkgs.aginx.net/agf/v0.2.0/agf-v0.2.0-4pc.tar eed372acd77037b1755ad3ad0053c949e86fc7f0bb4be57b06314e604b4862a9
+agmem          https://pkgs.aginx.net/agmem/v0.2.0/agmem-v0.2.0-4pc.tar 4b9c469038cbf4e97e913d10fa55b1fe67e14c2220a2f4134d522aeec0bf5357
+# grok is optional since M23 (选装 tier): an agent CLI like codex, but
+# self-built and not needed for the phone's own loop — pick it via "+".
+grok           https://pkgs.aginx.net/grok/v1.0.12/grok-v1.0.12-aarch64-unknown-linux-musl dac1ccb2084ee8ccbfd3e9656210e5dfb689c080b05d0fc1c5349c010fd6796d opt

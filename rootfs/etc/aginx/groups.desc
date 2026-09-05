@@ -1,0 +1,15 @@
+# aginx groups.desc — group key = one-line menu description (D13).
+# File-is-registry: a package introduces a new group by appending a line
+# here, no router reflash. Read by `aginx` at menu time;
+# AGINX_GROUPS_DESC overrides for tests and the build-time --check gate.
+cam=camera capture, QR and OCR
+snd=audio capture, playback, mixer
+net=wi-fi scan, join, self-heal
+sys=system status, reboot, provision markers
+pkg=package install and sync
+svc=supervised service units
+agent=agent conversation and session faces
+web=browser, search and fetch tools (agb via aginx-web bridge)
+files=file read/write/list/convert tools (agf via aginx-file bridge)
+mem=memory tools: kv, tree, knowledge, flows (agmem via aginx-mem bridge)
+sec=secret store admin: set, get, rm, list, sign (aginx-secretd sidecar)

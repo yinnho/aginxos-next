@@ -1,0 +1,6 @@
+# aginx:summary=reboot the device, or land in fastboot with 'bootloader'
+# aginx:args=[bootloader|poweroff]
+# aginx:examples=bootloader
+# aginx:group=sys
+# aginx:requires-sudo=true
+# 原名 /bin/reboot2 — raw reboot() syscalls (we run no init-side powerctl).

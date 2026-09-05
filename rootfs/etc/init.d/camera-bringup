@@ -1,0 +1,103 @@
+#!/bin/sh
+# Camera bring-up (M19, first run 2026-08-31 — see HARDWARE.md).
+# Loads the Qualcomm camera driver stack for the IFE (no-ICP) route:
+# cam_req_mgr + cam_sync + CPAS/CDM/CCI/CSIPHY/CSID/VFE/IFE-hw-mgr +
+# cam_context/cam_isp + the sensor chain. Order is dependency-proven on
+# device (2026-08-31, /proc/modules used-by + insmod unknown-symbol
+# rounds); the module set is the minimal one for first light — ICP/JPEG/
+# LRME/FD/custom-submod/eeprom/actuator/ois/flash stay out until a frame
+# is captured.
+#
+# Two naming traps that cost hours (both observed):
+#  - cam-sync.ko / cam-sensor-io.ko / cam-context.ko use DASHES, every
+#    other cam module uses underscores. insmod of the wrong spelling
+#    fails with "No such file" — which a `2>/dev/null` silently eats.
+#  - fw-update.ko (Google OIS firmware helper, outside the cam_* prefix)
+#    exports checkOISFWUpdate/getFWVersion that cam_sensor.ko imports;
+#    without it cam_sensor fails "unknown symbol".
+export PATH=/sbin:/bin:/usr/sbin:/usr/bin:/system/bin
+LOG=/var/camera.log
+exec >>"$LOG" 2>&1
+echo "=== camera bring-up $(date) ==="
+M=/vendor_a/lib/modules
+L=/lib/modules.aginx  # local override dir (patched kos win over vendor, M19)
+[ -d "$M" ] || { echo "camera fail no-vendor"; echo "camera fail no-vendor" >>/run/boot.state; exit 1; }
+
+loaded() { grep -q "^$(echo "$1" | tr -- '-.' '__') " /proc/modules 2>/dev/null; }
+FAILED=0
+load() {  # load <file-stem> — dash and underscore spellings are both real files here
+  loaded "$1" && { echo "have $1"; return 0; }
+  mn=$(echo "$1" | tr -- '-' '_')
+  loaded "$mn" && { echo "have $mn"; return 0; }
+  for f in "$L/$1.ko" "$M/$1.ko" "$M/$mn.ko"; do
+    [ -e "$f" ] || continue
+    busybox insmod "$f" 2>/dev/null && { echo "ok $1"; return 0; }
+  done
+  echo "FAIL $1"; FAILED=$((FAILED+1))
+}
+
+# SLG51000 camera PMIC FIRST, before anything else camera. Every camera
+# DT node (sensor@0/1/2, eeprom@0/1/2, actuator@0, ois@0) is a fw_devlink
+# consumer of i2c 1-0075 (slg51000): while the PMIC driver is absent,
+# every one of their probes silently returns -EPROBE_DEFER (observed
+# 2026-08-31: all unbound, zero CAM_ERR lines, driver dir empty). It must
+# also race ahead of whoever gpio_requests PM8150L gpio9 (1109): loading
+# it late cost "GPIO(1109) request failed(-16)" and 1-0075 stayed unbound.
+for m in slg51000-regulator; do load "$m"; done
+# Cross-chain deps touch-bringup normally has (ion/pinctrl); ensure first.
+for m in ion-alloc pinctrl-msm pinctrl-lito; do load "$m"; done
+# Core infra: clk controller, debug/tasklet utils, SMMU+mem, then the
+# util/req-mgr cluster (cam_req_mgr needs mem_mgr; cam_utils needs both).
+for m in camcc-lito cam_debug_util cam_tasklet_util cam_res_mgr \
+         cam_smmu_api cam_mem_mgr \
+         cam_utils cam_req_mgr cam_irq_controller cam_isp_packet_parser \
+         cam_sensor_vsync_pb cam_cpas cam_cdm; do load "$m"; done
+# Sync + bus masters: cam-sync (DASH file), CCI, CSIPHY, sensor-io.
+for m in cam-sync cam_cci cam_csiphy cam-sensor-io; do load "$m"; done
+# Sensor helpers, then the ISP front end. NOTE cam_req_mgr_late is NOT in
+# this group — see the late group below (order is load-bearing).
+for m in cam_sensor_util cam_gyro_core \
+         cam_ife_csid cam_ife_csid17x cam_ife_csid_lite17x \
+         cam_vfe cam_ife_hw_mgr cam_isp_hw_mgr \
+         cam_sensor_vsync_dev; do load "$m"; done
+# fw-update BEFORE cam_sensor (OIS helpers), then the sensor-module peers
+# (eeprom/actuator/ois devices sit in DT alongside the sensors; their
+# subdevs must also register before the late seal) and contexts + ISP.
+for m in fw-update cam_eeprom cam_actuator cam_ois \
+         cam_sensor cam-context cam_isp; do load "$m"; done
+# cam_req_mgr_late LAST, nothing after it: its init calls
+# cam_dev_mgr_create_subdev_nodes() which seals the registry — every
+# cam_register_subdev() after this point is rejected with
+# "dynamic node is not allowed" (observed 2026-08-31: cam-isp rejected,
+# all three cam-sensor@N left unbound, with the late module earlier in
+# the order). sensor/isp/context must all probe BEFORE this line.
+for m in cam_req_mgr_late; do load "$m"; done
+echo "load done, $FAILED failed"
+
+# Node check — same no-devtmpfs world as audio: mdev after the modules.
+# With slg51000 first + late last, expected subdevs: cam-cpas + 4x
+# cam-csiphy-driver + 3x sensor + 3x eeprom + actuator + ois + cam-isp
+# = 14. 8 is the pass bar (sensor+cpas+csiphy+isp minimum = 9, minus
+# tolerance for one module's probe variance).
+n=0
+while [ $n -lt 15 ]; do
+  mdev -s 2>/dev/null
+  [ "$(ls /dev/v4l-subdev* 2>/dev/null | wc -l)" -ge 8 ] && break
+  sleep 1; n=$((n+1))
+done
+SD=$(ls /dev/v4l-subdev* 2>/dev/null | wc -l)
+if [ "$SD" -ge 8 ] && ls /dev/video* >/dev/null 2>&1; then
+  echo "camera ok $(ls /dev/media* | wc -l) media, $(ls /dev/video* | wc -l) video, $SD subdev"
+  echo "camera ok media+video nodes" >>/run/boot.state
+else
+  echo "camera fail no-nodes (subdev $SD, loaded $FAILED fails)"
+  echo "camera fail no-nodes" >>/run/boot.state
+  dmesg | grep -iE "cam_|csiphy|cci|dynamic node" | tail -30
+  exit 1
+fi
+
+# Evidence for HARDWARE.md.
+dmesg | grep -iE "cam_sensor_platform|dynamic node|csiphy|cam_cci_probe|cam_req_mgr|cam_ife" | tail -20
+ls /sys/class/video4linux/ | while read -r v; do
+  echo "node $v name=$(cat /sys/class/video4linux/$v/name 2>/dev/null)"
+done

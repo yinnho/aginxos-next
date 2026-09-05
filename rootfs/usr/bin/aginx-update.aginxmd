@@ -1,0 +1,6 @@
+# aginx:summary=A/B self-update: check a manifest, write the inactive slot, flip active, reboot (M14)
+# aginx:args=check <manifest> | apply <manifest> [--no-reboot] | status
+# aginx:examples=apply /tmp/agupd/manifest.json --no-reboot
+# aginx:group=sys
+# aginx:requires-sudo=true
+# 原名 agupd（老仓资产，N4 落位改名烤入）。

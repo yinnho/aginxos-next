@@ -1,0 +1,452 @@
+#!/bin/sh
+# Radio bring-up (M3d; first deployed 2026-08-27 — see HARDWARE.md).
+# Stands up the AP-side service stack the modem's root PD needs over QRTR,
+# boots the modem, then loads the WLAN driver. The order is load-bearing:
+#
+#   1. qrtr-ns/pd-mapper/tftp_server/rmt_storage must be LISTENING before
+#      the modem boots — a modem that boots without its RFS/TFTP services
+#      is killed by its own watchdog every 65.7 s ("dog_hal_common.c DOG
+#      detects stalled initialization", the 5-day M3d blocker). With the
+#      services up: EFS served, DOG silent.
+#   2. rmt_storage runs PATCHED (/bin/rmt_storage, staged from
+#      .local/radio/): stock checks persist.vendor.modem.efs.clean and
+#      ERASES modemst1+modemst2 when the property is unresolvable — always
+#      true for us, we have no property service (observed 2026-08-27,
+#      EFS then rebuilt from the fsg golden copy; backups in .local/).
+#      The patch NOPs the two clear_modem_efs_partitions call sites.
+#   3. The modem does NOT autoboot: the mss DT node has no usable autoboot
+#      path and subsys-pil-tz probing mss leaves it OFFLINING (observed).
+#      /lib/modules/cdsp-modem-loader.ko (stock cdsp-loader.ko with
+#      subsystem_get retargeted cdsp→modem) gives us
+#      /sys/kernel/boot_cdsp/boot; echo 1 triggers PIL boot.
+#      The attr is ONE-SHOT per module load: success sets a "loaded" byte
+#      in the module's .bss that echo 0 does not clear (boot attr store
+#      disassembly, observed on device 2026-08-27 — echo 0 is a graceful
+#      subsystem_put shutdown, but a later echo 1 silently no-ops on the
+#      flag). Re-booting the modem after that requires a full reboot.
+#   4. Bring-up order copies stock (bugreport 2026-04-07, the "fixed"
+#      boot): service-notifier + msm_icnss at 0.9 s, wlan.ko at 3.4 s
+#      (its char dev is what /dev/wlan and cnss-daemon -n -l need), ADSP
+#      ONLINE at 3.5 s, modem PIL at 6.3 s — and wlan_pd UP at 8.8 s
+#      WITHOUT any AP-side trigger or firmware fetch: the modem spawns it
+#      from its own segments (modem_wlan_region@8c000000). The spawn is
+#      environment-conditional though: with the SAME 2023 modem image and
+#      EFS, our earlier minimal environment never got wlan_pd (servreg
+#      answers SERVICE_NOT_FOUND for msm/modem/wlan_pd — qmi-req probe,
+#      2026-08-27). This script replicates the stock AP-side set (radio
+#      daemons, ADSP, early wlan.ko + cnss-daemon) to find the missing
+#      ingredient; bisect afterwards if it works.
+#      ADSP unlock chain (observed live 2026-08-27): nvmem_qfprom.ko was
+#      never loaded -> 780000.qfprom unbound, and soc:qcom,msm-adsp-loader
+#      is a device-link CONSUMER of it, so adsp_loader_dlkm's probe sat on
+#      the deferred list forever and /sys/kernel/boot_adsp never existed.
+#      insmod nvmem_qfprom.ko bound qfprom, the deferral fired, and
+#      echo 1 > boot_adsp brought the ADSP ONLINE in ~0.3 s (first ever
+#      on AginxOS). ADSP must be up BEFORE the modem boots (stock order);
+#      a modem that booted first never spawned wlan_pd after the fact.
+#   5. service_locator enable=1 BEFORE msm_icnss (its WLFW discovery
+#      returns -ENODEV forever otherwise — stock init sets this).
+#   6. wlan's char node: the major is DYNAMIC and listed in /proc/devices
+#      (qcwlanstate), NOT /proc/misc — the old /proc/misc grep never
+#      matched, so /dev/wlan and cnss-daemon never came up (observed
+#      2026-08-27).
+#   7. Audio gate (M18, worked out 2026-08-31): q6_pdr's
+#      get_service_location("avs/audio") is ONE-SHOT (service-locator.c
+#      frees the work after the first attempt) and there are TWO races
+#      around it, both observed live:
+#      (a) it must run with servloc enable=1, else -ENODEV and the PDR
+#          framework never initializes — boot 2026-08-31 #1.
+#      (b) q6_pdr must insmod while the query is still BLOCKED waiting
+#          for the locator (no pd-mapper yet), so q6_notifier's
+#          audio_pdr_register() is on the callback list before the QMI
+#          roundtrip resolves. With pd-mapper already up the roundtrip
+#          takes ~10 ms and the LOCATOR_UP callback beats the next
+#          insmod — lost, audio_notifier sits UNINIT forever — boot
+#          2026-08-31 #2. Stock never sees this: its modules load ~1-3 s
+#          and pd-mapper starts much later, so the query always blocks.
+#          Hence: enable=1 → insmod q6 chain → START pd-mapper.
+#      When it fires, pd-mapper answers from /vendor/firmware/adspua.jsn
+#      (domain msm/adsp/audio_pd, qmi_instance_id 74), apr registers on
+#      PDR, the ADSP's servreg reports UP, and apr_adsp_up() runs
+#      of_platform_populate() — the sound subtree (q6core-audio/sound,
+#      bolero) only exists after that; /etc/init.d/audio-bringup waits
+#      for its "Q6 is Up" line before loading the codec chain.
+#
+# Firmware comes from modem_a — the pristine factory image
+# g7250-00264-230619-B-10346159 (reflashed 2026-08-27 from .factory after
+# the stock differential proved slot A's old content was FAT-corrupted).
+# modem_b holds a 2021 build, SSD:g7250-00132-210419-B-7294132: its root PD
+# boots and serves QRTR, but it never spawns wlan_pd for the 2023 AP stack
+# (no WLFW svc 0x45, ever — observed across multiple boots), while the 2023
+# modem on stock spawns wlan_pd automatically ~2.5 s after PIL load.
+export PATH=/sbin:/bin:/usr/sbin:/usr/bin:/system/bin
+LOG=/var/radio.log
+exec >>"$LOG" 2>&1
+echo "=== radio bring-up $(date) ==="
+
+[ -d /vendor_a/lib/modules ] || /aginxos/aginxos-init mount-super
+[ -d /vendor_a/lib/modules ] || { echo "no /vendor_a — radio cannot come up"; exit 1; }
+
+M=/vendor_a/lib/modules
+
+modem_state() {
+  for s in /sys/bus/msm_subsys/devices/subsys*; do
+    [ "$(cat $s/name 2>/dev/null)" = "modem" ] && { cat $s/state 2>/dev/null; return; }
+  done
+  echo none
+}
+adsp_state() {
+  for s in /sys/bus/msm_subsys/devices/subsys*; do
+    [ "$(cat $s/name 2>/dev/null)" = "adsp" ] && { cat $s/state 2>/dev/null; return; }
+  done
+  echo none
+}
+
+cdsp_state() {
+  for s in /sys/bus/msm_subsys/devices/subsys*; do
+    [ "$(cat $s/name 2>/dev/null)" = "cdsp" ] && { cat $s/state 2>/dev/null; return; }
+  done
+  echo none
+}
+
+# --- mounts and paths the daemons and modem expect ----------------------
+n=0
+while [ ! -e /dev/block/by-name/modem_a ] && [ $n -lt 30 ]; do
+  mdev -s 2>/dev/null; sleep 1; n=$((n+1))
+done
+mkdir -p /mnt/modem /lib/firmware
+mount -t vfat /dev/block/by-name/modem_a /mnt/modem 2>/dev/null
+# A FRESH vfat mount can transiently list empty (observed 2026-08-27) —
+# PIL needs modem.mdt visible before the boot trigger, so retry.
+n=0
+while [ ! -e /mnt/modem/image/modem.mdt ] && [ $n -lt 15 ]; do
+  sleep 1; n=$((n+1))
+done
+[ -e /mnt/modem/image/modem.mdt ] || echo "WARN: modem.mdt not visible after ${n}s"
+for f in /mnt/modem/image/* /vendor_a/firmware/*; do ln -sf "$f" /lib/firmware/ 2>/dev/null; done
+ln -sfn /vendor_a /vendor
+# tftp_server serves firmware from /vendor/firmware_mnt; the same vfat is
+# already mounted twice, so mount --bind the working one (direct vfat
+# mount of the busy device returns EBUSY — observed 2026-08-27).
+mkdir -p /vendor/firmware_mnt 2>/dev/null
+mount -o bind /mnt/modem /vendor/firmware_mnt 2>/dev/null
+# rmt_storage opens /dev/block/bootdevice/by-name/<part> — a real nested
+# path (a bootdevice→by-name symlink yields the wrong shape and rmt_storage
+# dies silently retrying open() every 27 s — observed 2026-08-27).
+mkdir -p /dev/block/bootdevice
+ln -sfn ../by-name /dev/block/bootdevice/by-name
+# RFS scratch dirs (rmt_storage/tftp_server sync targets) — the FULL stock
+# tree, world-writable: tftp_server runs as vendor_rfs (not root), and with
+# our root-owned dirs the modem's WRQ probe of
+# /vendor/rfs/msm/mpss/readwrite/server_check.txt failed EACCES (observed
+# 2026-08-28, tftp_server log). /vendor_a/rfs symlinks resolve to
+# /mnt/vendor/persist/* and /data/vendor/*, so both trees must exist.
+mkdir -p /mnt/vendor/persist
+mount -t ext4 /dev/block/by-name/persist /mnt/vendor/persist 2>/dev/null \
+  && echo "persist mounted rw" || echo "WARN: persist mount failed"
+for d in rfs/shared rfs/msm/mpss rfs/msm/adsp rfs/msm/cdsp rfs/msm/slpi \
+         rfs/msm/wpss rfs/mdm/mpss rfs/mdm/adsp rfs/mdm/cdsp rfs/mdm/slpi \
+         rfs/mdm/wpss rfs/mdm/tn rfs/apq/gnss hlos_rfs/shared; do
+  mkdir -p "/mnt/vendor/persist/$d" 2>/dev/null
+done
+mkdir -p /data/vendor/rfs/mpss /data/vendor/rfs/apq/gnss \
+         /data/vendor/tombstones/rfs/modem /data/vendor/tombstones/rfs/lpass \
+         /data/vendor/tombstones/rfs/tn /data/vendor/tombstones/rfs/slpi \
+         /data/vendor/tombstones/rfs/cdsp /data/vendor/tombstones/rfs/wpss
+chmod -R 777 /mnt/vendor/persist/rfs /mnt/vendor/persist/hlos_rfs \
+  /data/vendor/rfs /data/vendor/tombstones 2>/dev/null
+
+# --- modules part 1: QRTR transport + rmtfs shared memory ---------------
+# qrtr/qrtr-smd may already be loaded by touch-bringup — EEXIST is fine.
+for m in qrtr qrtr-smd qcom_sharedmem msm_sharedmem; do
+  insmod "$M/$m.ko" 2>/dev/null && echo "ok $m"
+done
+# rmt_storage mmaps /dev/uio0 (qcom,sharedmem-uio node); create it from
+# sysfs — nothing udevs in our world.
+if [ -e /sys/class/uio/uio0/dev ] && [ ! -e /dev/uio0 ]; then
+  mknod /dev/uio0 c "$(cut -d: -f1 /sys/class/uio/uio0/dev)" \
+                  "$(cut -d: -f2 /sys/class/uio/uio0/dev)" && echo "made /dev/uio0"
+fi
+
+# --- daemons BEFORE the modem boots --------------------------------------
+# bionic binaries: need /vendor (symlinked above) and a world-readable
+# /dev/urandom (devtmpfs default is 0660; pd-mapper dies EPERM otherwise).
+# touch/battery-bringup run mdev -s in parallel and can re-reset the perms
+# after our chmod — retry each start until it sticks (observed 2026-08-27).
+export LD_LIBRARY_PATH=/vendor/lib64:/system/lib64
+setsid /vendor/bin/qrtr-ns -f </dev/null >/tmp/qrtr-ns.log 2>&1 &
+sleep 1
+start_retry() {  # binary-path [args...] — start, verify it stays up
+  name="${1##*/}"
+  first=${name%"${name#?}"}; rest=${name#?}
+  n=0
+  while [ $n -lt 3 ]; do
+    chmod 666 /dev/urandom /dev/random 2>/dev/null
+    setsid "$@" </dev/null >"/tmp/${name}.log" 2>&1 &
+    sleep 1
+    ps | grep -aq "[${first}]${rest}" && return 0
+    echo "$name died (try $n) — see /tmp/${name}.log"
+    n=$((n+1))
+  done
+  echo "$name FAILED to stay up"
+  return 1
+}
+# pd-mapper deliberately does NOT start here — header note 7: the q6 chain
+# must insmod while its "avs/audio" query is still blocked waiting for the
+# locator, so start_retry pd-mapper runs after that loop instead.
+# PATCHED copy — see header note 2. Never substitute /vendor/bin/rmt_storage.
+# Both file servers run under trace_open.so ([T] open lines in their logs) so
+# any fetch the modem makes during a wlan_pd spawn attempt is visible.
+( export LD_PRELOAD=/lib/trace_open.so; start_retry /bin/rmt_storage )
+( export LD_PRELOAD=/lib/trace_open.so; start_retry /vendor/bin/tftp_server )
+sleep 2
+ps | grep -aq "[r]mt_storage" && echo "rmt_storage up" || echo "rmt_storage DEAD"
+ps | grep -aq "[t]ftp_server" && echo "tftp_server up" || echo "tftp_server DEAD"
+
+# --- modules part 2: subsys/PIL chain ------------------------------------
+for m in qcom_ipcc smp2p msm_qmp mdt_loader subsystem_notif subsystem-restart \
+         ramdump adc_tm microdump_collector peripheral-loader subsys-pil-tz \
+         qcom_glink_native qcom_glink_smem qcom_glink_spss glink_probe glink_pkt \
+         service-locator service-notifier cnss_utils cnss_prealloc cnss_nl \
+         qcom_socinfo modemsmem msm_gsi ipa3 google_wlan_mac \
+         nvmem_qfprom; do
+  insmod "$M/$m.ko" 2>/dev/null && echo "ok $m"
+done
+
+# --- IPA FW load trigger ---------------------------------------------------
+# ipa3's probe binds and returns, but its real init (SMMU attach, GSI, uC PIL,
+# QMI) lives in a work queued ONLY by a write to the /dev/ipa char dev —
+# stock does `write /dev/ipa 1` in vendor init.rc. Without it,
+# qdf_get_ipa_smmu_enabled() stays false while the icnss domain is live, and
+# qcacld's probe dies at the cds_smmu_mem_map_setup IPA/WLAN SMMU mismatch
+# (-EFAULT, silent — the qdf print path is not registered yet that early).
+# Observed 2026-08-28: probe failed -14 at 69.572; manual `printf 1 > /dev/ipa`
+# ran "IPA FW loaded successfully" + GSI + QMI_INIT within 20 ms.
+# /dev/ipa is a dynamic-major char dev ueventd would have created for us.
+# NB: parse with set --, NOT awk — this busybox's awk applet segfaults
+# (observed 2026-08-28: silent empty ipamaj, no trigger, probe -14 again).
+set -- $(grep -w ipa /proc/devices 2>/dev/null | head -n1)
+ipamaj=${1:-}
+if [ -n "$ipamaj" ]; then
+  [ -e /dev/ipa ] || mknod /dev/ipa c "$ipamaj" 0 2>/dev/null
+  printf 1 > /dev/ipa 2>/dev/null && echo "ipa fw load triggered (maj $ipamaj)"
+else
+  echo "WARN: no ipa chrdev — qcacld probe will hit the SMMU mismatch"
+fi
+
+# --- firmware_class sysfs fallback server (stock: ueventd's job) ------------
+# This kernel has no /vendor/firmware in its built-in fw search path; every
+# request_firmware() from the wlan driver (WCNSS_qcom_cfg.ini at attach)
+# falls back to /sys/class/firmware/<name>/{loading,data} and waits for
+# userspace. Stock's ueventd serves it from /vendor/firmware; without a
+# server each request stalls the probe for the fallback timeout. Serve any
+# request from /vendor/firmware (and the modem vfat at firmware_mnt/image).
+( while :; do
+    for d in /sys/class/firmware/*/; do
+      [ -e "$d/data" ] || continue
+      f=$(basename "$d" | tr '!' '/')
+      if [ -f "/vendor/firmware/$f" ]; then
+        echo 1 > "$d/loading" 2>/dev/null
+        cat "/vendor/firmware/$f" > "$d/data" 2>/dev/null
+        echo 0 > "$d/loading" 2>/dev/null
+        echo "fwfallback: served $f"
+      elif [ -f "/vendor/firmware_mnt/image/$f" ]; then
+        echo 1 > "$d/loading" 2>/dev/null
+        cat "/vendor/firmware_mnt/image/$f" > "$d/data" 2>/dev/null
+        echo 0 > "$d/loading" 2>/dev/null
+        echo "fwfallback: served $f (firmware_mnt)"
+      fi
+    done
+    sleep 0.2
+  done ) </dev/null >/tmp/fwfallback.log 2>&1 &
+
+# --- binder + fake servicemanager BEFORE the pm daemons --------------------
+# pm-service aborts within seconds unless a binder context manager answers
+# its addService, and it blocks forever on the servicemanager.ready property;
+# pm-proxy dies the same way (binder CM absent at its start). Both fakes must
+# be up BEFORE the daemons start — this block used to sit in the WLAN section
+# below, so every boot so far PIL'd the modem with pm-service dead: its QMI
+# svc 0x35 registered 22 min after PIL (qrtr-boot.log 2026-08-27), far too
+# late for the modem's boot-time environment check (header note 4).
+# /bin/fake-sm: musl-static CM answering every txn with Status-ok (proven
+# with a manual run 2026-08-27: pm-service stayed up, registered 0x35).
+# /lib/fake-props.so: fakes the 4 servicemanager properties pm-service waits
+# on and LOGS every other property read to /tmp/fake-props.log (diagnosis
+# instrument for the still-dead modem_svc/ssr_setup/subsystem_ramdump).
+/bin/binder-init 2>/dev/null
+for s in /sys/class/subsys/subsys_*; do
+  n=$(basename "$s" | sed 's/subsys_//'); d=$(cat "$s/dev" 2>/dev/null)
+  maj=${d%%:*}; min=${d##*:}
+  [ -e "/dev/subsys_$n" ] || mknod "/dev/subsys_$n" c "$maj" "$min" 2>/dev/null
+done
+if ! ps | grep -aq "[f]ake-sm"; then
+  setsid /bin/fake-sm /dev/binder /dev/hwbinder /dev/vndsbinder \
+    </dev/null >/tmp/fake-sm.log 2>&1 &
+  sleep 1
+  ps | grep -aq "[f]ake-sm" \
+    && echo "fake-sm up (binder CM for pm-service/pm-proxy)" \
+    || echo "ERROR: fake-sm dead — pm-service will fail again"
+fi
+
+# --- stock radio daemons (pm-service/pm-proxy/modem_svc/ramdump/ssr) ------
+# Replicated from stock init rc (args verbatim); part of the environment
+# the 2023 modem needs before it will spawn wlan_pd (hypothesis under
+# test 2026-08-27 — see header note 4).
+( export LD_PRELOAD=/lib/fake-props.so; start_retry /vendor/bin/pm-service )
+start_retry /vendor/bin/pm-proxy
+# modem_svc still can't link: libdsutils.so wants libnetutils.so, which is
+# in NO mounted partition (checked system_a/system_ext_a/vendor 2026-08-28).
+( export LD_PRELOAD=/lib/fake-props.so; start_retry /vendor/bin/subsystem_ramdump )
+( export LD_PRELOAD=/lib/fake-props.so; start_retry /vendor/bin/ssr_setup )
+
+# Soften the blast radius: a modem crash restarts only the modem.
+for s in /sys/bus/msm_subsys/devices/subsys*; do
+  if [ "$(cat $s/name 2>/dev/null)" = "modem" ]; then
+    echo related > "$s/restart_level"
+    echo "modem subsys $(basename $s) level=$(cat $s/restart_level)"
+  fi
+done
+# Crash evidence ON (stock ships these enabled; our boots had them 0, so a
+# wlan_pd dying at spawn would have left NO trace). With them 1, a user-PD
+# crash produces a minidump/tombstone under /data/vendor/tombstones/rfs/.
+echo 1 > /sys/module/subsystem_restart/parameters/enable_ramdumps 2>/dev/null
+echo 1 > /sys/module/subsystem_restart/parameters/enable_mini_ramdumps 2>/dev/null
+echo "ramdumps enabled: $(cat /sys/module/subsystem_restart/parameters/enable_ramdumps)/$(cat /sys/module/subsystem_restart/parameters/enable_mini_ramdumps)"
+
+# --- WLAN platform + driver BEFORE the modem (stock order) ---------------
+# THE gate: stock sets this; without it icnss's WLFW discovery
+# returns -ENODEV forever ("servloc: Service Locator not enabled").
+echo 1 > /sys/module/service_locator/parameters/enable && echo "servloc enabled"
+# --- audio gate: enable, then q6 chain, THEN pd-mapper (header note 7) ----
+# q6_pdr's one-shot "avs/audio" query blocks waiting for the locator (up
+# to 300 s) — that window guarantees q6_notifier's audio_pdr_register()
+# is on the callback list before LOCATOR_UP fires. adsp_loader rides
+# along: it uses apr symbols and creates the /sys/kernel/boot_adsp/boot
+# attr the trigger below writes.
+for m in q6_pdr_dlkm q6_notifier_dlkm snd_event_dlkm apr_dlkm adsp_loader_dlkm; do
+  insmod "$M/$m.ko" 2>/dev/null && echo "ok $m"
+done
+# NOW the locator: pd-mapper resolves "avs/audio" from adspua.jsn and the
+# notifier chain fires (apr hears SERVICE_UP once the ADSP's servreg
+# registers below). icnss's lookup reuses the same blocked connection.
+start_retry /vendor/bin/pd-mapper
+sleep 2
+insmod "$M/msm_icnss.ko" 2>/dev/null && echo "ok msm_icnss"
+# ADSP up before the modem (stock: enable >/sys/kernel/boot_adsp/boot).
+# The attr only exists if nvmem_qfprom bound (header note 4) — the wait
+# below also gives a late deferral a moment to resolve.
+n=0
+while [ ! -e /sys/kernel/boot_adsp/boot ] && [ $n -lt 10 ]; do
+  sleep 1; n=$((n+1))
+done
+if [ -e /sys/kernel/boot_adsp/boot ]; then
+  echo 1 > /sys/kernel/boot_adsp/boot && echo "adsp boot triggered $(date)"
+else
+  echo "ERROR: no /sys/kernel/boot_adsp/boot — ADSP will not start (qfprom?)"
+fi
+n=0
+while [ "$(adsp_state)" != "ONLINE" ] && [ $n -lt 30 ]; do
+  sleep 1; n=$((n+1))
+done
+echo "adsp state $(adsp_state) after ${n}s $(date)"
+# wlan.ko early: registers the char dev cnss-daemon needs. Major is
+# dynamic in /proc/devices (NOT /proc/misc — busybox awk segfaults in
+# this build, so parse the space-separated line with set --).
+insmod "$M/wlan.ko" 2>/dev/null && echo "ok wlan (early, stock order)"
+set -- $(grep -w qcwlanstate /proc/devices)
+if [ -n "${1:-}" ] && [ ! -e /dev/wlan ]; then
+  mknod /dev/wlan c "$1" 0 && echo "made /dev/wlan c $1 0"
+fi
+
+# cnss-daemon from here on, stock args (-n -l). binder-init + fake-sm now
+# run in the pm-daemon section above — cnss-daemon's libbase ProcessState
+# needs /dev/binder (4.19 binderfs backport: 264-byte binderfs_device ioctl,
+# cannot rename devices out of the mount — see src/binder-init.c).
+# trace_open.so is observation only: it mirrors cnss-daemon's logcat calls
+# (WLPS connect, BDF file search, MAC request) onto stderr -> this log.
+# cnss-daemon is the userspace half of the WLFW protocol the v1 kernel
+# cannot do: it answers WLFW's initiate-cal-download indication by pushing
+# the BDF (/vendor/firmware/bdwlan*.bin) via wlfw BDF_DOWNLOAD_REQ, then
+# sends the MAC. Without it the FW image loads + authenticates but never
+# boots to FW_READY. /data/vendor/wifi dirs are its OTA-BDF + cal-cache
+# locations (stock init creates them via cnss-daemon.rc mkdir lines).
+mkdir -p /data/vendor/wifi/cnss_daemon /data/vendor/firmware/wifi
+if [ -e /dev/wlan ] && ! ps | grep -aq "[c]nss-daemon"; then
+  LD_LIBRARY_PATH=/lib:/vendor/lib64:/system/lib64 \
+  LD_PRELOAD=/lib/fake-props.so:/lib/trace_open.so \
+    setsid /vendor/bin/cnss-daemon -n -l </dev/null >/tmp/cnss-daemon.log 2>&1 &
+  echo "cnss-daemon started (pre-modem, stock order, traced, fake-props)"
+fi
+
+# CDSP up BEFORE the modem too (stock: CDSP PIL at 3.5 s, modem at 6.3 s).
+# Stock cdsp-loader.ko with module/driver/sysfs names renamed (compat and
+# code untouched - a nop'd bl at 0x310 carries a CALL26 relocation the
+# loader re-applies at load time, producing brk #0x100 -> do_undefinstr
+# panic, observed 2026-08-27 after three crashes; the rename-only variant
+# binds the real soc:qcom,msm-cdsp-loader node with its
+# qcom,proc-img-to-load = "cdsp" property and boots the CDSP first try).
+# It must load BEFORE cdsp-modem-loader.ko to win the DT-node bind.
+insmod /lib/modules/cdsp-cdsp-loader.ko 2>/dev/null && echo "ok cdsp-cdsp-loader"
+if [ -e /sys/kernel/cdsp4boot/boot ]; then
+  echo 1 > /sys/kernel/cdsp4boot/boot && echo "cdsp boot triggered $(date)"
+else
+  echo "ERROR: no /sys/kernel/cdsp4boot/boot - CDSP will not start"
+fi
+n=0
+while [ "$(cdsp_state)" != "ONLINE" ] && [ $n -lt 30 ]; do
+  sleep 1; n=$((n+1))
+done
+echo "cdsp state $(cdsp_state) after ${n}s $(date)"
+
+# --- BOOT THE MODEM (header note 3) ---------------------------------------
+# PATCHED module: /sys/kernel/boot_cdsp/boot does subsystem_get("modem") →
+# PIL loads modem.mdt+b* from /lib/firmware. Re-anchored variant
+# (modem-npucc-loader.ko): stock cdsp-loader.ko with the subsystem string
+# "cdsp"→"modem" + the strcmp-result nop, PLUS compatible→qcom,lito-npucc
+# and the property-name string→"compatible" — the npucc node satisfies the
+# property read (its own compatible), so no rc-check bypass is needed and
+# NO relocated call site is touched. Necessary because the pure-CDSP loader
+# now owns the qcom,cdsp-loader DT node, and each loader needs a bound node
+# to create its sysfs trigger.
+insmod /lib/modules/modem-npucc-loader.ko 2>/dev/null && echo "ok modem-npucc-loader"
+# QRTR watcher BEFORE the trigger: records the baseline plus the modem's
+# fresh-boot service registration order, timestamped, to /var (tmpfs dies
+# with the boot). The open question: does WLFW (svc 0x45) ever appear, even
+# transiently (wlan_pd tried and failed) — or never (never attempted)?
+rm -f /var/qrtr-boot.log
+setsid /bin/qrtr-lookup 0 0 3600 </dev/null >/var/qrtr-boot.log 2>&1 &
+if [ -e /sys/kernel/boot_cdsp/boot ]; then
+  echo 1 > /sys/kernel/boot_cdsp/boot && echo "modem boot triggered $(date)"
+else
+  echo "ERROR: no /sys/kernel/boot_cdsp/boot — modem will not start"
+fi
+n=0
+while [ "$(modem_state)" != "ONLINE" ] && [ $n -lt 60 ]; do
+  sleep 1; n=$((n+1))
+done
+echo "modem state $(modem_state) after ${n}s $(date)"
+if [ "$(modem_state)" = "ONLINE" ]; then
+  echo "modem ok" >>/run/boot.state    # boot card row (M5)
+else
+  echo "modem fail" >>/run/boot.state
+fi
+
+# --- wait for the driver to finish: wlan_pd → FW_READY → wlan0 -----------
+n=0
+while [ $n -lt 120 ]; do
+  n=$((n+1))
+  [ -e /sys/class/net/wlan0 ] && break
+  sleep 2
+done
+
+if [ -e /sys/class/net/wlan0 ]; then
+  ip link set wlan0 up 2>/dev/null
+  echo "wlan0 UP $(date)"
+  echo "wlan ok wlan0" >>/run/boot.state   # boot card row (M5)
+  ip addr show wlan0 2>/dev/null | head -4
+else
+  echo "wlan0 never appeared $(date)"
+  echo "wlan fail" >>/run/boot.state
+  dmesg | grep -a "icnss" | tail -10
+fi
+echo "=== done $(date) ==="

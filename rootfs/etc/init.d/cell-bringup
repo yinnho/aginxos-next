@@ -1,0 +1,152 @@
+#!/bin/sh
+# Cell bring-up (M7; first working chain 2026-08-29 — see docs/HARDWARE.md).
+# Establishes the CT data call and configures the rmnet data path:
+#
+#   1. netmgrd runs ONCE under the shim stack. It is not our data stack —
+#      it exits by itself inside its WDS client setup — but before dying
+#      it performs the modem-side DPM port open (GET_SUPPORTED_CAPABILITIES
+#      + OPEN_PORT). Without it WDS bind is refused. Shims (all in /lib,
+#      NDK-built): libnetutils/libandroid_net/libhardware_legacy link
+#      stubs, diag-stub (Diag_LSM_Init + property_set), pathfix
+#      (/system/vendor→/vendor config path), fake-props (property_get).
+#   2. WDA SET_DATA_FORMAT on the WDA QRTR service port. Mux path: raw-IP
+#      + QMAP ul/dl aggregation (the IPA wwan netdev only ever carries
+#      QMAP (ETH_P_MAP) skbs — raw-IP skbs are SW-filtered in
+#      ipa3_wwan_xmit). Legacy path: raw-IP, aggregation disabled.
+#   3. rmnet.ko + rmnet_data0 (mux 1) via rtnetlink, then the legacy
+#      msm_rmnet extended ioctls (egress/ingress data format + add mux
+#      channel). The egress ioctl is what calls ipa3_setup_sys_pipe —
+#      without it every TX dies "pipe 2 not valid".
+#   4. WDS bind + START_NET on a client that then HOLDS the socket for a
+#      day: the bearer drops with PKT_SRVC_STATUS_IND the moment the
+#      client closes (observed 2026-08-28). The WDS instance advertises
+#      EITHER BIND_MUX_DATA_PORT (0xA2, QMAP rmnet_data0) or only the
+#      legacy BIND_DATA_PORT (0x2F, bearer directly on rmnet_ipa0) —
+#      probe once, then run the matching call. Settings come back on
+#      GET_CURRENT_SETTINGS; QMI u32s are little-endian, flipped in C.
+#
+# QRTR service ports differ per boot (WDS/DPM/WDA were 71/60/73 on one
+# boot, 62/61/64 the next) — everything is looked up, never hardcoded.
+# /run is persistent ext4 here; never guard modem-boot-scoped state with
+# a /run marker (a stale marker silently skipped the netmgrd DPM open on
+# 2026-08-29 and bind was refused all boot).
+
+LOG=/var/cell-bringup.log
+exec >>"$LOG" 2>&1
+echo "=== cell-bringup start $(date)"
+
+svcport() { # svc inst -> "node:port"
+	/bin/qrtr-lookup "$1" "$2" 3 2>/dev/null | grep -m1 'at ' | sed 's/.*at //'
+}
+
+# --- wait for the modem stack: WDS (svc 1) advertises ---------------------
+n=0
+WDS=""
+while [ -z "$WDS" ] && [ $n -lt 120 ]; do
+	sleep 2; n=$((n+1)); WDS=$(svcport 1 1)
+done
+[ -n "$WDS" ] || { echo "WDS service never appeared after $((n*2))s $(date)"; exit 1; }
+echo "WDS at $WDS"
+WN=${WDS%:*}; WP=${WDS#*:}
+
+# --- 1. netmgrd once for the DPM open ------------------------------------
+setsid /bin/logdw-sink /var/logdw.txt </dev/null >/dev/null 2>&1 &
+env LD_LIBRARY_PATH=/lib:/vendor/lib64:/system/lib64 \
+	LD_PRELOAD=/lib/diag-stub.so:/lib/pathfix.so:/lib/fake-props.so \
+	/vendor/bin/netmgrd </dev/null >/var/netmgrd-once.log 2>&1 &
+NPID=$!
+n=0
+while kill -0 $NPID 2>/dev/null && [ $n -lt 45 ]; do sleep 1; n=$((n+1)); done
+kill $NPID 2>/dev/null
+# netmgrd spawns a child that outlives the shimmed parent
+killall netmgrd 2>/dev/null
+echo "netmgrd run done after ${n}s (its DPM open precedes its WDS-bind exit)"
+
+# --- 2. WDA data format ----------------------------------------------------
+WDA=$(svcport 0x1a 1)
+[ -n "$WDA" ] || { echo "no WDA service"; exit 1; }
+# probe the WDS instance: mux bind (0xA2) or legacy bind (0x2F) only
+BINDMSG=0x2F; BINDTLV=""; NETDEV=rmnet_ipa0
+WDABLOB=1104000200000012040000000000130400000000
+if QR_TIMEOUT=10 /bin/qmi-req "$WN" "$WP" 0xA2 \
+	100800040000000100000011010001 2>/dev/null | grep -q '02 04 00 00 00 00 00'; then
+	BINDMSG=0xA2; BINDTLV=100800040000000100000011010001
+	NETDEV=rmnet_data0
+	WDABLOB=1104000200000012040005000000130400050000001708000400000001000000
+	echo "WDS instance supports mux bind (0xA2) -> $NETDEV"
+else
+	echo "WDS instance is legacy (0x2F only) -> $NETDEV raw-IP no-agg"
+fi
+QR_TIMEOUT=10 /bin/qmi-req "${WDA%:*}" "${WDA#*:}" 0x20 "$WDABLOB" \
+	>/var/m7-wda.log 2>&1
+if grep -q '02 04 00 00 00 00 00' /var/m7-wda.log; then
+	echo "WDA SET_DATA_FORMAT ok"
+else
+	echo "WDA SET_DATA_FORMAT FAILED:"; tail -6 /var/m7-wda.log
+fi
+
+# --- 3. rmnet module, mux netdev, IPA data-format ioctls ------------------
+n=0
+while [ ! -e /sys/class/net/rmnet_ipa0 ] && [ $n -lt 60 ]; do sleep 2; n=$((n+1)); done
+[ -e /sys/class/net/rmnet_ipa0 ] || { echo "rmnet_ipa0 never appeared"; exit 1; }
+insmod /vendor/lib/modules/rmnet.ko 2>/dev/null || echo "rmnet module: $(lsmod | grep -c rmnet) loaded"
+ip link set rmnet_ipa0 up
+if [ "$NETDEV" = rmnet_data0 ]; then
+	# tolerate a re-run on the same boot (netlink then answers -EEXIST)
+	/bin/rmnet-add rmnet_ipa0 rmnet_data0 1 || [ -e /sys/class/net/rmnet_data0 ] || exit 1
+	/bin/rmnet-ipa-ctl rmnet_ipa0 rmnet_data0 1 || exit 1
+	ip link set rmnet_data0 up
+fi
+
+# --- 4. data call on a held client ----------------------------------------
+# START_NET answers a call-end reason while the modem has not (re-)attached
+# — CT registration on this SIM opens only ~1 s windows (observed
+# 2026-08-29, m7-race2) so the retry loop has to outlast a full window
+# period. 30 attempts ≈ 25 min. The SETTINGS line is decoded in C (busybox
+# awk segfaults here).
+call=1
+while [ $call -le 30 ]; do
+	rm -f /var/m7-call.log
+	QR_SLEEP=800 QR_TIMEOUT=25 QR_DRAIN=1200 QR_HOLD=86400000 \
+		setsid /bin/qmi-req "$WN" "$WP" \
+		"$BINDMSG" "$BINDTLV" \
+		0x20 3101000119010004 \
+		0x2D '' >/var/m7-call.log 2>&1 </dev/null &
+	n=0
+	while [ $n -lt 40 ]; do
+		grep -q '^SETTINGS ip=' /var/m7-call.log 2>/dev/null && break
+		sleep 2; n=$((n+2))
+	done
+	grep -q '^SETTINGS ip=' /var/m7-call.log 2>/dev/null && break
+	echo "call attempt $call failed after ${n}s:"; tail -3 /var/m7-call.log
+	killall qmi-req 2>/dev/null
+	sleep 10; call=$((call+1))
+done
+
+eval "$(grep -a '^SETTINGS' /var/m7-call.log | tail -1 \
+	| sed -e 's/^SETTINGS //' -e 's/^ip=/IP=/' -e 's/ gw=/ GW=/' \
+	       -e 's/ mask=[0-9.]*//' -e 's/ plen=/ PLEN=/' \
+	       -e 's/ dns=\([0-9.]*\),\([0-9.]*\)/ DNS1=\1 DNS2=\2/')"
+
+if [ -z "${IP:-}" ]; then
+	echo "no IP in settings response after ${n}s:"; tail -12 /var/m7-call.log
+	echo "cell fail" >>/run/boot.state
+	exit 1
+fi
+echo "call up on $NETDEV: $IP/$PLEN gw $GW dns $DNS1 $DNS2"
+
+ip addr flush dev "$NETDEV" 2>/dev/null
+ip addr add "$IP/$PLEN" dev "$NETDEV"
+# metric: Wi-Fi (net-bringup) keeps the primary default when present;
+# the proof ping below forces $NETDEV so the result is unambiguous
+ip route add default via "$GW" dev "$NETDEV" onlink metric 200 2>/dev/null
+printf 'nameserver %s\nnameserver %s\n' "$DNS1" "$DNS2" > /etc/resolv.conf
+
+if ping -c 4 -W 3 -I "$NETDEV" 223.5.5.5 >/var/m7-ping.log 2>&1; then
+	echo "ping 223.5.5.5 OK $(date)"
+	echo "cell ok" >>/run/boot.state
+else
+	echo "ping failed:"; tail -4 /var/m7-ping.log
+	echo "cell fail" >>/run/boot.state
+fi
+echo "=== cell-bringup done $(date)"

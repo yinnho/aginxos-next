@@ -1,0 +1,49 @@
+#!/bin/sh
+# net-rejoin (M20b) — THE in-place WLAN recovery primitive.
+#
+# One definition of "drop the stale association, re-associate, get a
+# lease", used by net-watch (steady-state self-heal), aginx-net-wizard
+# (re-configure without rebooting), and by hand. Proven shape from the
+# 2026-09-02 AP-flake session: the Legrand AP drops the link under
+# sustained transfers (wlan0 NO-CARRIER, DNS dies with it) and this
+# exact sequence restored the same lease in ~10 s, no reboot.
+#
+# Exit 0 only when a lease was obtained. Progress goes to stdout
+# (callers redirect); nothing is written here except via udhcpc.
+export PATH=/sbin:/bin:/usr/sbin:/usr/bin
+
+IF=${IF:-wlan0}
+CONF=/etc/wifi.conf
+
+[ -f "$CONF" ] || { echo "net-rejoin: no $CONF" >&2; exit 2; }
+SSID=; PSK=
+while IFS='=' read -r k v; do
+  case "$k" in
+    ssid) SSID=$v ;;
+    psk)  PSK=$v ;;
+  esac
+done <"$CONF"
+SSID=$(printf '%s' "$SSID" | tr -d '\r')
+PSK=$(printf '%s' "$PSK" | tr -d '\r')
+[ -n "$SSID" ] && [ -n "$PSK" ] || { echo "net-rejoin: $CONF incomplete" >&2; exit 2; }
+
+attempt=0
+while [ $attempt -lt 2 ]; do
+  attempt=$((attempt+1))
+  echo "net-rejoin: attempt $attempt — flush + join '$SSID'"
+  ip addr flush dev "$IF" 2>/dev/null
+  ip link set "$IF" up 2>/dev/null
+  if /usr/bin/aginx-net-join "$IF" "$SSID" "$PSK"; then
+    if udhcpc -i "$IF" -n -q -t 6 -T 3 >/dev/null 2>&1; then
+      # NB: plain `ip addr` — busybox ip does not take -4 and fails
+      # silently; sed not awk — this busybox's awk applet segfaults.
+      echo "net-rejoin: lease ok ($(ip addr show "$IF" | sed -n 's/^ *inet \([0-9.][0-9.]*\)\/.*/\1/p' | head -n 1))"
+      exit 0
+    fi
+    echo "net-rejoin: join ok but no lease"
+  else
+    echo "net-rejoin: join failed (rc=$?)"
+  fi
+done
+echo "net-rejoin: gave up after $attempt attempts" >&2
+exit 1
