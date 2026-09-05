@@ -1,0 +1,471 @@
+// DRM dumb-buffer scanout, faithful port of bootcard.c's proven msm_drm
+// 4.19 path (raw ioctls, no libdrm). Quirks preserved:
+//  - zero count_fbs/count_encoders on the second GETRESOURCES
+//  - skip connectors without modes or with connector_type 0
+//  - prefer DSI (type 16); fall back to first compatible encoder when the
+//    previous master released the binding (encoder_id reads 0)
+//  - the FIRST frame must be painted before SETCRTC: this panel snapshots
+//    the fb contents at mode-set time (set-then-paint = black screen with
+//    backlight on, observed 2026-08-28)
+//  - PAGE_FLIP refused => re-SETCRTC re-latch fallback
+#![allow(non_camel_case_types)]
+
+use std::fs::{File, OpenOptions};
+use std::os::unix::fs::OpenOptionsExt;
+use std::os::unix::io::AsRawFd;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::time::Duration;
+
+const DRM_IOCTL_BASE: u32 = b'd' as u32;
+const _IOC_READ: u32 = 2;
+const _IOC_WRITE: u32 = 1;
+const fn iowr<T>(nr: u32) -> u32 {
+    ((_IOC_READ | _IOC_WRITE) << 30)
+        | ((std::mem::size_of::<T>() as u32) << 16)
+        | (DRM_IOCTL_BASE << 8)
+        | nr
+}
+const fn io(nr: u32) -> u32 {
+    (0u32 << 30) | (0u32 << 16) | (DRM_IOCTL_BASE << 8) | nr
+}
+
+#[repr(C)]
+#[derive(Default)]
+struct drm_mode_card_res {
+    fb_id_ptr: u64,
+    crtc_id_ptr: u64,
+    connector_id_ptr: u64,
+    encoder_id_ptr: u64,
+    count_fbs: u32,
+    count_crtcs: u32,
+    count_connectors: u32,
+    count_encoders: u32,
+    min_width: u32,
+    max_width: u32,
+    min_height: u32,
+    max_height: u32,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Default)]
+pub struct drm_mode_modeinfo {
+    pub clock: u32,
+    pub hdisplay: u16,
+    pub hsync_start: u16,
+    pub hsync_end: u16,
+    pub htotal: u16,
+    pub hskew: u16,
+    pub vdisplay: u16,
+    pub vsync_start: u16,
+    pub vsync_end: u16,
+    pub vtotal: u16,
+    pub vscan: u16,
+    pub vrefresh: u32,
+    pub flags: u32,
+    pub r#type: u32,
+    pub name: [u8; 32],
+}
+
+#[repr(C)]
+#[derive(Default)]
+struct drm_mode_crtc {
+    set_connectors_ptr: u64,
+    count_connectors: u32,
+    crtc_id: u32,
+    fb_id: u32,
+    x: u32,
+    y: u32,
+    gamma_size: u32,
+    mode_valid: u32,
+    mode: drm_mode_modeinfo,
+}
+
+#[repr(C)]
+#[derive(Default)]
+struct drm_mode_get_connector {
+    encoders_ptr: u64,
+    modes_ptr: u64,
+    props_ptr: u64,
+    prop_values_ptr: u64,
+    count_modes: i32,
+    count_props: i32,
+    count_encoders: i32,
+    encoder_id: u32,
+    connector_id: u32,
+    connector_type: u32,
+    connector_type_id: u32,
+    pad: u32,
+}
+
+#[repr(C)]
+#[derive(Default)]
+struct drm_mode_get_encoder {
+    encoder_id: u32,
+    encoder_type: u32,
+    crtc_id: u32,
+    possible_crtcs: u32,
+    possible_clones: u32,
+}
+
+#[repr(C)]
+#[derive(Default)]
+struct drm_mode_create_dumb {
+    height: u32,
+    width: u32,
+    bpp: u32,
+    flags: u32,
+    handle: u32,
+    pitch: u32,
+    size: u64,
+}
+
+#[repr(C)]
+#[derive(Default)]
+struct drm_mode_map_dumb {
+    handle: u32,
+    pad: u32,
+    offset: u64,
+}
+
+#[repr(C)]
+#[derive(Default)]
+struct drm_mode_fb_cmd2 {
+    fb_id: u32,
+    width: u32,
+    height: u32,
+    pixel_format: u32,
+    flags: u32,
+    handles: [u32; 4],
+    pitches: [u32; 4],
+    offsets: [u32; 4],
+    modifier: [u64; 4],
+}
+
+#[repr(C)]
+#[derive(Default)]
+struct drm_mode_crtc_page_flip {
+    fb_id: u32,
+    crtc_id: u32,
+    flags: u32,
+    reserved: u32,
+    user_data: u64,
+}
+
+const DRM_IOCTL_MODE_GETRESOURCES: u32 = iowr::<drm_mode_card_res>(0xA0);
+const DRM_IOCTL_MODE_SETCRTC: u32 = iowr::<drm_mode_crtc>(0xA2);
+const DRM_IOCTL_MODE_GETENCODER: u32 = iowr::<drm_mode_get_encoder>(0xA6);
+const DRM_IOCTL_MODE_GETCONNECTOR: u32 = iowr::<drm_mode_get_connector>(0xA7);
+const DRM_IOCTL_MODE_CREATE_DUMB: u32 = iowr::<drm_mode_create_dumb>(0xB2);
+const DRM_IOCTL_MODE_MAP_DUMB: u32 = iowr::<drm_mode_map_dumb>(0xB3);
+const DRM_IOCTL_MODE_ADDFB2: u32 = iowr::<drm_mode_fb_cmd2>(0xB8);
+const DRM_IOCTL_MODE_PAGE_FLIP: u32 = iowr::<drm_mode_crtc_page_flip>(0xB0);
+const DRM_IOCTL_SET_MASTER: u32 = io(0x1e);
+const DRM_FORMAT_XRGB8888: u32 = 0x34325258;
+
+pub static BLINK: AtomicBool = AtomicBool::new(false);
+
+pub struct Drm {
+    file: File,
+    pub width: u32,
+    pub height: u32,
+    pitch_px: usize,
+    fb: [u32; 2],
+    maps: [*mut u32; 2],
+    map_len: usize,
+    cur: usize,
+    flip_ok: bool,
+    crtc_id: u32,
+    conn_id: u32,
+    mode: drm_mode_modeinfo,
+}
+
+fn kmsg(s: &str) {
+    if let Ok(mut f) = OpenOptions::new().write(true).open("/dev/kmsg") {
+        use std::io::Write;
+        let _ = f.write_all(s.as_bytes());
+    }
+}
+
+impl Drm {
+    /// Retry DRM bring-up for up to ~10 min: msm_drm + the DSI panel take
+    /// ~60 s to register after rcS (bootcard used the same 300x2s wait).
+    pub fn wait_up() -> Result<Drm, String> {
+        for _ in 0..300 {
+            match Self::prepare() {
+                Ok(d) => return Ok(d),
+                Err(e) => {
+                    kmsg(&format!("aginx-term: drm not ready ({e})\n"));
+                    std::thread::sleep(Duration::from_secs(2));
+                }
+            }
+        }
+        Err("DRM never came up".into())
+    }
+
+    fn prepare() -> Result<Drm, String> {
+        let file = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .custom_flags(libc::O_CLOEXEC)
+            .open("/dev/dri/card0")
+            .map_err(|e| format!("open card0: {e}"))?;
+        let fd = file.as_raw_fd();
+        unsafe { libc::ioctl(fd, DRM_IOCTL_SET_MASTER as _) };
+
+        let mut res = drm_mode_card_res::default();
+        if unsafe { libc::ioctl(fd, DRM_IOCTL_MODE_GETRESOURCES as _, &mut res) } != 0 {
+            return Err("GETRESOURCES #1 failed".into());
+        }
+        let mut crtcs = [0u32; 16];
+        let mut conns = [0u32; 16];
+        res.count_crtcs = res.count_crtcs.min(16);
+        res.count_connectors = res.count_connectors.min(16);
+        res.crtc_id_ptr = crtcs.as_mut_ptr() as u64;
+        res.connector_id_ptr = conns.as_mut_ptr() as u64;
+        // msm_drm rejects a second GETRESOURCES if count_fbs/encoders are
+        // nonzero but their pointers are null — zero those counts too.
+        res.count_fbs = 0;
+        res.count_encoders = 0;
+        if unsafe { libc::ioctl(fd, DRM_IOCTL_MODE_GETRESOURCES as _, &mut res) } != 0 {
+            return Err("GETRESOURCES #2 failed".into());
+        }
+
+        let mut conn_id = 0u32;
+        let mut enc_id = 0u32;
+        let mut mode = drm_mode_modeinfo::default();
+        for i in 0..res.count_connectors {
+            let mut gc = drm_mode_get_connector::default();
+            let mut modes = [drm_mode_modeinfo::default(); 8];
+            let mut encs = [0u64; 8];
+            gc.connector_id = conns[i as usize];
+            gc.encoders_ptr = encs.as_mut_ptr() as u64;
+            gc.count_encoders = 8;
+            gc.modes_ptr = modes.as_mut_ptr() as u64;
+            gc.count_modes = 8;
+            if unsafe { libc::ioctl(fd, DRM_IOCTL_MODE_GETCONNECTOR as _, &mut gc) } != 0 {
+                continue;
+            }
+            if gc.count_modes < 1 || gc.connector_type == 0 {
+                continue;
+            }
+            // When the previous master exited, encoder_id reads 0 even though
+            // the connector still lists compatible encoders — fall back to
+            // the first; SETCRTC rebinds it.
+            let e = if gc.encoder_id != 0 {
+                gc.encoder_id
+            } else if gc.count_encoders > 0 {
+                encs[0] as u32
+            } else {
+                0
+            };
+            if e == 0 {
+                continue;
+            }
+            if conn_id == 0 || gc.connector_type == 16 {
+                conn_id = conns[i as usize];
+                enc_id = e;
+                mode = modes[0];
+                if gc.connector_type == 16 {
+                    break;
+                }
+            }
+        }
+        if conn_id == 0 {
+            return Err("no usable connector".into());
+        }
+
+        let mut crtc_id = 0u32;
+        let mut ge = drm_mode_get_encoder::default();
+        ge.encoder_id = enc_id;
+        if unsafe { libc::ioctl(fd, DRM_IOCTL_MODE_GETENCODER as _, &mut ge) } == 0 {
+            if ge.crtc_id != 0 {
+                crtc_id = ge.crtc_id;
+            } else {
+                for c in 0..res.count_crtcs {
+                    if ge.possible_crtcs & (1 << c) != 0 {
+                        crtc_id = crtcs[c as usize];
+                        break;
+                    }
+                }
+            }
+        }
+        if crtc_id == 0 {
+            return Err(format!("no crtc for enc {enc_id}"));
+        }
+
+        let mut fb = [0u32; 2];
+        let mut maps = [std::ptr::null_mut::<u32>(); 2];
+        let mut pitch_px = 0usize;
+        let mut map_len = 0usize;
+        for b in 0..2 {
+            let mut dumb = drm_mode_create_dumb {
+                width: mode.hdisplay as u32,
+                height: mode.vdisplay as u32,
+                bpp: 32,
+                ..Default::default()
+            };
+            if unsafe { libc::ioctl(fd, DRM_IOCTL_MODE_CREATE_DUMB as _, &mut dumb) } != 0 {
+                return Err("CREATE_DUMB failed".into());
+            }
+            let mut fb2 = drm_mode_fb_cmd2::default();
+            fb2.width = mode.hdisplay as u32;
+            fb2.height = mode.vdisplay as u32;
+            fb2.pixel_format = DRM_FORMAT_XRGB8888;
+            fb2.handles[0] = dumb.handle;
+            fb2.pitches[0] = dumb.pitch;
+            if unsafe { libc::ioctl(fd, DRM_IOCTL_MODE_ADDFB2 as _, &mut fb2) } != 0 {
+                return Err("ADDFB2 failed".into());
+            }
+            let mut map = drm_mode_map_dumb {
+                handle: dumb.handle,
+                ..Default::default()
+            };
+            if unsafe { libc::ioctl(fd, DRM_IOCTL_MODE_MAP_DUMB as _, &mut map) } != 0 {
+                return Err("MAP_DUMB failed".into());
+            }
+            let m = unsafe {
+                libc::mmap(
+                    std::ptr::null_mut(),
+                    dumb.size as usize,
+                    libc::PROT_READ | libc::PROT_WRITE,
+                    libc::MAP_SHARED,
+                    fd,
+                    map.offset as i64,
+                )
+            };
+            if m == libc::MAP_FAILED {
+                return Err("mmap dumb failed".into());
+            }
+            fb[b] = fb2.fb_id;
+            maps[b] = m as *mut u32;
+            pitch_px = dumb.pitch as usize / 4;
+            map_len = dumb.size as usize;
+        }
+
+        Ok(Drm {
+            file,
+            width: mode.hdisplay as u32,
+            height: mode.vdisplay as u32,
+            pitch_px,
+            fb,
+            maps,
+            map_len,
+            cur: 0,
+            flip_ok: true,
+            crtc_id,
+            conn_id,
+            mode,
+        })
+    }
+
+    fn modeset(&self, fb_id: u32) -> Result<(), String> {
+        let fd = self.file.as_raw_fd();
+        let conn_list = [self.conn_id];
+        let mut sc = drm_mode_crtc {
+            set_connectors_ptr: conn_list.as_ptr() as u64,
+            count_connectors: 1,
+            crtc_id: self.crtc_id,
+            fb_id,
+            x: 0,
+            y: 0,
+            gamma_size: 0,
+            mode_valid: 1,
+            mode: self.mode,
+        };
+        let mut rc = unsafe { libc::ioctl(fd, DRM_IOCTL_MODE_SETCRTC as _, &mut sc) };
+        if rc != 0 {
+            sc.set_connectors_ptr = 0;
+            sc.count_connectors = 0;
+            rc = unsafe { libc::ioctl(fd, DRM_IOCTL_MODE_SETCRTC as _, &mut sc) };
+        }
+        if rc != 0 {
+            return Err("SETCRTC failed".into());
+        }
+        Ok(())
+    }
+
+    /// Call AFTER painting the first frame into back_buf(): this panel
+    /// snapshots fb contents at mode-set time, so the modeset must latch
+    /// the buffer we just painted.
+    pub fn initial_modeset(&mut self) -> Result<(), String> {
+        let next = 1 - self.cur;
+        self.modeset(self.fb[next])?;
+        self.cur = next;
+        Ok(())
+    }
+
+    pub fn back_buf(&mut self) -> &mut [u32] {
+        let p = self.maps[1 - self.cur];
+        unsafe { std::slice::from_raw_parts_mut(p, self.pitch_px * self.height as usize) }
+    }
+
+    pub fn pitch_px(&self) -> usize {
+        self.pitch_px
+    }
+
+    /// M15 screen blank. This kernel's sde connector has NO legacy DPMS
+    /// property (probed via OBJ_GETPROPERTIES 2026-08-31 — atomic-only
+    /// driver), but a null SETCRTC (fb_id=0, no connectors, mode invalid)
+    /// takes the whole pipeline down: encoder disable -> DSI off ->
+    /// dsi_backlight_early_dpms hooks fire and the touch controller
+    /// suspends (observed in dmesg). `on` re-latches the back buffer — the
+    /// exact path present() uses as its PAGE_FLIP fallback and aginx-term's
+    /// startup initial_modeset, both proven on this panel. Callers must
+    /// not present() while blanked (a SETCRTC relatch would re-enable).
+    pub fn dpms(&mut self, on: bool) {
+        let fd = self.file.as_raw_fd();
+        if on {
+            let next = 1 - self.cur;
+            if self.modeset(self.fb[next]).is_ok() {
+                self.cur = next;
+            }
+        } else {
+            let mut sc = drm_mode_crtc {
+                crtc_id: self.crtc_id,
+                ..Default::default()
+            };
+            if unsafe { libc::ioctl(fd, DRM_IOCTL_MODE_SETCRTC as _, &mut sc) } != 0 {
+                kmsg("aginx-term: SETCRTC disable failed\n");
+            }
+        }
+    }
+
+    pub fn present(&mut self) {
+        let next = 1 - self.cur;
+        let fd = self.file.as_raw_fd();
+        if self.flip_ok {
+            let mut pf = drm_mode_crtc_page_flip {
+                fb_id: self.fb[next],
+                crtc_id: self.crtc_id,
+                ..Default::default()
+            };
+            if unsafe { libc::ioctl(fd, DRM_IOCTL_MODE_PAGE_FLIP as _, &mut pf) } == 0 {
+                self.cur = next;
+            } else {
+                self.flip_ok = false;
+                kmsg("aginx-term: PAGE_FLIP refused — relatch fallback\n");
+            }
+            return;
+        }
+        // flip path refused (observed on msm_drm 4.19): re-SETCRTC latches
+        // the back buffer. present() is event-driven, so relatch every call.
+        if self.modeset(self.fb[next]).is_ok() {
+            self.cur = next;
+        }
+        if BLINK.swap(false, Ordering::Relaxed) {
+            unsafe { libc::ioctl(fd, DRM_IOCTL_SET_MASTER as _) };
+        }
+    }
+}
+
+impl Drop for Drm {
+    fn drop(&mut self) {
+        unsafe {
+            for m in self.maps {
+                if !m.is_null() {
+                    libc::munmap(m as *mut libc::c_void, self.map_len);
+                }
+            }
+        }
+    }
+}

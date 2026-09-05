@@ -1,0 +1,11 @@
+[package]
+name = "agimg"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+description = "JPEG decode for aginx-term's photo viewer (M39) — vendored libjpeg-turbo"
+
+[dependencies]
+
+[build-dependencies]
+cc = "1"

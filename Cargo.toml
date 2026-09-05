@@ -10,6 +10,11 @@ members = [
     "crates/server",
     "crates/voice",
     "crates/wizard",
+    "crates/svc",
+    "crates/agimg",
+    "crates/term",
+    "crates/pkg",
+    "crates/testkit",
 ]
 
 [workspace.package]

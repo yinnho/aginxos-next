@@ -16,9 +16,18 @@ cd "${ROOT}"
 MODE="${1:-all}"
 
 # ---- 1. host tests ---------------------------------------------------------
+# aginx-svc's supervisor bin (aginx-svcd) is Linux-only (prctl/ucred/SO_PEERCRED),
+# same discipline as agupd/agsvc in the first-gen repo: on macOS the bin is
+# excluded and only its lib (host-testable, also what aginx-term links) runs.
 if [ "${MODE}" != "lint" ]; then
-  echo "==> cargo test --workspace"
-  cargo test --workspace
+  if [ "$(uname -s)" = "Linux" ]; then
+    echo "==> cargo test --workspace"
+    cargo test --workspace
+  else
+    echo "==> cargo test --workspace --exclude aginx-svc (+ its lib)"
+    cargo test --workspace --exclude aginx-svc
+    cargo test -p aginx-svc --lib
+  fi
 fi
 
 # ---- 2. registry lint ------------------------------------------------------

@@ -1,0 +1,32 @@
+[package]
+name = "aginx-svc"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+description = "AginxOS service layer: aginx-svcd supervisor, aginx-svc client, aginx-boot-ok slot marker"
+
+# N4③b 搬入即改姓（D13）。监督者走 inittab respawn（/usr/libexec/aginx/
+# aginx-svcd 落位，不进命令宇宙）；aginx-svc 是控制面 CLI（原 agctl）；
+# aginx-boot-ok 是槽位标记 CLI（原 agboot-ok，rcS 调）。通信走
+# /run/svc/ctl.sock——路径耦合，与二进制名无关，改名不断链。
+# lib 名 aginx_svc：aterm（aginx-term）引它读应用注册表。
+[lib]
+name = "aginx_svc"
+path = "src/lib.rs"
+
+[[bin]]
+name = "aginx-svcd"
+path = "src/main.rs"
+
+[[bin]]
+name = "aginx-svc"
+path = "src/agctl.rs"
+
+[[bin]]
+name = "aginx-boot-ok"
+path = "src/agboot.rs"
+
+[dependencies]
+libc = { workspace = true }

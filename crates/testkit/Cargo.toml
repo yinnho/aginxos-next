@@ -1,0 +1,6 @@
+[package]
+name = "testkit"
+version = "0.1.0"
+edition.workspace = true
+publish = false
+description = "shared test fixtures: scratch dirs, executable stubs, env lock"

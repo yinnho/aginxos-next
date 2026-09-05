@@ -1,0 +1,36 @@
+[package]
+name = "aginx-pkg"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+# aginx-pkg (M26 agpkg, N4③b 改姓) — package installer, Rust rewrite of the sh v0.
+# Loads manifest lines, verifies an ed25519 detached signature before a
+# single byte is parsed or fetched (aginx-sign lib — same chain as aginx-update),
+# and installs either a bare static binary (v0 path) or a 四件套 tar:
+# bin/<name> + pkg.toml + SKILL.md. SKILL.md is REQUIRED for tars —
+# a package without its skill doc does not install.
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+sha2 = "0.10"
+tar = "0.4"
+toml = "0.8"
+agio = { path = "../agio" }
+aginx-sign = { path = "../sign" }
+
+[[bin]]
+name = "aginx-pkg"
+path = "src/main.rs"
+
+# tests sign fixtures with their own throwaway key (the production key
+# is a local secret), craft tars via the crate, and parse the CLI's
+# envelope output.
+[dev-dependencies]
+ed25519-dalek = "2"
+rand_core = { version = "0.6", features = ["getrandom"] }
+tar = "0.4"
+base64 = "0.22"
+testkit = { path = "../testkit" }

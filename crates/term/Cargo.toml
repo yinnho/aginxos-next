@@ -1,0 +1,24 @@
+[package]
+name = "aginx-term"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+
+[dependencies]
+libc = { workspace = true }
+vte = "0.13"
+# M38a: CJK glyph rasterization (Noto Sans Mono CJK subset in the rootfs,
+# /usr/share/fonts/agterm-cjk.otf). Pure Rust, zero C deps — musl-static
+# friendly. ASCII stays on the 5x8 bitmap; this is the wide-glyph path.
+ab_glyph = "0.2"
+# M39: JPEG decode for the photo viewer — vendored libjpeg-turbo with NEON
+# (SM7250 has no JPEG decode hardware; this is the normal-phone path).
+agimg = { path = "../agimg" }
+# M16: the launcher's app registry (/var/apps scan + app.toml schema)
+# lives in the aginx-svc crate (N4③b ../svc) so the format has one definition.
+aginx-svc = { path = "../svc" }
+# M42a: the voice dialog face — voiced (the daemon) is the sole writer of
+# /run/voice/face; aterm parses the JSON to render it. Display-only: the
+# screen has no touch targets in that mode beyond the BACK affordance.
+serde = { workspace = true }
+serde_json = { workspace = true }
