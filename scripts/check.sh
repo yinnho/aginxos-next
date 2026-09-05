@@ -30,7 +30,22 @@ if [ "${MODE}" != "lint" ]; then
   fi
 fi
 
-# ---- 2. registry lint ------------------------------------------------------
+# ---- 2. campix host tests (M47②) --------------------------------------------
+# cam-shot's pixel-chain math (black level / gamma LUTs, crop geometry,
+# debayer-rotate-scale) lives in rootfs/src/campix.h as pure functions so
+# it is testable without a device — same zig that builds the device binary.
+if [ "${MODE}" != "lint" ]; then
+  ZIG="$(command -v zig || true)"
+  test -z "${ZIG}" && ZIG=/opt/homebrew/bin/zig
+  test -x "${ZIG}" || { echo "zig not found (needed for campix_test)" >&2; exit 1; }
+  echo "==> campix_test (rootfs/src)"
+  CBIN="$(mktemp -d)/campix_test"
+  "${ZIG}" cc -O1 -Wall -Wextra -o "${CBIN}" "${ROOT}/rootfs/src/campix_test.c" -lm
+  "${CBIN}"
+  rm -f "${CBIN}"
+fi
+
+# ---- 3. registry lint ------------------------------------------------------
 cargo build -p aginx-router --release >/dev/null
 SCRATCH="$(mktemp -d)"
 trap 'rm -rf "${SCRATCH}"' EXIT

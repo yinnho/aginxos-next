@@ -43,6 +43,7 @@
 #include <unistd.h>
 
 #include "jpegenc.h"
+#include "campix.h"
 
 /* ---- cam_defs.h ---- */
 struct cam_control {
@@ -1930,6 +1931,18 @@ static int g_jpeg_color = 1;
  * --wb r,g,b takes over manually, --wb off disables */
 static int g_wb_auto = 1;
 static float g_wb_r = 1.0f, g_wb_g = 1.0f, g_wb_b = 1.0f;
+/* M47② pixel domain: the RAW10 bits[9:2] carry the sensor's black level
+ * (rear imx363 optical black sits ~16 in the 8-bit domain — a covered-lens
+ * frame pins the exact value on device) and are LINEAR; the encoder and
+ * the screen want black at 0 and a display curve, or darks wash out
+ * gray-green and a mean-19 frame shows as mud. g_bl subtracts +
+ * renormalizes (WB and AEC stats live in that LINEAR domain, campix.h),
+ * g_gamma encodes for display after WB (<=1 = off, the old look).
+ * g_rot turns the landscape-mounted sensor frame upright (90 = CW —
+ * rear camera held portrait; 0 keeps M39 photo behavior). */
+static int g_bl = 16;
+static double g_gamma = 2.2;
+static int g_rot;
 static const char *g_jpeg_out;
 /* --frames N: queue N requests back-to-back before START (burst). Each
  * frame gets its own pixel buffer + fence; fences are waited in order
@@ -2275,110 +2288,15 @@ static void dump_png(const uint8_t *rdi, uint32_t w, uint32_t h, uint32_t stride
     printf("png: %ux%u gray8, %zu B payload -> %s\n", w, h, raw_len, path);
 }
 
-/* ---- JPEG path (M19c) ----
- * RAW10 RDI -> gray8 (bits[9:2]) -> optional bilinear debayer (RGGB —
- * verified correct phase for imx363 and imx481 on device 2026-09-01;
- * imx355 unverifiable, lens was blocked) -> jpegenc.h. */
-static uint8_t *cs_raw10_gray(const uint8_t *raw, uint32_t w, uint32_t h,
-                              uint32_t stride)
-{
-    uint8_t *g = malloc((size_t)w * h);
-    if (!g) return NULL;
-    for (uint32_t y = 0; y < h; y++) {
-        const uint8_t *r = raw + (size_t)y * stride;
-        for (uint32_t x = 0; x + 4 <= w; x += 4) {
-            const uint8_t *p = r + (size_t)(x / 4) * 5;
-            g[(size_t)y * w + x + 0] = p[0];
-            g[(size_t)y * w + x + 1] = p[1];
-            g[(size_t)y * w + x + 2] = p[2];
-            g[(size_t)y * w + x + 3] = p[3];
-        }
-    }
-    return g;
-}
-
-static uint8_t cs_at(const uint8_t *g, uint32_t w, uint32_t h,
-                     int64_t x, int64_t y)
-{
-    if (x < 0) x = 0;
-    if (y < 0) y = 0;
-    if (x >= (int64_t)w) x = w - 1;
-    if (y >= (int64_t)h) y = h - 1;
-    return g[(size_t)y * w + (size_t)x];
-}
-
-/* gray-world white balance: per-site means of the RGGB pattern (R at
- * even/even, B at odd/odd, G on the cross), gains normalizing all three
- * to the brightest site mean — brightness is preserved (gains >= 1) so
- * this never darkens the exposure we tuned with --gain/--dgain */
-static void wb_measure(const uint8_t *g, uint32_t w, uint32_t h, float wb[3])
-{
-    double sr = 0, sg = 0, sb = 0;
-    uint64_t nr = 0;
-    for (uint32_t y = 0; y + 1 < h; y += 2)
-        for (uint32_t x = 0; x + 1 < w; x += 2) {
-            size_t i0 = (size_t)y * w + x;
-            sr += g[i0];
-            sg += g[i0 + 1] + g[i0 + w];   /* 2 G samples per quad */
-            sb += g[i0 + w + 1];
-            nr++;
-        }
-    if (!nr) { wb[0] = wb[1] = wb[2] = 1.0f; return; }
-    double mr = sr / nr, mg = sg / (2.0 * nr), mb = sb / nr;
-    if (mr < 1.0 || mg < 1.0 || mb < 1.0) {
-        wb[0] = wb[1] = wb[2] = 1.0f;      /* black frame — nothing to balance */
-        return;
-    }
-    double top = mr > mg ? (mr > mb ? mr : mb) : (mg > mb ? mg : mb);
-    wb[0] = (float)(top / mr);
-    wb[1] = (float)(top / mg);
-    wb[2] = (float)(top / mb);
-    for (int k = 0; k < 3; k++)
-        if (wb[k] > 4.0f) wb[k] = 4.0f;    /* keep tinted scenes sane */
-}
-
-static uint8_t *cs_debayer(const uint8_t *g, uint32_t w, uint32_t h,
-                           const float wb[3])
-{
-    uint8_t *rgb = malloc((size_t)w * h * 3);
-    if (!rgb) return NULL;
-    for (uint64_t y = 0; y < h; y++)
-        for (uint64_t x = 0; x < w; x++) {
-            /* RGGB: even row = R G, odd row = G B */
-            int site = !(y & 1) ? (!(x & 1) ? 0 : 1) : (!(x & 1) ? 1 : 2);
-            int R, G, B;
-            int l = cs_at(g, w, h, x - 1, y), r = cs_at(g, w, h, x + 1, y);
-            int u = cs_at(g, w, h, x, y - 1), d = cs_at(g, w, h, x, y + 1);
-            int ul = cs_at(g, w, h, x - 1, y - 1), ur = cs_at(g, w, h, x + 1, y - 1);
-            int dl = cs_at(g, w, h, x - 1, y + 1), dr = cs_at(g, w, h, x + 1, y + 1);
-            if (site == 0) {          /* R site */
-                R = g[(size_t)y * w + x];
-                G = (l + r + u + d) / 4;
-                B = (ul + ur + dl + dr) / 4;
-            } else if (site == 2) {   /* B site */
-                B = g[(size_t)y * w + x];
-                G = (l + r + u + d) / 4;
-                R = (ul + ur + dl + dr) / 4;
-            } else if (!(y & 1)) {    /* G on R row: R left/right */
-                G = g[(size_t)y * w + x];
-                R = (l + r) / 2;
-                B = (u + d) / 2;
-            } else {                  /* G on B row: B left/right */
-                G = g[(size_t)y * w + x];
-                B = (l + r) / 2;
-                R = (u + d) / 2;
-            }
-            int Rc = (int)(R * wb[0] + 0.5f);
-            int Gc = (int)(G * wb[1] + 0.5f);
-            int Bc = (int)(B * wb[2] + 0.5f);
-            uint8_t *p = rgb + ((size_t)y * w + x) * 3;
-            p[0] = (uint8_t)(Rc > 255 ? 255 : Rc);
-            p[1] = (uint8_t)(Gc > 255 ? 255 : Gc);
-            p[2] = (uint8_t)(Bc > 255 ? 255 : Bc);
-        }
-    return rgb;
-}
-
+/* ---- JPEG path (M19c, rebuilt on campix.h in M47②) ----
+ * RAW10 RDI -> crop extract through the LINEAR LUT (black level out,
+ * campix.h) -> gray-world WB + yavg stats in the linear domain ->
+ * debayer/rotate/scale in one pass with the display (gamma) LUT at the
+ * tail -> jpegenc.h. The old chain dropped bits[9:2] straight into the
+ * encoder: no black level, no gamma — the M47 "dark, gray-green wash"
+ * defect. RGGB phase verified on device 2026-09-01 and preserved verbatim
+ * inside cp_debayer_rot. dump_png keeps its own raw-bit diagnostic logic
+ * and is untouched on purpose. */
 static void dump_jpeg(const uint8_t *rdi, uint32_t w, uint32_t h,
                       uint32_t stride, const char *raw_path)
 {
@@ -2394,45 +2312,76 @@ static void dump_jpeg(const uint8_t *rdi, uint32_t w, uint32_t h,
     struct timespec a, b;
     clock_gettime(CLOCK_MONOTONIC, &a);
 
-    uint8_t *g = cs_raw10_gray(rdi, w, h, stride);
+    /* full frame by default; M47④ wires --aspect/--preview into this */
+    uint32_t x0 = 0, y0 = 0, cw = w, ch = h;
+    uint8_t lin[256], gam[256], disp[256];
+    cp_lut_linear(lin, g_bl);
+    cp_lut_gamma(gam, g_gamma);
+    cp_lut_compose(lin, gam, disp);
+
+    /* gray in the LINEAR domain — stats and WB live here */
+    uint8_t *g = malloc((size_t)cw * ch);
     if (!g) { fprintf(stderr, "jpeg: no mem for gray\n"); return; }
-    size_t cap = (size_t)w * h * 3 + 65536;
+    cp_raw10_gray(rdi, stride, x0, y0, cw, ch, lin, g);
+
+    uint32_t ow = (g_rot == 90 || g_rot == 270) ? ch : cw;
+    uint32_t oh = (g_rot == 90 || g_rot == 270) ? cw : ch;
+    size_t cap = (size_t)ow * oh * 3 + 65536;
     uint8_t *out = malloc(cap);
     if (!out) { fprintf(stderr, "jpeg: no mem for %zu B out\n", cap); free(g); return; }
     ssize_t n;
+    double yavg;
     if (g_jpeg_color) {
         float wb[3] = { g_wb_r, g_wb_g, g_wb_b };
         if (g_wb_auto) {
-            wb_measure(g, w, h, wb);
+            cp_wb_measure(g, cw, ch, wb, &yavg);
             printf("wb: auto r=%.2f g=%.2f b=%.2f\n", wb[0], wb[1], wb[2]);
+        } else {
+            yavg = cp_yavg(g, (size_t)cw * ch);
         }
-        uint8_t *rgb = cs_debayer(g, w, h, wb);
+        uint8_t *rgb = malloc((size_t)ow * oh * 3);
+        if (!rgb) { fprintf(stderr, "jpeg: no mem for rgb\n"); free(g); free(out); return; }
+        cp_debayer_rot(g, cw, ch, wb, gam, g_rot, ow, oh, rgb);
         free(g);
-        if (!rgb) { fprintf(stderr, "jpeg: no mem for rgb\n"); free(out); return; }
-        n = jpeg_encode_rgb24(rgb, (int)w, (int)h, (int)w * 3, g_jpeg_q,
+        n = jpeg_encode_rgb24(rgb, (int)ow, (int)oh, (int)ow * 3, g_jpeg_q,
                               out, cap);
         free(rgb);
     } else {
-        n = jpeg_encode_gray8(g, (int)w, (int)h, (int)w, g_jpeg_q,
-                              out, (size_t)w * h + 65536);
+        yavg = cp_yavg(g, (size_t)cw * ch);
+        for (size_t i = 0; i < (size_t)cw * ch; i++)
+            g[i] = disp[g[i]];
+        n = jpeg_encode_gray8(g, (int)cw, (int)ch, (int)cw, g_jpeg_q,
+                              out, (size_t)cw * ch + 65536);
         free(g);
     }
+    /* linear-domain luminance: the number M47③'s AEC drives at ~50 */
+    printf("yavg: %.1f (linear, bl=%d gamma=%.2f rot=%d)\n",
+           yavg, g_bl, g_gamma, g_rot);
     if (n < 0) { fprintf(stderr, "jpeg: encode overflow\n"); free(out); return; }
-    int fd = open(path, O_WRONLY | O_CREAT | O_TRUNC, 0644);
+    /* atomic publish: tmp + rename(2). The old O_TRUNC write raced every
+     * mtime-polling reader (term's eye view, and M47④'s resident loop
+     * would hit it ~10x/s). */
+    char tmp[560];
+    snprintf(tmp, sizeof tmp, "%s.tmp", path);
+    int fd = open(tmp, O_WRONLY | O_CREAT | O_TRUNC, 0644);
     if (fd < 0) {
-        fprintf(stderr, "open %s: %s\n", path, strerror(errno));
+        fprintf(stderr, "open %s: %s\n", tmp, strerror(errno));
         free(out);
         return;
     }
     int bad = wr_all(fd, out, (size_t)n) < 0;
     close(fd);
+    if (!bad && rename(tmp, path) != 0) {
+        fprintf(stderr, "rename %s -> %s: %s\n", tmp, path, strerror(errno));
+        bad = 1;
+    }
     free(out);
     clock_gettime(CLOCK_MONOTONIC, &b);
     double t = (b.tv_sec - a.tv_sec) + (b.tv_nsec - a.tv_nsec) / 1e9;
     if (bad) { fprintf(stderr, "jpeg: write failed\n"); return; }
     printf("jpeg: %ux%u %s q%d -> %zd B (%.2f bpp) in %.3f s -> %s\n",
-           w, h, g_jpeg_color ? "color" : "gray", g_jpeg_q, n,
-           (double)n * 8 / ((double)w * h), t, path);
+           ow, oh, g_jpeg_color ? "color" : "gray", g_jpeg_q, n,
+           (double)n * 8 / ((double)ow * oh), t, path);
 }
 
 /* numbered output path for frame `frameno` of `total` (suffix -<n>
@@ -4072,6 +4021,22 @@ int main(int argc, char **argv)
                 }
                 g_wb_auto = 0;
                 g_wb_r = r; g_wb_g = gg; g_wb_b = b;
+            }
+        }
+        else if (strcmp(argv[i], "--bl") == 0 && i + 1 < argc) {
+            g_bl = atoi(argv[++i]);
+            if (g_bl < 0 || g_bl > 63) {
+                fprintf(stderr, "--bl: 0..63\n");
+                return 1;
+            }
+        }
+        else if (strcmp(argv[i], "--gamma") == 0 && i + 1 < argc)
+            g_gamma = atof(argv[++i]);   /* <=1 = off */
+        else if (strcmp(argv[i], "--rot") == 0 && i + 1 < argc) {
+            g_rot = atoi(argv[++i]);
+            if (g_rot != 0 && g_rot != 90 && g_rot != 270) {
+                fprintf(stderr, "--rot: 0 | 90 | 270\n");
+                return 1;
             }
         }
         else if (strcmp(argv[i], "--frames") == 0 && i + 1 < argc) {
