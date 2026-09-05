@@ -29,10 +29,10 @@ pub const CAP_MAX_SECS: u32 = 30;
 
 // ---- 音量（M42e 产品面：短按音量±键调，长按音量下=PTT）----
 // VOL 75 的观察收据：机身震 + 4.5-6k 破音——功放过推。改 60 起步，用户
-// 键控微调。优先级：/var/lib/voiced/vol（键调持久，state tar 内存活）>
+// 键控微调。优先级：/var/lib/aginx/voice/vol（键调持久，state tar 内存活）>
 // AG_VOICE_VOL env > 缺省 60。AtomicU8=0 表示未初始化（真值经 clamp_vol 恒 ≥20）。
 static VOL: AtomicU8 = AtomicU8::new(0);
-const VOL_FILE: &str = "/var/lib/voiced/vol";
+const VOL_FILE: &str = "/var/lib/aginx/voice/vol";
 /// 地板 20：2026-09-03 设备收据——连续短按音量下到 0 后整机静默，连「音量0」
 /// 播报都被自己的 0 音量吞掉。纯语音产品里 vol=0 等于设备失联，0-19 一律抬 20。
 const VOL_MIN: u8 = 20;
@@ -64,7 +64,7 @@ pub fn vol() -> u8 {
 pub fn adjust_vol(delta: i32) -> u8 {
     let v = clamp_vol(vol() as i32 + delta);
     VOL.store(v, Ordering::Relaxed);
-    let _ = std::fs::create_dir_all("/var/lib/voiced");
+    let _ = std::fs::create_dir_all("/var/lib/aginx/voice");
     let _ = std::fs::write(VOL_FILE, v.to_string());
     v
 }

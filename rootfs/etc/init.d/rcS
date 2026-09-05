@@ -13,6 +13,11 @@ mdev -s 2>/dev/null
 # /etc/wifi.conf or /var).
 /etc/init.d/state-restore
 
+# N5③: the state tar from the first-gen updater carries the OLD /var/lib
+# names — fold them into /var/lib/aginx before anything reads state.
+# Union + park, never deletes; no-op once the world is folded.
+/etc/init.d/varlib-migrate
+
 # Host mke2fs -d stored the macOS build user (uid 501) as owner - the
 # filesystem is rw, so the first boot normalizes it for good.
 chown -R 0:0 /bin /sbin /etc /aginxos /system /home /root /var /opt /srv /media 2>/dev/null
