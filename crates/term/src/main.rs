@@ -3,7 +3,7 @@
 // bootcard's DRM path + 5x8 font, a vte-parsed cell grid (black bg, green /
 // white text — the fixed phosphor palette), an openpty child (sh / codex /
 // grok / aclone), an evdev on-screen keyboard (tap = key, drag = scrollback),
-// and a launcher (clone / codex / grok / sh). Started by rcS's aterm-handoff (init script name kept)
+// and a launcher (clone / codex / grok / sh). Started by rcS's aginx-term-handoff.
 // once boot finishes: bootcard never exits on its own and holds DRM master
 // forever, so the handoff kills it by /run/bootcard.pid and takes the panel.
 //
@@ -58,7 +58,7 @@ const IME_STRIP_H: usize = 120;
 const POWER_HOLD: Duration = Duration::from_millis(1200);
 const IDLE_BLANK: Duration = Duration::from_secs(60);
 
-// M42a voice face: sole writer is the voiced daemon (atomic tmp+rename);
+// M42a voice face: sole writer is the aginx-voice daemon (atomic tmp+rename);
 // aginx-term only polls mtime and renders. Display-only modality.
 const VOICE_FACE: &str = "/run/aginx-voice/face";
 
@@ -259,7 +259,7 @@ struct Child {
 /// `aginx-pkg available` — optional packages not yet installed, capped at 12
 /// (picker row geometry is unsigned arithmetic; scrolling is later).
 fn read_available() -> Vec<String> {
-    std::process::Command::new(launch::BIN_AGPKG)
+    std::process::Command::new(launch::BIN_AGINX_PKG)
         .arg("available")
         .output()
         .ok()
@@ -412,14 +412,14 @@ enum Mode {
     /// Decode is libjpeg-turbo (no JPEG decode hardware on SM7250).
     Photos(photos::Photos),
     /// Voice dialog face (launcher VOICE tile, M42a): display-only
-    /// rendering of /run/aginx-voice/face, written by the voiced daemon.
+    /// rendering of /run/aginx-voice/face, written by the aginx-voice daemon.
     /// No pty, no keyboard — PTT (volume-down) is the input path.
     Voice,
 }
 
 // ---------------- voice face ----------------
 
-/// M42a: the JSON voiced writes to /run/aginx-voice/face. Every field defaults
+/// M42a: the JSON aginx-voice writes to /run/aginx-voice/face. Every field defaults
 /// so a partially-written doc never kills the renderer; `alive` lives on
 /// VoiceView, not here — it means "the file read+parsed at least once".
 #[derive(serde::Deserialize, Default)]
@@ -473,7 +473,7 @@ impl VoiceView {
                 false
             }
             None => {
-                // voiced never wrote / went away — keep the last frame's
+                // aginx-voice never wrote / went away — keep the last frame's
                 // content but flag it dead
                 self.alive = false;
                 true
@@ -627,7 +627,7 @@ impl<'a> Render<'a> {
     }
 
     /// Voice dialog face (M42a, launcher VOICE tile): pure rendering of
-    /// the doc voiced writes to /run/aginx-voice/face. Phosphor rules — agent
+    /// the doc aginx-voice writes to /run/aginx-voice/face. Phosphor rules — agent
     /// lines green, user lines white (prefixed ">"), selected SSID white,
     /// psk shown verbatim (read-back confirmation needs to be visible).
     /// No touch targets below the BACK toolbar: the screen is a display.
@@ -679,7 +679,7 @@ impl<'a> Render<'a> {
             clip_cols(&mut s, 48);
             draw_text(pix, self.pitch, self.w, self.h, self.font, g.m as i32, g.kb_panel_y as i32 - 120, &s, 4, WHITE);
         }
-        // hint line (voiced's default: how to talk, how to bail)
+        // hint line (aginx-voice's default: how to talk, how to bail)
         let hint = if d.hint.is_empty() { "按住音量下键说：连接无线网络" } else { d.hint.as_str() };
         draw_centered(pix, self.pitch, self.w, self.h, self.font, g.kb_panel_y as i32 - 40, hint, 3, UNAVAIL);
     }
@@ -959,7 +959,7 @@ fn power_off(d: &mut Drm, font: &[[u8; 8]; 128], canvas: &mut [u32], blanked: bo
     } else {
         d.present();
     }
-    let _ = std::process::Command::new(launch::BIN_REBOOT2).arg("poweroff").spawn();
+    let _ = std::process::Command::new(launch::BIN_AGINX_REBOOT).arg("poweroff").spawn();
     std::process::exit(0);
 }
 
@@ -1004,14 +1004,14 @@ fn host_ppm(out: &str) {
     }
 
     // third frame (M39): photo view — AGINX_TERM_PHOTOS_DEMO=<file.jpg> decodes
-    // through agimg (DCT-scaled to the panel box) and renders the real
+    // through aginx-img (DCT-scaled to the panel box) and renders the real
     // viewer screen, so the decode+blit path is host-verifiable.
     if let Ok(demo) = std::env::var("AGINX_TERM_PHOTOS_DEMO") {
         let bytes = std::fs::read(&demo).unwrap_or_default();
         let mut p = photos::Photos {
             files: vec![demo.clone()],
             sel: 0,
-            img: agimg::decode_scaled(&bytes, w as u32, (h - lg.toolbar_h) as u32),
+            img: aginx_img::decode_scaled(&bytes, w as u32, (h - lg.toolbar_h) as u32),
             view: true,
             err: String::new(),
         };
@@ -1338,7 +1338,7 @@ fn main() {
                                             redraw = true;
                                         } else if entries[i2].avail {
                                             let prog = entries[i2].bin.as_str();
-                                            if prog == launch::BIN_REBOOT2 {
+                                            if prog == launch::BIN_AGINX_REBOOT {
                                                 // these draw their own frame
                                                 // and never come back — no
                                                 // pty round-trip
@@ -1349,7 +1349,7 @@ fn main() {
                                                 draw_centered(&mut canvas, pitch, w, h, &font, (h as i32 - 8 * 5) / 2, "RESTARTING", 5, GREEN);
                                                 d.back_buf().copy_from_slice(&canvas);
                                                 d.dpms(true); // relatch the frame (crtc may be off)
-                                                let _ = std::process::Command::new(launch::BIN_REBOOT2)
+                                                let _ = std::process::Command::new(launch::BIN_AGINX_REBOOT)
                                                     .arg("reboot")
                                                     .spawn();
                                                 std::process::exit(0);
@@ -1387,14 +1387,14 @@ fn main() {
                                         if let Some(name) = pkgs.get(i2).cloned() {
                                             // synchronous install: paint the
                                             // frame first, the event loop is
-                                            // about to block on agdl
+                                            // about to block on aginx-download
                                             {
                                                 let r = Render { font: &font, w, h, pitch };
                                                 r.installing(&mut canvas[..], &name);
                                                 d.back_buf().copy_from_slice(&canvas);
                                                 d.present();
                                             }
-                                            let out = std::process::Command::new(launch::BIN_AGPKG)
+                                            let out = std::process::Command::new(launch::BIN_AGINX_PKG)
                                                 .arg("opt-in")
                                                 .arg(&name)
                                                 .output();

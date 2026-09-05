@@ -13,11 +13,11 @@ vte = "0.13"
 ab_glyph = "0.2"
 # M39: JPEG decode for the photo viewer — vendored libjpeg-turbo with NEON
 # (SM7250 has no JPEG decode hardware; this is the normal-phone path).
-agimg = { path = "../agimg" }
+aginx-img = { path = "../img" }
 # M16: the launcher's app registry (/var/apps scan + app.toml schema)
 # lives in the aginx-svc crate (N4③b ../svc) so the format has one definition.
 aginx-svc = { path = "../svc" }
-# M42a: the voice dialog face — voiced (the daemon) is the sole writer of
+# M42a: the voice dialog face — aginx-voice (the daemon) is the sole writer of
 # /run/aginx-voice/face; aginx-term parses the JSON to render it. Display-only: the
 # screen has no touch targets in that mode beyond the BACK affordance.
 serde = { workspace = true }

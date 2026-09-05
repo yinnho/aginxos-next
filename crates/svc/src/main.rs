@@ -708,7 +708,7 @@ fn next_deadline(runs: &BTreeMap<String, Run>, now: Instant) -> Option<Instant> 
 // a wedged supervisor (STOP, deadlock, a runaway unit starving the
 // loop) resets it — ABL drains a boot try and M14's rollback takes
 // over. A hung KERNEL is outside this dog's reach (the timer dies with
-// it); that class is fenced by agupd's verify-before-write instead.
+// it); that class is fenced by aginx-update's verify-before-write instead.
 // Opening arms the dog for the life of the kernel (nowayout — the
 // starve test never closed and still reset), which is what we want:
 // there is no legitimate state where aginx-svcd stops petting.

@@ -9,9 +9,10 @@ running Pixel 5 (redfin) is this line's hardware.
   `build-rootfs.sh` references it read-only via `OLD=` (default
   `~/Documents/aginxos`) for: busybox, `rootfs/src/*.c`, the unpacked
   vendor ramdisk, voice/OCR builds+models, dropbear, radio blobs, fonts,
-  and six renamed-at-install musl binaries (agdl/agupd/agqr/agdone/
-  agsecret/agsecretd + the aginxos trampoline pair). Do not build on its
-  code; its `docs/HARDWARE.md` holds every device receipt before N4.
+  and the frozen aginxos trampoline pair (aginxos-init/aginxos-agent —
+  deliberately not absorbed: the swapper of the rootfs swap stays
+  first-gen). Do not build on its code; its `docs/HARDWARE.md` holds
+  every device receipt before N4.
 - `~/Documents/aginx` — ecosystem (aginx-carrier, aginx daemon,
   aginxbrowser, memory server). Source of import seams, not development.
 
@@ -83,8 +84,11 @@ from the old repo's sources at bake.
 | `crates/pkg` | `aginx-pkg` — package manager (signed manifest, 四件套) |
 | `crates/svc` | `aginx-svcd` + `aginx-svc` + `aginx-boot-ok` — supervisor, control, A/B marker |
 | `crates/sign` | `aginx-sign` — host signer/verifier (ed25519; keys in `.local/keys/`) |
-| `crates/agqr` | QR decode lib (decoder binary comes from the old repo's build) |
-| `crates/agimg`, `crates/testkit` | vendored libjpeg-turbo; test helpers |
+| `crates/qr`, `crates/img` | `aginx-qr` — QR decode CLI (quircs + jpeg decode face); vendored libjpeg-turbo |
+| `crates/download`, `crates/update` | `aginx-download`/`aginx-update` — HTTPS fetch + signed A/B rootfs updater |
+| `crates/done` | `aginx-done` — provision done-marker discipline |
+| `crates/secret` | `aginx-secretd`/`aginx-secret` — the secret sidecar + its admin face |
+| `crates/testkit` | test helpers |
 | `rootfs/` | the image recipe — see `rootfs/README.md` (placement matrix, asset split) |
 | `scripts/build-rootfs.sh` | the bake: recipe + zigbuild + OLD= assets → `out/rootfs.img` |
 | `scripts/accept/` | device acceptance suites (n4.sh is the switch gate) |

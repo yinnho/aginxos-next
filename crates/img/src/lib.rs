@@ -1,4 +1,4 @@
-// agimg — JPEG decode for aterm's photo viewer (M39).
+// aginx-img — JPEG decode for aginx-term's photo viewer (M39).
 //
 // SM7250 has no hardware JPEG *decoder* (camss cam_jpeg is camera-pipeline
 // encode-only, Venus has no JPEG capability — probed from the vendor module
@@ -8,7 +8,7 @@
 // build.rs. The decode side is what a photo-open needs; capture-side
 // hardware JPEG encode (camss cam_jpeg) is separate M19-line work.
 //
-// Layout: all jpeglib struct knowledge stays in C (agimg_shim.c); the FFI
+// Layout: all jpeglib struct knowledge stays in C (img_shim.c); the FFI
 // boundary is one function returning malloc'd XRGB pixels. DCT-scaled
 // decompression picks the largest 1/N scale fitting the caller's box, so a
 // 12MP shot decodes straight to screen size instead of decoding full and
@@ -17,7 +17,7 @@
 use std::os::raw::{c_uchar, c_uint, c_ulong, c_void};
 
 extern "C" {
-    fn agimg_decode(
+    fn aginx_img_decode(
         data: *const c_uchar,
         len: c_ulong,
         max_w: c_uint,
@@ -29,7 +29,7 @@ extern "C" {
 }
 
 /// Decoded image: XRGB8888 pixels (0x00RRGGBB), row-major, `w*h` entries —
-/// the exact layout of aterm's DRM dumb-buffer framebuffers, so the viewer
+/// the exact layout of aginx-term's DRM dumb-buffer framebuffers, so the viewer
 /// blits without conversion.
 pub struct Bitmap {
     pub w: u32,
@@ -43,7 +43,7 @@ pub struct Bitmap {
 pub fn decode_scaled(jpeg: &[u8], max_w: u32, max_h: u32) -> Option<Bitmap> {
     let (mut w, mut h) = (0u32, 0u32);
     let p = unsafe {
-        agimg_decode(
+        aginx_img_decode(
             jpeg.as_ptr(),
             jpeg.len() as c_ulong,
             max_w,

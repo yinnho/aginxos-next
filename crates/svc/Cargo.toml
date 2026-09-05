@@ -22,11 +22,11 @@ path = "src/main.rs"
 
 [[bin]]
 name = "aginx-svc"
-path = "src/agctl.rs"
+path = "src/ctl.rs"
 
 [[bin]]
 name = "aginx-boot-ok"
-path = "src/agboot.rs"
+path = "src/boot_ok.rs"
 
 [dependencies]
 libc = { workspace = true }

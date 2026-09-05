@@ -20,6 +20,12 @@ router). The constitution lives in `docs/ARCH.md` (local only).
 | `crates/pkg` | `aginx-pkg` | package manager — signed manifest, 四件套 tars |
 | `crates/svc` | `aginx-svcd`/`aginx-svc`/`aginx-boot-ok` | supervisor, control client, A/B slot marker |
 | `crates/sign` | `aginx-sign` | host-side ed25519 signer/verifier |
+| `crates/qr` | `aginx-qr` | QR decode CLI — quircs + jpeg decode face (built in its own zigbuild pass) |
+| `crates/img` | `aginx-img` | vendored libjpeg-turbo decode (shared FFI) |
+| `crates/download` | `aginx-download` | HTTPS downloader — streaming, .part+rename |
+| `crates/update` | `aginx-update` | signed A/B rootfs updater — swap + state tar |
+| `crates/done` | `aginx-done` | provision done markers |
+| `crates/secret` | `aginx-secretd`/`aginx-secret` | secret sidecar daemon + admin face |
 
 Build entry points:
 

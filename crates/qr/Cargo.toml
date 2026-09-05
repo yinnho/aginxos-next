@@ -1,0 +1,35 @@
+[package]
+name = "aginx-qr"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "QR decode from a camera JPEG (M42b) — pure-Rust quircs + aginx-img"
+
+[features]
+# 三档特性面：
+# - default-features=false（aginx-voice 用）：只剩 WIFI: 载荷解析，纯字符串
+#   零依赖；
+# - decode：quircs QR 解码（CLI 最低面）；
+# - jpeg（default）：decode + aginx-img（vendored libjpeg-turbo，C 构建重），
+#   decode_jpeg/CLI 完整路径都在这档。
+#
+# N5② 起本仓自带完整三档（老仓 agqr 同款，改姓 aginx-qr）。烤机纪律：
+# aginx-voice 以 default-features=false 引本 crate，若同一次 cargo 调用里
+# 再选 aginx-qr/jpeg，feature 统一会把 quircs+aginx-img 织进 aginx-voice
+# ——设备的解码二进制必须用**第二次独立 zigbuild**
+# `-p aginx-qr --features aginx-qr/jpeg` 出（scripts/build-rootfs.sh 有断言）。
+default = ["jpeg"]
+decode = ["dep:quircs"]
+jpeg = ["decode", "dep:aginx-img"]
+
+[dependencies]
+# quircs：纯 Rust quirc 移植（自带 num-traits/num-derive/thiserror，均纯 Rust）
+quircs = { version = "0.10", optional = true }
+aginx-img = { path = "../img", optional = true }
+
+[dev-dependencies]
+qrcodegen = "1"
+
+[[bin]]
+name = "aginx-qr"
+path = "src/main.rs"

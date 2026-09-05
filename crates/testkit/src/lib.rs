@@ -4,11 +4,11 @@
 //!
 //! Convention, in order of preference (see crates that already do each):
 //!
-//! 1. Inject paths through the code under test (`agpkg::Paths`) and pass
+//! 1. Inject paths through the code under test (`aginx_pkg::Paths`) and pass
 //!    per-child env with `Command::env` for CLI e2e (`ag` router tests).
 //!    These parallelize freely — no lock needed.
 //! 2. `env_lock()` only when the code reads a process-global env var by
-//!    design and cannot be parameterized (`agdone::dir` is the standing
+//!    design and cannot be parameterized (`aginx_done::dir` is the standing
 //!    example). `std::env::set_var` touches process-global state, and
 //!    cargo runs tests in threads, so those tests must serialize.
 //!

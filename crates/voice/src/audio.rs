@@ -91,7 +91,7 @@ const ASR_HINT: &str = "你听到的是一台中文设备的语音指令录音�
     数字零到数字九、完了、删掉、退格、你在吗、帮助。";
 
 impl Brain {
-    /// key 从环境 AGINXBRAIN_API_KEY 读（agsvc 单元 env_file 注入）。
+    /// key 从环境 AGINXBRAIN_API_KEY 读（aginx-svc 单元 env_file 注入）。
     pub fn from_env() -> Option<Brain> {
         let key = std::env::var("AGINXBRAIN_API_KEY").ok()?;
         let base = std::env::var("AGINXBRAIN_URL")
@@ -215,13 +215,13 @@ impl Brain {
             stereo.extend_from_slice(s);
             stereo.extend_from_slice(s); // L = R
         }
-        let tmp = "/tmp/voiced-tts.raw";
+        let tmp = "/tmp/aginx-voice-tts.raw";
         fs::write(tmp, &stereo).map_err(|e| format!("tts tmp: {e}"))?;
         play_stereo_blocking(samples)
     }
 }
 
-/// 放 /tmp/voiced-tts.raw（48k L=R stereo），阻塞到放完。
+/// 放 /tmp/aginx-voice-tts.raw（48k L=R stereo），阻塞到放完。
 fn play_stereo_blocking(samples: usize) -> Result<(), String> {
     let budget = (samples / RATE as usize + 5) as u32;
     match play_stereo_spawn()? {
@@ -230,7 +230,7 @@ fn play_stereo_blocking(samples: usize) -> Result<(), String> {
     }
 }
 
-/// 起 snd-play 放 /tmp/voiced-tts.raw，不阻塞：open EBUSY（上一会话
+/// 起 snd-play 放 /tmp/aginx-voice-tts.raw，不阻塞：open EBUSY（上一会话
 /// teardown 的尾巴，M42e 设备收据）是毫秒级退出——原地小睡重试；GRACE
 /// 后仍在跑即接管成功返回 child。分句下限 4 字 ≈0.5s 音频，宽限内
 /// clean 退出=真放完了（返回 None）。
@@ -242,7 +242,7 @@ fn play_stereo_spawn() -> Result<Option<Child>, String> {
         let mut child = Command::new(SND_PLAY)
             .args([
                 PCM_PLAY,
-                "/tmp/voiced-tts.raw",
+                "/tmp/aginx-voice-tts.raw",
                 &RATE.to_string(),
                 "2",
                 &vol_s,
@@ -277,7 +277,7 @@ pub fn capture_start() -> std::io::Result<Child> {
         .args([
             PCM_CAP,
             &CAP_MAX_SECS.to_string(),
-            "/tmp/voiced-cap.raw",
+            "/tmp/aginx-voice-cap.raw",
             &RATE.to_string(),
             &CHANS.to_string(),
         ])
@@ -288,7 +288,7 @@ pub fn capture_start() -> std::io::Result<Child> {
 
 /// 读采集产物并封 WAV。过短（<0.1s）返回 None（误触）。
 pub fn capture_take() -> Option<Vec<u8>> {
-    let raw = fs::read("/tmp/voiced-cap.raw").ok()?;
+    let raw = fs::read("/tmp/aginx-voice-cap.raw").ok()?;
     let raw = &raw[..raw.len() - raw.len() % 2]; // 整样本截齐
     if raw.len() < (RATE as usize / 10) * 2 {
         return None;
@@ -396,8 +396,8 @@ fn pin_big_cores(_cmd: &mut Command) {}
 
 /// 固定 wav 落点：daemon 与 --say 各有自己的 server 实例，写同一路径。
 /// 并发跑两个入口理论上互踩这个文件——调试面小概率可忍，产品面只有 daemon。
-const TTS_WAV: &str = "/tmp/voiced-tts.wav";
-const HEAR_WAV: &str = "/tmp/voiced-hear.wav";
+const TTS_WAV: &str = "/tmp/aginx-voice-tts.wav";
+const HEAR_WAV: &str = "/tmp/aginx-voice-hear.wav";
 
 struct VoiceServer {
     child: Child,
@@ -530,7 +530,7 @@ pub fn local_asr(wav: &[u8]) -> Result<String, String> {
     let text = match resident_asr() {
         Ok(t) => t,
         Err(e) => {
-            eprintln!("voiced: asr serve {e} — one-shot");
+            eprintln!("aginx-voice: asr serve {e} — one-shot");
             let mut cmd = Command::new(AG_ASR);
             cmd.arg(HEAR_WAV);
             pin_big_cores(&mut cmd);
@@ -560,7 +560,7 @@ pub fn local_speak(text: &str) -> Result<(), String> {
     if speak_streamed(&split_clauses(&spoken)).is_ok() {
         return Ok(());
     }
-    eprintln!("voiced: tts serve failed — one-shot");
+    eprintln!("aginx-voice: tts serve failed — one-shot");
     let mut cmd = Command::new(AG_TTS);
     cmd.args([&spoken, TTS_WAV]);
     pin_big_cores(&mut cmd);
@@ -691,7 +691,7 @@ fn speak_streamed(clauses: &[String]) -> Result<(), String> {
 }
 
 /// wav（TTS 产物）→ FIR 升采样 48k → 7.5k 低通 → L=R 立体声写
-/// /tmp/voiced-tts.raw，返回样本数（放音等待预算用）。
+/// /tmp/aginx-voice-tts.raw，返回样本数（放音等待预算用）。
 fn stage_wav(wav: &[u8]) -> Result<usize, String> {
     let (off, len) = wav_data_span(wav)?;
     let rate = wav_rate(wav)?;
@@ -707,7 +707,7 @@ fn stage_wav(wav: &[u8]) -> Result<usize, String> {
         stereo.extend_from_slice(s);
         stereo.extend_from_slice(s); // L = R
     }
-    fs::write("/tmp/voiced-tts.raw", &stereo).map_err(|e| format!("tts tmp: {e}"))?;
+    fs::write("/tmp/aginx-voice-tts.raw", &stereo).map_err(|e| format!("tts tmp: {e}"))?;
     Ok(samples)
 }
 

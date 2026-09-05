@@ -4,7 +4,7 @@
 // executable aginx-* across the cmd dirs and reads their headers so
 // aginx:name=/aginx:alias= routes resolve too. Dir order = precedence:
 // AGINX_CMD_PATH defaults to /var/bin:/usr/bin so provisioned (writable)
-// commands shadow baked ones, same later-wins precedent agsvc uses for
+// commands shadow baked ones, same later-wins precedent aginx-svc uses for
 // its unit files.
 
 use crate::meta::{self, Meta};

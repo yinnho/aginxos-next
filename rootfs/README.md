@@ -7,7 +7,7 @@
 
 ## 目录内容
 
-- `etc/` — 静态系统配置。init.d 全套（rcS/net-bringup/provision/aterm-handoff/
+- `etc/` — 静态系统配置。init.d 全套（rcS/net-bringup/provision/aginx-term-handoff/
   app-registry/state-restore + 六个 bringup）、aginx/svc.d 五单元、
   aginx/（env 明文环境、groups.desc 命令分组、secret.policy sidecar 放行表）、
   apps.d 两 tile、crontabs（仅注释，文件在 crond 才有家）、agpkg.manifest
@@ -32,8 +32,8 @@
 | 本仓 target/musl | aginx-svcd | /usr/libexec/aginx/ |
 | 老仓 target/musl | aginxos-init, aginxos-agent | /aginxos/（trampoline） |
 | 本仓 target/musl | aginx-download, aginx-update | /usr/bin（N5① 吸收重编，修三死路径） |
-| 老仓 target/musl | agqr→aginx-qr, agdone→aginx-done, agsecret→aginx-secret | /usr/bin（改名即落） |
-| 老仓 target/musl | agsecretd→aginx-secretd | /usr/libexec/aginx/ |
+| 本仓 target/musl | aginx-qr（第二次独立 zigbuild，feature 陷阱）, aginx-done, aginx-secret | /usr/bin（N5② 吸收重编） |
+| 本仓 target/musl | aginx-secretd | /usr/libexec/aginx/（N5② 吸收重编） |
 | 老仓 rootfs/src/*.c（zig cc） | cam-shot→aginx-cam-shot, nlscan→aginx-net-scan, wifi-join→aginx-net-join, reboot2→aginx-reboot | /usr/bin |
 | 老仓 out/voice, out/ocr | ag-asr→aginx-asr, ag-tts→aginx-tts, ag-ocr→aginx-ocr + 模型→/var/models | /var/bin |
 

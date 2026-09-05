@@ -27,10 +27,12 @@ dependencies = [
 ]
 
 [[package]]
-name = "agimg"
+name = "aginx-done"
 version = "0.1.0"
 dependencies = [
- "cc",
+ "agio",
+ "serde_json",
+ "testkit",
 ]
 
 [[package]]
@@ -38,6 +40,13 @@ name = "aginx-download"
 version = "0.1.0"
 dependencies = [
  "ureq",
+]
+
+[[package]]
+name = "aginx-img"
+version = "0.1.0"
+dependencies = [
+ "cc",
 ]
 
 [[package]]
@@ -62,6 +71,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "aginx-qr"
+version = "0.1.0"
+dependencies = [
+ "aginx-img",
+ "qrcodegen",
+ "quircs",
+]
+
+[[package]]
 name = "aginx-router"
 version = "0.1.0"
 dependencies = [
@@ -81,6 +99,19 @@ dependencies = [
  "serde_json",
  "thiserror 1.0.69",
  "tokio",
+]
+
+[[package]]
+name = "aginx-secret"
+version = "0.1.0"
+dependencies = [
+ "agio",
+ "hmac",
+ "libc",
+ "serde",
+ "serde_json",
+ "sha2",
+ "testkit",
 ]
 
 [[package]]
@@ -116,7 +147,7 @@ name = "aginx-term"
 version = "0.1.0"
 dependencies = [
  "ab_glyph",
- "agimg",
+ "aginx-img",
  "aginx-svc",
  "libc",
  "serde",
@@ -138,7 +169,7 @@ dependencies = [
 name = "aginx-voice"
 version = "0.1.0"
 dependencies = [
- "agqr",
+ "aginx-qr",
  "libc",
  "serde",
  "serde_json",
@@ -151,10 +182,6 @@ version = "0.1.0"
 dependencies = [
  "serde_json",
 ]
-
-[[package]]
-name = "agqr"
-version = "0.1.0"
 
 [[package]]
 name = "arrayvec"
@@ -178,6 +205,12 @@ name = "atomic-waker"
 version = "1.1.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1505bd5d3d116872e7271a6d4e16d81d0c8570876c8de68093a09ac269d8aac0"
+
+[[package]]
+name = "autocfg"
+version = "1.5.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f2032f911046de80f0a198e0901378627c33f59ea0ac00e363d481118bd70a53"
 
 [[package]]
 name = "base64"
@@ -336,6 +369,7 @@ checksum = "9ed9a281f7bc9b7576e61468ba615a66a5c8cfdff42420a70aa82701a3b1e292"
 dependencies = [
  "block-buffer",
  "crypto-common",
+ "subtle",
 ]
 
 [[package]]
@@ -495,6 +529,15 @@ name = "hashbrown"
 version = "0.17.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ed5909b6e89a2db4456e54cd5f673791d7eca6732202bbf2a9cc504fe2f9b84a"
+
+[[package]]
+name = "hmac"
+version = "0.12.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6c49c37c09c17a53d937dfbb742eb3a961d65a994e6bcdcf37e7399d0cc8ab5e"
+dependencies = [
+ "digest",
+]
 
 [[package]]
 name = "http"
@@ -788,6 +831,26 @@ dependencies = [
 ]
 
 [[package]]
+name = "num-derive"
+version = "0.4.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ed3955f1a9c7c0c15e092f9c887db08b1fc683305fdf6eb6684f22555355e202"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 2.0.119",
+]
+
+[[package]]
+name = "num-traits"
+version = "0.2.19"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "071dfc062690e90b734c0b2273ce72ad0ffa95f0c74596bc250dcfd960262841"
+dependencies = [
+ "autocfg",
+]
+
+[[package]]
 name = "once_cell"
 version = "1.21.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -866,6 +929,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "qrcodegen"
+version = "1.8.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4339fc7a1021c9c1621d87f5e3505f2805c8c105420ba2f2a4df86814590c142"
+
+[[package]]
 name = "quinn"
 version = "0.11.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -919,6 +988,17 @@ dependencies = [
  "socket2",
  "tracing",
  "windows-sys 0.61.2",
+]
+
+[[package]]
+name = "quircs"
+version = "0.10.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d71dee9e56835add6f9c26227e6c690b19eda9414f5affc666c3ec833ba140dc"
+dependencies = [
+ "num-derive",
+ "num-traits",
+ "thiserror 2.0.20",
 ]
 
 [[package]]

@@ -15,7 +15,7 @@ serde_json = "1"
 ureq = { version = "3", default-features = false, features = ["rustls"] }
 libc = "0.2"
 # M42b: WIFI: 码载荷解析。default-features=false——只拿纯字符串解析，
-# 不把 quircs/agimg 拉进 voiced（解码在独立 agqr 进程里做）。
-agqr = { path = "../agqr", default-features = false }
+# 不把 quircs/aginx-img 拉进 aginx-voice（解码在独立 aginx-qr 进程里做）。
+aginx-qr = { path = "../qr", default-features = false }
 
 [dev-dependencies]

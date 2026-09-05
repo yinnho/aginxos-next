@@ -1,0 +1,23 @@
+[package]
+name = "aginx-done"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+# aginx-done (M27 agdone, N5② 吸收改姓) — provision 的 done 标记纪律。
+# 一次性引导步骤只有成功才留痕：失败不写标记、下次开机自然重试；坏
+# 标记（非常规文件）当不存在。态落 /var/lib/aginx/done/<name>，随
+# aginx-update 的 state tar 存活换机。AGINX_DONE_DIR env override 供测试
+# 与 adb 开发环。
+[dependencies]
+serde_json = { workspace = true }
+agio = { path = "../agio" }
+
+[[bin]]
+name = "aginx-done"
+path = "src/main.rs"
+
+[dev-dependencies]
+testkit = { path = "../testkit" }

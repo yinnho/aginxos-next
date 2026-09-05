@@ -1,6 +1,6 @@
 // Wi-Fi setup wizard (M10 UI half; N4③ 搬入新仓改姓 aginx-net-wizard).
 //
-// Runs as a TUI inside aterm's pty (launcher auto-starts it when
+// Runs as a TUI inside aginx-term's pty (launcher auto-starts it when
 // /etc/wifi.conf is missing, and it keeps a "WIFI SETUP" button for
 // re-config). Flow: aginx-net-scan -> numbered AP list -> password prompt ->
 // write /etc/wifi.conf (0600) -> run net-bringup in the foreground so the
