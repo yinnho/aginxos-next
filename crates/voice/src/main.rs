@@ -35,6 +35,10 @@ const TIMEOUT_SECS: u64 = 45; // 提示后无语音的退出时限
 const JOIN_BUDGET_SECS: u32 = 90;
 /// 母体一轮（真 brain，含工具往返）的等待预算——超了杀掉落地板话。
 const FRONT_BUDGET_SECS: u32 = 90;
+/// 眼取景一帧的预算（cam-shot 3 帧曝光收敛；解码 <300ms 在拍侧已覆盖）。
+const EYE_FRAME_BUDGET_SECS: u32 = 15;
+/// 取景总时长上限：超时闭眼（人对准之前机器不催，但也不能永远开着镜头）。
+const EYE_VIEW_SECS: u64 = 30;
 
 /// 前台模式开关：VOICED_FRONT=新前台路由器路径（aginx）→ 开。
 /// 只认这个 env，不猜 PATH——试跑期路由器在隔离树里，路径是显式合同。
@@ -72,7 +76,7 @@ fn main() {
         Some("--inject") => {
             let text = args.get(2).expect("usage: aginx-voice --inject <text>").clone();
             let mut vm = make_vm();
-            face::write(&vm, false, false);
+            face::write(&vm, false, false, false);
             let outs = vm.step(Ev::Heard(text));
             run_outs(&mut vm, outs, None);
         }
@@ -82,7 +86,7 @@ fn main() {
             // ——相机/TTS 落完才读下一行，喂两行也能按序走完。
             let brain = audio::Brain::from_env();
             let mut vm = make_vm();
-            face::write(&vm, false, false);
+            face::write(&vm, false, false, false);
             let mut line = String::new();
             loop {
                 line.clear();
@@ -115,7 +119,7 @@ fn daemon() {
     if ptt.is_none() {
         eprintln!("aginx-voice: no {} — PTT dead, face only", ptt::PTT_DEV);
     }
-    face::write(&vm, false, false);
+    face::write(&vm, false, false, false);
     eprintln!(
         "aginx-voice: up (local={}, brain={}, ptt={})",
         audio::local_voice_ready(),
@@ -134,6 +138,10 @@ fn daemon() {
     let mut deadline: Option<Instant> = None;
     // 音量下键按下时刻：短按(<300ms)=音量−10、长按=PTT（M42e 产品面）
     let mut ptt_down: Option<Instant> = None;
+    // 眼取景（M42g）：Some(开始时刻) = 取景中。音量+开/再按关，音量下关。
+    // 取景循环本身就是重试阶梯：逐帧拍→上屏→逐帧解，命中 WIFI: 码直接连
+    // （扫码即指令，拉式——机器开着取景等的就是这个格式）。
+    let mut eye: Option<Instant> = None;
 
     loop {
         // ---- PTT ----
@@ -141,13 +149,20 @@ fn daemon() {
             for ev in p.wait(200) {
                 match ev {
                     ptt::PttEv::Down => {
+                        // 取景中音量下 = 闭眼（吞掉本次按压周期：不开采集，
+                        // 后续 Up 因 ptt_down 为空自然空走）
+                        if eye.take().is_some() {
+                            let _ = vm.inject_say("取景已关。");
+                            face::write(&vm, false, false, false);
+                            continue;
+                        }
                         ptt_down = Some(Instant::now());
                         if capturing.is_none() {
                             match audio::capture_start() {
                                 Ok(c) => {
                                     capturing = Some(c);
                                     deadline = None; // 采集中不计时
-                                    face::write(&vm, true, false);
+                                    face::write(&vm, true, false, false);
                                 }
                                 Err(e) => eprintln!("aginx-voice: cap start {e}"),
                             }
@@ -163,7 +178,7 @@ fn daemon() {
                                 let _ = c.kill();
                                 let _ = c.wait();
                             }
-                            face::write(&vm, false, false);
+                            face::write(&vm, false, false, false);
                             let v = audio::adjust_vol(-10);
                             eprintln!("aginx-voice: vol {v}");
                             say(&format!("音量{v}"), brain.as_ref());
@@ -177,7 +192,7 @@ fn daemon() {
                             let _ = c.kill();
                             let _ = c.wait();
                             if let Some(wav) = audio::capture_take() {
-                                face::write(&vm, false, true);
+                                face::write(&vm, false, true, false);
                                 match hear(&wav, brain.as_ref()) {
                                     Ok(text) => {
                                         eprintln!("aginx-voice: heard {text:?}");
@@ -191,27 +206,56 @@ fn daemon() {
                                         // 挂了多半网络不通，TTS 也挂；只刷屏
                                         for o in outs {
                                             if o == Out::Show {
-                                                face::write(&vm, false, false);
+                                                face::write(&vm, false, false, false);
                                             }
                                         }
                                     }
                                 }
                             } else {
                                 // 误触（<0.1s）
-                                face::write(&vm, false, false);
+                                face::write(&vm, false, false, false);
                             }
-                            face::write(&vm, false, false);
+                            face::write(&vm, false, false, false);
                         }
                     }
                     ptt::PttEv::VolUp => {
-                        let v = audio::adjust_vol(10);
-                        eprintln!("aginx-voice: vol {v}");
-                        say(&format!("音量{v}"), brain.as_ref());
+                        // M42g：音量+ = 眼。再按=闭眼。音量+10 的老义退役
+                        //（音量下短按仍减；一屏一键一义，加音量走语音）。
+                        if eye.take().is_some() {
+                            let _ = vm.inject_say("取景已关。");
+                        } else {
+                            eye = Some(Instant::now());
+                            let _ = vm.inject_say("取景中，对准码。");
+                        }
+                        face::write(&vm, false, false, eye.is_some());
                     }
                 }
             }
         } else {
             std::thread::sleep(Duration::from_millis(200));
+        }
+
+        // ---- 眼取景（M42g：一帧一拍，取景循环即重试阶梯）----
+        if let Some(since) = eye {
+            if capturing.is_some() {
+                // 罕见赛跑：PTT 采集优先，取景帧这轮让路
+            } else if since.elapsed() >= Duration::from_secs(EYE_VIEW_SECS) {
+                eye = None;
+                let _ = vm.inject_say("没拍到码，再按音量上重试。");
+                face::write(&vm, false, false, false);
+            } else {
+                match eye_round() {
+                    Ok(payloads) if !payloads.is_empty() => {
+                        eye = None;
+                        face::write(&vm, false, false, false);
+                        // 命中即自动走：WIFI: 码直接连、文本码念前 40 字
+                        let outs = vm.step(Ev::QrDone(Ok(payloads)));
+                        run_outs(&mut vm, outs, brain.as_ref());
+                    }
+                    Err(e) => eprintln!("aginx-voice: eye {e}"), // 冷启动废片等，下一轮
+                    Ok(_) => {}
+                }
+            }
         }
 
         // ---- 超时 ----
@@ -269,13 +313,13 @@ fn run_outs(vm: &mut Vm, outs: Vec<Out>, brain: Option<&audio::Brain>) {
         match o {
             Out::Say(_) => {}
             Out::Speak(s) => {
-                face::write(vm, false, true);
+                face::write(vm, false, true, false);
                 say(&s, brain);
             }
             Out::Show => {}
             Out::Act(a) => match a {
                 Act::Scan => {
-                    face::write(vm, false, true);
+                    face::write(vm, false, true, false);
                     match scan_ssids() {
                         Ok(list) => followups.push(Ev::ScanDone(list)),
                         Err(e) => {
@@ -285,11 +329,11 @@ fn run_outs(vm: &mut Vm, outs: Vec<Out>, brain: Option<&audio::Brain>) {
                     }
                 }
                 Act::Join { ssid, psk } => {
-                    face::write(vm, false, true);
+                    face::write(vm, false, true, false);
                     followups.push(Ev::JoinDone(join_wifi(&ssid, &psk)));
                 }
                 Act::QrScan => {
-                    face::write(vm, false, true);
+                    face::write(vm, false, true, false);
                     let r = scan_qr();
                     if let Err(e) = &r {
                         eprintln!("aginx-voice: qr {e}");
@@ -297,7 +341,7 @@ fn run_outs(vm: &mut Vm, outs: Vec<Out>, brain: Option<&audio::Brain>) {
                     followups.push(Ev::QrDone(r));
                 }
                 Act::Ocr => {
-                    face::write(vm, false, true);
+                    face::write(vm, false, true, false);
                     let r = read_text();
                     if let Err(e) = &r {
                         eprintln!("aginx-voice: ocr {e}");
@@ -311,7 +355,7 @@ fn run_outs(vm: &mut Vm, outs: Vec<Out>, brain: Option<&audio::Brain>) {
                     }
                 }
                 Act::Chat(text) => {
-                    face::write(vm, false, true);
+                    face::write(vm, false, true, false);
                     let reply = match chat_front(&text) {
                         Ok(r) => r,
                         Err(e) => {
@@ -326,7 +370,7 @@ fn run_outs(vm: &mut Vm, outs: Vec<Out>, brain: Option<&audio::Brain>) {
             },
         }
     }
-    face::write(vm, false, false);
+    face::write(vm, false, false, false);
     for ev in followups {
         let outs = vm.step(ev);
         run_outs(vm, outs, brain);
@@ -494,6 +538,45 @@ fn scan_qr() -> Result<Vec<String>, String> {
         }
     }
     Err(last_err)
+}
+
+/// 眼取景一帧（M42g）：拍一张**彩色** JPEG 上屏（成果区给人看；解码内部
+/// 自转 luma，灰彩对 QR 等价），再解码。单轮失败（冷启动 IOMMU 间歇
+/// rc!=0 / 没码）直接返回——取景循环本身就是重试阶梯，不内置 scan_qr
+/// 的 4 轮档，每轮都有新帧上屏。
+fn eye_round() -> Result<Vec<String>, String> {
+    let tmp = format!("{}.tmp", face::EYE_JPG);
+    let mut child = Command::new("/usr/bin/aginx-cam-shot")
+        .args(["--stream", "--rear", "--frames", "3", "--jpeg"])
+        .arg("--jpeg-out")
+        .arg(&tmp)
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .map_err(|e| format!("cam-shot spawn: {e}"))?;
+    audio::wait_limited(&mut child, EYE_FRAME_BUDGET_SECS)
+        .map_err(|e| format!("cam-shot {e}"))?;
+    if !child.wait().map(|s| s.success()).unwrap_or(false) {
+        return Err("cam-shot rc!=0".into());
+    }
+    // 先上屏再解码：人先看到画面，解码是机器的事。rename 原子换帧，
+    // term 轮询 mtime 重渲染。
+    let _ = std::fs::rename(&tmp, face::EYE_JPG);
+    let out = Command::new("/usr/bin/aginx-qr")
+        .arg(face::EYE_JPG)
+        .output()
+        .map_err(|e| format!("aginx-qr spawn: {e}"))?;
+    if !out.status.success() {
+        return Err("aginx-qr rc!=0".into()); // exit 1 = 没码，取景下一轮
+    }
+    let payloads = String::from_utf8_lossy(&out.stdout)
+        .lines()
+        .map(str::to_string)
+        .collect::<Vec<_>>();
+    if payloads.is_empty() {
+        return Err("没找到二维码".into());
+    }
+    Ok(payloads)
 }
 
 /// 拍照念字（M45 眼分支）。同 QR 的冷启动废片收据：默认曝光两轮，末轮
