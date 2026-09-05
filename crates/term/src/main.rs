@@ -61,6 +61,11 @@ const IDLE_BLANK: Duration = Duration::from_secs(60);
 // M42a voice face: sole writer is the aginx-voice daemon (atomic tmp+rename);
 // aginx-term only polls mtime and renders. Display-only modality.
 const VOICE_FACE: &str = "/run/aginx-voice/face";
+// M42g eye viewfinder frame: same writer, same atomic rename, same poll
+// pattern. When face.eye is set this is the view's main area — the screen
+// is the result canvas, not a chat log, so the live frame takes the body
+// and dialog lines demote to a bottom strip.
+const VOICE_EYE: &str = "/run/aginx-voice/eye.jpg";
 
 fn fill_rect(pix: &mut [u32], pitch: usize, w: usize, h: usize, x: i32, y: i32, rw: i32, rh: i32, c: u32) {
     let (mut x, mut y, mut rw, mut rh) = (x, y, rw, rh);
@@ -430,6 +435,11 @@ struct FaceDoc {
     #[serde(default)]
     busy: bool,
     #[serde(default)]
+    /// M42g: viewfinder on — main area renders eye.jpg, lines demote to a
+    /// bottom strip. Defaults false so face docs from an older aginx-voice
+    /// still render as before.
+    eye: bool,
+    #[serde(default)]
     lines: Vec<(bool, String)>,
     #[serde(default)]
     list: Vec<String>,
@@ -446,6 +456,12 @@ struct VoiceView {
     doc: FaceDoc,
     mtime: Option<std::time::SystemTime>,
     alive: bool,
+    /// M42g viewfinder frame cache. `poll_eye` gates on eye.jpg mtime; the
+    /// decode itself blocks the event loop for a frame the same way the
+    /// photo viewer does (DCT-scaled to the box, ~tens of ms; frames land
+    /// at roughly one per second of cam-shot round).
+    eye_mtime: Option<std::time::SystemTime>,
+    eye_img: Option<aginx_img::Bitmap>,
 }
 
 impl VoiceView {
@@ -479,6 +495,33 @@ impl VoiceView {
                 true
             }
         }
+    }
+
+    /// M42g: poll the viewfinder frame. eye=false → drop the cached bitmap
+    /// (one repaint so the dialog view comes back clean); eye=true → stat
+    /// eye.jpg and decode on mtime change. Returns true when a repaint is
+    /// due. A decode failure keeps the previous frame — voice writes by
+    /// atomic rename, so a whole file that won't decode won't decode again
+    /// for the same mtime; the next frame is a new round anyway.
+    fn poll_eye(&mut self, max_w: u32, max_h: u32) -> bool {
+        if !self.doc.eye {
+            self.eye_mtime = None;
+            return self.eye_img.take().is_some();
+        }
+        let mtime = std::fs::metadata(VOICE_EYE)
+            .and_then(|m| m.modified())
+            .ok();
+        if mtime.is_none() || mtime == self.eye_mtime {
+            return false;
+        }
+        self.eye_mtime = mtime;
+        if let Ok(bytes) = std::fs::read(VOICE_EYE) {
+            if let Some(b) = aginx_img::decode_scaled(&bytes, max_w, max_h) {
+                self.eye_img = Some(b);
+                return true;
+            }
+        }
+        false
     }
 }
 
@@ -631,6 +674,10 @@ impl<'a> Render<'a> {
     /// lines green, user lines white (prefixed ">"), selected SSID white,
     /// psk shown verbatim (read-back confirmation needs to be visible).
     /// No touch targets below the BACK toolbar: the screen is a display.
+    ///
+    /// M42g eye=true: the screen is the result canvas, not a chat log — the
+    /// live viewfinder frame takes the body, dialog lines demote to a
+    /// bottom strip (scale 2), and the hint explains the eye keys.
     fn voice(&self, pix: &mut [u32], v: &VoiceView, g: &launch::Geom) {
         fill_rect(pix, self.pitch, self.w, self.h, 0, 0, self.w as i32, self.h as i32, BG);
         self.toolbar(pix, g.m, g.toolbar_h);
@@ -645,6 +692,44 @@ impl<'a> Render<'a> {
             draw_centered(pix, self.pitch, self.w, self.h, self.font, g.toolbar_h as i32 + 90, "正在听", 4, WHITE);
         } else if d.busy {
             draw_centered(pix, self.pitch, self.w, self.h, self.font, g.toolbar_h as i32 + 90, "处理中", 4, DIM);
+        }
+        // M42g 眼取景：成果区——取景帧占主区，人看着画面瞄准
+        if d.eye {
+            if let Some(b) = &v.eye_img {
+                let top = g.toolbar_h as i32 + 60;
+                let bot = g.kb_panel_y as i32 - 160; // 底部小字条 + hint 保留
+                if bot > top {
+                    let dx = ((self.w as i32 - b.w as i32) / 2).max(0);
+                    let dy = top + ((bot - top) - b.h as i32) / 2;
+                    for j in 0..b.h as usize {
+                        let py = dy + j as i32;
+                        if py < 0 || py >= self.h as i32 {
+                            continue;
+                        }
+                        for i in 0..b.w as usize {
+                            let px = dx + i as i32;
+                            if px < 0 || px >= self.w as i32 {
+                                continue;
+                            }
+                            pix[py as usize * self.pitch + px as usize] = b.pix[j * b.w as usize + i];
+                        }
+                    }
+                }
+            } else {
+                // 第一帧在路上（cam-shot 3 帧曝光要 ~2s）
+                draw_centered(pix, self.pitch, self.w, self.h, self.font, (self.h as i32 - 8 * 4) / 2, "取景中…", 4, GREEN);
+            }
+            // 对话行退居底部小字条：最近 2 行（成果区才是主角）
+            let mut y = g.kb_panel_y as i32 - 140;
+            for (is_user, line) in d.lines.iter().rev().take(2).rev() {
+                let (c, pfx) = if *is_user { (WHITE, ">") } else { (GREEN, "") };
+                let mut s = format!("{pfx}{line}");
+                clip_cols(&mut s, 64);
+                draw_text(pix, self.pitch, self.w, self.h, self.font, g.m as i32, y, &s, 2, c);
+                y += 40;
+            }
+            draw_centered(pix, self.pitch, self.w, self.h, self.font, g.kb_panel_y as i32 - 40, "对准码，音量+或音量下关闭取景", 3, UNAVAIL);
+            return;
         }
         // fresh boot, nothing said yet: the one big affordance
         if d.state == "idle" && d.lines.is_empty() && d.list.is_empty() {
@@ -1329,8 +1414,12 @@ fn main() {
                                             redraw = true;
                                         } else if entries[i2].voice {
                                             // force the first face read (mtime
-                                            // reset), then poll paints it
+                                            // reset), then poll paints it; the
+                                            // eye frame follows the same rule
+                                            // (M42g) so an open viewfinder
+                                            // paints its current frame at entry
                                             voice.mtime = None;
+                                            voice.eye_mtime = None;
                                             mode = Mode::Voice;
                                             redraw = true;
                                         } else if entries[i2].photos {
@@ -1631,13 +1720,19 @@ fn main() {
         // M42a voice face: poll while the dialog is on screen. A live
         // dialog counts as activity — the screen must not blank mid-flow
         // (a face write arrives exactly when the user starts talking).
-        if matches!(mode, Mode::Voice) && voice.poll() {
-            last_input = Instant::now();
-            if blanked {
-                blanked = false;
-                d.dpms(true);
+        // M42g: the viewfinder frame polls too — a frame landing ~1/s is
+        // activity; decode box is the body area under the toolbar.
+        if matches!(mode, Mode::Voice) {
+            let face = voice.poll();
+            let eye = voice.poll_eye(w as u32, (h - lg.toolbar_h) as u32);
+            if face || eye {
+                last_input = Instant::now();
+                if blanked {
+                    blanked = false;
+                    d.dpms(true);
+                }
+                redraw = true;
             }
-            redraw = true;
         }
 
         // blink toggle — repaint only the cursor's row
