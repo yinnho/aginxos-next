@@ -72,7 +72,8 @@ echo "==> zigbuild 新仓 musl 件（缓存则秒过）"
 (cd "${ROOT}" && cargo zigbuild --release --target aarch64-unknown-linux-musl \
   -p aginx-router -p aginx-server -p aginx-runtime -p aginx-voice \
   -p aginx-net-wizard -p aginx-term -p aginx-pkg -p aginx-svc \
-  -p aginx-download -p aginx-update -p aginx-done -p aginx-secret)
+  -p aginx-download -p aginx-update -p aginx-done -p aginx-secret \
+  -p aginx-gateway)
 
 # N5② feature-unification trap: aginx-voice depends aginx-qr with
 # default-features=false (it only links parse_wifi_payload). Selecting
@@ -343,6 +344,9 @@ install -m 755 "${TARGET}/aginx-download" "${TARGET}/aginx-update" "${TREE}/usr/
 install -m 755 "${TARGET}/aginx-qr" "${TARGET}/aginx-done" "${TARGET}/aginx-secret" \
   "${TREE}/usr/bin/"
 install -m 755 "${TARGET}/aginx-secretd" "${TREE}/usr/libexec/aginx/"
+# N5⑥ 网关：远端通道守护落 libexec（引擎的家）；id/secret 都不进镜像——
+# env_file 与 sidecar 在刷机日灌注（runbook 步 11）。
+install -m 755 "${TARGET}/aginx-gateway" "${TREE}/usr/libexec/aginx/"
 # Voice/OCR CLIs (bionic-static) + models. TTS: melo (vits-melo-tts-zh_en)
 # is the product mouth; the 170MB fp32 model.onnx is the real weights — the
 # tarball's model.int8.onnx is a 133B git-lfs pointer (release packaging

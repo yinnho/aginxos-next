@@ -8,13 +8,14 @@
 ## 目录内容
 
 - `etc/` — 静态系统配置。init.d 全套（rcS/net-bringup/provision/aginx-term-handoff/
-  app-registry/state-restore + 六个 bringup）、aginx/svc.d 五单元、
-  aginx/（env 明文环境、groups.desc 命令分组、secret.policy sidecar 放行表）、
-  apps.d 两 tile、crontabs（仅注释，文件在 crond 才有家）、agpkg.manifest
+  app-registry/state-restore/varlib-migrate + 六个 bringup）、aginx/svc.d 六单元、
+  aginx/（env 明文环境、gateway.toml 形状参数、groups.desc 命令分组、
+  secret.policy sidecar 放行表）、
+  apps.d 两 tile、crontabs（N5④：备份 now 定时行）、agpkg.manifest
   （N4 切净：8 条，删 aginx/aginx-carrier 两行，sig 由烤机脚本重签）。
 - `libexec/aginx/` — 守护的家（D13：libexec 不进路由器命令扫描）。net-watch/
-  net-rejoin 两个 sh 在此；aginx-svcd/aginx-server/aginx-runtime/aginx-secretd
-  由脚本落位。
+  net-rejoin 两个 sh 在此；aginx-svcd/aginx-server/aginx-runtime/aginx-secretd/
+  aginx-gateway 由脚本落位。
 - `usr/bin/` — **命令宇宙的元数据层**：15 个 `.aginxmd` sidecar（编译命令的
   门面说明，二进制由脚本落位改名后与 sidecar 同名相邻）+ 4 个 sh 面
   （aginx-web/file/mem = 桥到 provision 后的包二进制 agb/agf/agmem，
@@ -34,11 +35,13 @@
 | 本仓 target/musl | aginx-download, aginx-update | /usr/bin（N5① 吸收重编，修三死路径） |
 | 本仓 target/musl | aginx-qr（第二次独立 zigbuild，feature 陷阱）, aginx-done, aginx-secret | /usr/bin（N5② 吸收重编） |
 | 本仓 target/musl | aginx-secretd | /usr/libexec/aginx/（N5② 吸收重编） |
+| 本仓 target/musl | aginx-gateway | /usr/libexec/aginx/（N5⑤ 远端通道守护；id/secret 不进镜像，刷机日灌注） |
 | 老仓 rootfs/src/*.c（zig cc） | cam-shot→aginx-cam-shot, nlscan→aginx-net-scan, wifi-join→aginx-net-join, reboot2→aginx-reboot | /usr/bin |
 | 老仓 out/voice, out/ocr | ag-asr→aginx-asr, ag-tts→aginx-tts, ag-ocr→aginx-ocr + 模型→/var/models | /var/bin |
 
-不进镜像：老 `ag` 路由器、全部 `ag-*` 壳、carrier daemon、relay、ag-backup
-（#86 备份线归 N5）。/bin 内部件（splash、binder-init、qrtr-lookup、qmi-req、
+不进镜像：老 `ag` 路由器、全部 `ag-*` 壳、carrier daemon、老 relay/ag-backup（继任者
+已由本仓烤入：aginx-gateway N5⑤⑥、aginx-backup N5④）。/bin 内部件（splash、
+binder-init、qrtr-lookup、qmi-req、
 raw2jpg、snd-*、i2c-reg、bootcard、httpget、wdt、rtcal、fake-sm、dropbear、
 rmt_storage、busybox）**保原名**，照抄老仓脚本落 /bin。
 
