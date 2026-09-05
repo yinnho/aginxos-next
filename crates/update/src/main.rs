@@ -127,6 +127,14 @@ const STATE_OFF: u64 = 64 << 30;
 const STATE_MAGIC: &[u8; 8] = b"AGXSTATE";
 const STATE_MAX: u64 = 512 << 20;
 
+/// state tar 的 --exclude 集：state-restore 是整包 `tar -xf -C /`（overlay
+/// 语义——老成员盖掉新镜像同名件，镜像新增件幸存）。/etc/aginx 里 image-owned
+/// 的四件绝不能进 tar：2026-09-05 实测 N4 state tar 把 N5 烤的
+/// secret.policy/groups.desc 盖回老版，网关因此拿不到 relay.primary（secretd
+/// 每 5s 拒读）直到手工重推。busybox tar 的 --exclude 匹配存储名（无前导
+/// 斜杠）、flag 须在成员表前——设备实测 2026-09-05。
+const STATE_TAR_EXCLUDES: &str = "--exclude=etc/aginx/svc.d --exclude=etc/aginx/secret.policy --exclude=etc/aginx/gateway.toml --exclude=etc/aginx/groups.desc";
+
 fn swap_header(payload_len: u64, sha256_hex: &str, old_len: u64) -> Vec<u8> {
     let mut h = vec![0u8; SWAP_HDR as usize];
     h[..8].copy_from_slice(SWAP_MAGIC);
@@ -182,7 +190,7 @@ fn stage_state_tar() {
     let st = Command::new("/bin/sh")
         .arg("-c")
         .arg(format!(
-            "tar -cf {tar_path} /etc/wifi.conf /etc/aginx /home /root /var/log /var/power /var/lib 2>/dev/null"
+            "tar -cf {tar_path} {STATE_TAR_EXCLUDES} /etc/wifi.conf /etc/aginx /home /root /var/log /var/power /var/lib 2>/dev/null"
         ))
         .status()
         .unwrap_or_else(|e| die(&format!("spawn tar: {e}")));
@@ -751,6 +759,20 @@ mod tests {
         assert_eq!(STATE_MAX, 512u64 << 20);
         assert_eq!(SWAP_MAGIC, b"AGXROOT1");
         assert_eq!(STATE_MAGIC, b"AGXSTATE");
+    }
+
+    #[test]
+    fn state_tar_excludes_image_owned_etc_aginx_members() {
+        // 2026-09-05 收据：state-restore 整包 tar -xf，N4 state tar 把 N5 烤的
+        // policy/groups.desc 盖回老版（网关拿不到 relay.primary 直到重推）。
+        // 四件 image-owned：单元表/策略/网关形状/命令组表。
+        for image_owned in ["svc.d", "secret.policy", "gateway.toml", "groups.desc"] {
+            assert!(
+                STATE_TAR_EXCLUDES
+                    .contains(&format!("--exclude=etc/aginx/{image_owned}")),
+                "missing --exclude for {image_owned}"
+            );
+        }
     }
 
     #[test]

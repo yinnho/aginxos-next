@@ -9,7 +9,8 @@
 #   H 迁移  老根三处清 / migrate 日志 done / 七成员在 / stamps 存活 /
 #          done check / secret store 0600
 #   I 吸收  aginx-update status（slot+新戳+boot-ok=活证）/ aginx-qr 定数
-#          QR / aginx-secret set/list/rm 回路 / pkg ok
+#          QR / aginx-secret 回路（set/list/rm + get 对未放行 exe 拒读=
+#          policy 生证；值回读由 K 段网关腿证）/ pkg ok
 #   J 备份  now/list/verify 全绿 / crontab 定时行
 #   K 网关  六单元 ready / registered 日志 / 8443 ESTABLISHED（/proc/net/tcp，
 #          busybox netstat 禁用铁律）
@@ -103,7 +104,7 @@ expect_out "网关 id 键名在 /etc/aginx/env（只数行不回显）" '^1$'
 echo "==> H 迁移（/var/lib 归并到 /var/lib/aginx：老根清、七成员在、状态存活）"
 drv "test ! -e /var/lib/agpkg && test ! -e /var/lib/ag && test ! -e /var/lib/voiced"
 expect_rc  "老根三处不存在（agpkg/ag/voiced）"
-drv "grep -q 'varlib-migrate: done' /var/varlib-migrate.log"
+drv "grep -q ' done\$' /var/varlib-migrate.log"
 expect_rc  "迁移日志有 done 行"
 drv "ls /var/lib/aginx/skills /var/lib/aginx/units /var/lib/aginx/stamps /var/lib/aginx/pkgfiles /var/lib/aginx/done /var/lib/aginx/secret /var/lib/aginx/voice"
 expect_rc  "七成员齐（busybox tar 缺成员=致命，bake #9 收据）"
@@ -129,7 +130,7 @@ expect_rc  "secret set（stdin 灌注）rc=0"
 drv "/usr/bin/aginx-secret list"
 expect_out "secret list 见探针 scope"          "$N5_SCOPE"
 drv "printf x | /usr/bin/aginx-secret get $N5_SCOPE"
-expect_out "secret get 回读探针值"             'n5-probe-value'
+expect_out "get 对未放行 exe 拒读（policy 生证；回读经网关腿由 K 段证）" '"code":"denied"'
 drv "printf x | /usr/bin/aginx-secret rm $N5_SCOPE"
 expect_rc  "secret rm rc=0"
 drv "grep -q '^pkg ok' /run/boot.state"
@@ -140,8 +141,8 @@ drv "/usr/bin/aginx-backup now"
 expect_rc  "backup now rc=0"
 drv "/usr/bin/aginx-backup list"
 expect_rc  "backup list rc=0"
-expect_out "list 见新快照"                     'backup-[0-9]\{8\}T[0-9]\{6\}'
-BAK="$(printf '%s' "${DRV_OUT:-}" | sed -n 's/.*\(backup-[0-9T]*\.tar\.gz\).*/\1/p' | tail -1)"
+expect_out "list 见新快照"                     'backup-[0-9]{8}-[0-9]{6}'
+BAK="$(printf '%s' "${DRV_OUT:-}" | sed -n 's/.*\(backup-[0-9-]*\.tar\.gz\).*/\1/p' | tail -1)"
 drv "/usr/bin/aginx-backup verify /var/backups/aginx/$BAK"
 expect_rc  "backup verify rc=0（含 secret 剔除断言）"
 drv "grep -q 'aginx-backup now' /etc/crontabs/root"
