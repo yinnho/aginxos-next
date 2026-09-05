@@ -1,0 +1,23 @@
+[package]
+name = "aginx-update"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+# aginx-update (M14/M21/M22 agupd, N5① 吸收修死路径) — the A/B
+# self-updater: signed manifest gate, partition writes, rootfs-swap
+# staging on userdata. Deliberately dependency-starved: serde for the
+# manifest, libc for pwrite/statfs, and the shared ed25519 verify from
+# aginx-sign (same key pair as the package chain). No tokio, no ureq —
+# HTTPS fetches shell out to aginx-download.
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+libc = { workspace = true }
+aginx-sign = { path = "../sign" }
+
+[[bin]]
+name = "aginx-update"
+path = "src/main.rs"

@@ -1,0 +1,18 @@
+[package]
+name = "aginx-download"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+# aginx-download (M10 agdl, N5① 吸收改姓) — the phone's only TLS fetcher:
+# ureq+rustls, streams to <out>.part and renames on completion. Consumed by
+# aginx-pkg (mirror pulls) and aginx-update (https manifests). ureq3 only,
+# zero in-repo deps.
+[dependencies]
+ureq = { version = "3", default-features = false, features = ["rustls"] }
+
+[[bin]]
+name = "aginx-download"
+path = "src/main.rs"

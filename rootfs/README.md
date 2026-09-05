@@ -31,7 +31,8 @@
 | 本仓 target/musl | aginx-voice, aginx-net-wizard, aginx-term, aginx-pkg, aginx-svc, aginx-boot-ok | /usr/bin |
 | 本仓 target/musl | aginx-svcd | /usr/libexec/aginx/ |
 | 老仓 target/musl | aginxos-init, aginxos-agent | /aginxos/（trampoline） |
-| 老仓 target/musl | agdl→aginx-download, agupd→aginx-update, agqr→aginx-qr, agdone→aginx-done, agsecret→aginx-secret | /usr/bin（改名即落） |
+| 本仓 target/musl | aginx-download, aginx-update | /usr/bin（N5① 吸收重编，修三死路径） |
+| 老仓 target/musl | agqr→aginx-qr, agdone→aginx-done, agsecret→aginx-secret | /usr/bin（改名即落） |
 | 老仓 target/musl | agsecretd→aginx-secretd | /usr/libexec/aginx/ |
 | 老仓 rootfs/src/*.c（zig cc） | cam-shot→aginx-cam-shot, nlscan→aginx-net-scan, wifi-join→aginx-net-join, reboot2→aginx-reboot | /usr/bin |
 | 老仓 out/voice, out/ocr | ag-asr→aginx-asr, ag-tts→aginx-tts, ag-ocr→aginx-ocr + 模型→/var/models | /var/bin |
