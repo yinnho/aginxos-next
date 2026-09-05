@@ -242,3 +242,90 @@ New args: `--bl N` `--gamma E` `--rot 0|90|270`. Device receipts:
   receipt lands with M47⑤.
 - host: `check.sh` all green incl. new campix gate
   (luts/extract/wb/debayer-rot-scale/crop).
+
+## M47③ — AEC live: op7 per-frame exposure rides the ring (2026-09-05, observed)
+
+`sensor_update()` (op_code 7 + 7 I2C writes, the sensor_nop family)
+carries CIT/gain/dgain per queued request; the ladder state machine
+drives linear-domain yavg at ~50 with one rung per 2 frames, damping
+included. `aec.state` persists across launches (stale >10 min or wrong
+slot -> discard); bracket mode (`--frames 3 --aec`) pre-sets gain
+1x/4x/16x and picks the frame nearest target. Device receipts:
+heartbeat line `(rung N trim X yavg Y)` tracks scene changes rung by
+rung; covered-lens floor holds yavg 3.1 at the top rung without
+oscillation.
+
+## M47⑤g/h — Google's own CCMs + two desats land the color (2026-09-05, observed)
+
+CCMs extracted from the device's own vendor image (redfin U1B2 factory
+`/lib64/camera/com.google.ghawb.tuning.imx363.so`, float32 scan, rows
+sum 1.0 — TL84 green row 0.983 deliberate): D65/TL84/INC picked from
+the gray-world WB via warmth = wb_b/wb_r, piecewise. Around them:
+
+- **WB table clamp 1020 under a CCM** (legacy 255 bit-exact): a
+  per-channel clamp before the matrix destroys the ratio the matrix
+  needs.
+- **highlight desat** symmetric 255/max: a bare per-channel clamp on
+  wb b=1.5 leaves (71,109,255) — visibly greener than the correct
+  (59,91,255). Hue survives, highlights wash toward white.
+- **shadow desat** (knee 20, CCM mode only): the Google matrices'
+  -0.49 G cross-terms drive the R row negative on G-dominant shadow
+  noise; measured darks G-R +13 -> +23 the moment a CCM turned on
+  before this fix. Blends toward the pixel's own luma — blacks stay
+  black.
+- **emissive soft-weight 0.5** in cp_wb_measure: a green-terminal
+  monitor as the room's only source dragged global means until white
+  cables rendered sage (cable sensor (85,108,53), midtones 14% green);
+  HARD exclusion of quads >=200 overshot to magenta (screen band
+  G-R -49). Half-weight lands between emitter and reflector points,
+  no region more than ~10 off neutral — what a phone renders in a
+  monitor-lit room.
+
+Host gates pin all of it: campix_test hand-values for every matrix
+path, and the differential harness (git-HEAD vs current, 5000 trials)
+holds bit-exact in the legacy ccm==NULL path.
+
+## M47⑤i — placement + cpufreq: the fps regression root-caused and closed (2026-09-05, observed)
+
+Burn probe `/data/local/tmp/thprobe2` (1e9-iter pinned register burn,
+idle machine):
+
+- **scaling_max_freq is silently clamped and boot-baked**: writes
+  return rc=0 but read back capped (A55 policy 1.363 GHz vs cpuinfo
+  1.805; cpu6 1.478 vs 2.208; cpu7 1.766 vs 2.4). No LMh IRQ, no
+  cmdline cap, no userspace writer, no recovery after 9 min idle.
+  Uncapping is impossible; the attempt was deleted.
+- **scaling_min_freq writes stick** (readback-verified, restored on
+  teardown; SIGKILL leaks until reboot).
+- **Core classes under the caps**: cpu0 (A55) 1.47 s, cpu6 0.68 s,
+  cpu7 (prime) 0.57 s. A 4-thread A55 fan-out runs SLOWER than one
+  A55 alone (2.21 s — little-cluster derate). Floating single thread
+  1.13 s. Dual-big bimodal: 0.68 s at full capped freq (sampled
+  1478400/1766400 mid-burn) or ~1.35 s (transient droop).
+- **THE decisive probe, run DURING streaming**: cpu6 held 0.68 s
+  (full speed, unchanged) while cpu7 ran 1.13 s = exactly 2x — and
+  /proc/stat showed cpu7 100% non-idle from the chain itself. The
+  prime degrades under sustained streaming load (current limit at
+  1.766 GHz); cpu6 never does.
+- Camera IRQs (cpas-cdm, csid-lite, ife-lite, msm_drm) all land on
+  cpu0.
+
+Streaming config matrix (fps / extract / debayer ms, same scene):
+
+| config | fps | extract | debayer |
+|---|---|---|---|
+| floating threads (regression) | 24.6 | 8.7 | 21.7 |
+| pin mask{6,7} + floors + th2 | 35.4 | 3.7 | 17.4 |
+| + cache-blocked rotated walk | 35.7-36.4 | 3.7 | 16.7 |
+| explicit pins th2 (main7/worker6) | 22.9 | 6.4 | 30.2 |
+| explicit pins th1 (main7) | 25.0 | 6.0 | 27.0 |
+| **mask{6,7}, unpinned threads, th2 (SHIPPED)** | **36.4-36.8** | **3.7** | **16.7** |
+
+Conclusion, now in code comments: the process pins to the {cpu6,cpu7}
+MASK with threads left unpinned — the scheduler routes around the
+intermittently-drooping prime in real time; every FIXED assignment
+measured 27-30 ms debayer. Don't re-add per-thread pins. The
+cache-blocked rotated walk (CP_ROT_GROUP=8 staging) is bit-exact
+(campix_test + differential harness) and perf-neutral — kept, it is
+structurally right for L1. Debayer is compute-bound (~42 cyc/px), not
+memory-bound.
