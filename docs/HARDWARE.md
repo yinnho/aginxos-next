@@ -329,3 +329,91 @@ cache-blocked rotated walk (CP_ROT_GROUP=8 staging) is bit-exact
 (campix_test + differential harness) and perf-neutral — kept, it is
 structurally right for L1. Debayer is compute-bound (~42 cyc/px), not
 memory-bound.
+
+## M47⑤k — preview look (NR/tone/sat/sharpen) shipped + perf closed (2026-09-05/06, observed)
+
+Three ports, all credited in campix.h, all host-pinned by campix_test:
+- **hqdn3d** (ffmpeg vf_hqdn3d, GPL-2.0+): temporal-default ls0/lt12,
+  banded == whole-plane bit-exact; spatial off (line_ant chains rows —
+  cannot band, costs too much single-threaded).
+- **contrast stretch** (RPi rpi/contrast.cpp, BSD-2): quantile knots
+  q01/median-pinned/q95, mapped through gamma — drops in as the display
+  LUT, zero per-pixel cost.
+- **saturation + sharpen** (RPi semantics): sat Q8 294; sharpen
+  3x3-unsharp threshold/strength/limit with row-band parallelism.
+
+Perf campaign (same dark scene, yavg 6-9, AEC rung 0, th2 mask{6,7}):
+
+| config | fps | post-pass ms |
+|---|---|---|
+| look full (NR+tone+sat+sharpen live) | 12.9 | 29 |
+| **look live (NR+tone+sat; sharpen stills-only)** | **26.2-27.4** | **5.4-5.9** |
+| look off | 35.0-35.8 | ~0 |
+| -O3 -mcpu=cortex_a76 | 26.2 (no gain, reverted) | — |
+
+Chain at 26.2 fps: extract 3.7 / wb 4.0 / debayer 21.6 / post 5.5 /
+raw 1.3 / enc 7.8 (amortized x2/30 frames).
+
+Laws discovered on device:
+- **Sharpen is stills-only.** The live 565 frame gets a 1.5x
+  nearest-neighbor upscale in term — sharpening BEFORE that upscale is
+  half-eaten by the stretch, and its ~8.3 ms/frame scalar cost was 40%
+  of the chain budget. JPEG stills keep the full look (sharpen folds
+  into their band walk). Live rides NR+tone+sat.
+- **The post pass is compute-bound scalar uop count** (stride-3
+  interleaved walks + LUT gathers); -O3/A76 tuning bought zero — LLVM
+  won't vectorize these loops. Static grow-only plane caches killed the
+  musl mallocng per-frame mmap churn (look-off 24.3 -> 35.4 fps).
+- **th4/A55 killed by arithmetic**: even row-split makes A55 spans the
+  critical path (regression); weighted split gains nothing (both A76
+  saturated). SM7250 is 1+1+6 (cpu0-5 all A55 max 1804800 — probed),
+  not 2+2+4 — only 2 big cores exist.
+- **The parser segfault that ate a night**: unknown flags silently
+  became `only_slot = atoi(flag-arg)` — a `--vf-frames 3` typo fed
+  slots[3] and crashed the stream banner's first deref. Not a code bug
+  in the optimization; the parser now errors on typo'd flags (strict
+  bare-digit tail).
+
+Visual A/B (same scene JPEGs, look-on 381832 B vs look-off 255619 B,
+vision-model judged): look-on has NO green/magenta cast (⑤j chain
+holding), look-off shadows show green/magenta speckle; look-on residual
+noise gets amplified by sharpen's fixed threshold 4 (a bright-light
+value — RPi's noiseFactor threshold scaling is the known follow-up if
+the user flags dark-scene grain; deferred for the user's daylight
+judgment first).
+
+## M42c step 1 — command-first protocol + one-glance pair bootstrapping (2026-09-06, observed)
+
+The 2026-09-05 product law killed the scan→ordinal→spell-password→confirm
+flow. First step landed on device today (dev push; bake #19 pending —
+`/usr/bin/aginx-voice` and `/usr/bin/aginx-term` are ahead of the image,
+aginx-voice restarted onto the new protocol, six units ready after).
+
+What is on the device now:
+- **Protocol**: single idle state (no dwell states). 「连网」 = check wlan0
+  IP first → try remembered wifi.conf → only then open the eye for a code.
+  Pair codes (AGINXPAIR1, superset of WIFI:) beat WIFI: codes; both
+  auto-act (pull-style, no readback). 取消 closes the viewfinder
+  (Act::EyeClose); the eye itself (Act::Eye) is protocol-born now —
+  NetState::ConfFail/NoConf opens it without asking.
+- **PairApply chain** (daemon): join_wifi → identity 3-key merge into
+  /etc/aginx/env (0600 tmp+rename, HOME preserved, svc re-reads on spawn)
+  → quick clock (ntpd 2×10s alternating, `date +%Y≥2026` gate, non-fatal)
+  → `aginx-svc restart aginx-gateway` + `aginx-server` with ready re-check
+  (failed/breaker units restartable, M42e receipt). aginx-voice is never
+  restarted by itself (self-kill).
+- **Minting tool** (host-only, crates/pair): `aginx-pair` emits JPEG (the
+  device `aginx-qr` only decodes JPEG — PNG would have been dead on
+  arrival), tests round-trip through the device decode chain.
+
+Suite `scripts/accept/m42c.sh`: **15/15 PASS** on the in-service device —
+fixture pair minted on host (stdout echoes none of the five fields), pushed,
+device aginx-qr decoded the exact five-segment payload back; `--inject 你好/
+状态/连网` all answer from the new protocol on a connected device (连网
+returns 网已连 without touching wifi.conf); face doc is the new schema (no
+list/psk keys, hint 「按住音量下说话 · 音量+对码」, state stays "idle").
+
+Deliberately NOT in this step: the real pair receipt (fresh boot, no adb,
+human holds the code → gateway registers to relay) — that is the #198
+human product receipt, after bake #19. ASR n-best tap-to-correct is phase
+two (ag-asr source is not in this repo).
