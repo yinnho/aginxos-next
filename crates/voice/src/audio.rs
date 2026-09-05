@@ -350,8 +350,8 @@ pub fn wav_data_span(wav: &[u8]) -> Result<(usize, usize), String> {
 
 // ---------------- 本地后端（M42d：ag-asr/ag-tts bionic-static 子进程）----------------
 
-pub const AG_ASR: &str = "/var/bin/ag-asr";
-pub const AG_TTS: &str = "/var/bin/ag-tts";
+pub const AG_ASR: &str = "/var/bin/aginx-asr";
+pub const AG_TTS: &str = "/var/bin/aginx-tts";
 pub const ASR_MODEL_DIR: &str = "/var/models/asr";
 // vits(melo) 是产品嘴（ag-tts 默认 KIND 同此）：kokoro 的 zh 前端整词吞
 // Latin——OCR 念读「AginxOS/TEL」无声的根因（2026-09-04 用户收据）。

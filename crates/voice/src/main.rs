@@ -366,7 +366,7 @@ fn chat_front(text: &str) -> Result<String, String> {
 
 /// nlscan wlan0 → 去重（保信号最强）、滤 hidden、按信号排序，cap 10（序数上限）。
 fn scan_ssids() -> Result<Vec<String>, String> {
-    let out = Command::new("/bin/nlscan")
+    let out = Command::new("/usr/bin/aginx-net-scan")
         .arg("wlan0")
         .output()
         .map_err(|e| format!("spawn: {e}"))?;
@@ -448,7 +448,7 @@ fn scan_qr() -> Result<Vec<String>, String> {
     for round in 1..=4u32 {
         let t0 = Instant::now();
         let qr_jpg = format!("/tmp/voiced-qr{round}.jpg");
-        let mut cmd = Command::new("/bin/cam-shot");
+        let mut cmd = Command::new("/usr/bin/aginx-cam-shot");
         cmd.args(["--stream", "--rear", "--frames", "3", "--jpeg-gray"])
             .arg("--jpeg-out")
             .arg(&qr_jpg)
@@ -473,7 +473,7 @@ fn scan_qr() -> Result<Vec<String>, String> {
         }
         // 解码（agqr 进程，payload 一行一个）。output() 不带超时——解码
         // 是 <300ms 量级的纯计算，等待预算都在拍照那侧
-        let dec = Command::new("/usr/bin/agqr").arg(&qr_jpg).output();
+        let dec = Command::new("/usr/bin/aginx-qr").arg(&qr_jpg).output();
         match dec {
             Ok(out) if out.status.success() => {
                 let payloads = String::from_utf8_lossy(&out.stdout)
@@ -507,7 +507,7 @@ fn read_text() -> Result<Vec<String>, String> {
     let mut last_err = String::new();
     for round in 1..=3u32 {
         let jpg = format!("/tmp/voiced-ocr{round}.jpg");
-        let mut cmd = Command::new("/bin/cam-shot");
+        let mut cmd = Command::new("/usr/bin/aginx-cam-shot");
         cmd.args(["--stream", "--rear", "--frames", "3", "--jpeg"])
             .arg("--jpeg-out")
             .arg(&jpg)
@@ -530,7 +530,7 @@ fn read_text() -> Result<Vec<String>, String> {
         }
         // ag-ocr：stdout 每行 "text\tconf"，exit 0=有字 / 1=没字 / 2=错误。
         // 识别要秒级（agqr 的 <300ms 先例不适用），piped + wait_limited 给预算。
-        let mut child = match Command::new("/var/bin/ag-ocr")
+        let mut child = match Command::new("/var/bin/aginx-ocr")
             .arg(&jpg)
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::null())
@@ -569,7 +569,7 @@ fn read_text() -> Result<Vec<String>, String> {
 
 /// wifi-join wlan0 ssid psk，然后读 wlan0 的 IPv4。
 fn join_wifi(ssid: &str, psk: &str) -> Result<String, String> {
-    let mut child = Command::new("/bin/wifi-join")
+    let mut child = Command::new("/usr/bin/aginx-net-join")
         .args(["wlan0", ssid, psk])
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null())
