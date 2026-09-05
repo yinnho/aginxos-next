@@ -1,4 +1,7 @@
 # crond root crontab — busybox crond reads /etc/crontabs/root.
-# N4 切净: the #86 daily ag-backup line is GONE (no carrier.db in this
-# image — the backup channel gets rebuilt on the new line, N5). The
-# file stays so crond has a home; rcS starts crond with -c /etc/crontabs.
+# N5④ (#86 v2, local line): daily snapshot of the state world at 04:17 —
+# /home/.aginx + /var/lib/aginx (secret/ excluded, §9) + /etc/aginx into
+# /var/backups/aginx/, keep 7. Off-minute on purpose (fleet-uniform :00
+# piles up on the server when the push half exists someday). Log at
+# /var/log/aginx-backup.log; rcS starts crond with -c /etc/crontabs.
+17 4 * * * /usr/bin/aginx-backup now >> /var/log/aginx-backup.log 2>&1

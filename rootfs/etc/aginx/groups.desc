@@ -13,3 +13,4 @@ web=browser, search and fetch tools (agb via aginx-web bridge)
 files=file read/write/list/convert tools (agf via aginx-file bridge)
 mem=memory tools: kv, tree, knowledge, flows (agmem via aginx-mem bridge)
 sec=secret store admin: set, get, rm, list, sign (aginx-secretd sidecar)
+backup=local state backup: snapshot, list, verify, retention

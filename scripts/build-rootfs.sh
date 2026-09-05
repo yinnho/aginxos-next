@@ -372,7 +372,8 @@ cp "${OTARGET}/aginxos-init" "${OTARGET}/aginxos-agent" "${TREE}/aginxos/"
 # stay 644 — they are data read next to the binary.
 chmod 755 "${TREE}"/etc/init.d/*
 chmod 755 "${TREE}"/usr/bin/aginx-web "${TREE}"/usr/bin/aginx-file \
-  "${TREE}"/usr/bin/aginx-mem "${TREE}"/usr/bin/aginx-sys-status
+  "${TREE}"/usr/bin/aginx-mem "${TREE}"/usr/bin/aginx-sys-status \
+  "${TREE}"/usr/bin/aginx-backup
 chmod 755 "${TREE}"/usr/libexec/aginx/net-watch "${TREE}"/usr/libexec/aginx/net-rejoin
 # NB: wifi.conf.example rides along in ${RECIPE}/etc — the real
 # /etc/wifi.conf (with the passphrase) rides the aginx-update state tar

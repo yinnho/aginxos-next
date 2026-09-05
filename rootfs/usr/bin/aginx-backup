@@ -1,0 +1,81 @@
+#!/bin/sh
+# aginx:summary=local backup line: snapshot the state world, list, verify, keep 7
+# aginx:args=now | list | verify <file>
+# aginx:examples=now
+# aginx:examples=list
+# aginx:examples=verify /var/backups/aginx/backup-<ts>.tar.gz
+# aginx:group=backup
+# N5④ (#86 v2, local line — the push half is deferred by decision): the
+# first-gen ag-backup carried carrier.db through sqlite's backup API; that
+# substrate is gone (N4 切净), so v2 snapshots what IS the state now —
+# /home/.aginx (avatars + session logs, the truth source) + /var/lib/aginx
+# (the N5③ single state home) + /etc/aginx — via a staging copy, then one
+# tar.gz. The secret store NEVER rides a backup: the (future) push half's
+# auth must not bootstrap from its own cargo (DECISIONS §9); keys are
+# re-enterable (`aginx-secret set`). `verify` asserts that exclusion
+# against the finished tar, not just the staging discipline.
+# Restore is manual: unpack and copy members back (stop aginx-server
+# first for /home/.aginx), or fish a single session log out of the tar.
+# Device-local trust domain only — same content class the aginx-update
+# state tar already carries wholesale. Pushing anywhere requires the
+# server half that does not exist yet.
+set -eu
+
+B=/var/backups/aginx
+KEEP=7
+
+die() { echo "aginx-backup: $*" >&2; exit 1; }
+
+cmd_now() {
+  TS=$(date +%Y%m%d-%H%M%S)
+  S=$B/.build-$TS
+  mkdir -p "$S/home" "$S/var/lib" "$S/etc"
+
+  [ -d /home/.aginx ] || die "no /home/.aginx — nothing to back up"
+  cp -a /home/.aginx "$S/home/"
+  cp -a /var/lib/aginx "$S/var/lib/" 2>/dev/null || true
+  cp -a /etc/aginx "$S/etc/" 2>/dev/null || true
+  # §9: the sidecar store is the one member class that must not ride.
+  rm -rf "$S/var/lib/aginx/secret"
+
+  OUT=$B/backup-$TS.tar.gz
+  tar czf "$OUT" -C "$S" home var etc
+  rm -rf "$S"
+
+  # retention: keep the newest KEEP, drop older (ls -t newest first)
+  ls -1t "$B"/backup-*.tar.gz 2>/dev/null | tail -n +$((KEEP + 1)) | while read -r f; do
+    [ -n "$f" ] && rm -f "$f"
+  done
+
+  echo "backup: $OUT ($(du -h "$OUT" | cut -f1))"
+}
+
+cmd_list() {
+  [ -d "$B" ] || { echo "no backups yet ($B missing)"; exit 0; }
+  ls -1t "$B"/backup-*.tar.gz 2>/dev/null | while read -r f; do
+    echo "$(du -h "$f" | cut -f1)  $f  $(tar -tzf "$f" 2>/dev/null | wc -l | tr -d ' ') members"
+  done
+}
+
+cmd_verify() {
+  [ -f "$1" ] || die "no such file: $1"
+  gzip -t "$1" || die "gzip integrity check failed"
+  tar -tzf "$1" 2>/dev/null | grep -q '^home/\.aginx' \
+    || die "state home member missing"
+  tar -tzf "$1" 2>/dev/null | grep -q '^var/lib/aginx/' \
+    || die "var/lib state member missing"
+  # §9 reverse assertion: the exclusion is a contract, so it is checked
+  # against the tar itself — a staging bug must fail verify, loudly.
+  if tar -tzf "$1" 2>/dev/null | grep -q 'var/lib/aginx/secret'; then
+    die "SECRET STORE IN BACKUP — do not ship or push this file"
+  fi
+  n=$(tar -tzf "$1" 2>/dev/null | wc -l | tr -d ' ')
+  echo "verify: ok (${n} members, state home present, secret excluded)"
+}
+
+case "${1:-}" in
+  now)    cmd_now ;;
+  list)   cmd_list ;;
+  verify) [ $# -ge 2 ] || die "usage: aginx-backup verify <file>"; cmd_verify "$2" ;;
+  *)      echo "usage: aginx-backup now | list | verify <file>" >&2; exit 2 ;;
+esac
