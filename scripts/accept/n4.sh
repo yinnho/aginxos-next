@@ -69,7 +69,7 @@ echo "==> 预检（serial 钉死 / N4_STAMP 在 / key 键名在）"
 adbx get-state >/dev/null 2>&1 || { echo "n4: device $SERIAL 不在线"; exit 1; }
 [ -n "$STAMP" ] || { echo "n4: N4_STAMP 未传（防 HEAD 冒充镜像，见文件头）"; exit 1; }
 drv "cat /etc/aginx-version"
-expect_out "设备版本戳 = 烤机戳（$STAMP）" "^${STAMP}$"
+expect_out "设备版本戳 = 烤机戳（${STAMP}）" "^${STAMP}$"
 drv "grep -c \"^$KEYVAR=\" /etc/aginx/env"
 expect_out "brain key 键名在 /etc/aginx/env（只数行不回显）" '^1$'
 
