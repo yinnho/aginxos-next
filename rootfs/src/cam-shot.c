@@ -31,18 +31,24 @@
 // rejects 0, kernel keeps DT values) — msm_camera_fill_vreg_params maps
 // seq_type -> rail index by name, missing rail -> INVALID_VREG -> skipped.
 
+#define _GNU_SOURCE /* cpu_set_t / sched_setaffinity */
 #include <fcntl.h>
 #include <errno.h>
+#include <math.h>
+#include <pthread.h>
+#include <sched.h>
+#include <signal.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/ioctl.h>
 #include <sys/mman.h>
+#include <sys/stat.h>
 #include <time.h>
 #include <unistd.h>
 
-#include "jpegenc.h"
+#include "jpegenc_tj.h" // M47⑤d: libjpeg-turbo (same call shape as the old hand-written jpegenc.h)
 #include "campix.h"
 
 /* ---- cam_defs.h ---- */
@@ -1931,6 +1937,13 @@ static int g_jpeg_color = 1;
  * --wb r,g,b takes over manually, --wb off disables */
 static int g_wb_auto = 1;
 static float g_wb_r = 1.0f, g_wb_g = 1.0f, g_wb_b = 1.0f;
+/* M47⑤g color correction: default ON — Google's own per-CCT imx363 CCMs
+ * live in campix.h (extracted from THIS device's vendor image; gray-world
+ * WB balances means but cannot fix hue/saturation, which is why the
+ * viewfinder read green, 2026-09-05 user receipt). The matrix is picked
+ * per frame from the WB gains (poor man's CCT). --no-ccm is the A/B
+ * escape hatch (the old look). */
+static int g_ccm = 1;
 /* M47② pixel domain: the RAW10 bits[9:2] carry the sensor's black level
  * (rear imx363 optical black sits ~16 in the 8-bit domain — a covered-lens
  * frame pins the exact value on device) and are LINEAR; the encoder and
@@ -1943,7 +1956,53 @@ static float g_wb_r = 1.0f, g_wb_g = 1.0f, g_wb_b = 1.0f;
 static int g_bl = 16;
 static double g_gamma = 2.2;
 static int g_rot;
+/* M47③ AEC: drive the LINEAR-domain yavg (campix stats) at ~65 (AEC_TGT). Exposure
+ * lives on a one-rung-per-2x ladder (CIT then gain then dgain); the rung
+ * rides a per-request SENSOR_UPDATE packet (op 1) so it changes at that
+ * request's SOF. Opcode receipt (cam_sensor.ko jump tables, 2026-09-05):
+ * CAM_CONFIG_DEV (cam_control op 0x105) dispatches packet op_code in
+ * [0..7]+127 — 0/2/4/5 are this tool's proven STREAMON/INITIAL_CONFIG/
+ * CONFIG/STREAMOFF, sub 1 -> the update path (ring[req_id&0x1f] store;
+ * request_id stored only when op==1; applied at SOF printing
+ * "Sensor update req id"). op 7 is a DIFFERENT case that adds the packet
+ * but never registers the request — the first probe wedged exactly there
+ * ("Skip Frame: req 34 not ready, open_req count 15", no update print).
+ * g_probe_op7 is the on-device verdict run, and g_upd_ok latches the
+ * answer: once an update packet is rejected, every later request falls
+ * back to the NOP and AEC degrades to CONFIG-time-only exposure (方案B,
+ * the aec.state file crossing calls). */
+static int g_aec;
+static int g_probe_op7;
+static int g_upd_ok = 1;
 static const char *g_jpeg_out;
+/* M47④ resident viewfinder: --forever runs the ring with no end (SIGTERM
+ * tears down through the normal out: path), --aspect W:H center-crops the
+ * frame to the DISPLAY aspect (with --rot it maps to the sensor-landscape
+ * reciprocal), --preview scales the encoder output down (frame-rate
+ * budget: 0.12 s at full 2.3 MP is ~3 fps, 0.70 MP is the ~10 fps target),
+ * --vf-window shrinks the ring depth from MAXF (AEC latency ~ window
+ * frames; 8 gives <0.3 s convergence steps and keeps ~8 headroom under
+ * the kernel's ~19-packet pool). */
+static int g_forever;
+static volatile sig_atomic_t g_stop;
+static uint32_t g_aspect_w, g_aspect_h;
+static uint32_t g_preview_w;
+static int g_vf_window = 8;
+/* M47⑤c raw fast path: --raw-out publishes the display frame as raw RGB565
+ * (12-byte header + pixels, atomic tmp+rename) EVERY frame, while
+ * --jpeg-every-ms N demotes the JPEG to a throttled side product (QR decode
+ * reads eye.jpg at 2 Hz; the same-machine display reads the raw file and
+ * skips the encode+decode round trip entirely — the 0.125 s/frame encoder
+ * was the whole fps ceiling, device 2026-09-05). */
+static char g_raw_out[512];
+static uint32_t g_jpeg_every_ms;
+static double g_last_jpeg_t;
+
+static void on_stop(int sig)
+{
+    (void)sig;
+    g_stop = 1;
+}
 /* --frames N: queue N requests back-to-back before START (burst). Each
  * frame gets its own pixel buffer + fence; fences are waited in order
  * (frames land at sensor frame rate). Outputs gain a -<i> suffix. */
@@ -1967,6 +2026,257 @@ static void cfg_override(struct wreg *r, size_t *n, uint16_t addr, uint8_t val)
     r[*n].val = val;
     r[*n].width = 8;
     (*n)++;
+}
+
+/* ---- M47③ exposure regs + AEC ladder ----
+ * Single source for the exposure register set, shared by the CONFIG-time
+ * table override and the per-request op-1 update packet. Formulas are the
+ * imx355-family ones the two slot blocks used to carry inline (mainline
+ * imx355.c): CIT 0x0202:0x0203 (<= FLL-10; 0 = leave the mode default),
+ * analog gain 0x0204:0x0205 (reg = 1024-1024/g, cap 960 = 16x; g <= 1
+ * emits nothing), digital gain 0x020e:0x020f (256 = 1x) with 0x3070=1 =
+ * DPGA_USE_GLOBAL_GAIN (g <= 1 emits nothing). Returns the reg count.
+ * force (the op-1 update path): gain/dgain regs are ALWAYS written, in
+ * absolute form (1x -> 0x0000 / 0x0100) — the update lands on LIVE sensor
+ * state, not the CONFIG table, so a rung that LOWERS gain must write the
+ * register back down or the old value persists (observed 2026-09-05: the
+ * probe's rq40 rung-5 packet carried only CIT and the 16x stuck). CIT
+ * stays conditional (0 = mode default, writing 0 would black the frame). */
+static int expo_regs(unsigned cit, double gain, double dgain,
+                     struct wreg out[8], int force)
+{
+    int n = 0;
+    if (cit) {
+        out[n].addr = 0x0202; out[n].val = (uint16_t)(cit >> 8); out[n].width = 8; n++;
+        out[n].addr = 0x0203; out[n].val = (uint16_t)(cit & 0xff); out[n].width = 8; n++;
+    }
+    if (force || gain > 1.0) {
+        double m = gain > 16.0 ? 16.0 : gain;
+        if (m < 1.0) m = 1.0;
+        unsigned gv = (unsigned)(1024.0 - 1024.0 / m + 0.5);
+        if (gv > 960) gv = 960;
+        out[n].addr = 0x0204; out[n].val = (uint16_t)(gv >> 8); out[n].width = 8; n++;
+        out[n].addr = 0x0205; out[n].val = (uint16_t)(gv & 0xff); out[n].width = 8; n++;
+    }
+    if (force || dgain > 1.0) {
+        double m = dgain > 16.0 ? 16.0 : dgain;
+        if (m < 1.0) m = 1.0;
+        unsigned dv = (unsigned)(m * 256.0 + 0.5);
+        if (dv > 4095) dv = 4095;
+        out[n].addr = 0x3070; out[n].val = 1; out[n].width = 8; n++;
+        out[n].addr = 0x020e; out[n].val = (uint16_t)(dv >> 8); out[n].width = 8; n++;
+        out[n].addr = 0x020f; out[n].val = (uint16_t)(dv & 0xff); out[n].width = 8; n++;
+    }
+    return n;
+}
+
+/* fold (cit, gain, dgain) into a CONFIG table in place */
+static void apply_expo(struct wreg *r, size_t *n,
+                       unsigned cit, double gain, double dgain)
+{
+    struct wreg ex[8];
+    int k = expo_regs(cit, gain, dgain, ex, 0);
+    for (int i = 0; i < k; i++)
+        cfg_override(r, n, ex[i].addr, (uint8_t)ex[i].val);
+    if (cit)
+        printf("exposure: CIT=%u lines\n", cit);
+    if (gain > 1.0)
+        printf("analog gain: %.2fx\n", gain);
+    if (dgain > 1.0)
+        printf("digital gain: %.2fx\n", dgain);
+}
+
+/* FLL from a mode table (0x0340:0x0341) — all three slots' tables carry
+ * it; 0 when absent disables the CIT rungs of the ladder */
+static unsigned cfg_fll(const struct wreg *r, size_t n)
+{
+    int hi = -1, lo = -1;
+    for (size_t i = 0; i < n; i++) {
+        if (r[i].addr == 0x0340) hi = r[i].val;
+        else if (r[i].addr == 0x0341) lo = r[i].val;
+    }
+    if (hi < 0 || lo < 0) return 0;
+    return (unsigned)(hi << 8) | (unsigned)lo;
+}
+
+/* AEC ladder, one rung per 2x of exposure, index 0 = most light. Both rear
+ * modes ship CIT near the FLL cap, so rung 5 == the vendor default (CIT at
+ * cap, gain 1x); above it the CIT halves per rung (bright scenes), below
+ * it the gains double (dark). dgain stays <= 2x — it amplifies noise too.
+ * cit_cap 0 (no FLL found) collapses the ladder to rungs 0..5. */
+#define AEC_RUNGS 9
+static void aec_rung(int rung, unsigned cit_cap,
+                     unsigned *cit, double *gain, double *dgain)
+{
+    static const double g[AEC_RUNGS] = {16, 16, 8, 4, 2, 1, 1, 1, 1};
+    static const double d[AEC_RUNGS] = {2, 1, 1, 1, 1, 1, 1, 1, 1};
+    if (!cit_cap && rung > 5) rung = 5;
+    if (rung < 0) rung = 0;
+    if (rung >= AEC_RUNGS) rung = AEC_RUNGS - 1;
+    int div = rung <= 5 ? 1 : (1 << (rung - 5));
+    *cit = cit_cap / (unsigned)div;
+    *gain = g[rung];
+    *dgain = d[rung];
+}
+
+/* AEC state machine: target LINEAR yavg ~65 — M47⑤g brightness raise
+ * (2026-09-05 user receipt 「要比华为亮」: at target 50 the DISPLAY mean
+ * after gamma 2.2 lands at ~77/255 — Jensen; at 65 it lands ~137/255,
+ * Huawei-class). Two axes: the COARSE rung ladder (2x per rung: gain, then
+ * CIT halves above rung 5) takes proportional jumps — log2 of the error,
+ * so a dark room converges in 1-2 hops — and the FINE axis is a CIT trim
+ * at the current rung for errors smaller than one rung. The fine axis
+ * exists because the band [55,75] is narrower than a rung: the first
+ * indoor receipt (2026-09-05, target-50 era) measured 36.1 at gain 8x and
+ * 64.7 at 16x with the target between them, and the coarse-only loop
+ * oscillated rung 1<->2 forever. CIT is exactly linear in exposure
+ * (integration rows at fixed gain), so one secant step cit *= TGT/y
+ * converges. Every jump is held until SEEN: an op-1 update rides request
+ * rq and lands `window` frames later, so a second step before that would
+ * measure stale light.
+ * Returns the rung to send (a fine step returns the UNCHANGED rung — the
+ * trim is the payload), or -1 = hold. */
+#define AEC_TGT 65.0
+#define AEC_LO 55.0
+#define AEC_HI 75.0
+struct aec_st {
+    int rung;          /* ladder index currently requested */
+    int last_step;     /* frame index of the last step */
+    int pending;       /* a step is in flight (not yet observed) */
+    double last_y;     /* last measured yavg */
+    double trim;       /* FINE axis: CIT scale at the current rung, (0,1];
+                        * 1.0 = the rung's base cit; reset on rung change */
+};
+static int aec_step(struct aec_st *a, double y, int fi, int window)
+{
+    a->last_y = y;
+    if (y >= AEC_LO && y <= AEC_HI) {
+        a->pending = 0;
+        return -1;
+    }
+    if (a->pending) {
+        if (fi < a->last_step + window + 3) return -1;
+        a->pending = 0;   /* effect window elapsed — measure fresh */
+    }
+    if (fi < a->last_step + 2) return -1;   /* plain damping */
+    int dark = y < AEC_LO;
+    double ratio = dark ? AEC_TGT / (y < 1.0 ? 1.0 : y) : y / AEC_TGT;
+    if (ratio < 1.9) {
+        /* FINE: sub-rung error — trim CIT at the current rung (secant on a
+         * linear axis). Clamps pin at the rung's edges and fall through to
+         * the coarse step below, which resets the trim. */
+        double t = a->trim * AEC_TGT / (dark ? (y < 1.0 ? 1.0 : y) : y);
+        if (t > 1.0) t = 1.0;
+        if (t < 0.25) t = 0.25;
+        if (t != a->trim) {
+            a->trim = t;
+            a->last_step = fi;
+            a->pending = 1;
+            return a->rung;
+        }
+    }
+    int rungs = 1;
+    while (rungs < 4 && ratio > 2.0) {
+        rungs++;
+        ratio /= 2.0;
+    }
+    int nr = a->rung + (dark ? -rungs : rungs);
+    if (nr < 0) nr = 0;
+    if (nr >= AEC_RUNGS) nr = AEC_RUNGS - 1;
+    if (nr == a->rung) return -1;
+    a->rung = nr;
+    a->trim = 1.0;
+    a->last_step = fi;
+    a->pending = 1;
+    return nr;
+}
+
+/* AEC memory across calls: /run/aginx-cam/aec.state (tmpfs — survives
+ * process restarts, not reboots; that IS the design: the next capture in
+ * the same session starts at the converged rung, cold boot re-converges).
+ * One line "slot rung yavg ts"; a reader discards it on slot mismatch or
+ * staleness (>10 min — lighting may have changed). */
+#define AEC_STATE_PATH "/run/aginx-cam/aec.state"
+static int aec_state_read(int slot, int *rung, double *trim)
+{
+    FILE *f = fopen(AEC_STATE_PATH, "r");
+    if (!f) return -1;
+    int s, r; double yv, tv; long ts;
+    int k = fscanf(f, "%d %d %lf %lf %ld", &s, &r, &tv, &yv, &ts);
+    fclose(f);
+    if (k != 5 || s != slot || r < 0 || r >= AEC_RUNGS) return -1;
+    if (tv <= 0.0 || tv > 1.0) return -1;
+    if (time(NULL) - ts > 600) return -1;
+    *rung = r;
+    *trim = tv;
+    return 0;
+}
+static void aec_state_write(int slot, int rung, double trim, double yv)
+{
+    mkdir("/run/aginx-cam", 0755);
+    char tmp[128];
+    snprintf(tmp, sizeof tmp, "%s.tmp", AEC_STATE_PATH);
+    FILE *f = fopen(tmp, "w");
+    if (!f) return;
+    fprintf(f, "%d %d %.3f %.1f %ld\n", slot, rung, trim, yv, time(NULL));
+    fclose(f);
+    rename(tmp, AEC_STATE_PATH);
+}
+
+/* M47③ CONFIG-time AEC handoff, called from each slot's register chain
+ * once the mode table sits in cfg_regs: FLL -> CIT cap, then (when AEC
+ * owns exposure — the user pinning --cit/--gain keeps it hands-off) the
+ * remembered rung from aec.state or the vendor-default rung 5 folds into
+ * g_cit/g_gain/g_dgain for the apply_expo that follows. This is the
+ * "second call lights up on frame one" path: the state file carries the
+ * converged rung across process invocations. */
+static void aec_cfg_init(int slot, struct aec_st *a, const struct wreg *r,
+                         size_t n, unsigned *cit_cap)
+{
+    unsigned fll = cfg_fll(r, n);
+    *cit_cap = fll > 10 ? fll - 10 : 0;
+    if (!g_aec || g_cit || g_gain > 1.0 || g_dgain > 1.0)
+        return;
+    int r0 = 5;
+    double t0 = 1.0;
+    int hit = aec_state_read(slot, &r0, &t0);
+    unsigned c;
+    double gg, dd;
+    aec_rung(r0, *cit_cap, &c, &gg, &dd);
+    if (t0 < 1.0 && c)
+        c = (unsigned)(c * t0);
+    a->rung = r0;
+    a->trim = t0;
+    g_cit = c;
+    if (gg > 1.0) g_gain = gg;
+    if (dd > 1.0) g_dgain = dd;
+    printf("aec: start rung %d trim %.2f%s (FLL %u -> CIT %u gain %.1fx dgain %.1fx)\n",
+           r0, t0, hit == 0 ? " from aec.state" : " (cold)", fll, c, gg, dd);
+}
+
+/* full-frame linear-domain luminance, stride-sampled — the per-frame AEC
+ * stat. Every 8th row and every 8th 5-byte pixel group (~36k samples on the
+ * rear 2.3MP frame, no malloc). First indoor receipt (2026-09-05): a
+ * 256x256 CENTER crop metered the dark doorway of a fluorescents-lit room
+ * (center 10 vs full-frame 84 linear) and pinned AEC at rung 0 — viewfinder
+ * metering must average what the user sees, not the geometric center. */
+static double frame_yavg(const uint8_t *map, uint32_t w, uint32_t h,
+                         uint32_t stride)
+{
+    (void)w;
+    uint8_t lin[256];
+    cp_lut_linear(lin, g_bl);
+    unsigned long long sum = 0;
+    uint32_t n = 0;
+    for (uint32_t y = 0; y < h; y += 8) {
+        const uint8_t *row = map + (size_t)y * stride;
+        for (uint32_t xb = 0; xb + 4 < stride; xb += 40) {
+            sum += lin[row[xb]] + lin[row[xb + 1]] +
+                   lin[row[xb + 2]] + lin[row[xb + 3]];
+            n += 4;
+        }
+    }
+    return n ? (double)sum / n : -1.0;
 }
 /* --tpg: arm the CSID's built-in test pattern generator instead of the PHY
  * RX (CAM_ISP_IFE_IN_RES_TPG). The whole sensor side (probe, power, register
@@ -2297,6 +2607,139 @@ static void dump_png(const uint8_t *rdi, uint32_t w, uint32_t h, uint32_t stride
  * defect. RGGB phase verified on device 2026-09-01 and preserved verbatim
  * inside cp_debayer_rot. dump_png keeps its own raw-bit diagnostic logic
  * and is untouched on purpose. */
+/* M47⑤c: publish the display frame as raw RGB565 — 12-byte header (magic
+ * "RGW1", w, h, little-endian) + w*h u16 LE pixels, atomic tmp+rename like
+ * the JPEG path. Same-machine readers (term) blit this directly; the JPEG
+ * encode/decode round trip stays only for QR (throttled) and captures.
+ * M47⑤e: the 565 plane is packed inline by cp_debayer_rot — this is a pure
+ * writer now, no second walk over ow*oh pixels. */
+static void dump_raw565(const uint16_t *px5, uint32_t ow, uint32_t oh)
+{
+    char tmp[560];
+    snprintf(tmp, sizeof tmp, "%s.tmp", g_raw_out);
+    int fd = open(tmp, O_WRONLY | O_CREAT | O_TRUNC, 0644);
+    if (fd < 0) {
+        fprintf(stderr, "raw: open %s: %s\n", tmp, strerror(errno));
+        return;
+    }
+    uint32_t hdr[3] = { 0x31574752u, ow, oh };   /* 'R','G','W','1' on LE */
+    int bad = wr_all(fd, hdr, sizeof hdr) < 0 ||
+              wr_all(fd, px5, (size_t)ow * oh * 2) < 0;
+    close(fd);
+    if (!bad && rename(tmp, g_raw_out) != 0) {
+        fprintf(stderr, "raw: rename %s: %s\n", g_raw_out, strerror(errno));
+    }
+}
+
+/* M47⑤e: per-stage chain timing, averaged over the resident heartbeat
+ * window — the fps tuning mouth. [0]=crop extract [1]=WB measure [2]=debayer
+ * [3]=raw565 dump [4]=jpeg encode+publish (encode frames only; enc_n counts
+ * them). Single-threaded callers only. */
+static double chain_ms[5];
+static int chain_n, enc_n;
+
+/* M47⑤i: row-partitioned parallel walks. The two full-frame passes of the
+ * viewfinder chain (crop extract, debayer) are embarrassingly parallel over
+ * rows and write disjoint output rows, so any partition is bit-exact with
+ * the single-threaded walk (campix_test's rot-split + the diff harness pin
+ * the debayer half; extraction is the same per-row math). ~60 us of
+ * pthread create/join per frame against a ~30 ms frame is noise — and the
+ * point is capped clocks (see the cpufreq note above): four cores at
+ * 1.36-1.48 GHz beat one. */
+static int g_vf_threads = 2; /* the big pair — A55 fan-outs derate (probe ⑤i) */
+/* the two big cores, [0]=cpu6 [1]=cpu7(prime) — see the cpufreq block for
+ * the probe story. The PROCESS is pinned to the pair as a MASK and threads
+ * are left unpinned ON PURPOSE: cpu7 droops intermittently under streaming
+ * load (halving whatever runs there), cpu6 never does, and the scheduler
+ * routes around the droop in real time — measured mask{6,7}=17.4 ms
+ * debayer vs 27-30 ms for every FIXED assignment tried (main7+worker6,
+ * main7 alone). Hard pins cannot adapt; don't re-add them. */
+static const int g_big_cores[2] = { 6, 7 };
+
+struct row_span {
+    void (*fn)(void *u, uint32_t y0, uint32_t y1);
+    void *u;
+    uint32_t y0, y1;
+};
+
+static void *row_thread(void *arg)
+{
+    struct row_span *s = arg;
+    s->fn(s->u, s->y0, s->y1);
+    return NULL;
+}
+
+/* run fn(u, y0, y1) over contiguous slices of [0,rows); the calling thread
+ * takes slice 0, nth-1 workers take the rest. No locks anywhere. */
+static void run_rows(void (*fn)(void *u, uint32_t y0, uint32_t y1), void *u,
+                     uint32_t rows, int nth)
+{
+    if (nth < 1) nth = 1;
+    if (nth > 8) nth = 8;
+    if ((uint32_t)nth > rows) nth = (int)rows;
+    if (nth <= 1) {
+        fn(u, 0, rows);
+        return;
+    }
+    struct row_span sp[8];
+    pthread_t tid[7];
+    uint32_t base = rows / (uint32_t)nth, rem = rows % (uint32_t)nth, y = 0;
+    for (int i = 0; i < nth; i++) {
+        uint32_t n = base + (i < (int)rem ? 1u : 0u);
+        sp[i].fn = fn;
+        sp[i].u = u;
+        sp[i].y0 = y;
+        sp[i].y1 = y + n;
+        y += n;
+    }
+    for (int i = 1; i < nth; i++)
+        pthread_create(&tid[i - 1], NULL, row_thread, &sp[i]);
+    row_thread(&sp[0]);
+    for (int i = 1; i < nth; i++)
+        pthread_join(tid[i - 1], NULL);
+}
+
+/* extract thunk: staging memcpy of rows [a,b) from the (uncached) CDM
+ * mapping into the cached buffer, then the linear-LUT walk over the same
+ * rows — the M47⑤e staging pattern, split by row range */
+struct ext_job {
+    const uint8_t *src;         /* LUT-extract source (stage or raw) */
+    uint32_t sstride, sx0, sy0, cw;
+    const uint8_t *lin;
+    uint8_t *out;
+    const uint8_t *msrc;        /* staging: raw mapping (NULL = no staging) */
+    uint32_t mstride, y0, rowb, g0;
+    uint8_t *stage;
+};
+
+static void extract_rows(void *u, uint32_t a, uint32_t b)
+{
+    struct ext_job *j = u;
+    if (j->stage)
+        for (uint32_t y = a; y < b; y++)
+            memcpy(j->stage + (size_t)y * j->rowb,
+                   j->msrc + (size_t)(j->y0 + y) * j->mstride
+                          + (size_t)j->g0 * 5,
+                   j->rowb);
+    cp_raw10_gray(j->src, j->sstride, j->sx0, j->sy0 + a, j->cw, b - a,
+                  j->lin, j->out + (size_t)a * j->cw);
+}
+
+/* debayer thunk: cp_rot_rows over an output-row range (thread-safe for
+ * disjoint ranges — the column map and xform are read-only) */
+struct rot_job {
+    struct cp_rot R;
+    const uint8_t *g;
+    uint8_t *out;
+    uint16_t *out565;
+};
+
+static void debayer_rows(void *u, uint32_t a, uint32_t b)
+{
+    struct rot_job *j = u;
+    cp_rot_rows(&j->R, j->g, a, b, j->out, j->out565);
+}
+
 static void dump_jpeg(const uint8_t *rdi, uint32_t w, uint32_t h,
                       uint32_t stride, const char *raw_path)
 {
@@ -2312,23 +2755,96 @@ static void dump_jpeg(const uint8_t *rdi, uint32_t w, uint32_t h,
     struct timespec a, b;
     clock_gettime(CLOCK_MONOTONIC, &a);
 
-    /* full frame by default; M47④ wires --aspect/--preview into this */
+    /* full frame by default; --aspect (with --rot) center-crops to the
+     * display aspect in sensor orientation, --preview scales the output.
+     * First receipt geometry: term's eye box is 1080x1456 (0.7418); the
+     * sensor landscape 2016x1136 rotated 90 gives 1136x2016 (0.5635) —
+     * too narrow — so crop sensor-side to 1530x1136 (1456/1080 reciprocal)
+     * and the rotated output is 1136x1530, aspect-exact. */
     uint32_t x0 = 0, y0 = 0, cw = w, ch = h;
+    if (g_aspect_w && g_aspect_h &&
+        (g_rot == 90 || g_rot == 270)) {
+        double ta = (double)g_aspect_h / (double)g_aspect_w;
+        double sa = (double)w / (double)h;
+        if (sa > ta) {
+            cw = (uint32_t)((double)h * ta + 0.5);
+            if (cw > w) cw = w;
+            if (cw & 1) cw--;
+            x0 = (w - cw) / 2;
+            /* Bayer phase: an odd x0 flips every crop column's parity, so
+             * the site classifier reads G sites as R/B and the R/B mix as G
+             * -> gray-world boosts the wrong channel (green tint, seen on
+             * device 2026-09-05: wb g=1.78 on a neutral scene). Keep x0 on
+             * the sensor's even grid. */
+            if (x0 & 1) x0--;
+        } else if (sa < ta) {
+            ch = (uint32_t)((double)w / ta + 0.5);
+            if (ch > h) ch = h;
+            if (ch & 1) ch--;
+            y0 = (h - ch) / 2;
+            if (y0 & 1) y0--;   /* same Bayer-phase rule as x0 */
+        }
+    }
     uint8_t lin[256], gam[256], disp[256];
     cp_lut_linear(lin, g_bl);
     cp_lut_gamma(gam, g_gamma);
     cp_lut_compose(lin, gam, disp);
 
-    /* gray in the LINEAR domain — stats and WB live here */
+    /* gray in the LINEAR domain — stats and WB live here (the crop region:
+     * viewfinder AEC meters what the user sees) */
     uint8_t *g = malloc((size_t)cw * ch);
     if (!g) { fprintf(stderr, "jpeg: no mem for gray\n"); return; }
-    cp_raw10_gray(rdi, stride, x0, y0, cw, ch, lin, g);
+    double t0 = mono();
+    /* M47⑤e: the CDM mapping reads UNCACHED (~27 ns/B — the byte-wise LUT
+     * walk over the 2.3 MB crop measured 64 ms, 70% of the frame budget,
+     * 2026-09-05). memcpy the crop into a cached staging buffer first
+     * (burst reads), then extract at RAM speed. Row start = byte group
+     * x0/4; cp_raw10_gray gets the sub-group remainder as its x0.
+     * M47⑤i: both halves of this (staging memcpy + LUT walk) fan out over
+     * g_vf_threads row ranges. */
+    uint8_t *stage = NULL;
+    const uint8_t *src = rdi;
+    uint32_t sstride = stride, sx0 = x0, sy0 = y0;
+    {
+        uint32_t g0 = x0 / 4;
+        size_t rowb = (size_t)(((x0 & 3) + cw + 3) / 4) * 5 + 5;
+        stage = malloc(rowb * ch);
+        if (stage) {
+            src = stage;
+            sstride = (uint32_t)rowb;
+            sx0 = x0 & 3;
+            sy0 = 0;
+        }
+        struct ext_job xj = {
+            .src = src, .sstride = sstride, .sx0 = sx0, .sy0 = sy0,
+            .cw = cw, .lin = lin, .out = g,
+            .msrc = rdi, .mstride = stride, .y0 = y0,
+            .rowb = (uint32_t)rowb, .g0 = g0, .stage = stage,
+        };
+        run_rows(extract_rows, &xj, ch, g_vf_threads);
+    }
+    free(stage);
+    double t1 = mono();
 
     uint32_t ow = (g_rot == 90 || g_rot == 270) ? ch : cw;
     uint32_t oh = (g_rot == 90 || g_rot == 270) ? cw : ch;
+    if (g_preview_w && ow > g_preview_w) {
+        oh = (uint32_t)((double)oh * g_preview_w / ow + 0.5);
+        ow = g_preview_w;
+    }
+    /* M47⑤e: decide the JPEG throttle UP FRONT — a display-only frame then
+     * needs neither the encode buffer nor the RGB888 plane (the debayer
+     * pass emits 565 only), roughly halving its cost. First frame always
+     * encodes (g_last_jpeg_t==0). */
+    int want_jpeg = !(g_jpeg_every_ms && g_last_jpeg_t > 0 &&
+                      mono() - g_last_jpeg_t < (double)g_jpeg_every_ms / 1000.0);
     size_t cap = (size_t)ow * oh * 3 + 65536;
-    uint8_t *out = malloc(cap);
-    if (!out) { fprintf(stderr, "jpeg: no mem for %zu B out\n", cap); free(g); return; }
+    uint8_t *out = (g_jpeg_color && !want_jpeg) ? NULL : malloc(cap);
+    if (!out && !(g_jpeg_color && !want_jpeg)) {
+        fprintf(stderr, "jpeg: no mem for %zu B out\n", cap);
+        free(g);
+        return;
+    }
     ssize_t n;
     double yavg;
     if (g_jpeg_color) {
@@ -2339,22 +2855,74 @@ static void dump_jpeg(const uint8_t *rdi, uint32_t w, uint32_t h,
         } else {
             yavg = cp_yavg(g, (size_t)cw * ch);
         }
-        uint8_t *rgb = malloc((size_t)ow * oh * 3);
-        if (!rgb) { fprintf(stderr, "jpeg: no mem for rgb\n"); free(g); free(out); return; }
-        cp_debayer_rot(g, cw, ch, wb, gam, g_rot, ow, oh, rgb);
+        float ccm[9];
+        const float *ccm_p = NULL;
+        if (g_ccm) {
+            cp_ccm_for_wb(wb, ccm);
+            ccm_p = ccm;
+        }
+        double t2 = mono();
+        /* RGB888 plane only on encode frames — a display-only frame reads
+         * nothing but the packed 565 (cp_px takes out==NULL, M47⑤e) */
+        uint8_t *rgb = want_jpeg ? malloc((size_t)ow * oh * 3) : NULL;
+        uint16_t *px5 = g_raw_out[0] ? malloc((size_t)ow * oh * 2) : NULL;
+        if ((want_jpeg && !rgb) || (g_raw_out[0] && !px5)) {
+            fprintf(stderr, "jpeg: no mem for rgb/565\n");
+            free(g); free(out); free(rgb); free(px5);
+            return;
+        }
+        /* M47⑤i: init (column map + xform) single-threaded, then fan the
+         * row walk out over g_vf_threads — cp_rot_rows over disjoint row
+         * ranges is bit-exact with the one-call form */
+        struct rot_job rj = {
+            .g = g, .out = rgb, .out565 = px5,
+        };
+        if (!cp_rot_init(&rj.R, cw, ch, wb, ccm_p, gam, g_rot, ow, oh)) {
+            fprintf(stderr, "jpeg: rot_init failed\n");
+            free(g); free(out); free(rgb); free(px5);
+            return;
+        }
+        run_rows(debayer_rows, &rj, oh, g_vf_threads);
+        cp_rot_free(&rj.R);
         free(g);
+        double t3 = mono();
+        /* M47⑤c: the display frame rides the raw file every pass; JPEG is
+         * a throttled side product when --jpeg-every-ms is set (QR reads
+         * it at 2 Hz). First frame always encodes (g_last_jpeg_t==0). */
+        if (px5) {
+            dump_raw565(px5, ow, oh);
+            free(px5);
+        }
+        double t4 = mono();
+        chain_ms[0] += t1 - t0;
+        chain_ms[1] += t2 - t1;
+        chain_ms[2] += t3 - t2;
+        chain_ms[3] += t4 - t3;
+        chain_n++;
+        if (!want_jpeg) {
+            printf("yavg: %.1f (linear, bl=%d gamma=%.2f rot=%d)\n",
+                   yavg, g_bl, g_gamma, g_rot);
+            free(rgb);
+            free(out);
+            return;
+        }
         n = jpeg_encode_rgb24(rgb, (int)ow, (int)oh, (int)ow * 3, g_jpeg_q,
                               out, cap);
+        g_last_jpeg_t = mono();
         free(rgb);
+        chain_ms[4] += mono() - t4;
+        enc_n++;
     } else {
         yavg = cp_yavg(g, (size_t)cw * ch);
+        /* g is already linear (extracted through `lin`): only `gam` rides
+         * here — `disp` would subtract the black level twice */
         for (size_t i = 0; i < (size_t)cw * ch; i++)
-            g[i] = disp[g[i]];
+            g[i] = gam[g[i]];
         n = jpeg_encode_gray8(g, (int)cw, (int)ch, (int)cw, g_jpeg_q,
                               out, (size_t)cw * ch + 65536);
         free(g);
     }
-    /* linear-domain luminance: the number M47③'s AEC drives at ~50 */
+    /* linear-domain luminance: the number M47③'s AEC drives at ~65 (AEC_TGT) */
     printf("yavg: %.1f (linear, bl=%d gamma=%.2f rot=%d)\n",
            yavg, g_bl, g_gamma, g_rot);
     if (n < 0) { fprintf(stderr, "jpeg: encode overflow\n"); free(out); return; }
@@ -2479,6 +3047,71 @@ static int sensor_nop(int video_fd, int sd_fd, struct shot_bufs *b,
         .offset = 0, .packet_handle = b->pkt.out.buf_handle };
     return cam_ioctl(sd_fd, CAM_CONFIG_DEV, &cfg,
                      CAM_HANDLE_USER_POINTER, sizeof(cfg));
+}
+
+/* M47③ SENSOR_UPDATE packet for req_id: registers the request exactly
+ * like the NOP, but carries I2C random-writes the KMD applies when that
+ * request reaches its SOF (cam_sensor.ko apply-request path). op_code 1
+ * from the module jump tables (see the globals comment) — the first
+ * probe run used 7, which lands in an unrelated case that never
+ * registers the request (the 2026-09-05 wedge); the --probe-op7 device
+ * run is the verdict, see HARDWARE.md M47③. Layout mirrors
+ * sensor_config's one-desc form. */
+static int sensor_update(int video_fd, int sd_fd, struct shot_bufs *b,
+                         uint32_t session, uint32_t dev_hdl,
+                         int64_t req_id, const struct wreg *regs, int n)
+{
+    (void)video_fd;
+    size_t used = build_i2c_writes(b->p_cmd, regs, n);
+    memset(b->p_pkt, 0, 512);
+    struct cam_packet *pk = b->p_pkt;
+    pk->header.op_code = 1;
+    pk->header.request_id = (uint64_t)req_id;
+    pk->header.size = (uint32_t)(sizeof(*pk) + sizeof(struct cam_cmd_buf_desc));
+    pk->num_cmd_buf = 1;
+    struct cam_cmd_buf_desc *d = (void *)pk->payload;
+    d->mem_handle = (int32_t)b->cmd.out.buf_handle;
+    d->size = (uint32_t)b->cmd_cap;
+    d->length = (uint32_t)used;
+    struct cam_config_dev_cmd cfg = {
+        .session_handle = (int32_t)session, .dev_handle = (int32_t)dev_hdl,
+        .offset = 0, .packet_handle = b->pkt.out.buf_handle };
+    return cam_ioctl(sd_fd, CAM_CONFIG_DEV, &cfg,
+                     CAM_HANDLE_USER_POINTER, sizeof(cfg));
+}
+
+/* the per-request sensor packet: op-1 update when a rung is pending (AEC
+ * step, probe schedule, bracket pre-set), NOP otherwise. If the KMD
+ * rejects the update the request still MUST be registered — fall back to
+ * the NOP and latch the verdict so nothing tries the update again this
+ * process (方案B: exposure then only changes at CONFIG time, via
+ * aec.state). */
+static int send_sensor_req(int video_fd, int sd_fd, struct shot_bufs *b,
+                           uint32_t session, uint32_t dev_hdl,
+                           int64_t req_id, int rung, double trim,
+                           unsigned cit_cap)
+{
+    if (rung < 0 || !g_upd_ok)
+        return sensor_nop(video_fd, sd_fd, b, session, dev_hdl, req_id);
+    unsigned cit; double gain, dgain;
+    aec_rung(rung, cit_cap, &cit, &gain, &dgain);
+    /* FINE axis: the trim scales the rung's CIT (linear exposure axis) */
+    if (trim > 0.0 && trim < 1.0 && cit) {
+        cit = (unsigned)(cit * trim);
+        if (!cit) cit = 1;
+    }
+    struct wreg ex[8];
+    /* force=1: absolute regs — the packet must lower gain/dgain too, see
+     * the expo_regs doc (live-state deltas, 2026-09-05 probe receipt) */
+    int k = expo_regs(cit, gain, dgain, ex, 1);
+    printf("upd: req %ld rung %d trim %.2f (cit %u gain %.1fx dgain %.1fx, %d regs)\n",
+           (long)req_id, rung, trim, cit, gain, dgain, k);
+    if (sensor_update(video_fd, sd_fd, b, session, dev_hdl, req_id, ex, k) == 0)
+        return 0;
+    fprintf(stderr, "upd req %ld rejected: %s — NOP fallback, update disabled\n",
+            (long)req_id, strerror(errno));
+    g_upd_ok = 0;
+    return sensor_nop(video_fd, sd_fd, b, session, dev_hdl, req_id);
 }
 
 /* IFE packet builder. num_cmd = 1 (kmd only, length 0 => whole buf is KMD
@@ -2615,6 +3248,104 @@ static void fill_out_io(struct cam_buf_io_cfg *io, uint32_t buf_handle,
     }
 }
 
+/* Frequency + placement policy, settled by device probes 2026-09-05
+ * (M47⑤h/i; burn probe /data/local/tmp/thprobe2, pinned affinity, floors
+ * via scaling_min_freq):
+ *  - scaling_max_freq is SILENTLY CLAMPED by kernel/hardware — writes above
+ *    the cap return rc=0 but read back capped (A55 policy0 1.363 GHz vs
+ *    cpuinfo 1.805; cpu6 1.478 vs 2.208; cpu7 1.766 vs 2.4). No LMh IRQ,
+ *    no cmdline cap, no userspace writer, and the caps do NOT recover
+ *    after 9 min idle at 27-42 C: boot-baked. Unlifting is impossible;
+ *    an uncap attempt was deleted.
+ *  - scaling_min_freq IS writable (1363200 stuck on cpu0, restored clean).
+ *  - the cores are NOT equal under the caps. Same 1e9-iter register burn:
+ *      cpu0 (A55) 1.47 s   cpu6 0.68 s   cpu7 (prime) 0.57 s
+ *    A 4-thread fan-out onto the A55 cluster runs SLOWER than one A55
+ *    alone (2.21 s — the little cluster derates under load), and a
+ *    floating single thread averages 1.13 s (scheduler bounces it between
+ *    core classes). The original --vf-threads 4 scored zero precisely
+ *    because its workers landed on derating A55s.
+ *  - the two big cores CAN run at full capped freq concurrently (sampled
+ *    1478400/1766400 mid dual-burn; 2 burns in 0.68 s = 1.7x the prime
+ *    alone) but occasionally droop ~2x (LMh-style current limit, bimodal:
+ *    same config once measured 1.35 s). Worst case ~= one cpu6.
+ *  - DURING STREAMING the droop is cpu7-SPECIFIC and sustained: with the
+ *    chain burning cpu7, a pinned burn probe ran 1.13 s on cpu7 (~2x slow)
+ *    while cpu6 held 0.68 s (full speed) — and /proc/stat showed cpu7
+ *    100% non-idle from the chain itself. cpu6 never slowed; only the
+ *    prime degrades while the ISP runs (current limit at 1.766 GHz,
+ *    prime draws the most). Every FIXED pin (main7+worker6, main7 alone)
+ *    measured 27-30 ms debayer; the {6,7} MASK held 17.4 ms — the
+ *    scheduler sees the droop and routes threads to the core that is
+ *    actually delivering. Hard pins cannot adapt. Don't re-add them.
+ *  => the viewfinder pins itself to the {cpu6,cpu7} MASK (threads left
+ *     unpinned — see above), floors ONLY those two policies at their
+ *     capped max (idle cores park at 300-800 MHz and 20 ms frame bursts
+ *     finish inside the ramp window otherwise; A55 floors stay untouched
+ *     — background tasks don't need to burn max), and runs the pixel
+ *     chain on 2 threads. Do not re-add an uncap, per-thread pins, or an
+ *     A55 fan-out.
+ * Restored on the graceful exit path; a SIGKILL leaks the floors until
+ * reboot (the voice daemon's TERM-then-KILL leaves 2 s for teardown). */
+static int g_freq_min[2];               /* saved mins, per g_big_cores */
+
+static int sysfs_rd_int(const char *path)
+{
+    int fd = open(path, O_RDONLY);
+    if (fd < 0) return -1;
+    char buf[32];
+    int n = (int)read(fd, buf, sizeof buf - 1);
+    close(fd);
+    if (n <= 0) return -1;
+    buf[n] = 0;
+    return atoi(buf);
+}
+
+static void sysfs_wr_int(const char *path, int val)
+{
+    int fd = open(path, O_WRONLY);
+    if (fd < 0) return;
+    dprintf(fd, "%d", val);
+    close(fd);
+}
+
+static void cpufreq_floor(void)
+{
+    for (int i = 0; i < 2; i++) {
+        g_freq_min[i] = -1;
+        char p[96];
+        snprintf(p, sizeof p,
+                 "/sys/devices/system/cpu/cpu%d/cpufreq/scaling_min_freq",
+                 g_big_cores[i]);
+        int mn = sysfs_rd_int(p);
+        if (mn < 0) continue;
+        snprintf(p, sizeof p,
+                 "/sys/devices/system/cpu/cpu%d/cpufreq/scaling_max_freq",
+                 g_big_cores[i]);
+        int mx = sysfs_rd_int(p);
+        if (mx <= 0 || mn >= mx) continue;   /* already floored/immutable */
+        snprintf(p, sizeof p,
+                 "/sys/devices/system/cpu/cpu%d/cpufreq/scaling_min_freq",
+                 g_big_cores[i]);
+        int was = sysfs_rd_int(p);           /* re-read: the clamp truth */
+        sysfs_wr_int(p, mx);
+        if (sysfs_rd_int(p) == mx) g_freq_min[i] = was;
+    }
+}
+
+static void cpufreq_restore(void)
+{
+    for (int i = 0; i < 2; i++) {
+        if (g_freq_min[i] < 0) continue;
+        char p[96];
+        snprintf(p, sizeof p,
+                 "/sys/devices/system/cpu/cpu%d/cpufreq/scaling_min_freq",
+                 g_big_cores[i]);
+        sysfs_wr_int(p, g_freq_min[i]);
+        g_freq_min[i] = -1;
+    }
+}
+
 static int run_stream(int slot, const char *out_path, int wait_ms,
                       uint32_t settle_cnt, uint32_t tp, int rb, int nframes)
 {
@@ -2651,6 +3382,53 @@ static int run_stream(int slot, const char *out_path, int wait_ms,
      * fence signals (see the wait loop). */
     int window = nframes < (int)MAXF ? nframes : (int)MAXF;
     int ring = nframes > (int)MAXF;
+    /* M47④: the resident viewfinder trades ring depth for AEC latency —
+     * window 8 keeps ~8 packets of headroom under the kernel's ~19-packet
+     * UPDATE pool and converges in ~0.3 s steps. */
+    if (g_forever) {
+        if (g_vf_window < 1) g_vf_window = 1;
+        if (g_vf_window > (int)MAXF) g_vf_window = (int)MAXF;
+        window = g_vf_window;
+        ring = 1;
+        signal(SIGTERM, on_stop);
+        signal(SIGINT, on_stop);
+        /* big-core residency: floor cpu6/cpu7 at their capped max (idle
+         * cores park at 300-800 MHz and a 20 ms burst finishes inside the
+         * ramp window otherwise) and confine the whole process — chain,
+         * encoder, AEC — to the big pair as a MASK, threads left unpinned.
+         * Not a fixed assignment: cpu7 (prime) droops intermittently under
+         * streaming load while cpu6 never does, and the scheduler routes
+         * around the droop in real time — every FIXED pin tried measured
+         * 27-30 ms debayer vs the mask's 17 ms (see the cpufreq block). */
+        cpufreq_floor();
+        cpu_set_t big;
+        CPU_ZERO(&big);
+        CPU_SET(g_big_cores[0], &big);
+        CPU_SET(g_big_cores[1], &big);
+        if (sched_setaffinity(0, sizeof big, &big) == 0)
+            printf("vf: pinned to cpu%d+cpu%d\n", g_big_cores[0], g_big_cores[1]);
+        if (wait_ms >= 3000)
+            wait_ms = 500; /* default 3 s -> stop latency <1 s */
+    }
+    /* M47③ AEC: ladder state (initial rung fills at the slot CONFIG chain
+     * below, from aec.state or the vendor default), the CIT cap derived
+     * from the mode table's FLL, the rung riding the next queued request
+     * (consumed by send_sensor_req at the recycle/rolling/pre-queue sites),
+     * the bracket pre-sets, and the per-frame yavg record. */
+    struct aec_st aec = {5, -1000, 0, 0.0, 1.0};
+    unsigned cit_cap = 0;
+    int upd_rung = -1;
+    double upd_trim = 1.0;
+    int brungs[MAXF];
+    for (int i = 0; i < MAXF; i++) brungs[i] = -1;
+    double *aec_yv = NULL;
+    if ((g_aec || g_probe_op7) && !g_forever) {
+        aec_yv = calloc((size_t)nframes, sizeof(double));
+        if (!aec_yv) {
+            fprintf(stderr, "aec: no mem for yv\n");
+            goto out;
+        }
+    }
     double kt = 0;
     /* mode dims: slot 0 (rear imx363) = vendor-bin 2016x1136 binned mode
      * (2.86 MB RAW10); slot 1 (UW imx481) = vendor-bin mode #1301
@@ -3016,35 +3794,13 @@ static int run_stream(int slot, const char *out_path, int wait_ms,
                     cfg_regs[i].val = 0x5e;
             printf("rear564: OP_MUL 188->94 (564 Mbps/lane)\n");
         }
-        /* exposure/gain (imx355-family formulas, mainline imx355.c):
-         * CIT 0x0202 (<= FLL-10), analog gain 0x0204 multiplier =
-         * 1024/(1024-reg) so reg = 1024-1024/g (max 960 = 16x), digital
-         * gain 0x020e (256 = 1x) with 0x3070=1 selecting global. Mode
-         * #2610 defaults CIT 2474 (FLL 2488) and gain 1x — correct for a
-         * lit room; a dark scene needs --gain/--dgain, not more time. */
-        if (g_cit) {
-            cfg_override(cfg_regs, &n_cfg, 0x0202, (uint8_t)(g_cit >> 8));
-            cfg_override(cfg_regs, &n_cfg, 0x0203, (uint8_t)(g_cit & 0xff));
-            printf("exposure: CIT=%u lines\n", g_cit);
-        }
-        if (g_gain > 1.0) {
-            double m = g_gain > 16.0 ? 16.0 : g_gain;
-            unsigned gv = (unsigned)(1024.0 - 1024.0 / m + 0.5);
-            if (gv > 960) gv = 960;
-            cfg_override(cfg_regs, &n_cfg, 0x0204, (uint8_t)(gv >> 8));
-            cfg_override(cfg_regs, &n_cfg, 0x0205, (uint8_t)(gv & 0xff));
-            printf("analog gain: %.2fx (reg 0x%03x)\n",
-                   1024.0 / (1024.0 - (double)gv), gv);
-        }
-        if (g_dgain > 1.0) {
-            double m = g_dgain > 16.0 ? 16.0 : g_dgain;
-            unsigned dv = (unsigned)(m * 256.0 + 0.5);
-            if (dv > 4095) dv = 4095;
-            cfg_override(cfg_regs, &n_cfg, 0x3070, 0x01);
-            cfg_override(cfg_regs, &n_cfg, 0x020e, (uint8_t)(dv >> 8));
-            cfg_override(cfg_regs, &n_cfg, 0x020f, (uint8_t)(dv & 0xff));
-            printf("digital gain: %.2fx (reg 0x%03x)\n", dv / 256.0, dv);
-        }
+        /* exposure/gain: single-sourced in expo_regs() (M47③) — the same
+         * imx355-family formulas, folded into the CONFIG table here and
+         * sent as per-request op-1 updates by AEC. Mode #2610 defaults CIT
+         * 2474 (FLL 2488) and gain 1x — correct for a lit room; a dark
+         * scene needs gain, not more time. */
+        aec_cfg_init(slot, &aec, cfg_regs, n_cfg, &cit_cap);
+        apply_expo(cfg_regs, &n_cfg, g_cit, g_gain, g_dgain);
         if (g_halfrate) {
             for (size_t i = 0; i < n_cfg; i++)
                 if (cfg_regs[i].addr == 0x0307)
@@ -3110,29 +3866,8 @@ static int run_stream(int slot, const char *out_path, int wait_ms,
         printf("uw imx481: vendor-bin mode 2328x1310 4-lane (verbatim, "
                "702 Mbps/lane, ~29 fps)\n");
         /* exposure/gain: same imx355-family register set as the rear */
-        if (g_cit) {
-            cfg_override(cfg_regs, &n_cfg, 0x0202, (uint8_t)(g_cit >> 8));
-            cfg_override(cfg_regs, &n_cfg, 0x0203, (uint8_t)(g_cit & 0xff));
-            printf("exposure: CIT=%u lines\n", g_cit);
-        }
-        if (g_gain > 1.0) {
-            double m = g_gain > 16.0 ? 16.0 : g_gain;
-            unsigned gv = (unsigned)(1024.0 - 1024.0 / m + 0.5);
-            if (gv > 960) gv = 960;
-            cfg_override(cfg_regs, &n_cfg, 0x0204, (uint8_t)(gv >> 8));
-            cfg_override(cfg_regs, &n_cfg, 0x0205, (uint8_t)(gv & 0xff));
-            printf("analog gain: %.2fx (reg 0x%03x)\n",
-                   1024.0 / (1024.0 - (double)gv), gv);
-        }
-        if (g_dgain > 1.0) {
-            double m = g_dgain > 16.0 ? 16.0 : g_dgain;
-            unsigned dv = (unsigned)(m * 256.0 + 0.5);
-            if (dv > 4095) dv = 4095;
-            cfg_override(cfg_regs, &n_cfg, 0x3070, 0x01);
-            cfg_override(cfg_regs, &n_cfg, 0x020e, (uint8_t)(dv >> 8));
-            cfg_override(cfg_regs, &n_cfg, 0x020f, (uint8_t)(dv & 0xff));
-            printf("digital gain: %.2fx (reg 0x%03x)\n", dv / 256.0, dv);
-        }
+        aec_cfg_init(slot, &aec, cfg_regs, n_cfg, &cit_cap);
+        apply_expo(cfg_regs, &n_cfg, g_cit, g_gain, g_dgain);
         if (tp) {
             cfg_regs[n_cfg].addr = 0x0600;
             cfg_regs[n_cfg].val = 0;
@@ -3149,6 +3884,8 @@ static int run_stream(int slot, const char *out_path, int wait_ms,
         n_cfg = sizeof(imx355_vcfg) / sizeof(imx355_vcfg[0]);
         printf("front imx355: vendor-bin mode 1640x925 4-lane (verbatim, "
                "360 Mbps/lane, 30 fps — mainline 2-lane table retired)\n");
+        aec_cfg_init(slot, &aec, cfg_regs, n_cfg, &cit_cap);
+        apply_expo(cfg_regs, &n_cfg, g_cit, g_gain, g_dgain);
         if (tp) {
             int has_tp = 0;
             for (size_t i = 0; i < n_cfg; i++)
@@ -3158,6 +3895,20 @@ static int run_stream(int slot, const char *out_path, int wait_ms,
             printf("test pattern 0x%04x %s\n", tp,
                 has_tp ? "enabled" : "NOT SET (no 0x0600 in vendor table)");
         }
+    }
+    /* M47③ bracket (--aec, non-ring burst): pre-set each request's rung
+     * two apart, descending from the start rung — the request's op-1 rides
+     * the pre-queue below, the heavy pass picks the frame whose yavg lands
+     * nearest target. One shot, lit on the first call, no feedback round
+     * (the scan_qr/read_text blind captures). */
+    if (g_aec && !ring) {
+        printf("aec: bracket rungs");
+        for (int i = 0; i < window; i++) {
+            brungs[i] = aec.rung - 2 * i;
+            if (brungs[i] < 0) brungs[i] = 0;
+            printf(" %d", brungs[i]);
+        }
+        printf("\n");
     }
     if (sensor_config(video_fd, sensor_fd, &sb, session, sensor_hdl,
                       4 /* CONFIG */, cfg_regs, n_cfg) < 0) {
@@ -3493,8 +4244,10 @@ static int run_stream(int slot, const char *out_path, int wait_ms,
             goto out;
         }
         dump_kmd(&ub[rq - 1], rq);
-        /* sensor must also register req N -> NOP packet */
-        if (sensor_nop(video_fd, sensor_fd, &sb, session, sensor_hdl, rq) < 0) {
+        /* sensor must also register req N -> NOP packet (bracket: the
+         * pre-set rung rides this request as an op-1 update) */
+        if (send_sensor_req(video_fd, sensor_fd, &sb, session, sensor_hdl,
+                            rq, brungs[rq - 1], 1.0, cit_cap) < 0) {
             fprintf(stderr, "sensor NOP req%d: %s\n", rq, strerror(errno));
             kt = stream_kmsg(kmsg, kt);
             goto out;
@@ -3562,8 +4315,17 @@ static int run_stream(int slot, const char *out_path, int wait_ms,
      * vs >=1 s margin). Raw dumps are skipped: nframes x 2.86 MB would
      * fill tmpfs; JPEG/PNG stay per-frame-numbered. */
     int frames_ok = 0, frames_empty = 0;
+    int timeouts = 0; /* M47④: consecutive fence timeouts under --forever */
+    double fps_t0 = mono();
     for (int fi = 0; fi < nframes; fi++) {
         int slot = fi % window;
+        /* resident: SIGTERM (or a wait that straddled one) leaves through
+         * the normal teardown — aec.state still gets written */
+        if (g_forever && g_stop) {
+            printf("vf: stop requested after %d frames\n", frames_ok);
+            rc = 0;
+            goto out;
+        }
         printf("[t=%.3f] waiting for frame %d/%d (fence %d, slot %d, %d ms)...\n",
                mono(), fi + 1, nframes, sync_obj[slot], slot, wait_ms);
         struct cam_sync_wait sw;
@@ -3584,6 +4346,22 @@ static int run_stream(int slot, const char *out_path, int wait_ms,
                 : (wres ? "timed out" : "signaled"));
         kt = stream_kmsg(kmsg, kt);
         if (wrc < 0 || wres < 0) {
+            /* resident: a timed-out fence is retried on the SAME slot (the
+             * request may still land); three in a row means the pipeline
+             * died — exit 3 and let the supervisor restart us */
+            if (g_forever) {
+                if (g_stop) {
+                    rc = 0;
+                    goto out;
+                }
+                if (++timeouts < 3) {
+                    fi--;
+                    continue;
+                }
+                fprintf(stderr, "vf: 3 consecutive fence timeouts, exiting\n");
+                rc = 3;
+                goto out;
+            }
             /* RX has gone silent by now (observed: CSID fatal-halts its
              * csi2 rx ~48 ms after stream start). Read the sensor again
              * AFTER the silence: MODE_SELECT still 1 = sensor alive and
@@ -3602,6 +4380,61 @@ static int run_stream(int slot, const char *out_path, int wait_ms,
             goto out;
         }
         frames_ok++;
+        timeouts = 0;
+
+        /* resident heartbeat: fps + exposure line every 30 frames (the
+         * tuning mouth and the acceptance receipt) */
+        if (g_forever && frames_ok % 30 == 0) {
+            double dt = mono() - fps_t0;
+            printf("vf: %d frames, %.1f fps (rung %d trim %.2f yavg %.1f)\n",
+                   frames_ok, dt > 0 ? 30.0 / dt : 0.0, aec.rung, aec.trim,
+                   aec.last_y);
+            if (chain_n) {
+                printf("vf: chain x%d (th %d): extract %.1f wb %.1f debayer %.1f "
+                       "raw %.1f enc %.1f(x%d) ms\n",
+                       chain_n, g_vf_threads, chain_ms[0] * 1000.0 / chain_n,
+                       chain_ms[1] * 1000.0 / chain_n,
+                       chain_ms[2] * 1000.0 / chain_n,
+                       chain_ms[3] * 1000.0 / chain_n,
+                       chain_ms[4] * 1000.0 / (enc_n ? enc_n : 1), enc_n);
+                memset(chain_ms, 0, sizeof chain_ms);
+                chain_n = enc_n = 0;
+            }
+            fps_t0 = mono();
+        }
+
+        /* M47③: measure the landed frame (linear center-crop yavg), then
+         * step the ladder (ring mode — the update rides the request
+         * recycled below, landing `window` frames later) or run the
+         * probe's forced schedule. Non-ring has no future request to
+         * carry an update: bracket pre-set its rungs at queue time. */
+        if (g_probe_op7 || g_aec) {
+            double y = frame_yavg(pix_map[slot], width, height, stride);
+            if (y >= 0) {
+                if (aec_yv)
+                    aec_yv[fi] = y;
+                if (g_probe_op7) {
+                    printf("probe: frame %d yavg %.1f\n", fi + 1, y);
+                    /* forced jumps: 16x+2x at fence window+1, back to 1x
+                     * at fence window+7 — each lands 2*window-ish frames
+                     * later, the yavg trace IS the verdict */
+                    if (fi == window + 1) upd_rung = 1;
+                    else if (fi == window + 7) upd_rung = 5;
+                } else if (ring) {
+                    int nr = aec_step(&aec, y, fi, window);
+                    printf("aec: frame %d yavg %.1f rung %d trim %.2f%s\n",
+                           fi + 1, y, aec.rung, aec.trim,
+                           nr >= 0 ? " (stepped)" : "");
+                    if (nr >= 0) {
+                        upd_rung = nr;
+                        upd_trim = aec.trim;
+                    }
+                } else {
+                    printf("aec: frame %d yavg %.1f (bracket rung %d)\n",
+                           fi + 1, y, brungs[fi]);
+                }
+            }
+        }
 
         /* rolling mode only: queue the next request NOW, while the sensor
          * is between frames (pre-queue mode already has every request in) */
@@ -3636,8 +4469,9 @@ static int run_stream(int slot, const char *out_path, int wait_ms,
                 goto out;
             }
             dump_kmd(&ub[rslot], rq);
-            if (sensor_nop(video_fd, sensor_fd, &sb, session, sensor_hdl,
-                           rq) < 0) {
+            if (send_sensor_req(video_fd, sensor_fd, &sb, session,
+                                sensor_hdl, rq, upd_rung, upd_trim,
+                                cit_cap) < 0) {
                 fprintf(stderr, "sensor NOP req%d: %s\n", rq, strerror(errno));
                 kt = stream_kmsg(kmsg, kt);
                 rc = 2;
@@ -3704,15 +4538,29 @@ static int run_stream(int slot, const char *out_path, int wait_ms,
                 rc = 2;
                 goto out;
             }
-            if (sensor_nop(video_fd, sensor_fd, &sb, session, sensor_hdl,
-                           rq) < 0) {
+            if (send_sensor_req(video_fd, sensor_fd, &sb, session,
+                                sensor_hdl, rq, upd_rung, upd_trim,
+                                cit_cap) < 0) {
                 fprintf(stderr, "sensor NOP req%d: %s\n", rq, strerror(errno));
                 kt = stream_kmsg(kmsg, kt);
                 rc = 2;
                 goto out;
             }
         }
-        if (ring) {
+        /* the pending rung (if any) has been attached to the request this
+         * iteration queued — drop it so the next frame starts clean */
+        upd_rung = -1;
+        upd_trim = 1.0;
+        if (ring && g_forever) {
+            /* resident viewfinder: crop+rotate+scale+encode IN PLACE, then
+             * atomic tmp+rename publish (the voice side mtime-polls eye.jpg
+             * — a torn read would decode a half-written JPEG). The recycled
+             * request does not touch this slot for `window` frame periods
+             * (~0.27 s at window 8 / 30 fps); the ~0.1 s pass fits. First
+             * 3 frames are stats only (AEC bracketing from aec.state). */
+            if (fi >= 3 && g_jpeg_q > 0)
+                dump_jpeg(pix_map[slot], width, height, stride, out_path);
+        } else if (ring && !g_probe_op7) {
             /* spill the frame to disk and move on — the encode pass runs
              * after the burst (0.17 s/frame would stall this loop past the
              * 67 ms frame period and drain the in-flight window) */
@@ -3744,6 +4592,43 @@ static int run_stream(int slot, const char *out_path, int wait_ms,
      * spilled each frame to disk). Kept out of the wait loop so encode
      * time never throttles the burst. */
     if (!ring) {
+        if (g_aec) {
+            /* bracket verdict: the frame whose yavg landed nearest target
+             * wins — one output, no -<i> suffixes (the blind-capture
+             * contract: callers hand over a single path) */
+            int best = 0;
+            double bd = 1e9;
+            for (int fi = 0; fi < window; fi++) {
+                double d = fabs(aec_yv[fi] - 50.0);
+                if (d < bd) {
+                    bd = d;
+                    best = fi;
+                }
+            }
+            aec.rung = brungs[best] >= 0 ? brungs[best] : aec.rung;
+            aec.last_y = aec_yv[best];
+            printf("aec bracket: best frame %d (yavg %.1f)\n", best + 1,
+                   aec_yv[best]);
+            size_t nz = inspect_buf(pix_map[best], (size_t)pixbuf_len,
+                                    NULL, "frame");
+            if (nz && g_png)
+                dump_png(pix_map[best], width, height, stride,
+                         "/tmp/frame.png");
+            if (nz && g_jpeg_q > 0)
+                dump_jpeg(pix_map[best], width, height, stride, out_path);
+            else if (nz) {
+                /* no encoder requested: the winner rides the raw dump */
+                int fd = open(out_path, O_WRONLY | O_CREAT | O_TRUNC, 0644);
+                if (fd < 0 || wr_all(fd, pix_map[best], (size_t)pixbuf_len) < 0)
+                    nz = 0;
+                if (fd >= 0)
+                    close(fd);
+            }
+            if (!nz)
+                frames_empty++;
+            rc = frames_empty ? 3 : 0;
+            goto out;
+        }
         for (int fi = 0; fi < window; fi++) {
             size_t nz = process_frame(pix_map[fi], (size_t)pixbuf_len,
                                       out_path, fi + 1, nframes, width,
@@ -3751,7 +4636,7 @@ static int run_stream(int slot, const char *out_path, int wait_ms,
             if (!nz)
                 frames_empty++;
         }
-    } else {
+    } else if (!g_probe_op7 && !g_forever) {
         /* ring post-encode from the spilled raws: inspect + JPEG each,
          * then unlink the raw to hand tmpfs back */
         uint8_t *rb = malloc((size_t)pixbuf_len);
@@ -3794,6 +4679,23 @@ static int run_stream(int slot, const char *out_path, int wait_ms,
         }
         free(rb);
     }
+    /* probe verdict from the yavg trace: the first jump rides the request
+     * recycled at fence window+1 and lands as frame 2*window+1 (0-based);
+     * one settle frame, then judge against the pre-jump baseline. */
+    if (g_probe_op7 && g_upd_ok) {
+        int b0 = 1, b1 = window;
+        int a0 = 2 * window + 2, a1 = 2 * window + 7;
+        double sb = 0, sa = 0;
+        int nb = 0, na = 0;
+        for (int i = b0; i < b1 && i < nframes; i++) { sb += aec_yv[i]; nb++; }
+        for (int i = a0; i < a1 && i < nframes; i++) { sa += aec_yv[i]; na++; }
+        if (nb && na)
+            printf("PROBE: baseline yavg %.1f, gain-16x window yavg %.1f "
+                   "-> %s\n", sb / nb, sa / na,
+                   sa > sb * 1.8
+                       ? "op1-update WORKS (brightness followed the registers)"
+                       : "op1-update accepted but brightness DID NOT follow");
+    }
     rc = frames_empty == 0 ? 0 : (frames_empty == nframes ? 3 : 4);
     goto out;
 
@@ -3801,6 +4703,12 @@ out:
     /* teardown: streamoff -> stop (isp, csiphy, sensor) -> unlink -> release
      * -> destroy session. Best effort; the kernel also tears down on close. */
     printf("== teardown ==\n");
+    cpufreq_restore(); /* back to parked mins before anything slow */
+    if (g_aec && !g_probe_op7) {
+        aec_state_write(slot, aec.rung, aec.trim, aec.last_y);
+        printf("aec: state rung %d trim %.2f yavg %.1f -> %s\n", aec.rung,
+               aec.trim, aec.last_y, AEC_STATE_PATH);
+    }
     if (sensor_fd >= 0 && sensor_hdl && sb.p_pkt)
         sensor_config(video_fd, sensor_fd, &sb, session, sensor_hdl,
                       5 /* STREAMOFF */, imx355_streamoff, 1);
@@ -3891,6 +4799,7 @@ out:
         if (pix_map[fi] != MAP_FAILED) munmap(pix_map[fi], pixbuf_len);
         if (pix_mfd[fi] > 0) close(pix_mfd[fi]);
     }
+    free(aec_yv);
     if (out_fd >= 0) close(out_fd);
     if (sensor_fd >= 0) close(sensor_fd);
     if (rail_fd >= 0) close(rail_fd);
@@ -3915,6 +4824,7 @@ int main(int argc, char **argv)
     uint32_t tp = 0;           /* sensor test pattern (0x0600), 0=off */
     int rb = 0;                /* post-START sensor register readback */
     uint32_t reg = 0x0016;   /* Sony IMX3xx-family chip id register */
+    int frames_given = 0;
     for (int i = 1; i < argc; i++) {
         if (strcmp(argv[i], "--reg") == 0 && i + 1 < argc)
             reg = (uint32_t)strtoul(argv[++i], 0, 0);
@@ -4032,6 +4942,8 @@ int main(int argc, char **argv)
         }
         else if (strcmp(argv[i], "--gamma") == 0 && i + 1 < argc)
             g_gamma = atof(argv[++i]);   /* <=1 = off */
+        else if (strcmp(argv[i], "--no-ccm") == 0)
+            g_ccm = 0;   /* escape hatch: the pre-M47⑤g look */
         else if (strcmp(argv[i], "--rot") == 0 && i + 1 < argc) {
             g_rot = atoi(argv[++i]);
             if (g_rot != 0 && g_rot != 90 && g_rot != 270) {
@@ -4041,6 +4953,7 @@ int main(int argc, char **argv)
         }
         else if (strcmp(argv[i], "--frames") == 0 && i + 1 < argc) {
             g_frames = atoi(argv[++i]);
+            frames_given = 1;
             if (g_frames < 1 || g_frames > 999) {
                 fprintf(stderr, "--frames: 1..999 (<=16 pre-queued, "
                                 ">16 ring mode — see the wait loop note)\n");
@@ -4049,6 +4962,57 @@ int main(int argc, char **argv)
         }
         else if (strcmp(argv[i], "--roll") == 0)
             g_roll = 1;
+        else if (strcmp(argv[i], "--forever") == 0) {
+            /* M47④ resident viewfinder: ring with no end; the caller owns
+             * the lifecycle (SIGTERM stops through the normal teardown) */
+            g_forever = 1;
+            stream = 1;
+        }
+        else if (strcmp(argv[i], "--aspect") == 0 && i + 1 < argc) {
+            if (sscanf(argv[++i], "%u:%u", &g_aspect_w, &g_aspect_h) != 2 ||
+                !g_aspect_w || !g_aspect_h) {
+                fprintf(stderr, "--aspect: W:H (display portrait box)\n");
+                return 2;
+            }
+        }
+        else if (strcmp(argv[i], "--preview") == 0 && i + 1 < argc) {
+            g_preview_w = (uint32_t)strtoul(argv[++i], 0, 0);
+            if (!g_preview_w || g_preview_w > 2016) {
+                fprintf(stderr, "--preview: 1..2016 (output width cap)\n");
+                return 1;
+            }
+        }
+        else if (strcmp(argv[i], "--raw-out") == 0 && i + 1 < argc) {
+            /* M47⑤c: raw RGB565 display frame published every frame */
+            snprintf(g_raw_out, sizeof g_raw_out, "%s", argv[++i]);
+        }
+        else if (strcmp(argv[i], "--jpeg-every-ms") == 0 && i + 1 < argc) {
+            g_jpeg_every_ms = (uint32_t)strtoul(argv[++i], 0, 0);
+            if (g_jpeg_every_ms > 60000) {
+                fprintf(stderr, "--jpeg-every-ms: 0..60000 (0 = every frame)\n");
+                return 1;
+            }
+        }
+        else if (strcmp(argv[i], "--vf-window") == 0 && i + 1 < argc) {
+            g_vf_window = atoi(argv[++i]);
+            if (g_vf_window < 1 || g_vf_window > 16) {
+                fprintf(stderr, "--vf-window: 1..16\n");
+                return 1;
+            }
+        }
+        else if (strcmp(argv[i], "--vf-threads") == 0 && i + 1 < argc) {
+            g_vf_threads = atoi(argv[++i]);
+            if (g_vf_threads < 1 || g_vf_threads > 8) {
+                fprintf(stderr, "--vf-threads: 1..8\n");
+                return 1;
+            }
+        }
+        else if (strcmp(argv[i], "--aec") == 0)
+            g_aec = 1;
+        else if (strcmp(argv[i], "--probe-op7") == 0) {
+            g_probe_op7 = 1;
+            stream = 1;
+        }
         else if (strcmp(argv[i], "--cit") == 0 && i + 1 < argc)
             g_cit = (unsigned)strtoul(argv[++i], 0, 0);
         else if (strcmp(argv[i], "--gain") == 0 && i + 1 < argc)
@@ -4072,6 +5036,23 @@ int main(int argc, char **argv)
         else
             only_slot = atoi(argv[i]);
     }
+    /* probe defaults: rear camera, ring mode, 48 frames — the first forced
+     * jump rides the request recycled at fence window+1 (=17) and lands as
+     * 0-based frame 2*window+1 (=33); the verdict window [34,39) needs every
+     * frame up to and including 39, so 48 leaves settle margin. */
+    if (g_probe_op7) {
+        if (only_slot < 0)
+            only_slot = 0;
+        if (!frames_given)
+            g_frames = 48;
+        if (g_frames < 48) {
+            fprintf(stderr, "--probe-op7: needs --frames >= 48 "
+                            "(2*window+8 at window 16)\n");
+            return 1;
+        }
+    }
+    if (g_forever)
+        g_frames = 500000; /* ~4.6 h at 30 fps — SIGTERM owns the exit */
     if (stream)   /* default front camera (slot 2, imx355) */
         return run_stream(only_slot >= 0 ? only_slot : 2, out_path, wait_ms,
                           settle_cnt, tp, rb, g_frames);
