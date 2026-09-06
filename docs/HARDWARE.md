@@ -417,3 +417,22 @@ Deliberately NOT in this step: the real pair receipt (fresh boot, no adb,
 human holds the code → gateway registers to relay) — that is the #198
 human product receipt, after bake #19. ASR n-best tap-to-correct is phase
 two (ag-asr source is not in this repo).
+## 2026-09-07 — 开机体验⑤ 语音侧上机：接线员分流 + 英文话术 + term 直进 Voice（收据）
+
+aginx-voice / aginx-term musl 推 /usr/bin（chmod 755，agsvc 监督），重启验收：
+
+- **英文 TTS 首条收据**：`/var/bin/aginx-tts "Operator. Go ahead."
+  /tmp/en-test.wav` → exit 0，113888 字节（≈3.5s）。melo
+  vits-melo-tts-zh_en 出英文整句——此前零收据的风险点闭案。
+- **接线员分支（已连网）**：`aginx-svc restart aginx-voice` 两次，每次
+  face 文档 `lines=[["Operator. Go ahead."]]`、`eye=false`、state idle；
+  日志增量（offset 对齐）只有一行 `up (local=true, brain=true, …)`——
+  铃（play_ring）与 speak 无任何错误行；`/run/boot.state` 含
+  `wifi ok`（判 Up 分支的输入）。铃+英文问候扬声器出声两次（人耳
+  确认留用户）。
+- **term 直进 Voice**：kill 旧 term，handoff 常驻环 2s 内以新二进制
+  重启（pid 1577），无崩溃环；开机默认 Mode::Voice 生效路径 =
+  face 文档渲染（voice 侧收据）+ 常驻环存活。
+- **未收**：断网分支（英文警告+自动睁眼）——现网 wifi.conf 不可毁，
+  主机 34/34 测试覆盖，fresh-boot 留 bake #19；bootcard Matrix 雨/
+  END——initramfs 每次 boot 重建，同炉 bake #19。
