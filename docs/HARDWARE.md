@@ -428,8 +428,7 @@ aginx-voice / aginx-term musl 推 /usr/bin（chmod 755，agsvc 监督），重�
   face 文档 `lines=[["Operator. Go ahead."]]`、`eye=false`、state idle；
   日志增量（offset 对齐）只有一行 `up (local=true, brain=true, …)`——
   铃（play_ring）与 speak 无任何错误行；`/run/boot.state` 含
-  `wifi ok`（判 Up 分支的输入）。铃+英文问候扬声器出声两次（人耳
-  确认留用户）。
+  `wifi ok`（判 Up 分支的输入）。铃+英文问候扬声器出声两次（用户已人耳确认：铃与问候均听到——2026-09-07）。
 - **term 直进 Voice**：kill 旧 term，handoff 常驻环 2s 内以新二进制
   重启（pid 1577），无崩溃环；开机默认 Mode::Voice 生效路径 =
   face 文档渲染（voice 侧收据）+ 常驻环存活。
