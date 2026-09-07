@@ -847,21 +847,39 @@ fn scan_qr() -> Result<Vec<String>, String> {
 /// launch::VIEWFINDER_ASPECT 钉在一起（那边 host 测试守着）——布局属性由
 /// 本粘合层显式注入，不共享 crate。AEC 状态由 cam-shot 落
 /// /run/aginx-cam/aec.state，下次开眼首帧即正常亮度。
+///
+/// ⑤u 两个变化（A/B 2026-09-06）：取景参数加 `--nr 0:0:0:0`——⑤o 全分辨率
+/// demosaic+面积均值已结构性砍掉颗粒（√1.29×），⑤m 整面空间 NR 在这之上
+/// 纯付 17.2ms/帧（fps 26→10.9「可怜感」的主犯之一），取景关 NR、出片仍走
+/// 全 look；子进程 stdout/stderr 不再进 null，落 /run/aginx-voice/cam.log
+/// （每次开眼截断一份）——真实会话第一次可见 aec 走线与 vf: 链路心跳。
+///
+/// ⑤v-1（2026-09-06，P2 探针已证）：`--vf-window 4`——aec_step 的 pending 门
+/// 是 window+3 帧/步（window 8 → 11 帧 ≈0.77s@14fps，场景切换 ~2 粗步+trim
+/// 就是用户判的「曝光 3s」）。window 4 门降到 7 帧，收敛 ~1.9→~1.4s，fps
+/// 无损（P2 实跑 498 帧正常）；ring 更浅只会让 kernel UPDATE 池余量更大。
 fn eye_spawn() -> Result<std::process::Child, String> {
-    Command::new("/usr/bin/aginx-cam-shot")
-        .args([
+    let mut cmd = Command::new("/usr/bin/aginx-cam-shot");
+    cmd.args([
             "--stream", "--rear", "--forever", "--aec", "--rot", "90",
             "--aspect", "1080:2340", "--preview", "720", "--jpeg",
             "--jpeg-every-ms", "500",
+            "--nr", "0:0:0:0",
+            "--vf-window", "4",
         ])
         .arg("--jpeg-out")
         .arg(face::EYE_JPG)
         .arg("--raw-out")
-        .arg("/run/aginx-voice/eye.raw")
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .spawn()
-        .map_err(|e| format!("cam-shot spawn: {e}"))
+        .arg("/run/aginx-voice/eye.raw");
+    // ⑤u: 一个日志文件，开眼截断（tmpfs 限一次会话）；stderr 挂 stdout 的
+    // dup——共享偏移，2>&1 语义。开不了就退回 null：观察不能弄死眼。
+    let log = std::fs::File::create("/run/aginx-voice/cam.log").ok();
+    cmd.stdout(log.as_ref().and_then(|f| f.try_clone().ok()).map_or_else(
+        std::process::Stdio::null,
+        std::process::Stdio::from,
+    ));
+    cmd.stderr(log.map_or_else(std::process::Stdio::null, std::process::Stdio::from));
+    cmd.spawn().map_err(|e| format!("cam-shot spawn: {e}"))
 }
 
 /// 优雅停机（TERM-then-wait，2s 预算）：cam-shot --forever 的退出路径是
