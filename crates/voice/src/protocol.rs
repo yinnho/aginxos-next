@@ -194,7 +194,12 @@ impl Vm {
                 Err(e) => self.say(&mut outs, &format!("没连上，{e}。再说连网重试。")),
             },
             Ev::PairDone(r) => match r {
-                Ok(msg) => self.say(&mut outs, &format!("配对完成，{msg}。")),
+                Ok(msg) => {
+                    // 脸上留技术细节；收尾句出声（开机体验定档：hardline
+                    // 接回 = 母体重新接通，Matrix 法理即技术真相）。
+                    self.say(&mut outs, &format!("配对完成，{msg}。"));
+                    self.say_loud(&mut outs, "Connection restored. Welcome to the real world.");
+                }
                 Err(e) => self.say(&mut outs, &format!("配对没成，{e}。再说连网重试。")),
             },
             Ev::QrDone(r) => {
@@ -620,6 +625,10 @@ mod tests {
         let mut vm = Vm::new();
         let o = vm.step(Ev::PairDone(Ok("网已连，母体在线".into())));
         assert_eq!(says(&o), vec!["配对完成，网已连，母体在线。"]);
+        assert_eq!(
+            speaks(&o),
+            vec!["Connection restored. Welcome to the real world."]
+        );
         assert!(acts(&o).is_empty());
         let o = vm.step(Ev::PairDone(Err("时钟没同步".into())));
         assert_eq!(says(&o), vec!["配对没成，时钟没同步。再说连网重试。"]);

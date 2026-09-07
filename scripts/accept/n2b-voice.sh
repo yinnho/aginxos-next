@@ -10,7 +10,7 @@
 #   A 封闭词表离线地板：server 不在，你好 → 我在（本地，零 brain 往返）
 #   B 前台不可达兜底：server 不在，自由文本 → 「连不上母体」地板话
 #   C 自由文本 → 母体：server 在，问题 → 脸上出现母体真回复（真 brain）
-#   D 真耳环回：ag-tts 合成 wav → voiced-n --hear（本地 ASR）→
+#   D 真耳环回：aginx-tts 合成 wav → voiced-n --hear（本地 ASR）→
 #     ASR 文本喂 --inject → 封闭词表命中（扫描网络）——M42c 同款
 #     全流程的 CLI 可达段；完整 PTT 实机收据归用户
 #
@@ -110,9 +110,9 @@ expect_no  "不是兜底话"                     "连不上母体"
 expect_no  "不是没听懂地板"                  "没听懂"
 expect_out "脸上是母体真回复（含 AginxOS）"   "AginxOS"
 
-echo "==> D 真耳环回（ag-tts 合成 → 本地 ASR → 词表命中）"
-drv "/var/bin/ag-tts 连接无线网络 /tmp/n2b-ear.wav"
-expect_rc "ag-tts 合成耳环回 wav"
+echo "==> D 真耳环回（aginx-tts 合成 → 本地 ASR → 词表命中）"
+drv "/var/bin/aginx-tts 连接无线网络 /tmp/n2b-ear.wav"
+expect_rc "aginx-tts 合成耳环回 wav"
 drv "$VENV $TREE/bin/voiced-n --hear /tmp/n2b-ear.wav"
 expect_out "本地 ASR 认出网络词" "无线|网络|wi.?fi"
 ASR_TEXT="$(printf '%s' "${DRV_OUT:-}" | head -1)"

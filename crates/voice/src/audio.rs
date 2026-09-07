@@ -269,6 +269,31 @@ fn play_stereo_spawn() -> Result<Option<Child>, String> {
     Err(format!("snd-play: {last_err}"))
 }
 
+/// 老式电话铃（Matrix 问候起手）：440+480Hz 双音 ~2s，两端 0.1s 淡入淡出
+/// 去咔哒。进程内合成无资产文件；与 TTS 同链（48k L=R 立体声，mono 铁律）。
+pub fn play_ring() -> Result<(), String> {
+    const SECS: usize = 2;
+    let n = RATE as usize * SECS;
+    let mut stereo = Vec::with_capacity(n * 4);
+    for i in 0..n {
+        let t = i as f32 / RATE as f32;
+        let env = if t < 0.1 {
+            t / 0.1
+        } else if t > 1.9 {
+            (SECS as f32 - t) / 0.1
+        } else {
+            1.0
+        };
+        let s = (2.0 * std::f32::consts::PI * 440.0 * t).sin()
+            + (2.0 * std::f32::consts::PI * 480.0 * t).sin();
+        let v = (s * 0.25 * env * 32767.0) as i16;
+        stereo.extend_from_slice(&v.to_le_bytes());
+        stereo.extend_from_slice(&v.to_le_bytes());
+    }
+    fs::write("/tmp/aginx-voice-tts.raw", &stereo).map_err(|e| format!("ring tmp: {e}"))?;
+    play_stereo_blocking(n)
+}
+
 // ---------------- capture ----------------
 
 /// 起一次最长 CAP_MAX_SECS 的采集；PTT 松手时 kill，采到多少算多少。
@@ -348,12 +373,12 @@ pub fn wav_data_span(wav: &[u8]) -> Result<(usize, usize), String> {
     Err("no data chunk".into())
 }
 
-// ---------------- 本地后端（M42d：ag-asr/ag-tts bionic-static 子进程）----------------
+// ---------------- 本地后端（M42d：aginx-asr/aginx-tts bionic-static 子进程）----------------
 
 pub const AG_ASR: &str = "/var/bin/aginx-asr";
 pub const AG_TTS: &str = "/var/bin/aginx-tts";
 pub const ASR_MODEL_DIR: &str = "/var/models/asr";
-// vits(melo) 是产品嘴（ag-tts 默认 KIND 同此）：kokoro 的 zh 前端整词吞
+// vits(melo) 是产品嘴（aginx-tts 默认 KIND 同此）：kokoro 的 zh 前端整词吞
 // Latin——OCR 念读「AginxOS/TEL」无声的根因（2026-09-04 用户收据）。
 pub const TTS_MODEL_DIR: &str = "/var/models/tts/vits-melo-tts-zh_en";
 
@@ -387,7 +412,7 @@ fn pin_big_cores(cmd: &mut Command) {
 fn pin_big_cores(_cmd: &mut Command) {}
 
 // ---------------- 常驻本地后端（M42e：摊模型加载）----------------
-// 一次性调用每次重付装载：ag-tts ~3.8s、ag-asr ~2s（cpufreq 拉满后实测，
+// 一次性调用每次重付装载：aginx-tts ~3.8s、aginx-asr ~2s（cpufreq 拉满后实测，
 // HARDWARE.md M42e）——短句延迟的大头是装载不是推理。--serve 进程在
 // daemon 生命周期里只加载一次：stdin 一行一个请求，stdout 一行
 // "OK ..." / "ERR ..."。任何失败清空常驻、当次落回一次性老路径。
@@ -497,7 +522,7 @@ fn resident_tts(text: &str) -> Result<(), String> {
     let srv = slot.as_mut().unwrap();
     match srv.roundtrip(text, Duration::from_secs(120)) {
         Ok(line) if line.starts_with("OK ") => Ok(()),
-        Ok(line) => Err(format!("ag-tts: {line}")), // server 活着，这句真失败
+        Ok(line) => Err(format!("aginx-tts: {line}")), // server 活着，这句真失败
         Err(e) => {
             srv.kill();
             *slot = None; // 死/挂——清掉，下一次调用重 spawn
@@ -515,7 +540,7 @@ fn resident_asr() -> Result<String, String> {
     let srv = slot.as_mut().unwrap();
     match srv.roundtrip(HEAR_WAV, Duration::from_secs(60)) {
         Ok(line) if line.starts_with("OK ") => Ok(line[3..].trim().to_string()),
-        Ok(line) => Err(format!("ag-asr: {line}")),
+        Ok(line) => Err(format!("aginx-asr: {line}")),
         Err(e) => {
             srv.kill();
             *slot = None;
@@ -534,10 +559,10 @@ pub fn local_asr(wav: &[u8]) -> Result<String, String> {
             let mut cmd = Command::new(AG_ASR);
             cmd.arg(HEAR_WAV);
             pin_big_cores(&mut cmd);
-            let out = cmd.output().map_err(|e| format!("ag-asr spawn: {e}"))?;
+            let out = cmd.output().map_err(|e| format!("aginx-asr spawn: {e}"))?;
             if !out.status.success() {
                 return Err(format!(
-                    "ag-asr {}: {}",
+                    "aginx-asr {}: {}",
                     out.status,
                     String::from_utf8_lossy(&out.stderr).trim()
                 ));
@@ -546,7 +571,7 @@ pub fn local_asr(wav: &[u8]) -> Result<String, String> {
         }
     };
     if text.is_empty() {
-        return Err("ag-asr empty".into());
+        return Err("aginx-asr empty".into());
     }
     Ok(text)
 }
@@ -564,10 +589,10 @@ pub fn local_speak(text: &str) -> Result<(), String> {
     let mut cmd = Command::new(AG_TTS);
     cmd.args([&spoken, TTS_WAV]);
     pin_big_cores(&mut cmd);
-    let out = cmd.output().map_err(|e| format!("ag-tts spawn: {e}"))?;
+    let out = cmd.output().map_err(|e| format!("aginx-tts spawn: {e}"))?;
     if !out.status.success() {
         return Err(format!(
-            "ag-tts {}: {}",
+            "aginx-tts {}: {}",
             out.status,
             String::from_utf8_lossy(&out.stderr).trim()
         ));
