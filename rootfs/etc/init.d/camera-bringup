@@ -43,6 +43,10 @@ load() {  # load <file-stem> — dash and underscore spellings are both real fil
 # 2026-08-31: all unbound, zero CAM_ERR lines, driver dir empty). It must
 # also race ahead of whoever gpio_requests PM8150L gpio9 (1109): loading
 # it late cost "GPIO(1109) request failed(-16)" and 1-0075 stayed unbound.
+# cam_sensor_vsync_* stay in the lists on purpose: cam_isp imports
+# cam_notify_vsync_qmi from vsync_dev, so dropping them kills cam_isp.
+# The boot-wedge fix (2026-09-06 list_add race) is the neutered ko in
+# /lib/modules.aginx (scripts/patch-vsync-ko.sh) — load() prefers it.
 for m in slg51000-regulator; do load "$m"; done
 # Cross-chain deps touch-bringup normally has (ion/pinctrl); ensure first.
 for m in ion-alloc pinctrl-msm pinctrl-lito; do load "$m"; done
