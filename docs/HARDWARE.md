@@ -417,6 +417,315 @@ Deliberately NOT in this step: the real pair receipt (fresh boot, no adb,
 human holds the code → gateway registers to relay) — that is the #198
 human product receipt, after bake #19. ASR n-best tap-to-correct is phase
 two (ag-asr source is not in this repo).
+
+## 2026-09-06 — M47⑤p 取景黑帧根因：CCI 瞬态幻步 + AEC 毒态落盘（两护栏）
+
+症状链复盘（用户判「一片一片/颗粒」的那帧）：pull 下来的
+/run/aginx-voice/eye.raw 近乎全黑；aec.state = `0 0 1.000 0.3`。rung 0 =
+梯子顶（CIT cap 1642 + 16x 模拟 + 2x 数字 = 32x），真暗房在这个配置下也
+meter >5 —— yavg 0.3 是**曝光写没落地**的特���，不是光照事实。
+
+根因：此前实验 kill 掉 cam-shot 实例引发 CCI I2C 瞬态（已知自愈几分钟）；
+瞬态窗内的曝光寄存器写静默 NACK（ioctl 成功、I2C 失败），AEC 状态机照常
+记账 5→1→0 的「幻步」，停在 rung 0，把 0.3 当作场景亮度写进 aec.state。
+毒态落盘 → 后续会话冷启继承。
+
+**探针收据（同房间、健康链路）**：手动跑 daemon 同参 cam-shot，冷启
+rung 5（yavg 4.3）→ rung 1 落地 38.7（精确 9x）→ rung 0 落地 78.4 →
+fine trim 0.83 落地 64.6，带内收敛，13.8 fps；op-1 更新链、增益寄存器、
+CIT trim 全部在役。probe.jpg（84389 B）目视：曝光正常、无色块、无颗粒。
+**黑帧是毒会话，画质链本身没病。**
+
+两护栏（cam-shot.c ⑤p，部署 /usr/bin/aginx-cam-shot 3502256 B）：
+1. teardown 不落黑态：`rung==0 && last_y<5.0` 时跳过 aec_state_write——
+   下次会话走 rung-5 冷下降，每一步都被 yavg 重新验证。
+2. 梯子尽头周期重发：park 在 0 或 RUNGS-1 且 ratio>8 时每 2*window 帧
+   重发同 rung 更新——会话中途瞬态自愈后曝光能落地，无需重开眼。
+
+复验：新二进制 14 s 探针 191 帧（13.6 fps）收敛如常（rung 0 trim 0.83
+yavg 62），teardown 正常落盘 `0 0 0.828 62.0`——下次开眼首帧即正确亮度。
+
+**⑤p 归因更正（2026-09-06，用户证词）**：当晚手机是**扣在床上**的——镜头
+被床品遮死，yavg 0.3 是真实光照，不是毒态。「CCI 瞬态 → 幻步 → 黑帧」这条
+因果链没有成立证据，特此更正。两护栏本身保留（teardown 不落黑态、梯子尽头
+重发仍是正确的防御性设计，无副作用）。
+
+## 2026-09-06 — M47⑤q 取景左右分离根修 — 回收移到链后（读完才还槽）
+
+**根因（源码证明）**：dump_jpeg 的 extract 阶段是 slot 缓冲的**唯一读者**
+（memcpy 把 2016×930 crop 暂存进缓存；debayer/box/post/encode 全跑在私有
+平面 g/plane5f/px5/rgb 上）。传感器自由跑 ~60fps，主循环只有链速
+~13.4fps——8 深的 request 队列被永久饿穿，刚入队的 request 在**下一个
+SOF**（≤16ms）就执行：extract 还在读的 slot，驱动已经开始覆盖——左右两半
+各来自不同帧，即用户看到的取景左右分离。
+
+**修法（M41c 持帧纪律同法理）**：ring 回收从「publish 前」移到「publish
+之后」——slot 只在 extract 读完最后一次后才还给管线。帧率、AEC、publish
+语义零改动。时序收据（⑤q 构建）：extract 3.6 / wb 3.8 / debayer+box 44.5 /
+post 17.8 / raw write 2.5 / jpeg enc 6.1 ms，~13.4fps 循环。
+
+**用户判定（部署后真用）**：「除了有点卡，卡的时候会出现红色大圈，不卡的
+时候都挺好的，感觉方向对了」——左右分离已愈；卡与红圈转 ⑤r/⑤s。
+
+## 2026-09-06 — M47⑤r 取景卡根修 — cam-shot PDEATHSIG（voice 死亡不再孤儿占机）
+
+**症状与日志复盘**：取景中每隔一阵卡死数秒。用户整晚
+/var/log/aginx-svc/aginx-voice.log：卡顿窗内 voice「up」重启 7 次（svc
+拉起），每次都伴随 `eye spawn ... exit 2` + `eye stuck frame, respawn`
+三连。
+
+**根因（kill 复现，逐字命中日志签名）**：voice 死亡时其 `--forever`
+cam-shot 被 re-parent 给 init（PPid 1），继续向 eye.raw 流帧、**无限期占住
+相机节点**（voice 无信号处理器；Rust `Child` 的 Drop 不杀子进程）。复现：
+开眼中 `kill -9 <voice>` → 孤儿 cam-shot 继续 mtime 跳动；svc 秒级拉起新
+voice，VolUp 再开眼 → 新 cam-shot `exit 2`（setup ioctl 失败，节点被占）
+→ 10s 首帧 stuck 预算 → respawn ×3 = 用户看到的卡。
+
+**修法（cam-shot 侧，对任何 spawner 都成立）**：run_stream 开头
+`prctl(PR_SET_PDEATHSIG, SIGTERM)`——父死即收到我们已优雅处理的 SIGTERM
+（forever 模式 on_stop 正常 STREAMOFF + aec.state 落盘）；外加
+`getppid()==1` 竞态护栏（prctl 前父已死则拒绝碰硬件）。
+
+**部署收据（新二进制，多轮）**：开眼 cam=13087 流帧正常 → `kill -9` voice
+→ 3s 后 `cam=[]`（孤儿随父死）→ voice 回来重开眼即干净（cam=13356 流帧
+正常），日志 delta 仅一条「up」——零 exit 2、零 stuck。
+
+## 2026-09-06 — M47⑤s 红色大圈根修 — fringe 门两域中性（自发光晕不再被 CCM 染红）
+
+**先定位**：term 的眼渲染（blit_eye_raw + upscale565 直写 DRM 后缓冲）是
+纯重采样，画不出圆——红圈必然在 eye.raw 内容里，即 cam-shot 像素链。
+
+**根因（真实 campix 链在 host 完整复现，/tmp/circle_sim）**：⑤j fringe 门
+只测 **WB 后**中性比——循环论证。自发光晕（屏幕光晕）本身是中性像素，
+我们的 CT 增益恰在 CT 偏离时把它染成非中性（wb 1.43/1/2.58 下
+(200,200,200) → WB 后 286/200/514，比值 2.57）→ 门判「有色」放行 →
+CCM（色度放大 ~1.4×）+ sat 1.15 → 一整圈饱和品红-红环（模拟晕带修前
+(250,120,255) 级别）。暗房怼亮屏（20cm QR 场景）是最坏 case；每次
+cam-shot 重启首帧用未平滑 CT（cp_ct_smooth_init 每进程重置）+ AEC rung-0
+过曝把晕拉宽——与「卡的时候出红圈」完全同相。
+
+**修法（两域中性律）**：fringe 门改为「**任一域**中性即塌缩」：
+`(输入域 mxi*2<=mni*3 || WB 域 mxw*2<=mnw*3)`，亮度触发仍看 WB 后（伪影
+所在）。反射灰（被光源染色、WB 后中性——⑤j 设备晕 raw 158/211/86 →
+226/211/222）走 WB 域分支得救；自发光晕（输入即中性、被增益染色）走输入
+域分支得救；真彩色内容（两域比值都 >1.5，如红 LED 255/120/90）保色。
+
+**收据**：campix_test 全绿（含新增 ⑤s 回归向量；旧向量 200/220/255 与
+200/220/240 本就是输入近中性、改判塌缩是正确行为，换成真彩色向量
+150/210/255 与 120/220/240 并手算期望）；circle_sim 修后晕带
+(243,243,243)→(255,255,255) 无环；部署后（3505208 B）流帧回归正常，
+拉帧目检无全局色偏、无色环（暗房天花板景，灰面无色）。最坏 case（近距
+亮屏）留待用户真用收据。
+
+### 2026-09-06 场收据杂项
+
+- **adb push 剥执行位**：推二进制到 /usr/bin 后必须 `chmod +x`，否则
+  spawn 直接 EACCES（os error 13）。
+- **拼接 pidof 输出会误配**：两条 pidof 连打的输出肉眼常读错行——用
+  /proc/PID/status 的 Name/PPid 验证（本场又中招一次）。
+- **vol_up.bin 单发不开眼**：裸 release（ev 1,115,0）不算按键，必须
+  press（vol_down.bin）+ ~0.15s + release 完整一对。
+- **`stat -c %y` 有纳秒精度**——同秒流帧活性判定用它。
+- **voice 整晚 7 次 up 重启**：svc 秒级拉起；个体死因未定位（无 OOM/
+  panic 记录）。⑤r 之后后果已被包住，死因另立案、不阻塞。
+- **kmsg CRM "Watchdog timer exited already" 刷屏**：流帧稳态 ~284 条/s，
+  疑似无害、代价未量化，记录在案。
+
+## 2026-09-06 — M47⑤t 取景启动+节奏根修：冷启状态恢复 + th3 + 系统分核
+
+用户证词（⑤q 部署后真用）：「一开始还是会有，然后很快就好了，但是还是
+不丝滑，感觉很卡」——两个独立病灶：开眼瞬间的亮度爬坡 + 旧会话残帧闪现；
+以及稳态节奏抖。
+
+**病灶一（冷启爬坡，捕获复现）**：rm aec.state 后冷启，3 个亮度平台
+~1.2s（f02 r44/g52/b45 暗 → f03-06 r101 → f07+ r150 稳态）——旧的
+「>10 分钟陈旧态丢弃」守卫把上一会话的收敛成果全扔了，每次都从梯子顶
+(rung 5) 走一遍。f00/f01 里的 r143 旧亮度 = **上一次会话的残帧**还留在
+eye.raw 文件里（poll_eye 在眼关时把 raw_mtime 复位 None，开眼首询把旧
+mtime 误判为新鲜帧直接 blit——上一场景闪现 ~0.5-1s）。
+
+修法（cam-shot.c + term main.rs）：
+1. **删陈旧态丢弃**：aec.state 是起点不是真理——aec_cfg_init 把 rung 折
+   进配置时曝光，梯子随后用实测 yavg 逐帧复验，错了按常速走梯，永不更
+   坏。/run tmpfs 天然限界到本次开机。⑤p 黑态不落盘（写侧护栏）保留。
+2. **`g_vf_threads` 2→3**：debayer 是访存延迟受限（⑤i），第 3 线程填
+   cpu6 停顿泡而 cpu7 降频时依然有产出——≥100ms 帧占比 48%→4%，帧时
+   摆动 ±25ms→stdev ~4ms（fps 10.98→11.14，赢在分布不是吞吐）。th4
+   重新摊平分布丢模式；A55 扇出降速（⑤k 律）。
+3. **term 停入 {0..5}**：眼流期间 sched_setaffinity 钉小核（term 的
+   565→888+双线性放大 ≈ 37% 个大核，⑤i 探针），眼停全掩码归还。**钩子
+   跟着眼标志走而不是视图模式**——第一版挂在 poll_eye 里（仅 Voice 态
+   轮询）泄漏：音量+ 由 voice 守护处理与视图无关，Voice 态开眼后按
+   BACK 退启动器，流还在但 poll_eye 不再跑，term 永久钉死小核。现挂主
+   循环按 face doc 的 eye 标志翻（face 轮询因此改为全模式，渲染/防灭
+   屏仍限 Voice 态）。
+4. **aginx-qr 自钉 {0..5}**：2Hz 解码爆发（100-300ms）此前无掩码落在大
+   核对上。A55 上慢 ~2.5×，但链零代价。
+
+**在役收据（2026-09-06，term 在 Launcher 态全程未触屏）**：
+- 掩码三段：term 0-7 → 眼开 **0-5** → 眼关 **0-7**；cam 6-7（th3 活）；
+  qr 0-5，流中 3 次后台解码全命中（WIFI fixture 载荷）且节奏循环中无
+  可归因 hitch。
+- 节奏（700 次 stat 纳秒采样，~73 帧）：中位 93ms / stdev 3.9-4.1ms /
+  ≥100ms 帧 3/73（4%）——对照 ⑤t 前基线 48%/±25ms。诚实注记：term 两
+  轮都在 Launcher 态没做逐帧 blit，此分布证明 th3+qr 自钉；term blit 上
+  A55 的真人手感留用户判。
+- 冷启走线：t5（12 分钟陈旧 rung-1 态恢复）与 t6（新鲜 rung-0 态），
+  同方法采样，**首帧即稳态亮度**（99/99/81 与 82/86/70 全程平）——
+  对照 ⑤t 前三平台爬坡，同样的采样法当时清清楚楚拍到 r44→101→150。
+- 关眼干净：cam 进程退净无孤儿，aec.state 正常落盘（t6: `0 0 1.000
+  24.6`）。
+- 残帧闪现的渲染门（eye_open 时间戳拒旧帧）是代码级修复，可见症状待
+  用户下次真用确认。
+
+## 2026-09-06 — M47⑤u 取景 NR 关停（voice 层）+ 子进程日志可见性
+
+用户判词复盘（⑤t 部署后真用）：「开眼还是卡…只是可怜感严重」+「看看修
+颗粒感之前的代码」。方向报告 + 旗标 A/B 定案：**可怜感 = 颗粒修复的价**
+——⑤o 全分辨率 demosaic+面积均值把 debayer 从 21.6ms 抬到 ~60ms，⑤m 整
+面空间 NR 再加 17.2ms，fps 26.2→10.9（p3 探针：强迫曝光亮/暗同 fps =
+链速上限，非 AEC）。同旗标 A/B：`--nr 0:0:0:0` → 13.6fps（post 17.8→
+1.4ms）；`--nr 0:0:0:0 --tone 0 --sat 1.0` → 15.1fps。
+
+**修法（voice 层两处，cam-shot 零改动）**：`eye_spawn` 参数加
+`--nr 0:0:0:0`——⑤o 面积均值已结构性砍颗粒（√1.29×），NR 在其上是纯
+开销，取景关、出片仍全 look；子进程 stdout/stderr 从 `Stdio::null` 改落
+`/run/aginx-voice/cam.log`（每次开眼截断一份，stderr 挂 stdout 的 dup 共
+享偏移 = 2>&1 语义，开文件失败退回 null）。**真实会话第一次可见**
+aec 走线与 vf: 链路心跳——此前每次诊断都要手工重跑同参 cam-shot。
+
+**在役收据（dev push /usr/bin/aginx-voice 4a7101d6，aginx-svc restart，
+六单元 ready）**：
+- 旗标生效：cam.log 首行 `look: nr off 0:0:0:0 tone 1.08 sat 1.15 …`；
+  链路行 post **0.8-1.1ms**（⑤t 在役 17.8ms）。
+- fps：新鲜会话 **14.2-14.3**（在役 ⑤t 10.98；A/B 预测 13.6，真路径更好）。
+  debayer+box 56ms 原样（⑤o 的价，下一步杠杆）。
+- 节奏（34 个帧间隔）：中位 **73.3ms** / stdev 4.5ms / max 87ms /
+  **≥100ms 帧 0/34**——对照 ⑤t 在役 93ms 中位、4% ≥100ms。
+- 可见性即收据：重开会话首行 `aec: start rung 0 … from aec.state`，
+  **frame 1 yavg 74.2 带内**——⑤t 的状态恢复第一次在真实���径拍到；
+  teardown `vf: stop requested after 62 frames` + aec.state 落盘正常。
+- ⑤r 回归随新 spawn 结构保持：眼开中 `kill -9 voice` → 3s 内 cam=[]
+  （PDEATHSIG），svc 拉起 voice，重开眼即干净流（无 exit 2）。
+- 注记一：紧接的第二会话 fps 掉 11.4、debayer+box 70-80ms——⑤i 已知
+  大核降频（连续多会话热/电流），链路行首次把这事拍在真实路径上。
+- 注记二：cam.log 混入已知 CRM watchdog kmsg 刷屏（~83% 行数，
+  ~1.25MB/30s 会话，tmpfs 每开眼截断）——读日志 `grep -av kmsg`；
+  未动 cam-shot（并行会话在役）。
+
+颗粒真眼判定归用户（NR 关停在暗房是否带回颗粒 = ⑤o 结构性削减是否
+足够）；若可怜感仍在，下一杠杆 = 方向2 把面积均值折进 demosaic
+（56ms → ~30ms 段）。
+
+## 2026-09-06 — boot 卡死 modem 步：cam_sensor_vsync_dev 内核 BUG → cpu5 楔死（收据）
+
+**现象**：开机 bootcard 停在 modem 行不动（touch/camera/battery 已 ok，
+modem/wlan/audio/net 行不出），无 wlan0，用户看到的是 handoff 5 分钟超时
+兜底拉起的 aginx-term（boot.state 无 done 行时 aginx-term-handoff 150×2s
+超时后照样杀 bootcard 起 term——所以屏幕活着但没网）。
+
+**根因链（/var/cpu5-wedge-forensics.txt 646 行全档，kmsg-follow.log 每
+boot 重建）**：
+1. camera-bringup 照常加载 cam_sensor_vsync_pb + cam_sensor_vsync_dev（
+   boot 后 ~30s）。载入瞬间撞 race：CAM_WARN "Watchdog timer exited
+   already"（cam_req_mgr CRM）在前，`cam_vsync_qmi_work` 随即
+   `list_add corruption. next/prev is NULL` → `kernel BUG at
+   lib/list_debug.c:26`——每 63s 一发（CRM watchdog 周期），首发 kmsg
+   +35.2s，全程 24 发。同栈 2026-08-31 以来几十次 boot 首见楔死 →
+   race 性，非确定。
+2. kworker/u16:5（pid 290）卡在 cam_vsync_qmi_work 里自旋，cpu5 永不
+   让出（sched_debug：curr->pid 恒 290，cpu_load[0..4] 全 5121，
+   arch_timer 风暴 ~300-500/s）。cpu5 的 cpuhp/5、migration/5、
+   kworker/5:* 全饿死（R 态停 __switch_to）。
+3. radio-bringup 走到 `insmod wlan.ko`（+46.8s）→ qdf_cpuhp_init →
+   cpuhp_issue_call 等 cpu5 → D 态永塞（pid 2380）；audio-bringup 的
+   msm_pm 同塞在 lpm_probe → cma_alloc → drain_all_pages（pid 2518）。
+4. radio-bringup 不出 `modem ok`/`wlan ok` 行 → bootcard 永停 modem 步。
+
+**救机**：现场快照进持久 /var 后 `/usr/bin/aginx-reboot reboot`（shutdown
+慢但走完了，>25s 才掉 adb）。重启后一切正常：modem ok / wlan ok wlan0 /
+audio ok，`list_add corruption` 与 cam_vsync 在新 boot kmsg **零出现**，
+相机照常取景（用户开眼 409 帧正常）。唯一遗留：wifi join rc=2——
+scan 里没有 'Legrand AP'（AP 掐了，2026-09-02 同款），net-watch 每 ~45s
+自动 rejoin，AP 回空中即自愈。
+
+**busybox 新坑（awk/netstat/diff 之后第四弹）**：grep 的 BRE `\|` 交替
+不生效（`grep "a\|b"` 空输出）——一律 `grep -aE "a|b"`。
+
+**防御候选（未动手，等点头）**：camera-bringup 里去掉
+cam_sensor_vsync_pb/cam_sensor_vsync_dev（Google sensor-vsync→QMI 提示
+路径，我们无 SLPI/QMI 服务在跑，从未消费其符号）——动手前需验证无其他
+已载模块 import 其符号。
+
+## 2026-09-06 — #227 M47-AF 裁决：LC898129 伺服闭环证实 + 夜景光学 A/B 全部无效（收据）
+
+**问**：后摄 imx363 从不自动聚焦。假设链：stock HAL 走的 OIS-subdev INIT 我们
+没做 + 0xF01A 是不是 AF target 未证。
+
+**OIS INIT（新 --ois 面，cam-shot additive）**：in-stream rc==0 首次——kmsg
+`CAM-OIS: cam_ois_power_up: 142 Using default power settings`（DT 无电源表，
+默认 {SENSOR_VAF, CAM_VAF, 1, 2ms}）+ `qcom,ois ac4a000... Linked as a
+consumer to regulator.9`，users 1→2，slave-info latched，init_settings
+ACK。standalone -110 复盘：LC898129 CORE 骑在 sensor 轨上（slots[0] DT 无
+SENSOR_VAF），只开 cam_vaf 时核心死，写必超时。**INIT 不是 AF 不动的根因**
+（对照组无 --ois 照样 ACK）。
+
+**裁决实验（三次迭代，前两次全部作废）**：
+1. 梯度 A/B（0x000 vs 0x3ff，pin 曝光增益）：今晚四组 A/B/C/D/E/F/E2/F2
+   里目标效应 0.1–1.3，同目标批间漂移 2.5–3.9，**漂移吞掉效应** → 无可
+   复现光学差。作废原因后来才看清：夜景帧 mean≈40-52/255、std≈53，
+   梯度能量≈噪声地板；场景无细节时聚焦变化不产生梯度差。
+2. cit 1600→6400 想拉出噪声坑：mean 39→52（+33%≠+300%），**帧长钳制**。
+3. 真正的裁决换了量具——0x0538 连读（DWORD=小端 float32）：
+
+| target 0xF01A | LOP float (0x0538 连读) | (code−512)/256 |
+|---|---|---|
+| 0x000 | -2.03/-1.97/-2.06/-2.00（G）、-2.29..-1.77（J） | -2.000 |
+| 0x200 | 全部 ≈0（denormal 级） | 0.000 |
+| 0x3ff | +1.90/+1.83/+2.02/+1.60 | +1.996 |
+
+   **线性、三点定标、±0.2-0.3 采样抖动**——纯命令回声会精确回读不会抖，
+   这是 hall/滤波后的实测位置：**LC898129 AF 伺服环在咬 0xF01A，透镜
+   载带有真实位移，电气+固件链全通**。邻域：0x0534≈0x0538≈0x053c（三
+   个滤波阶段），0x0530=0。0x0538 单次读与目标无关的旧结论（A/B/C/D
+   各不同）是 float 没解码 + 单采样噪声。
+   附带翻案：今晚早些"lens came alive between 17:25 and now"是批间漂移
+   幻觉，17:25 的 afx A/B「完全相同」同样只是噪声地板上无细节。
+
+**根因改判**：AF 硬件活的，「不聚焦」= **我们栈里从来没人做对焦扫描**
+（stock 才做 AF sweep；cam-shot 的 --af-sweep 是老的 cci0 偶地址探针，
+同名不同物）。夜景下手写 0x000/0x3ff 光学验证无效，白天/照明下待做
+最终光学复验。
+
+**工具收据**：--ois / --af-write :32 / --af-read×4（上限 4，重复同址合法）
+全上机；--af-read 单次 DWORD 小端拼 float。
+
+### #227 补收据（同夜）：--af-scan 面上机，扫描机器全链通
+
+`aginx-cam-shot --stream 0 --rear --frames 105 --cit 1600 --gain 16
+--dgain 2 --af-scan --out /tmp/ois.raw` → rc 0。粗扫 16 步×68 code
+（0..0x3fc）+ 细扫 9 步（峰±32、步 8）全部**流中 op2 MANUAL_MOVE_LENS
+写 ACK**（SKIP=2 弃、MEAS=2 均值），末步回写最佳并打印
+`af: FOCUS code=0x3b8 sharp=83.37 (step-0 81.53, +2%)`——25 步 DAC 阶梯
++ 收尾回写一气呵成，机器证明。锐度=中心 50% 裁剪 |梯度| x+y 池化
+（RAW8，与 host python 量具同几何）。
+
+阶梯读数 80.85–83.37 全程平（±1.5%）＝噪声地板上的预期形状——
+夜景无细节场景光学峰不可分辨，**量具已备好，等白天/照明+细节场景
+做最终光学复验**。
+
+两个疑点均闭案，非本 run 所为：
+- kmsg `[OISFW]:RamWrite32A/RamRead32A sid:0x3b` -110 刷屏＝**旧环回放**
+  ——本 run 首次 kmsg dump 回放了整环（31 条 START_DEV，今晚全部
+  run），OISFW 段落在早前 --ois run 的 FW 下载位置；本 run 自己的窗口
+  （actuator INIT 之后）零 OISFW/CCI 错。本 run 无 --ois。
+- 本 run 新增 kmsg 只有老的 RDI EPOCH `-14` + 一条
+  `cam_actuator_update_req_mgr: Can't add Request ID: 0 to CRM`
+  （首个 op2 与流 epoch 竞速，阶梯照走完，良性观察项）。
+- pid 452 一度被误读为孤儿 cam-shot：实为短命 aginx-voice（⑤r 线的
+  病，不占相机），复查时已退出，与本案无关。教训：adb 拼接输出
+  `pidof A; pidof B` 要带标签读，别按行猜归属。
+
 ## 2026-09-07 — 开机体验⑤ 语音侧上机：接线员分流 + 英文话术 + term 直进 Voice（收据）
 
 aginx-voice / aginx-term musl 推 /usr/bin（chmod 755，agsvc 监督），重启验收：
