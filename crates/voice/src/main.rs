@@ -185,6 +185,8 @@ fn daemon() {
     // 这个格式）。
     let mut eye: Option<EyeView> = None;
 
+    boot_sequence(&mut vm, brain.as_ref(), &mut eye);
+
     loop {
         // ---- PTT ----
         if let Some(p) = ptt.as_mut() {
@@ -360,7 +362,52 @@ fn daemon() {
     }
 }
 
-/// 嘴：本地 ag-tts 优先（M42d，离线即产品），失败/缺件落 brain TTS。
+/// net-bringup 判词（/run/boot.state: "wifi ok|fail [ssid]"）。voice 起来
+/// 时 bring-up 常还在路上——先等它的判词（有界 20s），没有再自己查
+/// （net_check 会补一次 join，与已放弃的 bring-up 不再竞争）。
+fn boot_net_state() -> NetState {
+    for _ in 0..20 {
+        if let Ok(s) = std::fs::read_to_string("/run/boot.state") {
+            let mut decided = false;
+            for line in s.lines() {
+                if line.starts_with("wifi ok") {
+                    return NetState::Up;
+                }
+                if line.starts_with("wifi fail") {
+                    decided = true;
+                    break;
+                }
+            }
+            if decided {
+                break;
+            }
+        }
+        std::thread::sleep(Duration::from_secs(1));
+    }
+    net_check()
+}
+
+/// 开机序列：接线员分流。已连：铃 → "Operator. Go ahead."。未连：英文
+/// 警告 → 状态机接 NetState——静默脸行 + 自动睁眼走 M42c 现成链（协议
+/// 行是 Out::Say 不出声，无语言冲突）。
+fn boot_sequence(vm: &mut Vm, brain: Option<&audio::Brain>, eye: &mut Option<EyeView>) {
+    let ns = boot_net_state();
+    if matches!(ns, NetState::Up) {
+        if let Err(e) = audio::play_ring() {
+            eprintln!("aginx-voice: ring {e}");
+        }
+        let _ = vm.inject_say("Operator. Go ahead.");
+        face::write(vm, false, false, false);
+        say("Operator. Go ahead.", brain);
+        return;
+    }
+    let _ = vm.inject_say("Warning: I've lost the hardline.");
+    say("Warning: I've lost the hardline.", brain);
+    let outs = vm.step(Ev::NetState(ns));
+    run_outs(vm, outs, brain, eye);
+}
+
+/// 嘴：本地 aginx-tts 优先（M42d，离线即产品），失败/缺件落 brain TTS。
 fn say(text: &str, brain: Option<&audio::Brain>) {
     if audio::local_voice_ready() {
         match audio::local_speak(text) {
@@ -377,7 +424,7 @@ fn say(text: &str, brain: Option<&audio::Brain>) {
     }
 }
 
-/// 耳：本地 ag-asr 优先，失败/缺件落 brain ASR（brain 对本机采集链幻听，
+/// 耳：本地 aginx-asr 优先，失败/缺件落 brain ASR（brain 对本机采集链幻听，
 /// 见 audio.rs 法医收据——本地在位时实际不会走到云）。
 fn hear(wav: &[u8], brain: Option<&audio::Brain>) -> Result<String, String> {
     if audio::local_voice_ready() {
