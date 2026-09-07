@@ -38,6 +38,7 @@
 #include <pthread.h>
 #include <sched.h>
 #include <signal.h>
+#include <sys/prctl.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -312,7 +313,12 @@ struct i2c_rdwr_header {
 } __attribute__((packed));
 struct i2c_random_wr_payload { uint32_t reg_addr, reg_data; }
     __attribute__((packed));
+/* read-side payload (cam_sensor.h, packed): for a random read the reg_data
+ * field carries the register ADDRESS to read (cam_sensor_handle_random_read
+ * copies data_read[cnt].reg_data into reg_setting[cnt].reg_addr). */
+struct cam_cmd_read { uint32_t reg_data, reserved; } __attribute__((packed));
 #define CMD_I2C_RNDM_WR 5
+#define CMD_I2C_RNDM_RD 6
 #define I2C_OP_RNDM_WR  1
 #define I2C_TYPE_BYTE   1
 
@@ -320,6 +326,19 @@ struct i2c_random_wr_payload { uint32_t reg_addr, reg_data; }
 #define CAM_SENSOR_PROBE_CMD (0x109 + 1)
 struct cam_cmd_i2c_info { uint32_t slave_addr; uint8_t i2c_freq_mode,
     cmd_type; uint16_t reserved; } __attribute__((packed));
+/* cam_cmd_ois_info (cam_sensor.h, packed) — the OIS subdev's I2C_INFO
+ * carrier. cam_ois_slaveInfo_pkt_parser casts the whole cmd buffer to
+ * this shape and rejects anything shorter than 68 B. fw_flag / calib name
+ * the two optional follow-on phases inside the same INIT packet (firmware
+ * download / calibration apply); both 0 = bare slave-info INIT. */
+struct ois_cmd_info {
+    uint32_t slave_addr;
+    uint8_t  i2c_freq_mode, cmd_type, ois_fw_flag, is_ois_calib;
+    char     ois_name[32];
+    uint32_t prog, coeff, pheripheral, memory;
+    uint8_t  fw_addr_type, is_addr_increase, is_addr_indata, fwversion;
+    uint32_t fwchecksumsize, fwchecksum;
+} __attribute__((packed));
 struct cam_cmd_probe {
     uint8_t data_type, addr_type, op_code, cmd_type;
     uint32_t reg_addr, expected_data, data_mask;
@@ -361,6 +380,9 @@ enum { SENSOR_MCLK = 0, SENSOR_VANA, SENSOR_VDIG, SENSOR_VIO, SENSOR_VAF,
 #define CMD_WAIT     9
 #define WAIT_SW_UCND 3
 #define I2C_TYPE_WORD 2
+/* enum camera_sensor_i2c_type: BYTE=1 WORD=2 3B=3 DWORD=4 (kernel
+ * cam_cci_core.c sends DWORD as reg_data MSB->LSB — matches RamWrite32A) */
+#define I2C_TYPE_DWORD 4
 #define I2C_FREQ_FAST 1
 
 /* media controller bits (same struct as media-topo, 4.19 uapi) */
@@ -468,7 +490,9 @@ static const uint32_t try_addrs[] = { 0x34, 0x20, 0x10, 0x6E, 0x6C, 0x36 };
  * link freq 444 MHz, pixel rate 177.6 MPix/s), fll 1306, llp 1836, RAW10.
  * Width 8 = 8-bit reg, 16 = 16-bit reg; the packet builder groups by width
  * into separate I2C random-write commands. */
-struct wreg { uint16_t addr; uint16_t val; uint8_t width; };
+/* width 8/16/32 bits; 32 = DWORD data (LC898129 RamWrite32A semantics —
+ * the OIS/AF chip takes WORD addr + DWORD data, MSB first) */
+struct wreg { uint16_t addr; uint32_t val; uint8_t width; };
 
 /* imx355_global_regs — sent as INITIAL_CONFIG (applied at CONFIG_DEV) */
 static const struct wreg imx355_global[] = {
@@ -1661,7 +1685,8 @@ static size_t build_i2c_writes(uint8_t *buf, const struct wreg *r, int n)
         h->count = (uint32_t)(j - i);
         h->op_code = I2C_OP_RNDM_WR;
         h->cmd_type = CMD_I2C_RNDM_WR;
-        h->data_type = r[i].width == 16 ? I2C_TYPE_WORD : I2C_TYPE_BYTE;
+        h->data_type = r[i].width == 32 ? I2C_TYPE_DWORD
+                     : r[i].width == 16 ? I2C_TYPE_WORD : I2C_TYPE_BYTE;
         /* imx355 register ADDRESSES are always 16-bit, only data width
          * varies — with BYTE addr the CCI truncates 0x030d to register
          * 0x0d and the write is silently dropped (observed: every 8-bit
@@ -1937,11 +1962,17 @@ static int g_jpeg_color = 1;
  * --wb r,g,b takes over manually, --wb off disables */
 static int g_wb_auto = 1;
 static float g_wb_r = 1.0f, g_wb_g = 1.0f, g_wb_b = 1.0f;
+/* M47⑤j: temporal AWB state (libcamera libipa/awb.cpp port, see campix.h) —
+ * the viewfinder blends the measured COLOUR TEMPERATURE at speed 0.2 and
+ * freezes when the stats are too dark; gains and the CCM pick are pure
+ * functions of the smoothed CT (Google's imx363 curve), so neither jumps
+ * frame to frame. AEC keeps the raw per-frame yavg. */
+static struct cp_ct_smooth g_ct_smooth;
 /* M47⑤g color correction: default ON — Google's own per-CCT imx363 CCMs
  * live in campix.h (extracted from THIS device's vendor image; gray-world
  * WB balances means but cannot fix hue/saturation, which is why the
- * viewfinder read green, 2026-09-05 user receipt). The matrix is picked
- * per frame from the WB gains (poor man's CCT). --no-ccm is the A/B
+ * viewfinder read green, 2026-09-05 user receipt). M47⑤j: the matrix is
+ * keyed on the smoothed AWB colour temperature. --no-ccm is the A/B
  * escape hatch (the old look). */
 static int g_ccm = 1;
 /* M47② pixel domain: the RAW10 bits[9:2] carry the sensor's black level
@@ -1956,6 +1987,42 @@ static int g_ccm = 1;
 static int g_bl = 16;
 static double g_gamma = 2.2;
 static int g_rot;
+/* M47⑤k preview look — all ports, laws in campix.h's ⑤k block, all running
+ * on the packed display frame AFTER the ⑤j color chain (neutral in, neutral
+ * out; the ⑤j color verdicts are untouched):
+ *   g_nr*: hqdn3d denoise, --nr ls:cs:lt:ct. Default 4:3:0:0 (⑤m) =
+ *     mplayer's spatial defaults, temporal OFF — the handheld viewfinder
+ *     scene moves every frame (hand tremor), so temporal filtering no-ops
+ *     on noise yet ghosts slow motion (2026-09-06 daylight receipt: lt=12
+ *     gave 重影/一片一片 on top of the grain). Spatial is motion-agnostic
+ *     — the phone-preview-ISP law — but chains rows through line_ant, so
+ *     it runs whole-plane single-threaded (acceptable at 0.7 MP; the
+ *     banded temporal path stays for ls=0 tunes). --nr 0:0:0:0 turns
+ *     denoise off.
+ *   g_tone*: RPi contrast stretch + manual contrast, --tone F (0 = off,
+ *     default 1.08 our look call — RPi ships 1.0). Histogram rides the WB
+ *     measure; the composed LUT replaces gam at rot_init.
+ *   g_sat: RPi-style luma-preserving saturation, --sat F (default 1.15;
+ *     1.0 = off). Q8 rides the xform.
+ *   g_sharp*: RPi-semantics unsharp, --sharpen S:T:L (default 0.5:4:30,
+ *     S=0 off). Out-of-place row bands.
+ *   g_fold: ⑤v linear-domain fold, --fold 0|1 (default 1): debayer+rotate+
+ *     area-average in ONE pass — the linear-domain mean runs BEFORE the
+ *     color transform (one cp_apply_xform per OUTPUT pixel). 0 = the ⑤o
+ *     two-stage chain (full-res 565 plane + box) bit-for-bit. */
+static int g_nr_on = 1;
+static double g_nr_s[4] = { 4.0, 3.0, 0.0, 0.0 };
+static struct cp_nr g_nr;
+static int g_nr_ready;
+static double g_nr_nf;   /* ⑤m: noise factor the spatial tables were
+                          * last kneed for; 0 forces a first-frame adapt */
+static int g_tone_on = 1;
+static double g_tone_contrast = 1.08;
+static double g_sat = 1.15;
+static double g_sharp_s = 0.5;
+static int g_sharp_thr = 4, g_sharp_lim = 30;
+static int g_fold = 1;
+static uint32_t g_hist[256];
 /* M47③ AEC: drive the LINEAR-domain yavg (campix stats) at ~65 (AEC_TGT). Exposure
  * lives on a one-rung-per-2x ladder (CIT then gain then dgain); the rung
  * rides a per-request SENSOR_UPDATE packet (op 1) so it changes at that
@@ -2183,7 +2250,20 @@ static int aec_step(struct aec_st *a, double y, int fi, int window)
     int nr = a->rung + (dark ? -rungs : rungs);
     if (nr < 0) nr = 0;
     if (nr >= AEC_RUNGS) nr = AEC_RUNGS - 1;
-    if (nr == a->rung) return -1;
+    if (nr == a->rung) {
+        /* ⑤p: parked at a ladder end with the scene still >>1 rung away
+         * means the writes may be silently NACKing (CCI transient after an
+         * unclean kill — 2026-09-06 receipt: rung 0, yavg 0.3 constant,
+         * 10x darker than a dark room at 32x). Re-issue the rung every 2
+         * windows so a mid-session heal lands exposure without a restart;
+         * if the writes DO land, yavg moves and the loop resumes normally. */
+        if (ratio > 8.0 && fi >= a->last_step + 2 * window) {
+            a->last_step = fi;
+            a->pending = 1;
+            return nr;
+        }
+        return -1;
+    }
     a->rung = nr;
     a->trim = 1.0;
     a->last_step = fi;
@@ -2193,9 +2273,18 @@ static int aec_step(struct aec_st *a, double y, int fi, int window)
 
 /* AEC memory across calls: /run/aginx-cam/aec.state (tmpfs — survives
  * process restarts, not reboots; that IS the design: the next capture in
- * the same session starts at the converged rung, cold boot re-converges).
+ * the same boot starts at the converged rung, cold boot re-converges).
  * One line "slot rung yavg ts"; a reader discards it on slot mismatch or
- * staleness (>10 min — lighting may have changed). */
+ * malformed fields ONLY. ⑤t deleted the old >10-min staleness discard:
+ * the state is a STARTING POINT, not truth — aec_cfg_init folds the rung
+ * into the config-time exposure and the ladder re-validates against the
+ * first metered yavg, so a wrong rung (lighting changed) walks at the
+ * same one-rung-per-window pace a cold start does, never worse. The
+ * 10-min rule instead threw away a correct rung every time the eye
+ * reopened in the same room after a pause — the "cold descent" the user
+ * saw at EVERY eye-open (2026-09-06 cold capture: 3 brightness plateaus
+ * over ~1.2 s from rung 5; same room restored = first frame correct).
+ * Poisoned-state guards stay at the WRITE side (⑤p black-state skip). */
 #define AEC_STATE_PATH "/run/aginx-cam/aec.state"
 static int aec_state_read(int slot, int *rung, double *trim)
 {
@@ -2204,9 +2293,9 @@ static int aec_state_read(int slot, int *rung, double *trim)
     int s, r; double yv, tv; long ts;
     int k = fscanf(f, "%d %d %lf %lf %ld", &s, &r, &tv, &yv, &ts);
     fclose(f);
+    (void)ts;
     if (k != 5 || s != slot || r < 0 || r >= AEC_RUNGS) return -1;
     if (tv <= 0.0 || tv > 1.0) return -1;
-    if (time(NULL) - ts > 600) return -1;
     *rung = r;
     *trim = tv;
     return 0;
@@ -2604,8 +2693,9 @@ static void dump_png(const uint8_t *rdi, uint32_t w, uint32_t h, uint32_t stride
  * debayer/rotate/scale in one pass with the display (gamma) LUT at the
  * tail -> jpegenc.h. The old chain dropped bits[9:2] straight into the
  * encoder: no black level, no gamma — the M47 "dark, gray-green wash"
- * defect. RGGB phase verified on device 2026-09-01 and preserved verbatim
- * inside cp_debayer_rot. dump_png keeps its own raw-bit diagnostic logic
+ * defect. CFA orientation BGGR (2026-09-05 emissive chart receipt in
+ * campix.h — the 2026-09-01 "RGGB" note was convention-internal and never
+ * discriminated R from B). dump_png keeps its own raw-bit diagnostic logic
  * and is untouched on purpose. */
 /* M47⑤c: publish the display frame as raw RGB565 — 12-byte header (magic
  * "RGW1", w, h, little-endian) + w*h u16 LE pixels, atomic tmp+rename like
@@ -2633,9 +2723,11 @@ static void dump_raw565(const uint16_t *px5, uint32_t ow, uint32_t oh)
 
 /* M47⑤e: per-stage chain timing, averaged over the resident heartbeat
  * window — the fps tuning mouth. [0]=crop extract [1]=WB measure [2]=debayer
+ * +box (⑤o two-stage geometry)
  * [3]=raw565 dump [4]=jpeg encode+publish (encode frames only; enc_n counts
- * them). Single-threaded callers only. */
-static double chain_ms[5];
+ * them) [5]=⑤k post-pass (denoise+sharpen+re-pack, M47⑤k). Single-threaded
+ * callers only. */
+static double chain_ms[6];
 static int chain_n, enc_n;
 
 /* M47⑤i: row-partitioned parallel walks. The two full-frame passes of the
@@ -2646,7 +2738,14 @@ static int chain_n, enc_n;
  * pthread create/join per frame against a ~30 ms frame is noise — and the
  * point is capped clocks (see the cpufreq note above): four cores at
  * 1.36-1.48 GHz beat one. */
-static int g_vf_threads = 2; /* the big pair — A55 fan-outs derate (probe ⑤i) */
+static int g_vf_threads = 3; /* ⑤t: 3 threads time-share the {6,7} pair.
+ * Not throughput — pacing: debayer is memory-LATENCY bound (⑤i probe),
+ * so the third thread fills cpu6's stall bubbles while cpu7 droops (2x
+ * slow sustained under streaming load). Device 2026-09-06, same process
+ * mask, threads unpinned, th2 vs th3: >=100 ms frames 48% -> 4%, swing
+ * ±25 ms -> ±10 ms (fps 10.98 -> 11.14 — the win is the distribution,
+ * that ±25 ms bimodal beat is what read as 「不丝滑」). th4 re-spreads the
+ * distribution and loses the mode; A55 fan-outs derate (probe ⑤i). */
 /* the two big cores, [0]=cpu6 [1]=cpu7(prime) — see the cpufreq block for
  * the probe story. The PROCESS is pinned to the pair as a MASK and threads
  * are left unpinned ON PURPOSE: cpu7 droops intermittently under streaming
@@ -2740,6 +2839,79 @@ static void debayer_rows(void *u, uint32_t a, uint32_t b)
     cp_rot_rows(&j->R, j->g, a, b, j->out, j->out565);
 }
 
+/* M47⑤k post-pass thunks — same row-band contract (disjoint ranges,
+ * bit-exact with the whole walk; campix_test pins both) */
+struct nr_job {
+    struct cp_nr *n;
+    uint8_t *rgb;
+};
+
+static void nr_rows(void *u, uint32_t a, uint32_t b)
+{
+    struct nr_job *j = u;
+    cp_nr_rows(j->n, j->rgb, a, b);
+}
+
+struct sharp_job {
+    const uint8_t *src;
+    uint8_t *dst;
+    uint32_t w, h;
+    int s, t, l;
+    uint16_t *p5;    /* optional: pack this band's output rows to 565 */
+};
+
+static void sharp_rows(void *u, uint32_t a, uint32_t b)
+{
+    struct sharp_job *j = u;
+    cp_sharpen(j->src, j->dst, j->w, j->h, a, b, j->s, j->t, j->l);
+    if (j->p5) /* rides the same band walk — no separate full-frame pass */
+        cp_pack565(j->dst + (size_t)a * j->w * 3,
+                   (size_t)(b - a) * j->w, j->p5 + (size_t)a * j->w);
+}
+
+struct pack_job {
+    const uint8_t *src;
+    uint16_t *dst;
+    uint32_t w;
+};
+
+static void pack_rows(void *u, uint32_t a, uint32_t b)
+{
+    struct pack_job *j = u;
+    cp_pack565(j->src + (size_t)a * j->w * 3,
+               (size_t)(b - a) * j->w, j->dst + (size_t)a * j->w);
+}
+
+/* ⑤o box thunk: area-average downscale of the full-res 565 plane to the
+ * preview dims (row ranges bit-exact with the whole walk, campix_test) */
+struct box_job {
+    const struct cp_box *B;
+    const uint16_t *src;
+    uint16_t *o5;
+    uint8_t *o8;
+};
+
+static void box_rows(void *u, uint32_t a, uint32_t b)
+{
+    struct box_job *j = u;
+    cp_box_rows(j->B, j->src, a, b, j->o5, j->o8);
+}
+
+/* ⑤v fold thunk: debayer+rotate+area-average in one pass, linear-domain
+ * mean then ONE xform per output pixel (campix.h cp_fold) */
+struct fold_job {
+    struct cp_fold F;
+    const uint8_t *g;
+    uint8_t *out;
+    uint16_t *o565;
+};
+
+static void fold_rows(void *u, uint32_t a, uint32_t b)
+{
+    struct fold_job *j = u;
+    cp_fold_rows(&j->F, j->g, a, b, j->out, j->o565);
+}
+
 static void dump_jpeg(const uint8_t *rdi, uint32_t w, uint32_t h,
                       uint32_t stride, const char *raw_path)
 {
@@ -2826,8 +2998,9 @@ static void dump_jpeg(const uint8_t *rdi, uint32_t w, uint32_t h,
     free(stage);
     double t1 = mono();
 
-    uint32_t ow = (g_rot == 90 || g_rot == 270) ? ch : cw;
-    uint32_t oh = (g_rot == 90 || g_rot == 270) ? cw : ch;
+    uint32_t fw = (g_rot == 90 || g_rot == 270) ? ch : cw;
+    uint32_t fh = (g_rot == 90 || g_rot == 270) ? cw : ch;
+    uint32_t ow = fw, oh = fh;
     if (g_preview_w && ow > g_preview_w) {
         oh = (uint32_t)((double)oh * g_preview_w / ow + 0.5);
         ow = g_preview_w;
@@ -2838,8 +3011,24 @@ static void dump_jpeg(const uint8_t *rdi, uint32_t w, uint32_t h,
      * encodes (g_last_jpeg_t==0). */
     int want_jpeg = !(g_jpeg_every_ms && g_last_jpeg_t > 0 &&
                       mono() - g_last_jpeg_t < (double)g_jpeg_every_ms / 1000.0);
-    size_t cap = (size_t)ow * oh * 3 + 65536;
-    uint8_t *out = (g_jpeg_color && !want_jpeg) ? NULL : malloc(cap);
+    /* M47⑤k: every per-frame plane below is a CACHED grow-only static
+     * (single-threaded caller). Fresh 2 MB mallocs each frame meant
+     * mmap/munmap churn — ~500 zero-fill page faults per buffer under
+     * musl mallocng — measured as the bulk of the first ⑤k post-pass
+     * cost on device 2026-09-05 (post 29 ms with passes worth ~10).
+     * Never freed; geometry changes just grow them. */
+    static uint8_t *plane_out, *plane_rgb, *plane_scr;
+    static uint16_t *plane5, *plane5f;
+    static size_t plane_out_cap, plane_rgb_cap, plane_scr_cap, plane5_cap,
+                  plane5f_cap;
+    size_t need3 = (size_t)ow * oh * 3;
+    size_t cap = need3 + 65536;
+    if (cap > plane_out_cap) {
+        free(plane_out);
+        plane_out = malloc(cap);
+        plane_out_cap = plane_out ? cap : 0;
+    }
+    uint8_t *out = (g_jpeg_color && !want_jpeg) ? NULL : plane_out;
     if (!out && !(g_jpeg_color && !want_jpeg)) {
         fprintf(stderr, "jpeg: no mem for %zu B out\n", cap);
         free(g);
@@ -2850,66 +3039,247 @@ static void dump_jpeg(const uint8_t *rdi, uint32_t w, uint32_t h,
     if (g_jpeg_color) {
         float wb[3] = { g_wb_r, g_wb_g, g_wb_b };
         if (g_wb_auto) {
-            cp_wb_measure(g, cw, ch, wb, &yavg);
-            printf("wb: auto r=%.2f g=%.2f b=%.2f\n", wb[0], wb[1], wb[2]);
+            /* M47⑤j: quad means (dark-floor gated, emissive soft-weighted)
+             * -> bayes CT search on Google's imx363 curve -> EMA the CT
+             * (libcamera law) -> gains + CCM as pure functions of the
+             * smoothed CT. Legacy --no-ccm keeps the gray-world gain law
+             * (cp_wb_gains_gray), unsmoothed. */
+            double means[3];
+            if (g_tone_on)
+                memset(g_hist, 0, sizeof g_hist);
+            cp_wb_measure(g, cw, ch, means, &yavg, g_tone_on ? g_hist : NULL);
+            double ct_raw = 0.0;
+            if (g_ccm) {
+                ct_raw = cp_awb_search(means);
+                cp_ct_smooth_step(&g_ct_smooth, ct_raw, yavg);
+                cp_awb_gains(g_ct_smooth.ct, wb);
+            } else {
+                cp_wb_gains_gray(means, wb);
+            }
+            printf("wb: auto r=%.2f g=%.2f b=%.2f ct=%.0fK%s\n",
+                   wb[0], wb[1], wb[2],
+                   g_ccm ? g_ct_smooth.ct : 0.0,
+                   g_ccm ? (g_ct_smooth.primed ? "" : " (unprimed)")
+                         : (ct_raw > 0 ? " (gray)" : ""));
         } else {
             yavg = cp_yavg(g, (size_t)cw * ch);
         }
         float ccm[9];
         const float *ccm_p = NULL;
         if (g_ccm) {
-            cp_ccm_for_wb(wb, ccm);
+            cp_ccm_for_ct(g_ct_smooth.ct, ccm);
             ccm_p = ccm;
         }
+        /* M47⑤k tone: quantile stretch + manual contrast composed onto the
+         * gamma LUT (RPi contrast law, campix.h) — the histogram rode the WB
+         * measure above; the composed LUT replaces gam at rot_init. Neutral
+         * stays neutral: one curve for all channels. */
+        struct cp_tone tone;
+        const uint8_t *lutp = gam;
+        if (g_tone_on) {
+            cp_tone_step(&tone, g_hist, (uint64_t)cw * ch, gam,
+                         g_tone_contrast, 0.0);
+            lutp = tone.lut;
+        }
         double t2 = mono();
-        /* RGB888 plane only on encode frames — a display-only frame reads
-         * nothing but the packed 565 (cp_px takes out==NULL, M47⑤e) */
-        uint8_t *rgb = want_jpeg ? malloc((size_t)ow * oh * 3) : NULL;
-        uint16_t *px5 = g_raw_out[0] ? malloc((size_t)ow * oh * 2) : NULL;
-        if ((want_jpeg && !rgb) || (g_raw_out[0] && !px5)) {
+        /* RGB888 plane on encode frames AND on post-pass frames — the ⑤k
+         * denoise/sharpen run on the packed RGB888; a display-only frame
+         * with the look off still reads nothing but the 565 (M47⑤e).
+         * Sharpen is a stills-only pass (see the post block below), so it
+         * only forces the post-pack path on the frames that run it. */
+        int post565 = g_raw_out[0] && (g_nr_on || (g_sharp_s > 0.0 && want_jpeg));
+        if ((want_jpeg || post565) && need3 > plane_rgb_cap) {
+            free(plane_rgb);
+            plane_rgb = malloc(need3);
+            plane_rgb_cap = plane_rgb ? need3 : 0;
+        }
+        uint8_t *rgb = (want_jpeg || post565) ? plane_rgb : NULL;
+        if (g_raw_out[0] && (size_t)ow * oh > plane5_cap) {
+            free(plane5);
+            plane5 = malloc((size_t)ow * oh * 2);
+            plane5_cap = plane5 ? (size_t)ow * oh : 0;
+        }
+        uint16_t *px5 = g_raw_out[0] ? plane5 : NULL;
+        if (((want_jpeg || post565) && !rgb) || (g_raw_out[0] && !px5)) {
             fprintf(stderr, "jpeg: no mem for rgb/565\n");
-            free(g); free(out); free(rgb); free(px5);
+            free(g);
             return;
         }
-        /* M47⑤i: init (column map + xform) single-threaded, then fan the
-         * row walk out over g_vf_threads — cp_rot_rows over disjoint row
-         * ranges is bit-exact with the one-call form */
-        struct rot_job rj = {
-            .g = g, .out = rgb, .out565 = px5,
-        };
-        if (!cp_rot_init(&rj.R, cw, ch, wb, ccm_p, gam, g_rot, ow, oh)) {
+        /* ⑤v fold (default): debayer at native res, rotate, area-average and
+         * apply the color transform all in ONE pass — the linear-domain
+         * integer mean runs BEFORE the xform (one cp_apply_xform per OUTPUT
+         * pixel), killing the full-res 565 plane's DDR round-trip and the
+         * 1.9M full-res xform applications that made the ⑤o two-stage
+         * chain cost ~56 ms/frame (the ⑤u 可怜感 receipt). Bin law is
+         * cp_box's exactly (same floor/ceil spans, same (s+cnt/2)/cnt mean)
+         * — the √area noise cut is unchanged; campix_test pins identity ==
+         * the one-stage walk bit-exact. */
+        if (g_fold) {
+            struct fold_job fj = { .g = g, .out = rgb, .o565 = px5 };
+            if (!cp_fold_init(&fj.F, cw, ch, wb, ccm_p, lutp, g_rot, ow, oh)) {
+                fprintf(stderr, "jpeg: fold init failed\n");
+                free(g);
+                return;
+            }
+            if (g_sat > 0.0)
+                fj.F.R.xf.sat = (int)(g_sat * 256.0 + 0.5);
+            run_rows(fold_rows, &fj, oh, g_vf_threads);
+            cp_fold_free(&fj.F);
+            free(g);
+        } else
+        /* ⑤o two-stage geometry (--fold 0): debayer at NATIVE resolution
+         * (scale-1 centroid map = the exact pixel lattice, so the
+         * bilinear-in-Bayer reconstruction runs on true neighbors — no
+         * point-sampling), then the area-average box down to the preview
+         * dims. The old single scaled walk point-sampled the bayer, which
+         * keeps every bit of per-pixel sensor noise in the 0.7 MP preview
+         * (no √area averaging ever happens) — the 颗粒 receipt,
+         * 2026-09-06. The 565 pack rides the box pass now; on post-pass
+         * frames the ⑤k re-pack overwrites px5 after denoise, same as
+         * before. */
+        {
+        if ((size_t)fw * fh > plane5f_cap) {
+            free(plane5f);
+            plane5f = malloc((size_t)fw * fh * 2);
+            plane5f_cap = plane5f ? (size_t)fw * fh : 0;
+        }
+        if (!plane5f) {
+            fprintf(stderr, "jpeg: no mem for full-res 565\n");
+            free(g);
+            return;
+        }
+        struct rot_job rj = { .g = g, .out = NULL, .out565 = plane5f };
+        if (!cp_rot_init(&rj.R, cw, ch, wb, ccm_p, lutp, g_rot, fw, fh)) {
             fprintf(stderr, "jpeg: rot_init failed\n");
-            free(g); free(out); free(rgb); free(px5);
+            free(g);
             return;
         }
-        run_rows(debayer_rows, &rj, oh, g_vf_threads);
+        if (g_sat > 0.0)
+            rj.R.xf.sat = (int)(g_sat * 256.0 + 0.5);
+        run_rows(debayer_rows, &rj, fh, g_vf_threads);
         cp_rot_free(&rj.R);
         free(g);
+        struct cp_box bx;
+        if (!cp_box_init(&bx, fw, fh, ow, oh)) {
+            fprintf(stderr, "jpeg: box init failed\n");
+            return;
+        }
+        struct box_job bj = {
+            .B = &bx,
+            .src = plane5f,
+            .o5 = px5,
+            .o8 = rgb,
+        };
+        run_rows(box_rows, &bj, oh, g_vf_threads);
+        cp_box_free(&bx);
+        }
         double t3 = mono();
+        /* M47⑤k post-pass on the packed display frame: temporal denoise
+         * (banded, frame_ant state carries across frames) then out-of-place
+         * sharpen; 565 re-packs AFTER so the raw file and the JPEG carry
+         * one look. `final` is what downstream consumes (scratch when
+         * sharpened, rgb otherwise — rgb NULL only on display-only frames
+         * with the whole look off). */
+        uint8_t *scratch = NULL;
+        const uint8_t *final = rgb;
+        if (rgb && g_nr_on) {
+            if (!g_nr_ready || g_nr.w != ow || g_nr.h != oh) {
+                if (g_nr_ready)
+                    cp_nr_free(&g_nr); /* geometry moved: state is dead */
+                g_nr_ready = cp_nr_init(&g_nr, ow, oh, g_nr_s[0], g_nr_s[1],
+                                        g_nr_s[2], g_nr_s[3]);
+                g_nr_nf = 0.0;      /* fresh tables: force the first adapt */
+            }
+            if (g_nr_ready) {
+                /* ⑤m: re-knee the SPATIAL tables when the AEC moved the
+                 * noise floor (cp_nr_adapt / sdn semantics). send_sensor_req
+                 * mirrors the applied rung gains into g_gain/g_dgain, so
+                 * this tracks the sensor's actual state with a window-frame
+                 * lag — irrelevant for a slow trend. Cap at 4: past that
+                 * the knee starts eating real edges (deep-dark smearing).
+                 */
+                double nf = cp_noise_factor(g_gain, g_dgain);
+                if (nf > 4.0)
+                    nf = 4.0;
+                if (nf != g_nr_nf) {
+                    g_nr_nf = nf;
+                    cp_nr_adapt(&g_nr, g_nr_s[0] * nf, g_nr_s[1] * nf);
+                }
+                cp_nr_prime(&g_nr, rgb); /* first frame only */
+                if (g_nr_s[0] > 0.0)
+                    cp_nr_frame(&g_nr, rgb); /* spatial: whole-plane law */
+                else {
+                    struct nr_job nj = { .n = &g_nr, .rgb = rgb };
+                    run_rows(nr_rows, &nj, oh, g_vf_threads);
+                }
+            }
+        }
+        /* the 565 re-pack rides the sharpen band walk when it runs (each
+         * band packs its own output rows — no separate full-frame pass);
+         * otherwise (NR-only look, or sharpen OOM) it is its own banded
+         * pass. Either way it is never the old single-threaded full-frame
+         * walk (2026-09-05 device: post 29 ms was malloc churn + that
+         * walk).
+         *
+         * Sharpen runs on STILL frames only (want_jpeg): the live 565
+         * frame gets a 1.5x bilinear upscale in term (⑤l), and
+         * sharpening BEFORE that upscale is half-eaten by the stretch —
+         * while its ~8 ms/frame scalar cost was 40% of the whole chain
+         * budget (2026-09-05 device: post 19 = NR 6.5 + sharpen+pack
+         * 12.5; -O3/A76 tuning bought nothing, the loops are stride-3
+         * interleaved + LUT-gather and do not vectorize). Stills keep the
+         * FULL look — sharpen folds into their band walk and the JPEG
+         * carries it; the live view rides NR + tone + saturation. */
+        int packed = 0;
+        int sq8 = (int)(g_sharp_s * 256.0 + 0.5); /* 0.001 rounds to 0: off */
+        if (rgb && want_jpeg && sq8 > 0) {
+            /* ⑤l: sharpen parameters track the noise floor (RPi
+             * cp_sharp_adapt) — a dark frame must not sharpen its grain */
+            int thr = g_sharp_thr, lim = g_sharp_lim;
+            cp_sharp_adapt(cp_noise_factor(g_gain, g_dgain), &sq8, &thr, &lim);
+            if (need3 > plane_scr_cap) {
+                free(plane_scr);
+                plane_scr = malloc(need3);
+                plane_scr_cap = plane_scr ? need3 : 0;
+            }
+            scratch = plane_scr;
+            if (scratch) {
+                struct sharp_job sj = {
+                    .src = rgb, .dst = scratch, .w = ow, .h = oh,
+                    .s = sq8,
+                    .t = thr, .l = lim,
+                    .p5 = (post565 && px5) ? px5 : NULL,
+                };
+                run_rows(sharp_rows, &sj, oh, g_vf_threads);
+                final = scratch;
+                packed = sj.p5 != NULL;
+            }
+        }
+        if (post565 && px5 && final && !packed) {
+            struct pack_job pj = { .src = final, .dst = px5, .w = ow };
+            run_rows(pack_rows, &pj, oh, g_vf_threads);
+        }
+        double t3b = mono();
+        chain_ms[5] += t3b - t3;
         /* M47⑤c: the display frame rides the raw file every pass; JPEG is
          * a throttled side product when --jpeg-every-ms is set (QR reads
          * it at 2 Hz). First frame always encodes (g_last_jpeg_t==0). */
-        if (px5) {
+        if (px5)
             dump_raw565(px5, ow, oh);
-            free(px5);
-        }
         double t4 = mono();
         chain_ms[0] += t1 - t0;
         chain_ms[1] += t2 - t1;
         chain_ms[2] += t3 - t2;
-        chain_ms[3] += t4 - t3;
+        chain_ms[3] += t4 - t3b;
         chain_n++;
         if (!want_jpeg) {
             printf("yavg: %.1f (linear, bl=%d gamma=%.2f rot=%d)\n",
                    yavg, g_bl, g_gamma, g_rot);
-            free(rgb);
-            free(out);
             return;
         }
-        n = jpeg_encode_rgb24(rgb, (int)ow, (int)oh, (int)ow * 3, g_jpeg_q,
+        n = jpeg_encode_rgb24(final, (int)ow, (int)oh, (int)ow * 3, g_jpeg_q,
                               out, cap);
         g_last_jpeg_t = mono();
-        free(rgb);
         chain_ms[4] += mono() - t4;
         enc_n++;
     } else {
@@ -2925,7 +3295,7 @@ static void dump_jpeg(const uint8_t *rdi, uint32_t w, uint32_t h,
     /* linear-domain luminance: the number M47③'s AEC drives at ~65 (AEC_TGT) */
     printf("yavg: %.1f (linear, bl=%d gamma=%.2f rot=%d)\n",
            yavg, g_bl, g_gamma, g_rot);
-    if (n < 0) { fprintf(stderr, "jpeg: encode overflow\n"); free(out); return; }
+    if (n < 0) { fprintf(stderr, "jpeg: encode overflow\n"); return; }
     /* atomic publish: tmp + rename(2). The old O_TRUNC write raced every
      * mtime-polling reader (term's eye view, and M47④'s resident loop
      * would hit it ~10x/s). */
@@ -2934,7 +3304,6 @@ static void dump_jpeg(const uint8_t *rdi, uint32_t w, uint32_t h,
     int fd = open(tmp, O_WRONLY | O_CREAT | O_TRUNC, 0644);
     if (fd < 0) {
         fprintf(stderr, "open %s: %s\n", tmp, strerror(errno));
-        free(out);
         return;
     }
     int bad = wr_all(fd, out, (size_t)n) < 0;
@@ -2943,7 +3312,6 @@ static void dump_jpeg(const uint8_t *rdi, uint32_t w, uint32_t h,
         fprintf(stderr, "rename %s -> %s: %s\n", tmp, path, strerror(errno));
         bad = 1;
     }
-    free(out);
     clock_gettime(CLOCK_MONOTONIC, &b);
     double t = (b.tv_sec - a.tv_sec) + (b.tv_nsec - a.tv_nsec) / 1e9;
     if (bad) { fprintf(stderr, "jpeg: write failed\n"); return; }
@@ -3095,6 +3463,10 @@ static int send_sensor_req(int video_fd, int sd_fd, struct shot_bufs *b,
         return sensor_nop(video_fd, sd_fd, b, session, dev_hdl, req_id);
     unsigned cit; double gain, dgain;
     aec_rung(rung, cit_cap, &cit, &gain, &dgain);
+    /* these gains are now what the sensor will run (once the packet lands);
+     * the ⑤l noise-factor consumers (NR knee, sharpen scaling) read them */
+    g_gain = gain;
+    g_dgain = dgain;
     /* FINE axis: the trim scales the rung's CIT (linear exposure axis) */
     if (trim > 0.0 && trim < 1.0 && cit) {
         cit = (unsigned)(cit * trim);
@@ -3346,6 +3718,61 @@ static void cpufreq_restore(void)
     }
 }
 
+static int run_af_probe(int video_fd, int kmsg, double *kmark,
+                        uint32_t af_addr, const struct wreg *af_regs,
+                        int n_af_regs, int af_hold, int af_sweep,
+                        int sensor_fd, int slot, uint32_t reg,
+                        int *act_keep_fd, const uint32_t *rd_addrs,
+                        int n_rd, int rd_delay_ms);
+static int run_ois_init(int video_fd, int kmsg, double *kmark,
+                        uint32_t ois_addr, int *keep_fd);
+
+/* #227 in-stream AF write: parsed in main, consumed by run_stream after
+ * sensor CONFIG. The LC898129 (OIS+AF combo @0x76) core rides the SENSOR
+ * rails, not cam_vaf — a standalone actuator INIT (cam_vaf only) writes
+ * to a dead chip (2026-09-06: random write timed out -110 with rail up),
+ * so the regs ride the stream session where sensor power_up already ran. */
+static struct wreg g_af_regs[4];
+static int g_af_nregs;
+static uint32_t g_af_rd[4];
+static int g_af_nrd;
+static int g_af_rdelay;
+static uint32_t g_af_addr;
+static int g_af_act_fd = -1;   /* run_stream teardown closes it (parks lens) */
+static int g_ois;              /* #227: cam_ois vendor INIT before the A/B */
+static int g_ois_fd = -1;      /* teardown closes it (state + cam_vaf ref) */
+
+/* #227 --af-scan: contrast AF sweep riding the ring loop. Each step writes
+ * one 0xF01A target via AUTO_MOVE_LENS on the actuator handle the
+ * in-stream INIT left open; SKIP frames are settle (lens still moving),
+ * MEAS frames average into the step's sharpness (center-crop gradient on
+ * the RAW8 frame). Coarse 16 steps x 68 codes, then a 9-point fine pass
+ * at +-32 around the peak, best code written back before the tail frames.
+ * Fixed exposure only (--aec's ladder would walk brightness under the
+ * sharpness metric). */
+#define AF_SCAN_SKIP 2
+#define AF_SCAN_MEAS 2
+#define AF_SCAN_NCOARSE 16
+#define AF_SCAN_NFINE 9
+struct af_scan_st {
+    int phase;      /* 1=coarse 2=fine 0=done/idle */
+    int step;       /* index within the phase */
+    int fr;         /* frames since this step's write */
+    double acc;     /* accumulated sharpness of measured frames */
+    int nacc;
+    double best;    /* best step mean seen */
+    int best_code;  /* its 0xF01A code */
+    double base;    /* coarse step-0 mean (drift sanity line) */
+};
+static int g_af_scan;
+static struct af_scan_st g_afs;
+static uint32_t g_af_act_session, g_af_act_hdl;  /* run_af_probe publishes */
+static int af_scan_move(uint32_t session, uint32_t act_hdl, int video_fd,
+                        uint16_t code);
+static int af_scan_code(int phase, int step, int peak);
+static double frame_sharp(const uint8_t *map, uint32_t w, uint32_t h,
+                          uint32_t stride);
+
 static int run_stream(int slot, const char *out_path, int wait_ms,
                       uint32_t settle_cnt, uint32_t tp, int rb, int nframes)
 {
@@ -3382,6 +3809,19 @@ static int run_stream(int slot, const char *out_path, int wait_ms,
      * fence signals (see the wait loop). */
     int window = nframes < (int)MAXF ? nframes : (int)MAXF;
     int ring = nframes > (int)MAXF;
+    /* M47⑤r: never outlive the spawner. Reproduced 2026-09-06: aginx-voice
+     * dying mid-viewfinder (svc restart) re-parented its --forever child to
+     * init, which kept streaming and held the camera nodes forever — every
+     * respawn of the next voice instance collided (exit 2, stuck, respawn
+     * churn = the user-visible 卡). PDEATHSIG turns any parent death into
+     * the SIGTERM we already handle (in forever mode on_stop tears down
+     * gracefully); the getppid check closes the race where the parent died
+     * between fork and this prctl — refuse to touch hardware orphaned. */
+    prctl(PR_SET_PDEATHSIG, SIGTERM);
+    if (getppid() == 1) {
+        fprintf(stderr, "parent already dead (ppid 1), refusing to run\n");
+        return 1;
+    }
     /* M47④: the resident viewfinder trades ring depth for AEC latency —
      * window 8 keeps ~8 packets of headroom under the kernel's ~19-packet
      * UPDATE pool and converges in ~0.3 s steps. */
@@ -3473,7 +3913,6 @@ static int run_stream(int slot, const char *out_path, int wait_ms,
         ? (uint64_t)g_pcoff + (uint64_t)g_pstride * ((height + 1) / 2)
         : (uint64_t)stride * height;
 
-    setvbuf(stdout, NULL, _IOLBF, 0);
     video_fd = open("/dev/video3", O_RDWR);
     sync_fd = open("/dev/video4", O_RDWR);
     kmsg = open("/dev/kmsg", O_RDONLY | O_NONBLOCK);
@@ -3917,6 +4356,26 @@ static int run_stream(int slot, const char *out_path, int wait_ms,
         goto out;
     }
     printf("sensor CONFIG (mode/crop/pll %zu regs) applied\n", n_cfg);
+    /* #227: OIS subdev vendor INIT FIRST — stock HAL order (ois before
+     * actuator at camera open). The fd is held to teardown: closing runs
+     * cam_ois_shutdown, resetting the very state the A/B is testing. */
+    if (g_ois) {
+        if (run_ois_init(video_fd, kmsg, &kt,
+                         g_af_addr ? g_af_addr : 0x76, &g_ois_fd) != 0)
+            fprintf(stderr, "ois: INIT failed — see kmsg above\n");
+    }
+    /* #227: in-stream AF write — power_up ran on this CONFIG (sensor
+     * rails up, LC898129 core alive); the actuator INIT adds cam_vaf and
+     * pushes the regs while the bus is quiet (pre-STREAMON, HAL order).
+     * fd held to teardown: closing drops cam_vaf and the lens parks. */
+    if (g_af_nregs > 0 || g_af_nrd > 0) {
+        if (run_af_probe(video_fd, kmsg, &kt, g_af_addr, g_af_regs,
+                         g_af_nregs, 0, 0, -1, slot, 0,
+                         &g_af_act_fd, g_af_rd, g_af_nrd,
+                         g_af_rdelay) != 0)
+            fprintf(stderr, "af: in-stream AF probe failed — "
+                            "see kmsg above\n");
+    }
     t0 = kt;
     if (!g_tpg) {
     if (sensor_config(video_fd, sensor_fd, &sb, session, sensor_hdl,
@@ -4307,13 +4766,18 @@ static int run_stream(int slot, const char *out_path, int wait_ms,
 
     /* 14. wait on each fence in order (frame i signals as it lands).
      * RING mode (nframes > MAXF): only `window` buffers exist; frame f
-     * lives in slot f%window. The moment its fence signals, the slot is
+     * lives in slot f%window. The heavy pass on the landed frame runs
+     * FIRST — extract, its first stage, stages the crop out of the slot
+     * into cached memory (the slot's only reader; debayer/box/post run on
+     * private planes) — and only after the pass returns does the slot get
      * recycled for request f+window (retire the fired fence, create a
-     * fresh one, SCHED_REQ + UPDATE + NOP), then the heavy pass runs on
-     * the landed frame IN PLACE — the slot is not rewritten until that
-     * request executes at SOF, window frame periods away (0.17 s encode
-     * vs >=1 s margin). Raw dumps are skipped: nframes x 2.86 MB would
-     * fill tmpfs; JPEG/PNG stay per-frame-numbered. */
+     * fresh one, SCHED_REQ + UPDATE + NOP). The sensor free-runs at ~60
+     * fps while this loop runs at chain pace, so the request queue sits
+     * drained and a just-queued request executes at the very next SOF
+     * (~17 ms): requeue-at-fence used to race the RDI write master against
+     * extract and splice two capture times at the thread boundary
+     * (2026-09-06). Raw dumps are skipped: nframes x 2.86 MB would fill
+     * tmpfs; JPEG/PNG stay per-frame-numbered. */
     int frames_ok = 0, frames_empty = 0;
     int timeouts = 0; /* M47④: consecutive fence timeouts under --forever */
     double fps_t0 = mono();
@@ -4390,17 +4854,88 @@ static int run_stream(int slot, const char *out_path, int wait_ms,
                    frames_ok, dt > 0 ? 30.0 / dt : 0.0, aec.rung, aec.trim,
                    aec.last_y);
             if (chain_n) {
-                printf("vf: chain x%d (th %d): extract %.1f wb %.1f debayer %.1f "
-                       "raw %.1f enc %.1f(x%d) ms\n",
+                printf("vf: chain x%d (th %d): extract %.1f wb %.1f debayer+box %.1f "
+                       "post %.1f raw %.1f enc %.1f(x%d) ms\n",
                        chain_n, g_vf_threads, chain_ms[0] * 1000.0 / chain_n,
                        chain_ms[1] * 1000.0 / chain_n,
                        chain_ms[2] * 1000.0 / chain_n,
+                       chain_ms[5] * 1000.0 / chain_n,
                        chain_ms[3] * 1000.0 / chain_n,
                        chain_ms[4] * 1000.0 / (enc_n ? enc_n : 1), enc_n);
                 memset(chain_ms, 0, sizeof chain_ms);
                 chain_n = enc_n = 0;
             }
             fps_t0 = mono();
+        }
+
+        /* #227 --af-scan: frame-paced contrast AF. fr counts frames since
+         * the step's write; SKIP are settle, MEAS accumulate the step's
+         * sharpness. On the last measured frame the verdict prints and the
+         * NEXT code goes out — it takes effect under the following SKIP
+         * frames, so every MEAS window sees a settled lens. */
+        if (g_af_scan && g_afs.phase) {
+            double s = frame_sharp(pix_map[slot], width, height, stride);
+            g_afs.fr++;
+            if (g_afs.fr > AF_SCAN_SKIP && g_afs.fr <= AF_SCAN_SKIP + AF_SCAN_MEAS) {
+                g_afs.acc += s;
+                g_afs.nacc++;
+            }
+            if (g_afs.fr == AF_SCAN_SKIP + AF_SCAN_MEAS) {
+                double v = g_afs.acc / (g_afs.nacc ? g_afs.nacc : 1);
+                int code = af_scan_code(g_afs.phase, g_afs.step,
+                                        g_afs.best_code);
+                printf("af: scan %s step %2d code=0x%03x sharp=%.2f%s\n",
+                       g_afs.phase == 1 ? "coarse" : "fine  ", g_afs.step,
+                       code, v, v > g_afs.best ? " <" : "");
+                if (g_afs.phase == 1 && g_afs.step == 0)
+                    g_afs.base = v;
+                if (v > g_afs.best) {
+                    g_afs.best = v;
+                    g_afs.best_code = code;
+                }
+                g_afs.step++;
+                g_afs.fr = 0;
+                g_afs.acc = 0.0;
+                g_afs.nacc = 0;
+                if (g_afs.phase == 1 && g_afs.step >= AF_SCAN_NCOARSE) {
+                    g_afs.phase = 2;
+                    g_afs.step = 0;
+                    printf("af: scan coarse peak 0x%03x (%.2f) — fine pass\n",
+                           g_afs.best_code, g_afs.best);
+                    /* the else-if below is skipped on this transition, so
+                     * issue the first fine move here — without it fine
+                     * step 0 measured the stale coarse-end code (0x3fc)
+                     * while printing the planned fine code */
+                    if (af_scan_move(g_af_act_session, g_af_act_hdl,
+                                     video_fd,
+                                     (uint16_t)af_scan_code(g_afs.phase,
+                                                            g_afs.step,
+                                                            g_afs.best_code)) != 0) {
+                        fprintf(stderr, "af: scan move failed — scan aborted\n");
+                        g_afs.phase = 0;
+                    }
+                } else if (g_afs.phase == 2 && g_afs.step >= AF_SCAN_NFINE) {
+                    if (af_scan_move(g_af_act_session, g_af_act_hdl,
+                                     video_fd, (uint16_t)g_afs.best_code) == 0)
+                        printf("af: FOCUS code=0x%03x sharp=%.2f "
+                               "(step-0 %.2f, %+.0f%%)\n",
+                               g_afs.best_code, g_afs.best, g_afs.base,
+                               g_afs.base > 0.01
+                                   ? 100.0 * (g_afs.best / g_afs.base - 1.0)
+                                   : 0.0);
+                    else
+                        fprintf(stderr, "af: final move to 0x%03x failed\n",
+                                g_afs.best_code);
+                    g_afs.phase = 0;   /* tail frames ride the best code */
+                } else if (af_scan_move(g_af_act_session, g_af_act_hdl,
+                                        video_fd,
+                                        (uint16_t)af_scan_code(g_afs.phase,
+                                                              g_afs.step,
+                                                              g_afs.best_code)) != 0) {
+                    fprintf(stderr, "af: scan move failed — scan aborted\n");
+                    g_afs.phase = 0;
+                }
+            }
         }
 
         /* M47③: measure the landed frame (linear center-crop yavg), then
@@ -4482,11 +5017,53 @@ static int run_stream(int slot, const char *out_path, int wait_ms,
                    pix[rslot].out.buf_handle, sync_obj[rslot]);
         }
 
-        /* ring: recycle this slot for request fi+window+1 (its fence just
-         * fired — retire it, arm a fresh one), then process the landed
-         * frame in place. Requeue BEFORE the encode so the pipeline
-         * refills first; the buffer stays untouched until the request
-         * executes window frames later. */
+        if (ring && g_forever) {
+            /* resident viewfinder: crop+rotate+scale+encode, then atomic
+             * tmp+rename publish (the voice side mtime-polls eye.jpg — a
+             * torn read would decode a half-written JPEG). The slot stays
+             * ours until this pass returns — the recycle below hands it
+             * back to the pipeline only after extract, its last reader,
+             * is done. First 3 frames are stats only (AEC bracketing
+             * from aec.state). */
+            if (fi >= 3 && g_jpeg_q > 0)
+                dump_jpeg(pix_map[slot], width, height, stride, out_path);
+        } else if (ring && !g_probe_op7) {
+            /* spill the frame to disk and move on — the encode pass runs
+             * after the burst (0.17 s/frame would stall this loop past the
+             * 67 ms frame period and drain the in-flight window) */
+            char fpath[512];
+            frame_path(fpath, sizeof fpath, out_path, fi + 1, nframes);
+            int fd = open(fpath, O_WRONLY | O_CREAT | O_TRUNC, 0644);
+            if (fd < 0) {
+                fprintf(stderr, "spill %s: %s\n", fpath, strerror(errno));
+                frames_empty++;
+            } else {
+                size_t off = 0;
+                while (off < (size_t)pixbuf_len) {
+                    ssize_t w = write(fd, (uint8_t *)pix_map[slot] + off,
+                                      (size_t)pixbuf_len - off);
+                    if (w <= 0)
+                        break;
+                    off += (size_t)w;
+                }
+                close(fd);
+                if (off < (size_t)pixbuf_len) {
+                    fprintf(stderr, "spill %s: short write\n", fpath);
+                    frames_empty++;
+                }
+            }
+        }
+        /* ring: recycle this slot for request fi+window+1 — AFTER the pass.
+         * The pass's extract stage is the slot's only reader (it stages the
+         * crop out to cached memory; debayer/box/post/encode all run on
+         * private planes). The sensor free-runs at ~60 fps while this loop
+         * runs at chain pace, so the window-deep request queue sits drained
+         * and the request queued here executes at the VERY NEXT SOF (~17 ms)
+         * — requeue-at-fence used to put the RDI write master on the slot
+         * WHILE extract was still copying it, splicing two capture times at
+         * the extract thread boundary (landscape row 465 = portrait x 360),
+         * the 左右分离 receipt of 2026-09-06. Hand the slot back only once
+         * it is fully read. */
         if (ring && fi + window < nframes) {
             int rq = fi + window + 1;
             memset(&sinfo, 0, sizeof(sinfo));
@@ -4551,41 +5128,6 @@ static int run_stream(int slot, const char *out_path, int wait_ms,
          * iteration queued — drop it so the next frame starts clean */
         upd_rung = -1;
         upd_trim = 1.0;
-        if (ring && g_forever) {
-            /* resident viewfinder: crop+rotate+scale+encode IN PLACE, then
-             * atomic tmp+rename publish (the voice side mtime-polls eye.jpg
-             * — a torn read would decode a half-written JPEG). The recycled
-             * request does not touch this slot for `window` frame periods
-             * (~0.27 s at window 8 / 30 fps); the ~0.1 s pass fits. First
-             * 3 frames are stats only (AEC bracketing from aec.state). */
-            if (fi >= 3 && g_jpeg_q > 0)
-                dump_jpeg(pix_map[slot], width, height, stride, out_path);
-        } else if (ring && !g_probe_op7) {
-            /* spill the frame to disk and move on — the encode pass runs
-             * after the burst (0.17 s/frame would stall this loop past the
-             * 67 ms frame period and drain the in-flight window) */
-            char fpath[512];
-            frame_path(fpath, sizeof fpath, out_path, fi + 1, nframes);
-            int fd = open(fpath, O_WRONLY | O_CREAT | O_TRUNC, 0644);
-            if (fd < 0) {
-                fprintf(stderr, "spill %s: %s\n", fpath, strerror(errno));
-                frames_empty++;
-            } else {
-                size_t off = 0;
-                while (off < (size_t)pixbuf_len) {
-                    ssize_t w = write(fd, (uint8_t *)pix_map[slot] + off,
-                                      (size_t)pixbuf_len - off);
-                    if (w <= 0)
-                        break;
-                    off += (size_t)w;
-                }
-                close(fd);
-                if (off < (size_t)pixbuf_len) {
-                    fprintf(stderr, "spill %s: short write\n", fpath);
-                    frames_empty++;
-                }
-            }
-        }
     }
 
     /* 15. heavy pass (non-ring: every frame sits in its own buffer; ring
@@ -4703,11 +5245,30 @@ out:
     /* teardown: streamoff -> stop (isp, csiphy, sensor) -> unlink -> release
      * -> destroy session. Best effort; the kernel also tears down on close. */
     printf("== teardown ==\n");
+    if (g_ois_fd >= 0) {
+        close(g_ois_fd);   /* cam_ois shutdown: drops its cam_vaf ref */
+        g_ois_fd = -1;
+    }
+    if (g_af_act_fd >= 0) {
+        close(g_af_act_fd);   /* drops cam_vaf — lens parks */
+        g_af_act_fd = -1;
+    }
     cpufreq_restore(); /* back to parked mins before anything slow */
     if (g_aec && !g_probe_op7) {
-        aec_state_write(slot, aec.rung, aec.trim, aec.last_y);
-        printf("aec: state rung %d trim %.2f yavg %.1f -> %s\n", aec.rung,
-               aec.trim, aec.last_y, AEC_STATE_PATH);
+        /* ⑤p: a black meter at the exposure ceiling (rung 0) is an
+         * exposure-path failure (writes silently NACKing — 2026-09-06
+         * receipt), not a lighting fact: even a dark room meters >5 at
+         * 32x + CIT cap. Persisting it would cold-start the next session
+         * black; skipping forces the rung-5 cold descent, which re-verifies
+         * each step against yavg. */
+        if (aec.rung == 0 && aec.last_y < 5.0) {
+            printf("aec: rung 0 yavg %.1f — exposure path suspect, "
+                   "state not persisted\n", aec.last_y);
+        } else {
+            aec_state_write(slot, aec.rung, aec.trim, aec.last_y);
+            printf("aec: state rung %d trim %.2f yavg %.1f -> %s\n", aec.rung,
+                   aec.trim, aec.last_y, AEC_STATE_PATH);
+        }
     }
     if (sensor_fd >= 0 && sensor_hdl && sb.p_pkt)
         sensor_config(video_fd, sensor_fd, &sb, session, sensor_hdl,
@@ -4814,10 +5375,645 @@ out:
     return rc;
 }
 
+/* ================= #227 AF probe (additive; gated behind --af) =================
+ *
+ * The rear lens has never moved since bring-up: the imx363 power sequence
+ * omits SENSOR_VAF (the rail is mapped only on actuator@0 in the DT), so the
+ * VCM sits unpowered at its spring position = permanent whole-frame optical
+ * defocus. Root cause seen live on device: regulator "camera_ldo" (cam_vaf,
+ * gpio-regulator on pm8150l gpio8) disabled / num_users 0 with the camera
+ * stack idle; the 2026-09-01 cci0 address sweep stayed silent for the same
+ * reason — an unpowered VCM does not ACK.
+ *
+ * Every step below is confirmed in redfin's own camera-kernel source
+ * (kernel/msm-extra/camera-kernel, android-msm-redbull-4.19-android12):
+ *   - cam_actuator_power_up() constructs a DEFAULT power setting
+ *     {SENSOR_VAF, CAM_VAF, config_val 1, delay 2} when the actuator DT node
+ *     carries none — cam_vaf rises with no packet blob at all.
+ *   - the INIT packet (op_code 0) handler parses its cmd descs (cmd_type 4 =
+ *     I2C_INFO sets the CCI client address; any other cmd_type parses as an
+ *     i2c random-wr mosaic into init_settings), THEN calls
+ *     cam_actuator_power_up() unconditionally (state ACQUIRE -> CONFIG) and
+ *     applies init_settings SYNCHRONOUSLY inside the same ioctl. One packet =
+ *     rail up + optional fixed DAC probe write.
+ *   - ACQUIRE_DEV has no probe prerequisite (unlike cam_sensor); the last
+ *     close() runs cam_actuator_shutdown -> power_down -> the rail drops, so
+ *     the fd stays open to hold it. */
+
+/* find a v4l subdev node by its sysfs name. The actuator's media entity type
+ * number is not defined in any redfin header (cam_subdev.h has no
+ * *_DEVICE_TYPE defines), but sysfs "v4l-subdevN/name" ==
+ * "cam-actuator-driver" is what the device itself shows — the observed
+ * anchor, no invented constant. Returns an opened fd or -1. */
+static int find_subdev_by_name(const char *want)
+{
+    for (int s = 0; s < 32; s++) {
+        char sf[96], nm[64];
+        snprintf(sf, sizeof(sf), "/sys/class/video4linux/v4l-subdev%d/name", s);
+        int fd = open(sf, O_RDONLY);
+        if (fd < 0)
+            continue;
+        ssize_t r = read(fd, nm, sizeof(nm) - 1);
+        close(fd);
+        if (r <= 0)
+            continue;
+        nm[r] = 0;
+        if (strncmp(nm, want, strlen(want)) != 0)
+            continue;
+        char devp[32];
+        snprintf(devp, sizeof(devp), "/dev/v4l-subdev%d", s);
+        int dfd = open(devp, O_RDWR);
+        if (dfd < 0)
+            continue;
+        printf("  node %s = %s\n", want, devp);
+        return dfd;
+    }
+    return -1;
+}
+
+/* cam_vaf receipt line: find the regulator sysfs dir by its consumer-visible
+ * name ("camera_ldo") and print state + num_users under a tag. Returns 0 if
+ * the rail reads enabled, 1 if disabled, -1 if not found. */
+static int af_show_rail(const char *tag)
+{
+    char base[96] = "";
+    for (int i = 0; i < 128; i++) {
+        char p[96], nm[64];
+        snprintf(p, sizeof(p), "/sys/class/regulator/regulator.%d/name", i);
+        int fd = open(p, O_RDONLY);
+        if (fd < 0)
+            continue;
+        ssize_t r = read(fd, nm, sizeof(nm) - 1);
+        close(fd);
+        if (r > 0 && strncmp(nm, "camera_ldo", 10) == 0) {
+            nm[10] = 0;
+            snprintf(base, sizeof(base), "/sys/class/regulator/regulator.%d", i);
+            break;
+        }
+    }
+    if (!base[0]) {
+        printf("af: %s camera_ldo regulator not found in sysfs\n", tag);
+        return -1;
+    }
+    char p[128], b[64] = "?", u[64] = "?";
+    snprintf(p, sizeof(p), "%s/state", base);
+    int fd = open(p, O_RDONLY);
+    if (fd >= 0) {
+        ssize_t r = read(fd, b, sizeof(b) - 1);
+        if (r > 0) b[r] = 0;
+        close(fd);
+    }
+    snprintf(p, sizeof(p), "%s/num_users", base);
+    fd = open(p, O_RDONLY);
+    if (fd >= 0) {
+        ssize_t r = read(fd, u, sizeof(u) - 1);
+        if (r > 0) u[r] = 0;
+        close(fd);
+    }
+    for (char *c = b; *c; c++) if (*c == '\n') *c = 0;
+    for (char *c = u; *c; c++) if (*c == '\n') *c = 0;
+    printf("af: %s %s state=%s users=%s\n", tag, base, b, u);
+    return strcmp(b, "enabled") == 0 ? 0 : 1;
+}
+
+/* print actuator-relevant kmsg since ts (kmsg_drain's filter list predates
+ * the actuator line; a local copy keeps the shared matcher untouched) */
+static double af_kmsg_show(int fd, double since_us)
+{
+    char buf[512];
+    double max = since_us;
+    if (fd < 0)
+        return max;
+    while (1) {
+        ssize_t n = read(fd, buf, sizeof(buf) - 1);
+        if (n <= 0)
+            break;
+        buf[n] = 0;
+        double ts;
+        if (sscanf(buf, "%*d,%*llu,%lf;%*s", &ts) != 1)
+            ts = max;
+        if (ts > max)
+            max = ts;
+        if (ts < since_us)
+            continue;
+        char *semi = strchr(buf, ';');
+        if (semi && (strstr(semi, "CAM-ACTUATOR") || strstr(semi, "CAM-OIS") ||
+                     strstr(semi, "CAM-CCI") ||
+                     strstr(semi, "camera_ldo") || strstr(semi, "regulator")))
+            printf("    kmsg: %s", semi + 1);
+    }
+    return max;
+}
+
+/* --af: rail up through the actuator subdev, hold it (sweep / out-of-process
+ * A/B captures ride the hold), then drop it and show both states.
+ * sensor_fd >= 0 + af_sweep: re-run the cci0 even-address sweep WITH the rail
+ * held — probe_once cycles only the sensor rails (slots[0] omits SENSOR_VAF),
+ * so the two never fight over the regulator. */
+static int run_af_probe(int video_fd, int kmsg, double *kmark,
+                        uint32_t af_addr, const struct wreg *af_regs,
+                        int n_af_regs, int af_hold, int af_sweep,
+                        int sensor_fd, int slot, uint32_t reg,
+                        int *act_keep_fd, const uint32_t *rd_addrs,
+                        int n_rd, int rd_delay_ms)
+{
+    int rc = 1, act_fd = -1;
+    uint32_t act_hdl = 0, session = 0;
+    struct shot_bufs sb = {0};
+
+    af_show_rail("before:");
+    act_fd = find_subdev_by_name("cam-actuator-driver");
+    if (act_fd < 0) {
+        fprintf(stderr, "af: no cam-actuator-driver subdev in sysfs\n");
+        goto out;
+    }
+    struct cam_req_mgr_session_info si;
+    memset(&si, 0, sizeof(si));
+    if (cam_ioctl(video_fd, CAM_REQ_MGR_CREATE_SESSION, &si,
+                  CAM_HANDLE_USER_POINTER, sizeof(si)) < 0) {
+        fprintf(stderr, "af: CREATE_SESSION: %s\n", strerror(errno));
+        goto out;
+    }
+    session = (uint32_t)si.session_hdl;
+    printf("af: session %u\n", session);
+
+    struct cam_sensor_acquire_dev acq;
+    memset(&acq, 0, sizeof(acq));
+    acq.session_handle = session;
+    acq.handle_type = CAM_HANDLE_USER_POINTER;
+    if (cam_ioctl(act_fd, CAM_ACQUIRE_DEV, &acq,
+                  CAM_HANDLE_USER_POINTER, sizeof(acq)) < 0) {
+        fprintf(stderr, "af: actuator ACQUIRE_DEV: %s\n", strerror(errno));
+        goto out;
+    }
+    act_hdl = acq.device_handle;
+    g_af_act_session = session;   /* #227: --af-scan moves reuse mid-stream */
+    g_af_act_hdl = act_hdl;
+    printf("af: actuator dev hdl %u\n", act_hdl);
+
+    /* INIT packet, one cmd buffer + two descs: [0] cam_cmd_i2c_info at
+     * offset 0, [1] the random-wr mosaic at offset 16 — the kernel INIT
+     * handler honors desc.offset, so one allocation carries both. With no
+     * regs there is only desc[0] and the packet is a pure rail-up. */
+    if (shot_alloc(video_fd, &sb, 256, 0) < 0)
+        goto out;
+    struct cam_cmd_i2c_info *i2c = sb.p_cmd;
+    i2c->slave_addr = af_addr;
+    i2c->i2c_freq_mode = I2C_FREQ_FAST;
+    i2c->cmd_type = CMD_I2C_INFO;
+    /* Cold-rail boot-wait (2026-09-06 receipts): the driver's default
+     * power delay is 2 ms (cam_actuator_init_default_power_settings) and
+     * nothing in the INIT path waits out the LC898129 flash boot — the
+     * first write NACKs and cam_cci_wait returns the ISR-latched bus
+     * error (-EINVAL: wait:270 -> transfer_end:345 -> data_queue:870).
+     * Same packet ACKed on a rail another live session held warm
+     * (scan4); NACK at +2 ms and +150 ms, ACK after minutes. Poll like
+     * camera_io's retry idiom: a reg-less INIT rides the rail up (its
+     * empty-init EINVAL is the documented rail receipt), then re-apply
+     * the real packet — INIT in CONFIG state skips power_up and goes
+     * straight to I2C — until the slave answers. */
+    int attempt = 0, n_tries = 10, cfg_rc = 0, cfg_err = 0;
+    for (;;) {
+        int regs_n = (n_af_regs > 0 && attempt > 0) ? n_af_regs : 0;
+        size_t used = 0;
+        if (regs_n > 0)
+            used = build_i2c_writes((uint8_t *)sb.p_cmd + 16, af_regs,
+                                    regs_n);
+        struct cam_packet *pk = sb.p_pkt;
+        pk->header.op_code = 0;   /* CAM_ACTUATOR_PACKET_OPCODE_INIT */
+        pk->header.size = (uint32_t)(sizeof(*pk) +
+                                     (size_t)(1 + (regs_n > 0)) *
+                                         sizeof(struct cam_cmd_buf_desc));
+        pk->num_cmd_buf = 1 + (regs_n > 0);
+        struct cam_cmd_buf_desc *d = (void *)pk->payload;
+        d[0].mem_handle = (int32_t)sb.cmd.out.buf_handle;
+        d[0].offset = 0;
+        d[0].size = (uint32_t)sb.cmd_cap;
+        d[0].length = sizeof(*i2c);
+        if (regs_n > 0) {
+            d[1].mem_handle = (int32_t)sb.cmd.out.buf_handle;
+            d[1].offset = 16;
+            d[1].size = (uint32_t)sb.cmd_cap;
+            d[1].length = (uint32_t)used;
+        }
+        struct cam_config_dev_cmd cfg = {
+            .session_handle = (int32_t)session,
+            .dev_handle = (int32_t)act_hdl,
+            .offset = 0, .packet_handle = sb.pkt.out.buf_handle };
+        double t0 = *kmark;
+        cfg_rc = cam_ioctl(act_fd, CAM_CONFIG_DEV, &cfg,
+                           CAM_HANDLE_USER_POINTER, sizeof(cfg));
+        cfg_err = errno;
+        *kmark = af_kmsg_show(kmsg, t0);
+        if (cfg_rc == 0 || n_af_regs == 0 || attempt >= n_tries)
+            break;
+        if (attempt == 0)
+            printf("af: cold-rail — waiting out LC898129 boot "
+                   "(250 ms x %d)\n", n_tries);
+        attempt++;
+        usleep(250000);
+    }
+    /* kernel order inside INIT: parse descs -> power_up (UNCONDITIONAL,
+     * state ACQUIRE->CONFIG) -> apply init_settings. So:
+     *   rc==0            rail up + (if regs) DAC write ACKed at af_addr
+     *   rc<0, no regs    expected: empty init_settings makes apply_settings
+     *                    return -EINVAL AFTER the rail rose — receipt is the
+     *                    rail, not the ioctl
+     *   rc<0, with regs  NACK (wrong addr) or bus error — rail state decides
+     *                    whether the hold/sweep is still worth running */
+    int rail = af_show_rail("after :");
+    if (cfg_rc == 0)
+        printf("af: INIT ok (op0, addr 0x%02x, %d dac write(s)) — "
+               "power_up ran, write ACKed\n", af_addr, n_af_regs);
+    else if (rail == 0)
+        printf("af: INIT rc=%d (%s) but RAIL IS UP — power_up ran; %s\n",
+               cfg_rc, strerror(cfg_err),
+               n_af_regs ? "write path failed (addr/NACK) — see kmsg above"
+                         : "empty init_settings EINVAL is expected "
+                           "(rail-only probe)");
+    else {
+        fprintf(stderr, "af: actuator INIT failed and rail stayed down "
+                        "(rc=%d %s)\n", cfg_rc, strerror(cfg_err));
+        goto out;
+    }
+    if (act_keep_fd) {
+        /* in-stream caller wants a proven ACK, not a rail receipt — a
+         * timed-out write left the lens untouched and means the chip
+         * still isn't listening; fail so the caller knows. */
+        if (cfg_rc != 0) {
+            rc = 1;
+            goto out;
+        }
+    }
+
+    if (n_rd > 0) {
+        /* READ packet (opcode 3, cam_actuator_core.c READ handler): state
+         * is CONFIG (INIT just ran). One cmd desc walks [i2c_info at 0
+         * (sid re-assert, as INIT left it)][random_rd at 8]; the register
+         * ADDRESS rides cam_cmd_read.reg_data — cam_sensor_handle_random_
+         * read copies it into reg_setting[].reg_addr. The kernel reads
+         * each DWORD over CCI (wire MSB-first, assembled buf[0]<<24|… in
+         * cam_cci_i2c_read) then memcpy()s the native-LE u32 into the
+         * OUTPUT io buffer — decode little-endian here. */
+        struct cam_mem_mgr_alloc_cmd rb;
+        if (alloc_buf(video_fd, 64, 8, &rb) < 0)
+            goto out;
+        uint8_t *rdata = map_fd(rb.out.fd, 64);
+        if (!rdata) {
+            release_buf(video_fd, rb.out.buf_handle);
+            goto out;
+        }
+        memset(rdata, 0, 64);
+        struct i2c_rdwr_header *rh = (void *)((uint8_t *)sb.p_cmd + 8);
+        memset(rh, 0, sizeof(*rh) + 8u * (size_t)n_rd);
+        rh->count = (uint32_t)n_rd;
+        rh->cmd_type = CMD_I2C_RNDM_RD;
+        rh->data_type = I2C_TYPE_DWORD;
+        rh->addr_type = I2C_TYPE_WORD;
+        for (int k = 0; k < n_rd; k++)
+            ((struct cam_cmd_read *)(rh + 1))[k].reg_data = rd_addrs[k];
+        memset(sb.p_pkt, 0, 4096);
+        struct cam_packet *rpk = sb.p_pkt;
+        rpk->header.op_code = 3;   /* CAM_ACTUATOR_PACKET_OPCODE_READ */
+        rpk->header.size = (uint32_t)(sizeof(*rpk) +
+            sizeof(struct cam_cmd_buf_desc) +
+            sizeof(struct cam_buf_io_cfg));
+        rpk->num_cmd_buf = 1;
+        rpk->io_configs_offset = (uint32_t)sizeof(struct cam_cmd_buf_desc);
+        rpk->num_io_configs = 1;
+        struct cam_cmd_buf_desc *rdesc = (void *)rpk->payload;
+        rdesc->mem_handle = (int32_t)sb.cmd.out.buf_handle;
+        rdesc->size = (uint32_t)sb.cmd_cap;
+        rdesc->length = (uint32_t)(8 + sizeof(*rh) + 8u * (size_t)n_rd);
+        struct cam_buf_io_cfg *rio = (void *)((uint8_t *)rpk->payload +
+                                              sizeof(*rdesc));
+        rio->mem_handle[0] = (int32_t)rb.out.buf_handle;
+        rio->direction = CAM_BUF_OUTPUT;
+        if (rd_delay_ms > 0) {
+            /* let the lens settle (or INI complete) before sampling */
+            printf("af: settling %dms before read\n", rd_delay_ms);
+            usleep((useconds_t)rd_delay_ms * 1000);
+        }
+        struct cam_config_dev_cmd rcfg = {
+            .session_handle = (int32_t)session,
+            .dev_handle = (int32_t)act_hdl,
+            .offset = 0, .packet_handle = sb.pkt.out.buf_handle };
+        double rts = *kmark;
+        if (cam_ioctl(act_fd, CAM_CONFIG_DEV, &rcfg,
+                      CAM_HANDLE_USER_POINTER, sizeof(rcfg)) < 0) {
+            fprintf(stderr, "af: READ packet: %s\n", strerror(errno));
+            *kmark = af_kmsg_show(kmsg, rts);
+        } else {
+            for (int k = 0; k < n_rd; k++) {
+                const uint8_t *b = rdata + 4 * k;
+                uint32_t v = (uint32_t)b[0] | (uint32_t)b[1] << 8 |
+                             (uint32_t)b[2] << 16 | (uint32_t)b[3] << 24;
+                printf("af: read 0x%04x = 0x%08x "
+                       "(bytes %02x %02x %02x %02x)\n",
+                       rd_addrs[k], v, b[0], b[1], b[2], b[3]);
+            }
+        }
+        munmap(rdata, 64);
+        release_buf(video_fd, rb.out.buf_handle);
+    }
+
+    if (af_sweep && sensor_fd >= 0) {
+        printf("af: sweep slot %d (%s), rail HELD — even addrs, reg 0x%04x\n",
+               slot, slots[slot].name, reg);
+        fflush(stdout);
+        for (uint32_t a = 0x02; a <= 0xFE; a += 2) {
+            double ts = *kmark;
+            probe_once(video_fd, sensor_fd, slot, a, reg, 0xFFFF);
+            uint32_t id = 0;
+            int st = kmsg >= 0 ? kmsg_classify(kmsg, ts, &id, kmark)
+                               : KMSG_QUIET;
+            if (st == KMSG_HIT)
+                printf("  0x%02x: ACK id=0x%04x\n", a, id);
+            else if (st == KMSG_WEDGE) {
+                printf("  0x%02x: BUS WEDGE (timeout) — abort sweep\n", a);
+                fflush(stdout);
+                break;
+            }
+            if ((a & 0x1e) == 0) {
+                printf("  .. 0x%02x done\n", a);
+                fflush(stdout);
+            }
+        }
+    }
+    if (af_hold > 0) {
+        printf("af: holding rail %ds (fd open; close drops it)\n", af_hold);
+        sleep((unsigned)af_hold);
+    }
+    rc = 0;
+out:
+    shot_free(video_fd, &sb);
+    if (act_keep_fd && rc == 0 && act_fd >= 0) {
+        /* caller owns the fd: holding it open keeps cam_vaf up (closing
+         * is what parks the lens) — run_stream closes it at teardown */
+        *act_keep_fd = act_fd;
+        return rc;
+    }
+    if (act_hdl && act_fd >= 0) {
+        struct cam_release_dev_cmd rel = {
+            .session_handle = (int32_t)session,
+            .dev_handle = (int32_t)act_hdl };
+        cam_ioctl(act_fd, CAM_RELEASE_DEV, &rel, CAM_HANDLE_USER_POINTER,
+                  sizeof(rel));
+    }
+    if (act_fd >= 0)
+        close(act_fd);   /* last close -> cam_actuator_shutdown -> rail down */
+    if (rc == 0)
+        af_show_rail("closed:");
+    return rc;
+}
+
+/* #227 --af-scan helpers. */
+static int af_scan_move(uint32_t session, uint32_t act_hdl, int video_fd,
+                        uint16_t code)
+{
+    if (g_af_act_fd < 0)
+        return -1;
+    struct shot_bufs sb;
+    memset(&sb, 0, sizeof(sb));
+    if (shot_alloc(video_fd, &sb, 64, 0) < 0)
+        return -1;
+    /* one desc holding the random-wr mosaic {0xF01A, code, 32} — sid/freq
+     * were latched at INIT */
+    struct wreg w = { 0xF01A, code, 32 };
+    size_t used = build_i2c_writes(sb.p_cmd, &w, 1);
+    struct cam_packet *pk = sb.p_pkt;
+    memset(pk, 0, sizeof(*pk) + sizeof(struct cam_cmd_buf_desc));
+    /* AUTO_MOVE_LENS, not MANUAL: MANUAL parks the settings in per_frame[]
+     * and waits for a req-mgr SOF callback that never fires on our unlinked
+     * actuator fd (ACK=0 but no I2C write); AUTO sets ACT_APPLY_SETTINGS_NOW
+     * and the CAM_CONFIG_DEV dispatcher applies it before returning */
+    pk->header.op_code = 1;   /* CAM_ACTUATOR_PACKET_AUTO_MOVE_LENS */
+    pk->header.size = (uint32_t)(sizeof(*pk) +
+                                 sizeof(struct cam_cmd_buf_desc));
+    pk->num_cmd_buf = 1;
+    struct cam_cmd_buf_desc *d = (void *)pk->payload;
+    d->mem_handle = (int32_t)sb.cmd.out.buf_handle;
+    d->offset = 0;
+    d->size = (uint32_t)sb.cmd_cap;
+    d->length = (uint32_t)used;
+    struct cam_config_dev_cmd cfg = {
+        .session_handle = (int32_t)session, .dev_handle = (int32_t)act_hdl,
+        .offset = 0, .packet_handle = sb.pkt.out.buf_handle };
+    int rc = cam_ioctl(g_af_act_fd, CAM_CONFIG_DEV, &cfg,
+                       CAM_HANDLE_USER_POINTER, sizeof(cfg));
+    shot_free(video_fd, &sb);
+    return rc < 0 ? -1 : 0;
+}
+
+static int af_scan_code(int phase, int step, int peak)
+{
+    int c = phase == 1 ? step * 68 : peak - 32 + step * 8;
+    if (c < 0) c = 0;
+    if (c > 0x3ff) c = 0x3ff;
+    return c;
+}
+
+/* center-crop mean |gradient| (x+y pooled) on the RAW10-packed frame —
+ * pixel bytes only: byte i of each 5-byte group IS pixel i's bits[9:2]
+ * (raw2jpg's receipt), the 5th byte is carry padding. Walking all 5 as a
+ * pixel stream diluted the metric ~5:1 and graded a 22% focus swing as
+ * ~1%. Same center-50% geometry as the host python A/B metric (2016x1420
+ * -> cols 504..1512, rows 355..1065), so numbers compare across tools */
+static double frame_sharp(const uint8_t *map, uint32_t w, uint32_t h,
+                          uint32_t stride)
+{
+    if (!map || w < 8 || h < 8 || stride < w / 4 * 5)
+        return 0.0;
+    uint32_t x0 = w / 4, x1 = w - w / 4, y0 = h / 4, y1 = h - h / 4;
+    uint32_t cw = x1 - x0;
+    uint8_t row[2][2048];        /* compact pixel rows; cw <= 2016 here */
+    if (cw > 2048)
+        return 0.0;
+    double acc = 0.0;
+    uint64_t n = 0;
+    int cur = 0;
+    for (uint32_t y = y0; y < y1; y++) {
+        const uint8_t *src = map + (size_t)y * stride;
+        uint8_t *dst = row[cur];
+        for (uint32_t x = x0; x < x1; x++)
+            dst[x - x0] = src[(x >> 2) * 5 + (x & 3)];
+        if (y > y0) {
+            const uint8_t *p = row[cur ^ 1];
+            for (uint32_t x = 1; x < cw; x++) {
+                int gx = p[x] - p[x - 1];
+                int gy = dst[x] - p[x];
+                acc += (double)(gx < 0 ? -gx : gx) + (double)(gy < 0 ? -gy : gy);
+                n++;
+            }
+        }
+        cur ^= 1;
+    }
+    return n ? acc / (double)n : 0.0;
+}
+
+/* #227 --ois: drive the cam_ois subdev through its vendor INIT — the
+ * bring-up stock Android's HAL does at every camera open and ours never
+ * did (dmesg has carried zero CAM-OIS lines since boot). Written while AF
+ * still looked dead; the op1 actuator path has since proved the 0xF01A
+ * servo DOES move the lens optically (A/B −22% gradient, crisp/blur
+ * pair), so this INIT is a stabilizer/health probe, not an AF revive.
+ *
+ * One INIT packet, two descs, one 256-B cmd buffer:
+ *   [0] cam_cmd_ois_info @ 0    — slave addr, FAST i2c, fw_flag=0,
+ *                                 calib=0 (bare slave-info INIT; the fw
+ *                                 and calib phases are follow-ups gated
+ *                                 on what this probe observes)
+ *   [1] random-wr mosaic @ 68   — one DWORD write 0xF01A=0x30d (the
+ *                                 observed power-on default: a true no-op
+ *                                 for the servo). Kernel order inside
+ *                                 CAM_OIS_PACKET_OPCODE_INIT: parse descs
+ *                                 (I2C_INFO sets sid/freq; RNDM_WR lands
+ *                                 in i2c_init_data) -> power_up (default
+ *                                 {SENSOR_VAF, on, 2 ms} when the DT node
+ *                                 carries none; state -> CONFIG) -> fw
+ *                                 skip -> apply init_settings -> calib
+ *                                 skip. An EMPTY init_settings would fail
+ *                                 apply_settings with -EINVAL after
+ *                                 power_up and power straight back down —
+ *                                 same shape as the actuator rail probe —
+ *                                 so the no-op write is what keeps state
+ *                                 CONFIG and the rail held.
+ * keep_fd != NULL (in-stream A/B): the caller owns the fd — holding it
+ * open keeps cam_ois_state CONFIG and its cam_vaf reference alive across
+ * the 0xF01A A/B; closing runs cam_ois_shutdown and resets the chip. */
+static int run_ois_init(int video_fd, int kmsg, double *kmark,
+                        uint32_t ois_addr, int *keep_fd)
+{
+    int rc = 1, ois_fd = -1;
+    uint32_t ois_hdl = 0, session = 0;
+    struct shot_bufs sb = {0};
+
+    af_show_rail("ois-before:");
+    ois_fd = find_subdev_by_name("cam-ois");
+    if (ois_fd < 0) {
+        fprintf(stderr, "ois: no cam-ois subdev in sysfs\n");
+        goto out;
+    }
+    struct cam_req_mgr_session_info si;
+    memset(&si, 0, sizeof(si));
+    if (cam_ioctl(video_fd, CAM_REQ_MGR_CREATE_SESSION, &si,
+                  CAM_HANDLE_USER_POINTER, sizeof(si)) < 0) {
+        fprintf(stderr, "ois: CREATE_SESSION: %s\n", strerror(errno));
+        goto out;
+    }
+    session = (uint32_t)si.session_hdl;
+    printf("ois: session %u\n", session);
+
+    struct cam_sensor_acquire_dev acq;
+    memset(&acq, 0, sizeof(acq));
+    acq.session_handle = session;
+    acq.handle_type = CAM_HANDLE_USER_POINTER;
+    if (cam_ioctl(ois_fd, CAM_ACQUIRE_DEV, &acq,
+                  CAM_HANDLE_USER_POINTER, sizeof(acq)) < 0) {
+        fprintf(stderr, "ois: ACQUIRE_DEV: %s\n", strerror(errno));
+        goto out;
+    }
+    ois_hdl = acq.device_handle;
+    printf("ois: dev hdl %u\n", ois_hdl);
+
+    if (shot_alloc(video_fd, &sb, 256, 0) < 0)
+        goto out;
+    struct ois_cmd_info *oi = sb.p_cmd;
+    memset(oi, 0, sizeof(*oi));
+    oi->slave_addr = ois_addr;
+    oi->i2c_freq_mode = I2C_FREQ_FAST;
+    oi->cmd_type = CMD_I2C_INFO;
+    /* ois_fw_flag 0, is_ois_calib 0, name/opcodes zeroed above */
+    const struct wreg noreg[1] = { { 0xF01A, 0x30d, 32 } };
+    size_t used = build_i2c_writes((uint8_t *)sb.p_cmd + sizeof(*oi),
+                                    noreg, 1);
+
+    struct cam_packet *pk = sb.p_pkt;
+    pk->header.op_code = 0;   /* CAM_OIS_PACKET_OPCODE_INIT */
+    pk->header.size = (uint32_t)(sizeof(*pk) +
+                                 2 * sizeof(struct cam_cmd_buf_desc));
+    pk->num_cmd_buf = 2;
+    struct cam_cmd_buf_desc *d = (void *)pk->payload;
+    d[0].mem_handle = (int32_t)sb.cmd.out.buf_handle;
+    d[0].offset = 0;
+    d[0].size = (uint32_t)sb.cmd_cap;
+    d[0].length = (uint32_t)sizeof(*oi);
+    d[1].mem_handle = (int32_t)sb.cmd.out.buf_handle;
+    d[1].offset = (uint32_t)sizeof(*oi);
+    d[1].size = (uint32_t)sb.cmd_cap;
+    d[1].length = (uint32_t)used;
+    struct cam_config_dev_cmd cfg = {
+        .session_handle = (int32_t)session, .dev_handle = (int32_t)ois_hdl,
+        .offset = 0, .packet_handle = sb.pkt.out.buf_handle };
+    double t0 = *kmark;
+    printf("ois: INIT (op0, addr 0x%02x, no-op 0xF01A=0x30d, no fw, "
+           "no calib)\n", ois_addr);
+    int cfg_rc = cam_ioctl(ois_fd, CAM_CONFIG_DEV, &cfg,
+                           CAM_HANDLE_USER_POINTER, sizeof(cfg));
+    int cfg_err = errno;
+    *kmark = af_kmsg_show(kmsg, t0);
+    int rail = af_show_rail("ois-after :");
+    if (cfg_rc == 0)
+        printf("ois: INIT ok — power_up ran, slave-info latched, "
+               "init_settings ACKed; state CONFIG\n");
+    else if (rail == 0)
+        printf("ois: INIT rc=%d (%s) but RAIL IS UP — power_up ran; "
+               "see kmsg above for where it stopped\n",
+               cfg_rc, strerror(cfg_err));
+    else {
+        fprintf(stderr, "ois: INIT failed and rail stayed down "
+                        "(rc=%d %s)\n", cfg_rc, strerror(cfg_err));
+        goto out;
+    }
+    if (keep_fd) {
+        /* in-stream caller owns the fd: cam_ois_shutdown (last close)
+         * would drop the state and the rail ref mid-A/B */
+        *keep_fd = ois_fd;
+        rc = 0;
+        shot_free(video_fd, &sb);
+        return rc;
+    }
+    rc = 0;
+out:
+    shot_free(video_fd, &sb);
+    if (ois_hdl && ois_fd >= 0) {
+        struct cam_release_dev_cmd rel = {
+            .session_handle = (int32_t)session,
+            .dev_handle = (int32_t)ois_hdl };
+        cam_ioctl(ois_fd, CAM_RELEASE_DEV, &rel, CAM_HANDLE_USER_POINTER,
+                  sizeof(rel));
+    }
+    if (ois_fd >= 0) {
+        double t1 = *kmark;
+        close(ois_fd);   /* last close -> cam_ois_shutdown (kmsg receipt) */
+        *kmark = af_kmsg_show(kmsg, t1);
+    }
+    if (rc == 0)
+        af_show_rail("ois-closed:");
+    return rc;
+}
+
 int main(int argc, char **argv)
 {
+    /* line-buffered stdout from the very first byte — one setvbuf, before
+     * ANY output (a later setvbuf after writes is UB, and fully-buffered
+     * redirected logs swallow the output when the process dies; both bitten
+     * 2026-09-05). run_stream used to call setvbuf here itself — that one
+     * ran after the startup prints and is gone. */
+    setvbuf(stdout, NULL, _IOLBF, 0);
+    cp_ct_smooth_init(&g_ct_smooth);
     int only_slot = -1;
     int real = 0, sweep = 0, stream = 0;
+    int af = 0, af_sweep = 0, af_scan = 0;    /* #227: VCM rail probe via actuator subdev */
+    int ois = 0;                 /* #227: cam_ois vendor INIT via ois subdev */
+    uint32_t af_addr = 0;        /* 0 = unprogrammed; --af-sweep pins it */
+    int af_addr_given = 0;
+    int af_hold = 2;
+    struct wreg af_regs[4];      /* fixed-DAC probe writes (--af-write) */
+    int n_af_regs = 0;
+    uint32_t af_rd[4];           /* register addrs to read (--af-read) */
+    int n_af_rd = 0;
+    int af_rd_delay = 0;         /* settle ms before reads (--af-delay) */
     const char *out_path = "/tmp/frame.raw";
     int wait_ms = 3000;
     uint32_t settle_cnt = 0;   /* 0 = derive from data rate (23 @888 Mbps) */
@@ -5009,6 +6205,46 @@ int main(int argc, char **argv)
         }
         else if (strcmp(argv[i], "--aec") == 0)
             g_aec = 1;
+        else if (strcmp(argv[i], "--nr") == 0 && i + 1 < argc) {
+            /* hqdn3d dist25 strengths ls:cs:lt:ct; all-zero = denoise off */
+            double v[4] = { 0, 0, 0, 0 };
+            int got = sscanf(argv[++i], "%lf:%lf:%lf:%lf",
+                             &v[0], &v[1], &v[2], &v[3]);
+            if (got < 1) {
+                fprintf(stderr, "--nr: ls:cs:lt:ct (0..255 each)\n");
+                return 1;
+            }
+            for (int k = 0; k < 4; k++) g_nr_s[k] = v[k];
+            g_nr_on = v[0] > 0.0 || v[1] > 0.0 || v[2] > 0.0 || v[3] > 0.0;
+        }
+        else if (strcmp(argv[i], "--tone") == 0 && i + 1 < argc) {
+            g_tone_contrast = atof(argv[++i]);
+            g_tone_on = g_tone_contrast > 0.0; /* 0 = stretch off */
+        }
+        else if (strcmp(argv[i], "--sat") == 0 && i + 1 < argc) {
+            g_sat = atof(argv[++i]);
+            if (g_sat <= 0.0 || g_sat > 4.0) {
+                fprintf(stderr, "--sat: 0..4 (1 = off)\n");
+                return 1;
+            }
+        }
+        else if (strcmp(argv[i], "--fold") == 0 && i + 1 < argc) {
+            g_fold = atoi(argv[++i]);
+            if (g_fold < 0 || g_fold > 1) {
+                fprintf(stderr, "--fold: 0|1 (0 = the two-stage chain)\n");
+                return 1;
+            }
+        }
+        else if (strcmp(argv[i], "--sharpen") == 0 && i + 1 < argc) {
+            int thr, lim;
+            if (sscanf(argv[++i], "%lf:%d:%d", &g_sharp_s, &thr, &lim) != 3 ||
+                g_sharp_s < 0.0 || g_sharp_s > 8.0 || thr < 0 || lim < 0) {
+                fprintf(stderr, "--sharpen: S:T:L (0..8 : threshold : limit)\n");
+                return 1;
+            }
+            g_sharp_thr = thr;
+            g_sharp_lim = lim;
+        }
         else if (strcmp(argv[i], "--probe-op7") == 0) {
             g_probe_op7 = 1;
             stream = 1;
@@ -5031,10 +6267,73 @@ int main(int argc, char **argv)
             g_tpg = 1;
         else if (strcmp(argv[i], "--railhelper") == 0)
             g_railhelper = 1;
+        else if (strcmp(argv[i], "--af") == 0)
+            af = 1;
+        else if (strcmp(argv[i], "--ois") == 0) {
+            /* #227: vendor OIS INIT on the cam-ois subdev — the bring-up
+             * stock's HAL does at every open, ours never did. Default
+             * slave 0x76 (the LC898129 combo chip); --af-addr overrides.
+             * In-stream it runs right after sensor CONFIG, before the
+             * actuator INIT, fd held to teardown. */
+            ois = 1;
+            g_ois = 1;
+        }
+        else if (strcmp(argv[i], "--af-addr") == 0 && i + 1 < argc) {
+            af_addr = (uint32_t)strtoul(argv[++i], 0, 0);
+            af_addr_given = 1;
+        }
+        else if (strcmp(argv[i], "--af-hold") == 0 && i + 1 < argc)
+            af_hold = atoi(argv[++i]);
+        else if (strcmp(argv[i], "--af-sweep") == 0)
+            af_sweep = 1;
+        else if (strcmp(argv[i], "--af-write") == 0 && i + 1 < argc) {
+            /* reg:val[:width] hex; width 8/16/32 bits, default 16.
+             * :32 = DWORD data — the LC898129 AF/OIS command protocol
+             * (WORD addr + DWORD val, e.g. 0xF01A target code) */
+            unsigned r, v, w = 16;
+            if (sscanf(argv[++i], "%x:%x:%u", &r, &v, &w) >= 2 &&
+                (w == 8 || w == 16 || w == 32) && n_af_regs < 4 &&
+                r <= 0xFFFF &&
+                v <= (w == 8 ? 0xFFU : w == 16 ? 0xFFFFU : 0xFFFFFFFFU)) {
+                af_regs[n_af_regs].addr = (uint16_t)r;
+                af_regs[n_af_regs].val = v;
+                af_regs[n_af_regs].width = (uint8_t)w;
+                n_af_regs++;
+            } else {
+                fprintf(stderr, "--af-write expects 0xRR:0xVV[:8|16|32]\n");
+                return 1;
+            }
+        }
+        else if (strcmp(argv[i], "--af-read") == 0 && i + 1 < argc) {
+            /* LC898129 register address for a DWORD read (WORD addr +
+             * DWORD data — the chip's only read shape). Repeatable,
+             * max 4; in-stream only (the chip core rides sensor rails). */
+            unsigned a = (uint32_t)strtoul(argv[++i], 0, 0);
+            if (a > 0xFFFF || n_af_rd >= 4) {
+                fprintf(stderr, "--af-read expects 0xRRRR (max 4)\n");
+                return 1;
+            }
+            af_rd[n_af_rd++] = a;
+        }
+        else if (strcmp(argv[i], "--af-delay") == 0 && i + 1 < argc)
+            af_rd_delay = atoi(argv[++i]);
+        else if (strcmp(argv[i], "--af-scan") == 0)
+            af_scan = 1;   /* #227: contrast AF sweep (in-stream, ring) */
         else if (strcmp(argv[i], "--sweep") == 0)
             sweep = 1;
-        else
-            only_slot = atoi(argv[i]);
+        else {
+            /* bare slot number only — anything else is a typo'd flag and
+             * must NOT silently become only_slot (device 2026-09-05: a
+             * --vf-frames 3 typo fed slots[3] and segfaulted the stream
+             * banner's first deref, disguised as a code bug). */
+            char *end;
+            long v = strtol(argv[i], &end, 10);
+            if (end == argv[i] || *end || v < 0 || v > 2) {
+                fprintf(stderr, "unknown option: %s\n", argv[i]);
+                return 1;
+            }
+            only_slot = (int)v;
+        }
     }
     /* probe defaults: rear camera, ring mode, 48 frames — the first forced
      * jump rides the request recycled at fence window+1 (=17) and lands as
@@ -5053,9 +6352,89 @@ int main(int argc, char **argv)
     }
     if (g_forever)
         g_frames = 500000; /* ~4.6 h at 30 fps — SIGTERM owns the exit */
-    if (stream)   /* default front camera (slot 2, imx355) */
+    if (af && stream) {
+        /* #227: in-stream mode — the regs ride the stream session (sensor
+         * rails power the AF chip); standalone --af stays stream-less. */
+        if ((n_af_regs == 0 && n_af_rd == 0) || !af_addr_given) {
+            fprintf(stderr, "--af --stream needs --af-addr + "
+                            "--af-write or --af-read\n");
+            return 1;
+        }
+        if (n_af_regs == 0) {
+            /* read-only run: INIT still needs one write to apply (empty
+             * init_settings fails the ioctl with -EINVAL) — 0xF010 is
+             * onsemi CMD_RETURN_TO_CENTER with ZAXS_SRV_ON (bit 2):
+             * servo on + lens to center, the documented benign init. */
+            af_regs[0].addr = 0xF010;
+            af_regs[0].val = 0x00000004;
+            af_regs[0].width = 32;
+            n_af_regs = 1;
+            printf("af: read-only run — INIT writes 0xF010:4 "
+                   "(return to center)\n");
+        }
+        memcpy(g_af_regs, af_regs, sizeof(struct wreg) * (size_t)n_af_regs);
+        g_af_nregs = n_af_regs;
+        g_af_addr = af_addr;
+        memcpy(g_af_rd, af_rd, sizeof(af_rd));
+        g_af_nrd = n_af_rd;
+        g_af_rdelay = af_rd_delay;
+    }
+    if (n_af_rd > 0 && !(af && stream)) {
+        fprintf(stderr, "--af-read is in-stream only (--af --stream): "
+                        "the AF chip core rides the sensor rails\n");
+        return 1;
+    }
+    if ((n_af_regs > 0 || n_af_rd > 0) && !af_addr_given) {
+        fprintf(stderr, "--af-write/--af-read needs --af-addr "
+                        "(the VCM's CCI address)\n");
+        return 1;
+    }
+    if (af_scan) {
+        /* #227: contrast AF sweep — rides the ring capture loop with the
+         * exposure pinned. Synthesizes the in-stream INIT write (code 0 =
+         * coarse step 0, pre-STREAMON) so the scan measures from frame 1;
+         * the state machine lives in run_stream's fence loop. */
+        if (!stream) {
+            fprintf(stderr, "--af-scan: in-stream only "
+                            "(the AF chip core rides the sensor rails)\n");
+            return 1;
+        }
+        if (g_aec) {
+            fprintf(stderr, "--af-scan: fixed exposure only — the --aec "
+                            "ladder walks brightness under the metric\n");
+            return 1;
+        }
+        g_af_scan = 1;
+        memset(&g_afs, 0, sizeof(g_afs));
+        g_afs.phase = 1;
+        g_af_regs[0].addr = 0xF01A;
+        g_af_regs[0].val = 0;
+        g_af_regs[0].width = 32;
+        g_af_nregs = 1;
+        if (!g_af_addr)
+            g_af_addr = af_addr_given ? af_addr : 0x76;
+        int need = (AF_SCAN_NCOARSE + AF_SCAN_NFINE) *
+                       (AF_SCAN_SKIP + AF_SCAN_MEAS) + 3;
+        if (g_frames < need) {
+            printf("af: scan needs %d frames — --frames %d -> %d\n",
+                   need, g_frames, need);
+            g_frames = need;
+        }
+        printf("af: scan armed (%d coarse x68 + %d fine, "
+               "skip %d meas %d, addr 0x%02x)\n",
+               AF_SCAN_NCOARSE, AF_SCAN_NFINE, AF_SCAN_SKIP, AF_SCAN_MEAS,
+               g_af_addr);
+    }
+    if (stream) { /* the M47⑤k look line — one receipt line per run */
+        printf("look: nr %s%.0f:%.0f:%.0f:%.0f tone %.2f sat %.2f "
+               "sharp %.2f:%d:%d fold %d\n",
+               g_nr_on ? "" : "off ",
+               g_nr_s[0], g_nr_s[1], g_nr_s[2], g_nr_s[3],
+               g_tone_on ? g_tone_contrast : 0.0, g_sat,
+               g_sharp_s, g_sharp_thr, g_sharp_lim, g_fold);
         return run_stream(only_slot >= 0 ? only_slot : 2, out_path, wait_ms,
                           settle_cnt, tp, rb, g_frames);
+    }
 
     int video_fd = open("/dev/video3", O_RDWR);
     if (video_fd < 0) {
@@ -5073,6 +6452,45 @@ int main(int argc, char **argv)
     if (n == 0) {
         fprintf(stderr, "no sensor subdevs found\n");
         return 1;
+    }
+
+    /* #227 --ois standalone: vendor INIT on the cam-ois subdev, kmsg
+     * receipts for power-up AND shutdown, then drop it — diagnostic only
+     * (in-stream --ois is the one that holds state across an A/B). */
+    if (ois && !stream) {
+        int rc = run_ois_init(video_fd, kmsg, &kmark,
+                              af_addr ? af_addr : 0x76, NULL);
+        if (!af) {
+            close(video_fd);
+            if (kmsg >= 0) close(kmsg);
+            return rc;
+        }
+    }
+
+    /* #227 AF probe: standalone mode — returns before the probe loop, so
+     * default paths are untouched. The VCM rides the rear camera's cci0;
+     * slot 0's sensor fd feeds the rail-held address sweep (probe_once
+     * powers only the sensor rails — slots[0] omits SENSOR_VAF, no
+     * regulator fight with the actuator's cam_vaf). */
+    if (af && !stream) {
+        int sensor_fd = -1;
+        for (int i = 0; i < n; i++) {
+            if (sd_slot[i] == 0)
+                sensor_fd = sd_fd[i];
+            else
+                close(sd_fd[i]);
+        }
+        if (af_sweep && sensor_fd < 0) {
+            fprintf(stderr, "af: no slot-0 sensor subdev for the sweep\n");
+            return 1;
+        }
+        int rc = run_af_probe(video_fd, kmsg, &kmark, af_addr, af_regs,
+                              n_af_regs, af_hold, af_sweep, sensor_fd, 0,
+                              reg, NULL, NULL, 0, 0);
+        if (sensor_fd >= 0) close(sensor_fd);
+        close(video_fd);
+        if (kmsg >= 0) close(kmsg);
+        return rc;
     }
 
     /* chip ids for the real probe (moved to file scope: probe + stream) */

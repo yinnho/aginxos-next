@@ -9,7 +9,7 @@
  *
  *   --gray   (default) bits[9:2] of each pixel -> gray8 JPEG
  *   --color  bilinear debayer -> RGB -> YCbCr 4:2:0 JPEG
- *   --cfa    Bayer phase: rggb (default) | bggr | gbrg | grbg
+ *   --cfa    Bayer phase: bggr (default, rear-proven) | rggb | gbrg | grbg
  *
  * The encoder is jpegenc.h (same directory; validated host-side against
  * sips + libjpeg 2026-09-01). Once cam-shot grows a native --jpeg flag
@@ -22,7 +22,9 @@
 #include <time.h>
 #include "jpegenc.h"
 
-static int cfa = 0;   /* 0=rggb 1=bggr 2=gbrg 3=grbg */
+static int cfa = 1;   /* 0=rggb 1=bggr 2=gbrg 3=grbg — bggr default: rear
+                       * imx363 RDI starts on a B site (campix.h CFA
+                       * ORIENTATION receipt, device 2026-09-05) */
 
 /* RAW10 packed: 5 bytes -> 4 pixels; byte i of the group = pixel i's
  * bits[9:2] (the high 8 of 10). bits[1:0] live in the 5th byte. */
