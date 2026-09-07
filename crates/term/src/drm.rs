@@ -151,6 +151,20 @@ struct drm_mode_crtc_page_flip {
     user_data: u64,
 }
 
+/* kernel header for the flip-completion event (drm.h drm_event_vblank):
+ * the read buffer is a chain of {type,length} records */
+#[repr(C)]
+#[derive(Default)]
+struct drm_event_vblank {
+    typ: u32,
+    len: u32,
+    user_data: u64,
+    _tv_sec: u32,
+    _tv_usec: u32,
+    _sequence: u32,
+    _crtc_id: u32,
+}
+
 const DRM_IOCTL_MODE_GETRESOURCES: u32 = iowr::<drm_mode_card_res>(0xA0);
 const DRM_IOCTL_MODE_SETCRTC: u32 = iowr::<drm_mode_crtc>(0xA2);
 const DRM_IOCTL_MODE_GETENCODER: u32 = iowr::<drm_mode_get_encoder>(0xA6);
@@ -161,6 +175,9 @@ const DRM_IOCTL_MODE_ADDFB2: u32 = iowr::<drm_mode_fb_cmd2>(0xB8);
 const DRM_IOCTL_MODE_PAGE_FLIP: u32 = iowr::<drm_mode_crtc_page_flip>(0xB0);
 const DRM_IOCTL_SET_MASTER: u32 = io(0x1e);
 const DRM_FORMAT_XRGB8888: u32 = 0x34325258;
+const DRM_MODE_PAGE_FLIP_EVENT: u32 = 0x01;
+const DRM_EVENT_VBLANK: u32 = 0x01;
+const DRM_EVENT_FLIP_COMPLETE: u32 = 0x02;
 
 pub static BLINK: AtomicBool = AtomicBool::new(false);
 
@@ -430,22 +447,76 @@ impl Drm {
         }
     }
 
+    /// kmscube discipline: PAGE_FLIP lands at the NEXT vblank and until the
+    /// FLIP_COMPLETE event arrives the kernel still scans out fb[cur] — so
+    /// the just-painted buffer must not be latched as "current" (and the
+    /// old front must not be reused as back) before this returns. Writing
+    /// into the scanout buffer mid-frame is exactly the eye-viewfinder
+    /// "一片一片" banding (2026-09-06 receipt; same disease M41c fixed on
+    /// the vidc path with 持帧+vblank). Poll-bounded: if this msm_drm 4.19
+    /// legacy path ever fails to deliver, degrade to the old no-wait
+    /// behavior rather than hang the render thread.
+    fn wait_flip(&self, magic: u64) {
+        let fd = self.file.as_raw_fd();
+        let mut buf = [0u8; 1024];
+        for _ in 0..8 {
+            let mut pfd = libc::pollfd {
+                fd,
+                events: libc::POLLIN,
+                revents: 0,
+            };
+            if unsafe { libc::poll(&mut pfd, 1, 50) } <= 0 {
+                return; // timeout / poll error: degrade silently
+            }
+            let n = unsafe {
+                libc::read(
+                    fd,
+                    buf.as_mut_ptr() as *mut libc::c_void,
+                    buf.len(),
+                )
+            };
+            if n <= 0 {
+                return;
+            }
+            let n = n as usize;
+            let mut off = 0usize;
+            while off + 8 <= n {
+                let e = unsafe { std::ptr::read_unaligned(buf.as_ptr().add(off) as *const drm_event_vblank) };
+                let len = e.len as usize;
+                if len < 8 || off + len > n {
+                    return;
+                }
+                if (e.typ == DRM_EVENT_FLIP_COMPLETE || e.typ == DRM_EVENT_VBLANK)
+                    && e.user_data == magic
+                {
+                    return;
+                }
+                off += len;
+            }
+        }
+    }
+
     pub fn present(&mut self) {
         let next = 1 - self.cur;
         let fd = self.file.as_raw_fd();
         if self.flip_ok {
+            // user_data magic that survives a stale event from a previous
+            // wait_flip that bailed on its poll budget
+            const MAGIC: u64 = 0xA61B_7E5D_C0DE;
             let mut pf = drm_mode_crtc_page_flip {
                 fb_id: self.fb[next],
                 crtc_id: self.crtc_id,
+                flags: DRM_MODE_PAGE_FLIP_EVENT,
+                user_data: MAGIC,
                 ..Default::default()
             };
             if unsafe { libc::ioctl(fd, DRM_IOCTL_MODE_PAGE_FLIP as _, &mut pf) } == 0 {
+                self.wait_flip(MAGIC);
                 self.cur = next;
-            } else {
-                self.flip_ok = false;
-                kmsg("aginx-term: PAGE_FLIP refused — relatch fallback\n");
+                return;
             }
-            return;
+            self.flip_ok = false;
+            kmsg("aginx-term: PAGE_FLIP refused — relatch fallback\n");
         }
         // flip path refused (observed on msm_drm 4.19): re-SETCRTC latches
         // the back buffer. present() is event-driven, so relatch every call.
