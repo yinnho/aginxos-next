@@ -12,6 +12,20 @@ fn main() {
 
 #[cfg(feature = "jpeg")]
 fn main() {
+    // M47⑤t: self-pin to the little cluster {cpu0..cpu5}. This CLI is
+    // spawned by aginx-voice's QR poll (2 Hz, 100-300 ms bursts on a big
+    // core) exactly while cam-shot owns {cpu6,cpu7} with the viewfinder
+    // pixel chain — an unpinned decode lands mid-chain and shows up as a
+    // frame hitch. On an A55 the burst runs ~2.5x longer but costs the
+    // chain nothing (⑤i core-class probe).
+    #[cfg(target_os = "linux")]
+    unsafe {
+        let mut set: libc::cpu_set_t = std::mem::zeroed();
+        for i in 0..6 {
+            libc::CPU_SET(i, &mut set);
+        }
+        libc::sched_setaffinity(0, std::mem::size_of::<libc::cpu_set_t>(), &set);
+    }
     let path = std::env::args().nth(1).unwrap_or_default();
     if path.is_empty() {
         eprintln!("usage: aginx-qr <jpg>");

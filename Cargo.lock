@@ -99,6 +99,7 @@ name = "aginx-qr"
 version = "0.1.0"
 dependencies = [
  "aginx-img",
+ "libc",
  "qrcodegen",
  "quircs",
 ]

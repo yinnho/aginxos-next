@@ -27,6 +27,10 @@ jpeg = ["decode", "dep:aginx-img"]
 quircs = { version = "0.10", optional = true }
 aginx-img = { path = "../img", optional = true }
 
+# M47⑤t: A55 自钉（sched_setaffinity）——设备面专用，host 测试面不拉
+[target.'cfg(target_os = "linux")'.dependencies]
+libc = { workspace = true }
+
 [dev-dependencies]
 qrcodegen = "1"
 
