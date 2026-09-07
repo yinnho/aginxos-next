@@ -283,6 +283,13 @@ done
 # build; host-side layout check via `bootcard --ppm out.ppm [state]`.
 "${ZIG}" cc -target aarch64-linux-musl -static -O2 \
   -o "${TREE}/bin/bootcard" "${ORECIPE}/src/bootcard.c"
+# Patched vendor ko override (boot-wedge defense, #228): camera-bringup
+# prefers /lib/modules.aginx over vendor. Blob stays out of git (.local) —
+# regenerate with scripts/patch-vsync-ko.sh.
+if [ -d "${ROOT}/.local/modules.aginx" ]; then
+  mkdir -p "${TREE}/lib/modules.aginx"
+  cp "${ROOT}"/.local/modules.aginx/*.ko "${TREE}/lib/modules.aginx/"
+fi
 # httpget: minimal HTTP fetch for the boot internet check — busybox's wget
 # applet segfaults in this build (2026-08-28), so net-bringup uses ours.
 "${ZIG}" cc -target aarch64-linux-musl -static -O2 \
