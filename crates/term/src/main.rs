@@ -462,6 +462,13 @@ struct VoiceView {
     /// M47⑤c: raw-frame mtime gate (the preferred source; eye_mtime/JPEG is
     /// the fallback when cam-shot runs without --raw-out).
     raw_mtime: Option<std::time::SystemTime>,
+    /// M47⑤t: when THIS eye session opened. eye.raw/eye.jpg still hold the
+    /// PREVIOUS session's last frame at eye-open, and the mtime gates below
+    /// reset to None on eye-off — without this stamp the first poll mistakes
+    /// any old mtime for a fresh frame and blits the stale frame (the brief
+    /// "wrong scene" flash at eye-open, 2026-09-06). Only frames published
+    /// after the open are ours.
+    eye_open: Option<std::time::SystemTime>,
     eye_img: Option<aginx_img::Bitmap>,
     /// M47⑤f: raw frames no longer build a Bitmap at poll time — the render
     /// pass blits 565→888 fused with the upscale straight into the back
@@ -515,15 +522,29 @@ impl VoiceView {
             self.eye_mtime = None;
             self.raw_mtime = None;
             self.raw_dirty = false;
+            if self.eye_open.take().is_some() {
+                return true; // one repaint to leave the eye view cleanly
+            }
             return self.eye_img.take().is_some();
         }
+        if self.eye_open.is_none() {
+            // Stamp the session open (see the field doc). Affinity is NOT
+            // set here — it follows the eye FLAG from main(), in every
+            // mode: the stream can outlive the voice view (the user backs
+            // out while cam-shot keeps going), and this poll only runs in
+            // Mode::Voice.
+            self.eye_open = Some(std::time::SystemTime::now());
+        }
+        let opened = self.eye_open;
         // M47⑤c: prefer the raw RGB565 frame (published every frame); the
         // JPEG is the fallback when cam-shot runs without --raw-out.
+        // ⑤t: frames must ALSO postdate the eye-open stamp — the files
+        // carry the previous session's tail at open.
         let mtime = std::fs::metadata(VOICE_EYE_RAW)
             .and_then(|m| m.modified())
             .ok();
         if let Some(t) = mtime {
-            if Some(t) != self.raw_mtime {
+            if Some(t) != self.raw_mtime && t > opened.unwrap_or(t) {
                 self.raw_mtime = Some(t);
                 self.raw_dirty = true;
                 return true;
@@ -533,7 +554,7 @@ impl VoiceView {
         let mtime = std::fs::metadata(VOICE_EYE)
             .and_then(|m| m.modified())
             .ok();
-        if mtime.is_none() || mtime == self.eye_mtime {
+        if mtime.is_none() || mtime == self.eye_mtime || mtime <= opened {
             return false;
         }
         self.eye_mtime = mtime;
@@ -1370,6 +1391,33 @@ fn host_ppm(out: &str) {
 // of stat-polling on a timer whose 12 ms cadence misaligned with the 22 ms
 // publish (device probe 2026-09-05). No-op off linux so host tests build.
 
+/// M47⑤t: while the eye streams, park this process on the little cluster
+/// {cpu0..cpu5}. cam-shot pins its process to the big pair {6,7} and the
+/// pixel chain saturates both; term's fused 565→888 + bilinear upscale
+/// measured ~37% of one big core per frame (⑤i probe) and aginx-qr's
+/// decode bursts (2 Hz, 100-300 ms) landed unpinned on the pair — together
+/// they erased the 70 ms fast-frame mode in service (in-service min 83 ms
+/// vs isolated 70 ms, 2026-09-06). The upscale fits in one A55; at eye
+/// close the full mask returns (terminal/photos get the big cores back).
+///
+/// Called from main() on eye-FLAG transitions in ANY mode — the first cut
+/// hooked it inside poll_eye (Mode::Voice only), which leaked the park:
+/// VolUp is handled by the voice daemon regardless of the view on screen,
+/// so the stream can outlive the voice view, and a back-out mid-stream
+/// left this process on {0..5} forever.
+#[cfg(target_os = "linux")]
+fn set_eye_affinity(on: bool) {
+    unsafe {
+        let mut set: libc::cpu_set_t = std::mem::zeroed();
+        for i in 0..if on { 6 } else { 8 } {
+            libc::CPU_SET(i, &mut set);
+        }
+        libc::sched_setaffinity(0, std::mem::size_of::<libc::cpu_set_t>(), &set);
+    }
+}
+#[cfg(not(target_os = "linux"))]
+fn set_eye_affinity(_on: bool) {}
+
 #[cfg(target_os = "linux")]
 fn ino_init() -> (libc::c_int, libc::c_int) {
     let fd = unsafe { libc::inotify_init1(libc::IN_NONBLOCK | libc::IN_CLOEXEC) };
@@ -1463,9 +1511,13 @@ fn main() {
 
     let mut term = Term::new(term_cols, rows_for(kb_visible, scale));
     let mut parser = vte::Parser::new();
-    let mut mode = Mode::Launcher;
+    // 开机即语音面（开机体验定档）：home=voice，工具栏 BACK 仍回 Launcher。
+    let mut mode = Mode::Voice;
     // M42a: voice dialog face view (polled from /run/aginx-voice/face)
     let mut voice = VoiceView::default();
+    // M47⑤t: last affinity decision from the eye flag (see the main-loop
+    // watcher) — keeps sched_setaffinity off the no-change path.
+    let mut eye_parked = false;
     // Debug/headless path: AGINX_TERM_START=<bin> skips the launcher and spawns
     // the program immediately (e.g. AGINX_TERM_START=/bin/sh).
     if let Ok(prog) = std::env::var("AGINX_TERM_START") {
@@ -1478,23 +1530,9 @@ fn main() {
             Ok(c) => mode = Mode::Running(c),
             Err(e) => eprintln!("aginx-term: AGINX_TERM_START spawn: {e}"),
         }
-    } else if !std::path::Path::new("/etc/wifi.conf").exists()
-        && std::path::Path::new(launch::BIN_WIZARD).is_file()
-    {
-        // First boot / wiped userdata: no network credentials yet, so the
-        // wizard is the setup UI (SYSTEM.md §9.2) instead of the launcher.
-        scale = launch::scale_for(launch::BIN_WIZARD);
-        term_cols = cols_for(scale);
-        term = Term::new(term_cols, rows_for(kb_visible, scale));
-        match spawn_shell(
-            term_cols as u16,
-            rows_for(kb_visible, scale) as u16,
-            &[launch::BIN_WIZARD],
-        ) {
-            Ok(c) => mode = Mode::Running(c),
-            Err(e) => eprintln!("aginx-term: wizard spawn: {e}"),
-        }
     }
+    // 未连网的开机不再自动拉 wizard：语音面 + 自动睁眼就是装机流程
+    // （警告 → 对准配对码，M42c 链）。WIFI SETUP 仍是 Launcher 瓦片，手动可达。
     let mut touch = TouchReader::open("/dev/input/event2", w as i32, h as i32);
     // M15: qpnp_pon keys (power + volume-down) on event1 — hardcoded like
     // the touch node, per HARDWARE.md.
@@ -2027,13 +2065,16 @@ fn main() {
             }
         }
 
-        // M42a voice face: poll while the dialog is on screen. A live
-        // dialog counts as activity — the screen must not blank mid-flow
-        // (a face write arrives exactly when the user starts talking).
+        // M42a voice face: polled in EVERY mode (⑤t) — the eye flag in this
+        // doc drives this process's CPU affinity, and the stream can outlive
+        // the voice view. A live dialog counts as activity — the screen must
+        // not blank mid-flow (a face write arrives exactly when the user
+        // starts talking) — but that keep-awake, like the rendering, is
+        // Voice-mode-only.
         // M42g: the viewfinder frame polls too — a frame landing ~1/s is
         // activity; decode box is the body area under the toolbar.
+        let face = voice.poll();
         if matches!(mode, Mode::Voice) {
-            let face = voice.poll();
             let (_, _, eye_w, eye_h) = lg.eye_box();
             let eye = voice.poll_eye(eye_w as u32, eye_h as u32);
             if face || eye {
@@ -2044,6 +2085,13 @@ fn main() {
                 }
                 redraw = true;
             }
+        }
+        // M47⑤t: park on {0..5} while the eye streams, full mask when it
+        // stops — keyed on the FLAG, any mode (the voice daemon opens and
+        // closes the eye with VolUp no matter which view is showing).
+        if voice.doc.eye != eye_parked {
+            eye_parked = voice.doc.eye;
+            set_eye_affinity(eye_parked);
         }
 
         // blink toggle — repaint only the cursor's row
