@@ -744,3 +744,241 @@ aginx-voice / aginx-term musl 推 /usr/bin（chmod 755，agsvc 监督），重�
 - **未收**：断网分支（英文警告+自动睁眼）——现网 wifi.conf 不可毁，
   主机 34/34 测试覆盖，fresh-boot 留 bake #19；bootcard Matrix 雨/
   END——initramfs 每次 boot 重建，同炉 bake #19。
+
+## 2026-09-07 — P0 视口帧流真机首收（aginxbrowser main 9cffa34，#235 后续）
+
+交接文档 ~/Documents/aginx/aginxbrowser-p0-viewport-stream-done.md（M 系列 Mac
+实测）。本日 fresh clone main（9cffa34，v0.2.8 之后未发版）→ macOS cargo-zigbuild
+aarch64-musl --features screenshot（85MB 静态）→ svcd 单元换血重拉。
+
+**构建坑（host）**：rusty_v8 build script 走 github CDN 下载 librusty_v8.a.gz
+黑洞（ESTABLISHED 但零字节 10min+）。解法＝~/.cache/rusty_v8 已有 8月29 件
+（v150.4.0 同版），直接预填 target/{,aarch64-unknown-linux-musl/}release/gn_out/
+obj/librusty_v8.a + 同 URL 的 .sum → 跳过下载。
+
+**设备坑**：aginxbrowser 是 agsvc 单元——裸 kill 会被监督者用旧二进制抢先重拉
+（实测：新引擎 Address in use 死掉，bench 打了一轮 v0.2.8 假数据）。正路：
+换好二进制后 `/usr/bin/aginx-svc restart aginxbrowser`。
+
+**测量（1080×2340 视口，36 节×298px=10728px 高测试页，jpeg q80）**：
+- 新路视口抓帧 `captureScreenshot{captureBeyondViewport:false}`：
+  **中位 148ms/帧，y=0→8388 全程 144–166ms 纹丝不动**（png 239ms 同平）。
+  帧字节随位置变化 244–269KB＝真帧。**「成本与页高无关」在 Pixel 5 成立。**
+- 对照 v0.2.8 老路同级页 ~1400ms/帧 → **~9.5×**。
+- screencast 流（jpeg q80 + ack 背压 + scrollBy 20Hz 驱动）：**6.21fps**，
+  中位帧距 164ms，metadata scrollOffsetY 真值（8388 封顶）；瓶颈＝SoC 带产出
+  ~150ms（泵 33ms 节拍喂得饱），对照 Mac 19.3fps。
+- **静止 10s 零新帧**（vfdisp 计数不涨）＝damage 门空闲成本零；引擎 RSS 54MB。
+- **live 闭环**：evdev 合成拖动（event2 y 1800→700）→ scrollTo → 帧流 →
+  /tmp/vf.jpg → vfdisp → DRM 面板；拖前 y=0（第 1–3 节）拖后第 4–6 节，
+  CJK 渲染清晰（样张 /tmp/vf_a_y0.jpg /tmp/vf_live_after.jpg）。
+
+**新 bug（回报 aginxbrowser）**：`captureBeyondViewport:true`（老路全页）在新
+引擎上 1080×10728 页必炸 `frame buffer size mismatch`（-32601）——老路对照
+拿不到，同时是他们发版前该修的。
+
+**客户端坑（/tmp/vstream.py，已修）**：damage 门静止时连接零流量——10s 读
+超时把 reader 判死；解法＝60s 长轮询 + 0.3s 心跳 Runtime.evaluate（顺带喂泵，
+泵只在消息间隙打点）。
+
+**设备现态（known state）**：aginxbrowser 单元＝main 9cffa34（新）；live.py +
+vfdisp.new + http.server(8123) 常驻，面板=可拖测试页；term loop 未恢复；
+/var/bin/aginxbrowser.v028/v025 备份在位。
+
+## 2026-09-07 — P0 修复复验全绿（aginxbrowser main 3fd39d8，真机）
+
+上条反馈的回修。3fd39d8 两修：legacy 全页路径 jpeg 臂「PNG 字节当 raw RGBA」
+根因修复（quality 顺带真生效）+ screencast 泵每 tick settle 5ms 驱动页面 JS
+事件循环（静默连接不再冻结页面时间）。重构建（89,087,976B）换血复验。
+
+**换血坑二则（补上条的 svcd 教训）**：
+- /tmp 是 tmpfs，跨设备 mv 到 /var/bin 退化为写模式 → 运行中二进制
+  `Text file busy`。正路：先同盘 mv 到 /var/bin/*.new 再 rename 到位。
+- adb shell 里 setsid+& 的链会挂住 shell 本身（已知无害），回查用后续查询。
+
+**四条清单（全部 PASS）**：
+1. 原崩溃形状 fullpage jpeg q80 ×3：**1651–1686ms、1,209,106B、JPEG magic
+   正确**（Mac 217–249ms，~7× 符合 SoC 差）。不再炸。
+2. 无参 capture 同页：1176ms、1,253,082B PNG——与 v0.2.8 老引擎逐字节同尺寸，
+   legacy 兼容未破。
+3. 静默监听+自驱动页（setInterval 100ms 改 DOM，客户端只 ack）：
+   **39 帧/5s，帧距稳 ~131ms**——比他们 Mac 的 7 帧/5s 更顺，settle 修法
+   真机彻底成立，心跳可退役。
+4. quality A/B：q50=186,196B vs q80=266,672B——**参数真生效实锤**（视口
+   路径 q80 上轮 242–270KB 本轮同域，视口路径本来就尊重 q）。
+
+**回归护栏（无退）**：视口抓帧中位 149.5ms（上轮 147.9）全平 y=0→8388；
+screencast 6.08fps（上轮 6.21，噪声内）；idle 静默 12s 零帧——上一条记的
+「5s 出 1 帧」实为 startScreencast 首帧快照（启动即推当前状态，排队在
+盲吸收窗里），非滴漏。引擎 RSS 51,896KB（fullpage 三连后无滞留）。
+
+**结论**：3fd39d8 真机复验通过，aginxbrowser 可发 v0.2.9。真机数字组
+（148ms 全平 / ~9.5× / 6.2fps / RSS ~51–55MB）随版本号贴上游 follow-up。
+设备现态：aginxbrowser 单元＝main 3fd39d8（pid 387）；live demo 重挂在
+新引擎上待真人拖动；term loop 仍未恢复。
+
+**真人收据（补记同日）**：用户上手拖动 live 页（新引擎 3fd39d8），原话
+「很快啊」——首条真人触摸闭环收据。6fps 档被感知为顺：滚动位置即时跟手
+（scrollTo 直投）、帧流背压只留一帧在途不积延迟，是「跟手+追帧」而非
+「等帧」。感知验收通过，产品化前无需再提 fps。
+
+**收尾（同日晚）**：demo 全拆——vstream live / vfdisp / http.server(8123)
+全灭（/proc 扫描两遍零残留），/tmp spike 工件（脚本/页面/帧文件/日志）清空，
+term loop 恢复（pid 13331/13336，01:24:50 起无重启）。六单元全 ready，
+aginxbrowser 单元保留在 main 3fd39d8（pid 387）。设备回到产品态。
+
+## 2026-09-07 全环路首通：指令→母体前台→分身工具执行→HTML 上屏
+
+用户命题测试：一条「今天天气怎么样？」走完产品主环路三段——(1) 指令到
+母体前台；(2) 后端分身真执行（工具链）；(3) 结果以 HTML 上屏。
+
+**腿1 母体前台**：`aginx agent send "今天天气怎么样？"` UDS
+/run/aginx.sock 阻塞往返 OK（母体 me v0 设计=无账本无工具面，单次 brain
+直答——本腿只验前台通，不验工具）。
+
+**腿2 分身执行**：化身 小喜（aginx agent create）走完整工具环——前台
+路由 → spawn aginx-runtime（ledger 先记）→ `aginx commands --json` 发现
+工具（含 web 面）→ brain 发 tool_call → server 侧执行
+`aginx web fetch`（wttr.in）→ tool_result 回喂 → brain 成文。实测取回
+**真实郑州天气**（IP 定位 34.77°N 113.72°E）。母体自己答不了天气而分身
+能答——架构分工（母体=前台、分身=干活的）首次以产品语义验明。
+
+**腿3 HTML 上屏**（视口管线复活）：`vstream.py ask` 新模式——发问前先
+publish 占位页（磷光风「正在问 小喜▊」闪标），ask 线程走同一 UDS 前台问
+分身，回复经 markdown-lite 转磷光 HTML（黑底绿字、问句块、粗白数据），
+tmp+rename 落 /tmp/ask.html，`location.reload()` 重载；screencast 流
+（0.3s 心跳）持续把视口帧写 /tmp/vf.jpg，vfdisp mtime 监视 → DRM 上屏。
+**实测：回复 19.3s 到，重载后内容 1412px 单屏容纳，面板帧 211,586B，
+截图核对磷光版天气明细全部渲染**（问句块/实况列表/粗白数值/页脚戳）。
+整链无 adb 参与，面板侧可触摸拖动（touch_thread 沿用）。
+
+**管线小注**：CDP.call id 分配加 ilock（ask 模式双线程并发调 CDP 的竞态
+修复）；vfdisp 启动容忍帧文件缺失（mtime 轮询 continue），冷启动即黑屏
+打底不炸。
+
+**设备现态**：term loop 再次让位（restore wrapper 13335 + aginx-term
+13336 已杀）；rig 在跑——http.server(8123) 15058 / vfdisp 15059 /
+vstream ask 15060，日志 /tmp/{ask,vfdisp,httpsrv}.log。用户过目后拆 rig
+恢复 term（脚本 /tmp/rig.sh 同目录拆除法照旧）。截图已按用户要求放
+桌面：aginxos-ask-weather-panel-0744.jpg。
+
+**白底修补（同日，用户目检立案）**：用户指「下面一片白色」——短文档
+（内容 1412px < 视口 2340px）时，`html{background:#000}` 只把根元素盒子
+涂黑，文档盒以下露出引擎合成面默认白底。**该引擎 screencast 路径不做
+根背景向画布的传播**（标准 Blink 应覆盖整视口）——上游 aginxbrowser
+可修项，先页面侧兜底：`html,body{background:#000}` +
+`body{min-height:100vh}`。复跑第二轮 ask（20.9s，河南郑州，偏南风
+12km/h/UV 7），整幅 1080×2340 全黑收据（截图 0750-black）。此坑只在
+「文档矮于视口」时显形——长页 demo（10728px）从未踩到。
+〔订正见下条：本轮根因分析有误，0750-black 系假收据〕
+
+**白底真因订正（同日，第三/四轮 + csstest 隔离实验）**：上条「白底修补」
+的修法从未生效——**引擎 CSS 静默丢弃 `vh` 单位**。csstest（同页三变体，
+Page.getLayoutMetrics 为口）：`min-height:100vh` → 内容高 400px（声明
+被丢，等同没写）；`height:2340px` 与 `min-height:2340px` → 2340px；
+viewport JPEG 对比 vh 版绿条以下全白、px 版全黑。第二轮 0750-black 因此
+是假收据：那轮回复内容恰好 ≥2340px 撑满视口（黑白一直由回复长度随机
+决定），第三轮同模板、内容 1412px → 白底复现（截图 0801，日志
+`reply on panel, content 1412px`）。附带：同页 navigate 与
+`location.reload()` 渲染逐字节同（md5 一致），reload 路径无辜。
+**真修**：模板 `body{min-height:2340px}`。第四轮 ask（15.8s，郑州：
+阴 31°C/偏南风 12km/h/UV 7）内容高 2340px，整幅全黑，拉帧核对后用户
+实机确认「确实全黑」（截图 0817-black，桌面）。**上游 aginxbrowser
+可修项两条**（待 v0.2.9 后反馈引擎线）：① `vh` 单位支持；② 根背景向
+画布传播（文档矮于视口时露合成面白底）。
+
+**设备现态（第四轮后）**：term loop 仍让位；rig 在跑——http.server(8123)
+15058 / vfdisp（obs 仪表版）14964 / vstream ask 第四轮 16901，日志
+/tmp/{httpsrv,vfdisp,ask4}.log。用户发话后拆 rig 恢复 term（脚本
+/tmp/rig.sh 拆除法照旧；csstest 留了 ~4 个引擎 target 未关，拆时一并
+restart aginxbrowser 清）。
+
+**Archify 第三方 HTML 上屏（09-07 晚，成果画布首战）**：archify（tt-a1i，
+MIT，51.5k★）= Agent Skill：typed JSON IR → Node.js 确定性编译成自包含
+HTML。Mac 侧 clone 后手写 AginxOS 架构 IR（12 组件/2 边界/13 连线/
+3 卡片，/tmp/archify/aginxos.architecture.json）。**验证门三轮拦截**实证
+其修复回执机制：标签-组件重叠（诊断给建议坐标，labelDy 修）→ 标签-标签
+0px 间距 → showcase 档 boundary-title 字号收敛门不认 1530px 宽画布
+（诊断无细节，读源码定因）→ 降标准档过。deliver 721,252B 单文件
+（zh-CN/dark/classic，sha256 2dc26426…）。推设备 /tmp/arch.html，
+showarch.py（复用 vstream 机器）开页+screencast → vfdisp 上屏。
+**引擎首战成绩：整页渲染成功**——content 1560px 单屏容纳，组件盒/
+连线/边界框/三卡片/中文全渲染，拉帧核对+桌面留档
+aginxos-archify-on-panel-0831.jpg；HTML 同存桌面 aginxos-arch.html。
+引擎 RSS **124MB**（基线 ~52MB，重页翻倍——待反馈引擎线）。
+未验：JS 交互面（主题切换/搜索/export 菜单）；另 Target.getTargets 从
+第二 CDP 连接返回空（target 注册表疑似按连接隔离，CDP 客户端互通性
+存疑）。**产品假设「面板吃第三方 agent 成果 HTML」首血**。
+
+## 2026-09-07 — 自然入口→分身画图全环路：brain 产 IR、编译门修复回执、面板出图（收据）
+
+上条 archify 是手写 IR。本条把「画一下系统架构」这种自然入口接通：占位页
+（「正在让 小喜 画架构图▊」）→ UDS 前台问化身 小喜，prompt 内嵌 archify
+schema + 硬约束（枚举/画布/间距/少用连线标签）+ AginxOS 内容要点；分身回
+JSON IR 落 /tmp/ir.N.json → **Mac 扮演 twin-server 编译器**（archloop.py：
+pull ir.N → `archify deliver --json` → 过则 push arch2.html + arch.done
+标记最后推；不过则 push 机器诊断 diag.N.json 回喂分身修复；3 轮尽推手写
+兜底页）→ 设备侧 archask.py 见 done 即导航图页，screencast→vfdisp 上屏。
+
+**三轮实录（修复回执机制首次在真 brain 上走通）**：
+| 轮 | 分身耗时 | IR | archify 判决 |
+|---|---|---|---|
+| 1 | 217.9s | 4494B | 拒：connections[3] aginx-core→gateway 自带 via 段违反端点方向（clean-flow/endpoint-side-direction，诊断含建议修法） |
+| 2 | 178.3s | 4620B | 拒：同一条线穿过无关组件 aginxbrowser（2px 间隙，clean-flow/edge-through-node） |
+| 3 | **37.0s** | 4655B | **过，deliver 714,615B** |
+
+第 3 轮 37s 说明修复 prompt 里诊断已够具体——brain 只需小改。全程 ≈7.5 min
+（分身 433s + 编译/传输 ~20s），瓶颈全在 brain 长输出，编译器毫秒级。
+分身自己的分解与我的手写版不同（9 组件：user-input/voice-input/aginx-core/
+avatar-runtime/aginx-gateway/brain-api/data-memory/cloud-relay/output-panel，
+多了 data-memory，没有独立「面板/浏览器」对）——brain 按自己的理解组织，
+不是照抄。**面板收据**：导航后 content 1080×1274 单屏容纳，拉帧目检组件
+盒/连线/边界框/卡片/中文全渲染（桌面 aginxos-brain-arch-panel-1641.jpg；
+IR+HTML 同存桌面 aginxos-brain-arch.*）。引擎 RSS 142MB——注：同引擎还挂
+着 csstest 残留 target，非纯净对照。触摸拖动照旧（touch_thread 沿用）。
+
+**意义**：这是「分身干活→机器验证→诊断回喂→自修复」第一次完整落地——
+修复回执不只对人类工程师有效，对 brain 同样有效。Mac 编译器即 M37
+twin-server 的预演（真形态=86quan 上 archify 服务化，agpkg 装包）。
+文件握手（标记最后推）粗糙但可靠，正式化时换 UDS/网关通道即可。
+
+### 字号读不清修法：svg 切条 + 两个引擎新坑（09-07，用户判「根本看不清楚」）
+
+整图 fit 上屏后组件字号 ~8.7px（archify svg 内字号是 viewBox 单位的 9–12，
+fit 1080/1370=0.79×）。放大尝试三连败，全部是引擎坑：
+
+1. **JS 变异 style 不重绘**：Runtime.evaluate 设 svg width=2100/2400/3000px
+   （inline CSS），布局探测器（clientWidth/scrollWidth）如实报告 2100/2400/
+   3000，但 screencast 帧逐字节不变（md5 全同）——paint 路径无视。
+2. **初始 CSS 同样无效**：把 width:2400px !important 烤进 HTML <head>，
+   加载期就位，帧仍逐字节同。
+3. **svg width/height 属性也无效**：`<svg width="2400" height="1241">`，
+   帧仍同。结论：**该引擎 svg paint 把 viewBox fit 到容器盒，对元素自身的
+   CSS/属性尺寸一概不理**——与 vh 丢弃同族的静默忽略，布局与 paint 脱钩。
+
+（过程坑：3000px「裁决帧」我目检误判为已裁剪放大，md5 对账才发现四帧
+全同——**看帧先 md5，别让预期替眼睛看**。）
+
+**修法（绕过一切尺寸输入）**：svg 切竖条叠放。先从编译产物提取组件盒
+x 坐标（四列：100–250/450–600/800–950/1150–1300），把缝切在巷道
+345/690/1035；复制 svg 四份，各改 viewBox 为 `[x,0,345,708]` 条，inline
+style width:100% 叠放（条间虚线分隔）。每条变成竖构图，fit 放大
+~2.8×（966px 容器/345 单位条），字号 ~8.7→**~31px**，整页 3245px 竖滑
+阅读，触摸竖拖平移照旧。切缝只切边界框横线，组件盒零损伤。
+拉帧目检：标题/组件标签/副标签全部清晰可读（桌面
+aginxos-brain-arch-strips-1705.jpg）。
+
+**产品含义**：横构图成果画布上竖屏面板，切条是通用的「转排」方案；
+正式化应在编译侧做（twin-server 输出竖排变体），而不是设备端后处理。
+
+**第四/五连败与交接（09-07 深夜）**：svg 内容 `font-size` 属性 ×1.5
+（31 处，页高 3245→3264）与 viewBox 条宽 345→250（arch7，四条更窄本应
+再放 ~1.4×、页高应到 ~11k）帧仍 md5 全同。arch7 已对账排除管线失误：
+设备/主机 md5 两端一致、showarch2 URL 指向 arch7、layout 探测在跑——
+**paint 对 svg 的内容字号与 viewBox 宽度均无感，唯一生效的只有 viewBox
+裁剪窗口的位置**。客户端缩放到此为止（用户裁决「丢给 aginxbrowser
+做」）：五连败表 + vh/根背景重申 + P2 观察（RSS 翻倍、Target.getTargets
+按连接隔离）+ 复现包路径，打包在
+`~/Documents/aginx/aginxos-svg-zoom-engine-feedback.md` 交接引擎线。
+面板停在 31px 切条版（arch7 在载，渲染同 arch5），等引擎侧缩放支持
+（`Emulation.setPageScaleFactor` 或 svg 尺寸在 paint 生效）后退役切条。
