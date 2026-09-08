@@ -7,8 +7,10 @@
 
 ## 目录内容
 
-- `etc/` — 静态系统配置。init.d 全套（rcS/net-bringup/provision/aginx-term-handoff/
-  app-registry/state-restore/varlib-migrate + 六个 bringup）、aginx/svc.d 六单元、
+- `etc/` — 静态系统配置。init.d 通用七件（rcS/net-bringup/provision/
+  aginx-term-handoff/app-registry/state-restore/varlib-migrate）；六个
+  bringup 不在配方里——由 `devices/<codename>/bringup/` 烤机时注入
+  （D14 机型是数据）、aginx/svc.d 六单元、
   aginx/（env 明文环境、gateway.toml 形状参数、groups.desc 命令分组、
   secret.policy sidecar 放行表）、
   apps.d 两 tile、crontabs（N5④：备份 now 定时行）、agpkg.manifest
@@ -36,7 +38,8 @@
 | 本仓 target/musl | aginx-qr（第二次独立 zigbuild，feature 陷阱）, aginx-done, aginx-secret | /usr/bin（N5② 吸收重编） |
 | 本仓 target/musl | aginx-secretd | /usr/libexec/aginx/（N5② 吸收重编） |
 | 本仓 target/musl | aginx-gateway | /usr/libexec/aginx/（N5⑤ 远端通道守护；id/secret 不进镜像，刷机日灌注） |
-| 老仓 rootfs/src/*.c（zig cc） | cam-shot→aginx-cam-shot, nlscan→aginx-net-scan, wifi-join→aginx-net-join, reboot2→aginx-reboot | /usr/bin |
+| 本仓 rootfs/src/*.c（zig cc） | nlscan→aginx-net-scan, wifi-join→aginx-net-join, reboot2→aginx-reboot | /usr/bin |
+| devices/${DEVICE}/cam + 本仓 rootfs/src/jpegenc_tj.c | cam-shot→aginx-cam-shot（build-cam.sh 带机型 cam 目录；传感器源=机型数据 D14） | /usr/bin |
 | 老仓 out/voice, out/ocr | ag-asr→aginx-asr, ag-tts→aginx-tts, ag-ocr→aginx-ocr + 模型→/var/models | /var/bin |
 
 不进镜像：老 `ag` 路由器、全部 `ag-*` 壳、carrier daemon、老 relay/ag-backup（继任者

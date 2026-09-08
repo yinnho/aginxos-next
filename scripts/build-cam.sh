@@ -3,6 +3,11 @@
 # change deploy-tests with one script instead of a full bake (build-rootfs.sh
 # calls this too — single source for the build command).
 #
+# Usage: scripts/build-cam.sh <devices/<codename>/cam>
+# Sensor sources (cam-shot.c / campix.h / campix_test.c) are machine data
+# (D14) and live in the device dir; the JPEG encoder (jpegenc_tj.c) is
+# platform and stays in rootfs/src/.
+#
 # cam-shot's JPEG encoder is vendored libjpeg-turbo 2.1.5.1 (M47⑤d) — the
 # same tree the img crate builds from (crates/img/vendor; Android itself
 # encodes JPEG with this library, AOSP external/libjpeg-turbo). Source lists
@@ -19,6 +24,10 @@ RECIPE="${ROOT}/rootfs"
 VEND="${ROOT}/crates/img/vendor"
 OUT="${OUT:-${ROOT}/out/cam}"
 ZIG="${ZIG:-zig}"
+
+CAMDIR="${1:-}"
+test -n "${CAMDIR}" && test -f "${CAMDIR}/cam-shot.c" \
+  || { echo "usage: scripts/build-cam.sh <devices/<codename>/cam> — no cam-shot.c there" >&2; exit 1; }
 
 test -f "${VEND}/jpeglib.h" || { echo "missing ${VEND}/jpeglib.h" >&2; exit 1; }
 
@@ -61,9 +70,11 @@ done
 # jccolext-neon.c is deliberately absent: it is #included by jccolor-neon.c
 # (CMake compiles only these two aarch64 files).
 
-"${ZIG}" cc -target aarch64-linux-musl -static -O2 "${JPEG_INC[@]}" \
+# -I"${RECIPE}/src": cam-shot.c includes "jpegenc_tj.h" (platform) next to
+# its own "campix.h" (machine, same dir as the source).
+"${ZIG}" cc -target aarch64-linux-musl -static -O2 "${JPEG_INC[@]}" -I"${RECIPE}/src" \
   -o "${OUT}/aginx-cam-shot" \
-  "${RECIPE}/src/cam-shot.c" "${RECIPE}/src/jpegenc_tj.c" "${OBJS[@]}"
+  "${CAMDIR}/cam-shot.c" "${RECIPE}/src/jpegenc_tj.c" "${OBJS[@]}"
 echo "built ${OUT}/aginx-cam-shot"
 
 # raw2jpg (M19c companion) keeps the self-written encoder — offline dump
