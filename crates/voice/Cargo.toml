@@ -17,5 +17,7 @@ libc = "0.2"
 # M42b: WIFI: 码载荷解析。default-features=false——只拿纯字符串解析，
 # 不把 quircs/aginx-img 拉进 aginx-voice（解码在独立 aginx-qr 进程里做）。
 aginx-qr = { path = "../qr", default-features = false }
+# D14: 机型事实（PTT 节点/键码、audio、panel、quirks、affinity）唯一来源。
+hwd = { path = "../hwd" }
 
 [dev-dependencies]

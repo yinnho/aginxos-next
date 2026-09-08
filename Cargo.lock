@@ -204,6 +204,7 @@ name = "aginx-voice"
 version = "0.1.0"
 dependencies = [
  "aginx-qr",
+ "hwd",
  "libc",
  "serde",
  "serde_json",
