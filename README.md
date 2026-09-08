@@ -6,11 +6,11 @@
 
 **An operating system for AI agents, written in Rust — running on a real phone.**
 
-Linux kernel for drivers · Rust userspace for the system · one Pixel 5, no emulator
+Linux kernel for drivers · Rust userspace for the system · real phones, no emulator
 
 [![userspace: Rust](https://img.shields.io/badge/userspace-Rust-dea584?logo=rust)](https://www.rust-lang.org)
 [![binaries: musl static](https://img.shields.io/badge/binaries-musl%20static-8b949e?logo=linux)](https://musl.libc.org)
-[![device: Pixel 5](https://img.shields.io/badge/device-Pixel%205%20%C2%B7%20redfin-34d399)](#the-metal)
+[![devices: redfin · enchilada (bring-up)](https://img.shields.io/badge/devices-redfin%20%C2%B7%20enchilada%20(bring--up)-34d399)](#the-metal)
 [![license: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](./LICENSE)
 
 给 Agent 的操作系统 —— 人只发指令，机器干活。
@@ -72,11 +72,13 @@ below carries a receipt from real hardware:
 
 ## The metal
 
-**Google Pixel 5** (`redfin`, Snapdragon 765G / SM7250), unlocked, one
-dedicated experiment unit — no Android userspace, no emulator:
+**First target: Google Pixel 5** (`redfin`, Snapdragon 765G / SM7250),
+unlocked, one dedicated experiment unit — no Android userspace, no
+emulator. A second bring-up line (OnePlus 6, `enchilada`) exists to keep
+the platform honest about machine differences.
 
 ```text
-XBL (fused, signed) → AginxOS bootloader → Linux 5.4 kernel + vendor modules → Rust userspace
+XBL (fused, signed) → AginxOS bootloader → Linux 4.19 stock kernel + vendor modules → Rust userspace
 ```
 
 - DRM/DSI panel driven directly — dumb-buffer modeset, page flips that wait
@@ -103,11 +105,28 @@ Left/middle: the boot card on the panel — rain while bring-up reports in,
 wordmark when every stage is green. Right: a markdown brief the agent wrote,
 rendered as HTML on the same panel.
 
+## Machines are data (D14)
+
+The platform (`crates/` + `rootfs/` + `scripts/`) carries zero machine
+references: no panel size, no event-node path, no SoC name in any crate.
+Every machine difference lives in `devices/<codename>/` — a TOML profile
+(panel/input/audio/quirks/affinity/camera), an ordered module list,
+bring-up init scripts, the boot-image packing line, and camera sensor
+sources. `DEVICE=<codename> ./scripts/build-rootfs.sh` bakes that machine.
+
+**Adding a machine is a new directory plus a bring-up line — the platform
+doesn't change.** Laws (enforced by a grep gate in `check.sh`): machine
+strings in crates are unconstitutional; there is no default machine (a
+missing profile fails fast at boot, never falls back); device dirs never
+import each other. OTA manifests carry a mandatory `device` field — the
+updater refuses a package baked for another machine. See
+[`devices/README.md`](devices/README.md) for the add-a-machine checklist.
+
 ## Architecture
 
 ```mermaid
 flowchart TB
-    K["Linux 5.4 kernel + vendor modules"]
+    K["Linux 4.19 stock kernel + vendor modules"]
     subgraph U["Rust userspace · musl static"]
         S["aginx-server — the mother<br/>front desk · routing · session ledger"]
         R["aginx-runtime — one engine<br/>runs avatar folders over fast-agi stdio"]
@@ -137,6 +156,7 @@ flowchart TB
 | `crates/runtime` | `aginx-runtime` | fast-agi engine: runs an avatar folder |
 | `crates/agi` | — | fast-agi v0 frame types |
 | `crates/agio` | — | D1 output envelope for every CLI |
+| `crates/hwd` | — | device profile reader — the single legal source of machine facts (D14) |
 | `crates/voice` | `aginx-voice` | voice dialog daemon — PTT input, closed-vocab protocol, face writer |
 | `crates/wizard` | `aginx-net-wizard` | first-boot Wi-Fi setup TUI |
 | `crates/term` | `aginx-term` | on-device terminal UI (launcher + pty shell on the panel) |
@@ -154,11 +174,20 @@ flowchart TB
 
 ## Building & discipline
 
-- `./scripts/check.sh` — host gate (workspace tests + registry lint), before
-  every commit
-- `./scripts/build-rootfs.sh` — bake the flashable image (`out/rootfs.img`;
-  device assets staged under `.local/device/redfin` — see
-  `devices/redfin/boot/assets.md`), see `rootfs/README.md`
+- `./scripts/check.sh` — host gate (workspace tests, per-device camera
+  pixel-chain tests, the D14 machine-string grep gate, registry lint),
+  before every commit
+- `DEVICE=redfin ./scripts/build-rootfs.sh` — bake a machine's flashable
+  image (`out/rootfs.img`; device assets staged under
+  `.local/device/<codename>` — see `devices/<codename>/boot/assets.md`),
+  see `rootfs/README.md`
+- `devices/redfin/boot/flash-redfin.sh` — the flash day: packs
+  vendor_boot, gates every fastboot call on the profile's serial,
+  flashes userdata-then-vendor_boot (commit point last). Dry-run by
+  default, `GO=1` to flash
+- `./scripts/ota-manifest.sh <codename> <ver> <outdir> boot=<img> …` —
+  build + ed25519-sign an update manifest; stamps the mandatory `device`
+  field from the machine's own profile
 - `./scripts/accept/*.sh` — device acceptance suites, pinned to the
   experiment unit's serial
 - Experiment history and receipts live in `docs/HARDWARE.md`, kept local —
@@ -177,7 +206,8 @@ Milestone history and working rules: `AGENTS.md`.
 
 ## Status & license
 
-Early and fast-moving: one device, daily experiments, no releases yet.
+Early and fast-moving: one phone in daily use, a second in bring-up, daily
+experiments, no releases yet.
 
 MIT — except vendor firmware blobs, which are never committed (extracted
 locally, gitignored).
