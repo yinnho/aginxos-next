@@ -16,7 +16,9 @@
 //   文本增量，富产物类型后续加 kind。
 // - request 只带本轮文本；会话上下文由 runtime 从化身文件夹的
 //   sessions/{id}.jsonl 冷恢复（D8：会话日志 = 真源，冷启动即恢复）。
-// - steer 是主动输入中途插入（语音打断、追加指令），v0 定义不使用。
+// - steer 是主动输入中途插入（语音打断、追加指令）：server 在工具步
+//   边界记账并下发，runtime 折成 user 轮（运行中插入 = steer，空闲
+//   插入 = 下一回合——dsh 词表）。
 //
 // 帧判别字段是 "t"（紧凑、人读 JSONL 时一眼可分）。
 
@@ -30,15 +32,19 @@ pub const MAX_LINE: usize = 16 * 1024 * 1024;
 // ---------------- frames ----------------
 
 /// server → runtime：一轮请求。runtime 以化身文件夹 + session 为上下文
-/// 跑一轮，收尾必须给 done。
+/// 跑一轮，收尾必须给 done。turn 是回合号（server 记账时编，从 1 起，
+/// 每轮 +1）：投影/自查按它锚定「哪个回合」，旧账无此字段读 0。
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Request {
     pub avatar: String,
     pub session: String,
     pub text: String,
+    #[serde(default)]
+    pub turn: u64,
 }
 
-/// server → runtime：中途插入的主动输入（v0 定义不使用）。
+/// server → runtime：中途插入的主动输入。只在工具步边界下发（紧跟
+/// tool_result 之后），runtime 把它折成 user 轮进下一次 brain 调用。
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Steer {
     pub text: String,
@@ -90,24 +96,33 @@ pub struct FrameError {
 }
 
 /// runtime → server：终帧。ok=true 时 text 是本轮定稿回复；ok=false 时
-/// error 说明死因。done 之后流即结束。
+/// error 说明死因。done 之后流即结束。turn 回填回合号（与 request 配对，
+/// 可验证账形）；缺省（旧账/server 补账前的空档）不出现在 wire 上。
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Done {
     pub ok: bool,
     pub text: String,
     pub error: Option<FrameError>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub turn: Option<u64>,
 }
 
 impl Done {
     pub fn ok(text: impl Into<String>) -> Done {
-        Done { ok: true, text: text.into(), error: None }
+        Done { ok: true, text: text.into(), error: None, turn: None }
     }
 
     pub fn err(code: &str, message: impl Into<String>) -> Done {
         Done { ok: false, text: String::new(), error: Some(FrameError {
             code: code.to_string(),
             message: message.into(),
-        }) }
+        }), turn: None }
+    }
+
+    /// 绑定回合号（server 记账与补账用）。
+    pub fn at_turn(mut self, turn: u64) -> Done {
+        self.turn = Some(turn);
+        self
     }
 }
 
@@ -237,6 +252,7 @@ mod tests {
                 avatar: "小满".into(),
                 session: "s-20260905-01".into(),
                 text: "北京今天天气怎么样".into(),
+                turn: 7,
             }),
             Frame::ToolCall(ToolCall {
                 id: "c1".into(),
@@ -252,7 +268,7 @@ mod tests {
             }),
             Frame::Artifact(Artifact { kind: ArtifactKind::Text, data: "今天北京".into() }),
             Frame::Artifact(Artifact { kind: ArtifactKind::Text, data: "晴，26 度。".into() }),
-            Frame::Done(Done::ok("今天北京晴，26 度。")),
+            Frame::Done(Done::ok("今天北京晴，26 度。").at_turn(7)),
         ]
     }
 
@@ -265,12 +281,12 @@ mod tests {
         assert_eq!(
             lines,
             vec![
-                r#"{"t":"request","avatar":"小满","session":"s-20260905-01","text":"北京今天天气怎么样"}"#,
+                r#"{"t":"request","avatar":"小满","session":"s-20260905-01","text":"北京今天天气怎么样","turn":7}"#,
                 r#"{"t":"tool_call","id":"c1","tool":"web-search","args":["北京","天气"]}"#,
                 r#"{"t":"tool_result","id":"c1","ok":true,"code":0,"out":"{\"ok\":true,\"data\":\"晴 26C\"}","err":""}"#,
                 r#"{"t":"artifact","kind":"text","data":"今天北京"}"#,
                 r#"{"t":"artifact","kind":"text","data":"晴，26 度。"}"#,
-                r#"{"t":"done","ok":true,"text":"今天北京晴，26 度。","error":null}"#,
+                r#"{"t":"done","ok":true,"text":"今天北京晴，26 度。","error":null,"turn":7}"#,
             ]
         );
     }
@@ -306,7 +322,7 @@ mod tests {
             }),
             Frame::Artifact(Artifact { kind: ArtifactKind::Image, data: "/tmp/shot.png".into() }),
             Frame::Done(Done::err("brain_unreachable", "dial tcp: timeout")),
-            Frame::Done(Done { ok: true, text: String::new(), error: None }),
+            Frame::Done(Done { ok: true, text: String::new(), error: None, turn: None }),
         ];
         let mut wire = String::new();
         for f in &frames {
@@ -360,5 +376,28 @@ mod tests {
         for want in canonical_turn() {
             assert_eq!(rd.next().unwrap(), Some(want));
         }
+    }
+
+    #[test]
+    fn legacy_ledger_without_turn_still_parses() {
+        // 旧账（回合帧之前落的）没有 turn 字段：request 读 0、done 读
+        // None——新二进制吃旧账不炸，部署序自由的前提。
+        let legacy = concat!(
+            r#"{"t":"request","avatar":"a","session":"main","text":"旧问题"}"#, "\n",
+            r#"{"t":"done","ok":true,"text":"旧回答","error":null}"#, "\n",
+        );
+        let mut rd = FrameReader::new(legacy.as_bytes());
+        match rd.next().unwrap() {
+            Some(Frame::Request(r)) => assert_eq!(r.turn, 0),
+            other => panic!("expected request, got {other:?}"),
+        }
+        match rd.next().unwrap() {
+            Some(Frame::Done(d)) => {
+                assert!(d.ok);
+                assert_eq!(d.turn, None);
+            }
+            other => panic!("expected done, got {other:?}"),
+        }
+        assert_eq!(rd.next().unwrap(), None);
     }
 }

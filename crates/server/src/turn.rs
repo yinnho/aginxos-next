@@ -1,14 +1,20 @@
 // turn — fast-agi 的 server 端：spawn aginx-runtime，转发帧，执行工具。
 //
 // 一轮的完整记账（D8：server 记它经手的所有线上帧）：
-//   request（先记账再 spawn）→ [tool_call → tool_result]* → done
+//   request（先记账再 spawn）→ [tool_call → tool_result → steer?]* → done
 // 工具执行在 server 侧（D12：外件一律 CLI，母体唯一外部接口 = spawn），
 // 派发走路由器 `aginx <工具名> <argv…>`——server 不需要知道任何
 // aginx-* 二进制的存在。
 //
+// ② steer：relay 在每个工具回账落管后下发排队的中途输入——这是唯一
+// 有「下一步存在」保证的下发点（刚回过账的轮必然还要再调 brain），
+// 管序=账序（tool_result 在前、steer 在后），runtime 收齐结果再把
+// steer 折成 user 轮，下一次 brain 调用就看得见。
+//
 // v0 无工具级超时：设备上的 aginx-* 是可信 CLI，轮级活性由 runtime 的
 // 卡死检测兜底；真挂死的工具（交互式等待）等 N2 收据说话。
 
+use crate::front::{FrontDesk, SteerOutcome};
 use crate::ServerCfg;
 use agi::{Done, Frame, FrameReader, Request, ToolCall, ToolResult};
 use serde_json::Value;
@@ -21,13 +27,33 @@ const TOOL_OUT_MAX_CHARS: usize = 200_000;
 
 /// 跑一轮化身对话。所有失败都折进返回的 Done（协议同构：done 是唯一
 /// 终帧），调用方只管把它回给前台。
-pub fn run_avatar_turn(cfg: &ServerCfg, avatar: &str, text: &str) -> Done {
+pub fn run_avatar_turn(cfg: &ServerCfg, desk: &FrontDesk, avatar: &str, text: &str) -> Done {
     let ws = cfg.workspaces_root.join(avatar);
     let log = crate::ledger::session_log(&cfg.workspaces_root, avatar, crate::front::SESSION_MAIN);
+
+    // ③ spawn 前补账：上次 server 半路死掉留下的残骸（悬空调用、未
+    // 收口轮）先清偿成合法形状——修复一次性落账、可审计，不重写历史；
+    // runtime 的内存 repair 从此降为最后防线。顺手拿下一回合号。
+    let scan = crate::ledger::scan(&log);
+    if let Err(e) = crate::ledger::repair(&log) {
+        return Done::err("ledger", format!("cannot repair session log: {e}"));
+    }
+    if !scan.dangling.is_empty() || scan.open_turn.is_some() {
+        let repaired = scan.dangling.len() + u64::from(scan.open_turn.is_some()) as usize;
+        eprintln!(
+            "ledger: repaired {repaired} frame(s) before turn {} ({} dangling tool_call, open_turn={:?})",
+            scan.next_turn,
+            scan.dangling.len(),
+            scan.open_turn,
+        );
+    }
+    let turn = scan.next_turn;
+
     let request = Request {
         avatar: avatar.to_string(),
         session: crate::front::SESSION_MAIN.to_string(),
         text: text.to_string(),
+        turn,
     };
 
     // 铁律：先记账、再 spawn——模型可见即已记录
@@ -49,7 +75,8 @@ pub fn run_avatar_turn(cfg: &ServerCfg, avatar: &str, text: &str) -> Done {
         Err(e) => {
             // request 已在账上，失败也得让轮次收口（D8：账本永远落在
             // 合法形状上），否则下一次 send 的重放会撞见孤儿 request
-            let d = Done::err("spawn", format!("cannot spawn {}: {e}", cfg.runtime_bin));
+            let d =
+                Done::err("spawn", format!("cannot spawn {}: {e}", cfg.runtime_bin)).at_turn(turn);
             let _ = crate::ledger::append(&log, &Frame::Done(d.clone()));
             return d;
         }
@@ -59,13 +86,18 @@ pub fn run_avatar_turn(cfg: &ServerCfg, avatar: &str, text: &str) -> Done {
 
     // 管里再发一遍 request 当 go 信号（文本已在账上，runtime 不叠份）
     if agi::write(&mut stdin, &Frame::Request(request)).is_err() {
-        let d = Done::err("protocol", "runtime closed stdin before accepting the request");
+        let d = Done::err("protocol", "runtime closed stdin before accepting the request")
+            .at_turn(turn);
         let _ = crate::ledger::append(&log, &Frame::Done(d.clone()));
         let _ = child.kill();
         return d;
     }
 
-    let done = relay(cfg, &mut child, stdout, &mut stdin, &log);
+    // ② 登记 steer 支线的运行化身（与 end_turn 同在持轮线程手里，队列
+    // 的入队/善后闭环由此保证——见 front.rs SteerBox 注）
+    desk.begin_turn(avatar);
+    let done = relay(cfg, desk, &mut child, stdout, &mut stdin, &log, turn);
+    desk.end_turn();
     let _ = child.wait();
     done
 }
@@ -73,10 +105,12 @@ pub fn run_avatar_turn(cfg: &ServerCfg, avatar: &str, text: &str) -> Done {
 /// 帧转发主循环：runtime → server 的每帧记账，tool_call 就地执行回账。
 fn relay(
     cfg: &ServerCfg,
+    desk: &FrontDesk,
     child: &mut Child,
     stdout: std::process::ChildStdout,
     stdin: &mut std::process::ChildStdin,
     log: &std::path::Path,
+    turn: u64,
 ) -> Done {
     let mut rd = FrameReader::new(BufReader::new(stdout));
     loop {
@@ -86,14 +120,28 @@ fn relay(
                 let result = execute_tool(&cfg.aginx_bin, tc);
                 let _ = crate::ledger::append(log, &Frame::ToolResult(result.clone()));
                 if agi::write(stdin, &Frame::ToolResult(result)).is_err() {
-                    return close_broken(log, child, "runtime closed stdin mid-turn");
+                    return close_broken(log, child, "runtime closed stdin mid-turn", turn);
+                }
+                // ② 步边界下发 steer：工具回账已进管，插进来的主动输入排
+                // 在它后面——管序=账序，runtime 收齐结果、再把 steer 折成
+                // user 轮，下一次 brain 调用就看得见。这也是唯一有「下一
+                // 步存在」保证的下发点（刚回过账的轮必然还要调 brain）。
+                // 已知 v0 窗口：runtime 若已在最后一次 brain 调用里，steer
+                // 下发了也读不到——账上 steer 在 done 前，下一轮重放会把它
+                // 当 user 轮折进去（迟到应答，不丢话）。
+                if let Some(d) = drain_steers(desk, child, stdin, log, turn) {
+                    return d;
                 }
             }
             Ok(Some(Frame::Artifact(a))) => {
                 // v0 没有投影面：账本就是投影记录（D6 渲染器后续接）
                 let _ = crate::ledger::append(log, &Frame::Artifact(a));
             }
-            Ok(Some(Frame::Done(d))) => {
+            Ok(Some(Frame::Done(mut d))) => {
+                // runtime 不知道回合号语义，server 记账时统一盖章
+                if d.turn.is_none() {
+                    d = d.at_turn(turn);
+                }
                 let _ = crate::ledger::append(log, &Frame::Done(d.clone()));
                 return d;
             }
@@ -101,16 +149,17 @@ fn relay(
                 // request/steer/tool_result 是 server→runtime 方向的帧，
                 // 从 runtime 吐出来就是协议破裂
                 let tag = crate::frame_tag(&other);
-                let d = Done::err("protocol", format!("runtime sent a server-bound {tag} frame"));
+                let d = Done::err("protocol", format!("runtime sent a server-bound {tag} frame"))
+                    .at_turn(turn);
                 let _ = crate::ledger::append(log, &Frame::Done(d.clone()));
                 let _ = child.kill();
                 return d;
             }
             Ok(None) => {
-                return close_broken(log, child, "runtime exited without a done frame");
+                return close_broken(log, child, "runtime exited without a done frame", turn);
             }
             Err(e) => {
-                return close_broken(log, child, format!("bad frame from runtime: {e}"));
+                return close_broken(log, child, format!("bad frame from runtime: {e}"), turn);
             }
         }
     }
@@ -118,11 +167,36 @@ fn relay(
 
 /// runtime 半路断流：补一帧 synthetic done(err) 让账本轮次收口，重放
 /// 永远落在合法形状上。
-fn close_broken(log: &std::path::Path, child: &mut Child, why: impl Into<String>) -> Done {
-    let d = Done::err("protocol", why);
+fn close_broken(log: &std::path::Path, child: &mut Child, why: impl Into<String>, turn: u64) -> Done {
+    let d = Done::err("protocol", why).at_turn(turn);
     let _ = crate::ledger::append(log, &Frame::Done(d.clone()));
     let _ = child.kill();
     d
+}
+
+/// ② 步边界下发排队 steer。先记账再进管（D8 铁律同款）；记账失败 =
+/// 这笔插不进去（TurnEnded 回执，发送方走下一回合），管照常活着；
+/// 进管失败 = runtime 已死，按断流收口。Some = relay 应返回的终态。
+fn drain_steers(
+    desk: &FrontDesk,
+    child: &mut Child,
+    stdin: &mut std::process::ChildStdin,
+    log: &std::path::Path,
+    turn: u64,
+) -> Option<Done> {
+    for req in desk.take_steers() {
+        let f = Frame::Steer(agi::Steer { text: req.text });
+        if crate::ledger::append(log, &f).is_err() {
+            let _ = req.reply.send(SteerOutcome::TurnEnded);
+            continue;
+        }
+        if agi::write(stdin, &f).is_err() {
+            let _ = req.reply.send(SteerOutcome::TurnEnded);
+            return Some(close_broken(log, child, "runtime closed stdin mid-turn (steer)", turn));
+        }
+        let _ = req.reply.send(SteerOutcome::Delivered(turn));
+    }
+    None
 }
 
 /// 执行一次工具调用：spawn `aginx <tool> <argv…>`，stdout 进 out、
@@ -252,7 +326,7 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
         let cfg = cfg(&dir);
 
-        let done = run_avatar_turn(&cfg, "小满", "打个招呼");
+        let done = run_avatar_turn(&cfg, &FrontDesk::new(cfg.workspaces_root.clone()), "小满", "打个招呼");
         assert!(done.ok);
         assert_eq!(done.text, "你好，世界");
 
@@ -268,10 +342,49 @@ mod tests {
             .map(|l| serde_json::from_str(l).unwrap())
             .collect();
         assert_eq!(lines.len(), 4);
-        assert!(matches!(&lines[0], Frame::Request(r) if r.text == "打个招呼"));
+        assert!(matches!(&lines[0], Frame::Request(r) if r.text == "打个招呼" && r.turn == 1));
         assert!(matches!(&lines[1], Frame::ToolCall(c) if c.tool == "dev-hello"));
         assert!(matches!(&lines[2], Frame::ToolResult(r) if r.ok && r.out.contains("hello from tool")));
-        assert!(matches!(&lines[3], Frame::Done(d) if d.ok));
+        assert!(matches!(&lines[3], Frame::Done(d) if d.ok && d.turn == Some(1)));
+    }
+
+    #[test]
+    fn crash_residue_repaired_before_next_turn() {
+        // ③ 收据：server 上次死在半路（旧账无 turn、悬空 tool_call、
+        // request 未收口）。下一次 send 先补账再开新轮，新轮自动续号。
+        let dir = std::env::temp_dir().join("aginx-server-test-turn-repair");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let cfg = cfg(&dir);
+
+        // 旧账手植：request + tool_call 后 server 直接死
+        let log = crate::ledger::session_log(&cfg.workspaces_root, "小满", "main");
+        std::fs::write(
+            &log,
+            concat!(
+                r#"{"t":"request","avatar":"小满","session":"main","text":"旧问题"}"#, "\n",
+                r#"{"t":"tool_call","id":"c9","tool":"dev-hello","args":["x"]}"#, "\n",
+            ),
+        )
+        .unwrap();
+
+        let done = run_avatar_turn(&cfg, &FrontDesk::new(cfg.workspaces_root.clone()), "小满", "新问题");
+        assert!(done.ok);
+
+        let lines: Vec<Frame> = std::fs::read_to_string(&log)
+            .unwrap()
+            .lines()
+            .map(|l| serde_json::from_str(l).unwrap())
+            .collect();
+        // 旧账 2 帧 + 补账 2 帧（悬空结果 + synthetic done）+ 新轮 4 帧
+        assert_eq!(lines.len(), 8);
+        assert!(matches!(&lines[0], Frame::Request(r) if r.turn == 0)); // 旧账原样
+        assert!(matches!(&lines[1], Frame::ToolCall(c) if c.id == "c9"));
+        assert!(matches!(&lines[2], Frame::ToolResult(r) if r.id == "c9" && !r.ok));
+        assert!(matches!(&lines[3], Frame::Done(d) if !d.ok && d.turn == Some(0)));
+        // 新轮续号：旧账 1 个 request（turn=0）→ next_turn = 2
+        assert!(matches!(&lines[4], Frame::Request(r) if r.text == "新问题" && r.turn == 2));
+        assert!(matches!(&lines[7], Frame::Done(d) if d.ok && d.turn == Some(2)));
     }
 
     #[test]
@@ -285,9 +398,9 @@ mod tests {
         make_exec(&p);
         let root = dir.join("workspaces");
         std::fs::create_dir_all(root.join("小满/sessions")).unwrap();
-        let cfg = ServerCfg::for_test(root, "aginx".into(), p.to_string_lossy().to_string());
+        let cfg = ServerCfg::for_test(root.clone(), "aginx".into(), p.to_string_lossy().to_string());
 
-        let done = run_avatar_turn(&cfg, "小满", "x");
+        let done = run_avatar_turn(&cfg, &FrontDesk::new(root.clone()), "小满", "x");
         assert!(!done.ok);
         assert_eq!(done.error.as_ref().unwrap().code, "protocol");
         // 账上有 synthetic done：重放落合法形状
@@ -298,7 +411,7 @@ mod tests {
             .map(|l| serde_json::from_str(l).unwrap())
             .collect();
         assert_eq!(lines.len(), 2); // request + synthetic done
-        assert!(matches!(&lines[1], Frame::Done(d) if !d.ok));
+        assert!(matches!(&lines[1], Frame::Done(d) if !d.ok && d.turn == Some(1)));
     }
 
     #[test]
@@ -335,8 +448,8 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
         let root = dir.join("workspaces");
         std::fs::create_dir_all(root.join("小满/sessions")).unwrap();
-        let cfg = ServerCfg::for_test(root, "aginx".into(), dir.join("no-such-runtime").to_string_lossy().to_string());
-        let done = run_avatar_turn(&cfg, "小满", "你好");
+        let cfg = ServerCfg::for_test(root.clone(), "aginx".into(), dir.join("no-such-runtime").to_string_lossy().to_string());
+        let done = run_avatar_turn(&cfg, &FrontDesk::new(root.clone()), "小满", "你好");
         assert!(!done.ok);
         assert_eq!(done.error.as_ref().unwrap().code, "spawn");
         // request 已记账且轮次收口：模型可见即已记录，spawn 失败也不留孤儿

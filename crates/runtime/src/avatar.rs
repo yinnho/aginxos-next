@@ -139,10 +139,12 @@ fn repair(messages: &mut Vec<Message>) {
     for m in messages.drain(..) {
         match m.role {
             Role::Assistant if !m.tool_calls.is_empty() => {
-                close_group(&mut out, &mut open_ids);
+                // 上一组还悬着：先落它的 assistant 本体，再补合成结果——
+                // tool 结果必须跟在带调用的 assistant 之后（OpenAI 形状）
                 if let Some(a) = pending_assistant.take() {
                     out.push(a);
                 }
+                close_group(&mut out, &mut open_ids);
                 open_ids = m.tool_calls.iter().map(|c| c.id.clone()).collect();
                 pending_assistant = Some(m);
             }
@@ -157,10 +159,12 @@ fn repair(messages: &mut Vec<Message>) {
                 } // 孤儿结果：配对调用不在，丢弃
             }
             _ => {
-                close_group(&mut out, &mut open_ids);
+                // 新 user/assistant_text 到了：悬空组先收口（assistant
+                // 本体在前，合成结果在后），再落新消息
                 if let Some(a) = pending_assistant.take() {
                     out.push(a);
                 }
+                close_group(&mut out, &mut open_ids);
                 out.push(m);
             }
         }
@@ -195,7 +199,7 @@ mod tests {
         let p = log(
             &dir,
             &[
-                Frame::Request(Request { avatar: "小满".into(), session: "s".into(), text: "打个招呼".into() }),
+                Frame::Request(Request { avatar: "小满".into(), session: "s".into(), text: "打个招呼".into(), turn: 1 }),
                 Frame::ToolCall(ToolCall { id: "c1".into(), tool: "dev-hello".into(), args: json!(["世界"]) }),
                 Frame::ToolResult(ToolResult { id: "c1".into(), ok: true, code: 0, out: "hello 世界".into(), err: String::new() }),
                 Frame::Done(Done::ok("你好，世界")),
@@ -218,7 +222,7 @@ mod tests {
         let p = log(
             &dir,
             &[
-                Frame::Request(Request { avatar: "a".into(), session: "s".into(), text: "x".into() }),
+                Frame::Request(Request { avatar: "a".into(), session: "s".into(), text: "x".into(), turn: 1 }),
                 Frame::ToolCall(ToolCall { id: "c1".into(), tool: "nope".into(), args: json!([]) }),
                 Frame::ToolResult(ToolResult { id: "c1".into(), ok: false, code: 127, out: String::new(), err: "unknown command".into() }),
                 Frame::Done(Done::err("brain", "dial timeout")),
@@ -239,7 +243,7 @@ mod tests {
         let p = log(
             &dir,
             &[
-                Frame::Request(Request { avatar: "a".into(), session: "s".into(), text: "查一下".into() }),
+                Frame::Request(Request { avatar: "a".into(), session: "s".into(), text: "查一下".into(), turn: 1 }),
                 Frame::ToolCall(ToolCall { id: "c1".into(), tool: "web-search".into(), args: json!(["北京"]) }),
             ],
         );
@@ -251,13 +255,45 @@ mod tests {
     }
 
     #[test]
+    fn repair_puts_synthetic_result_after_its_assistant() {
+        // 序错回归：悬空调用后面跟着新 request（server 死在工具轮中间、
+        // 下次 send 直接开新轮的账形）。合成 tool_result 必须排在带调用
+        // 的 assistant **之后**——排到前面是 OpenAI 非法序（tool 引用
+        // 了还没出现的 tool_call_id），严格 brain 会拒单。
+        let dir = std::env::temp_dir().join("aginx-runtime-test-avatar-order");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let p = log(
+            &dir,
+            &[
+                Frame::Request(Request { avatar: "a".into(), session: "s".into(), text: "第一问".into(), turn: 1 }),
+                Frame::ToolCall(ToolCall { id: "c1".into(), tool: "web-search".into(), args: json!(["x"]) }),
+                Frame::Request(Request { avatar: "a".into(), session: "s".into(), text: "第二问".into(), turn: 2 }),
+                Frame::Done(Done::ok("第二答")),
+            ],
+        );
+        let m = replay_session(&p);
+        assert_eq!(m.len(), 5);
+        assert_eq!(m[0].role, Role::User);
+        assert_eq!(m[1].role, Role::Assistant);
+        assert_eq!(m[1].tool_calls[0].id, "c1");
+        assert_eq!(m[2].role, Role::Tool);
+        assert_eq!(m[2].tool_call_id.as_deref(), Some("c1"));
+        assert!(m[2].content.contains("中断"));
+        assert_eq!(m[3].role, Role::User);
+        assert_eq!(m[3].content, "第二问");
+        assert_eq!(m[4].role, Role::Assistant);
+        assert_eq!(m[4].content, "第二答");
+    }
+
+    #[test]
     fn replay_drops_orphan_tool_result() {
         let dir = std::env::temp_dir().join("aginx-runtime-test-avatar-orphan");
         std::fs::create_dir_all(&dir).unwrap();
         let p = log(
             &dir,
             &[
-                Frame::Request(Request { avatar: "a".into(), session: "s".into(), text: "x".into() }),
+                Frame::Request(Request { avatar: "a".into(), session: "s".into(), text: "x".into(), turn: 1 }),
                 Frame::ToolResult(ToolResult { id: "ghost".into(), ok: true, code: 0, out: "?".into(), err: String::new() }),
             ],
         );
@@ -272,7 +308,7 @@ mod tests {
         let p = log(
             &dir,
             &[
-                Frame::Request(Request { avatar: "a".into(), session: "s".into(), text: "北京天气".into() }),
+                Frame::Request(Request { avatar: "a".into(), session: "s".into(), text: "北京天气".into(), turn: 1 }),
                 Frame::Artifact(agi::Artifact { kind: agi::ArtifactKind::Text, data: "正在查".into() }),
                 Frame::Steer(agi::Steer { text: "改成上海".into() }),
             ],
@@ -291,30 +327,30 @@ mod tests {
         let p = log(
             &dir,
             &[
-                Frame::Request(Request { avatar: "a".into(), session: "main".into(), text: "第一问".into() }),
+                Frame::Request(Request { avatar: "a".into(), session: "main".into(), text: "第一问".into(), turn: 1 }),
                 Frame::Done(Done::ok("第一答")),
-                Frame::Request(Request { avatar: "a".into(), session: "main".into(), text: "第二问".into() }),
+                Frame::Request(Request { avatar: "a".into(), session: "main".into(), text: "第二问".into(), turn: 1 }),
             ],
         );
         // 末行就是本轮 request：不叠份
         assert!(trailing_request_logged(
             &p,
-            &Request { avatar: "a".into(), session: "main".into(), text: "第二问".into() }
+            &Request { avatar: "a".into(), session: "main".into(), text: "第二问".into(), turn: 1 }
         ));
         // 末行是别的轮：照常从帧上进
         assert!(!trailing_request_logged(
             &p,
-            &Request { avatar: "a".into(), session: "main".into(), text: "第一问".into() }
+            &Request { avatar: "a".into(), session: "main".into(), text: "第一问".into(), turn: 1 }
         ));
         // session 不同不算（防跨会话误伤）
         assert!(!trailing_request_logged(
             &p,
-            &Request { avatar: "a".into(), session: "other".into(), text: "第二问".into() }
+            &Request { avatar: "a".into(), session: "other".into(), text: "第二问".into(), turn: 1 }
         ));
         // 没有账本（新会话首播）
         assert!(!trailing_request_logged(
             &dir.join("nope.jsonl"),
-            &Request { avatar: "a".into(), session: "main".into(), text: "x".into() }
+            &Request { avatar: "a".into(), session: "main".into(), text: "x".into(), turn: 1 }
         ));
     }
 
