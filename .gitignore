@@ -2,3 +2,4 @@
 docs/ARCH.md
 /out
 /.local
+.DS_Store
