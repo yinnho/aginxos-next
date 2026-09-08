@@ -28,6 +28,10 @@
 //!
 //! Manifest (JSON, local path or https URL; image urls likewise):
 //!   { "version": "…",
+//!     "device":        "<codename>", // MANDATORY (D14): the machine
+//!                                  // this update was baked for — must
+//!                                  // equal [device]name in this
+//!                                  // machine's device.toml or apply refuses
 //!     "boot":          { "url": "…", "sha256": "hex", "size": N },
 //!     "vendor_boot":   { … },   // optional, only when modules move
 //!     "dtbo":          { … },   // optional
@@ -76,6 +80,14 @@ struct Image {
 #[derive(Deserialize)]
 struct Manifest {
     version: String,
+    /// D14 cross-machine gate: the codename this update was baked for.
+    /// NO serde default — a pre-D14 manifest fails to parse, fail-closed
+    /// like every other protocol break (old updaters ignore the unknown
+    /// field, so old-device → new-manifest still applies; the refuse is
+    /// new-device → old-manifest, exactly where cross-machine flashing
+    /// would start). Must equal [device]name in /etc/aginx/device.toml,
+    /// checked in cmd_apply before a single byte is staged.
+    device: String,
     boot: Image,
     vendor_boot: Option<Image>,
     dtbo: Option<Image>,
@@ -129,11 +141,14 @@ const STATE_MAX: u64 = 512 << 20;
 
 /// state tar 的 --exclude 集：state-restore 是整包 `tar -xf -C /`（overlay
 /// 语义——老成员盖掉新镜像同名件，镜像新增件幸存）。/etc/aginx 里 image-owned
-/// 的四件绝不能进 tar：2026-09-05 实测 N4 state tar 把 N5 烤的
+/// 的五件绝不能进 tar：2026-09-05 实测 N4 state tar 把 N5 烤的
 /// secret.policy/groups.desc 盖回老版，网关因此拿不到 relay.primary（secretd
-/// 每 5s 拒读）直到手工重推。busybox tar 的 --exclude 匹配存储名（无前导
-/// 斜杠）、flag 须在成员表前——设备实测 2026-09-05。
-const STATE_TAR_EXCLUDES: &str = "--exclude=etc/aginx/svc.d --exclude=etc/aginx/secret.policy --exclude=etc/aginx/gateway.toml --exclude=etc/aginx/groups.desc";
+/// 每 5s 拒读）直到手工重推。第五件 device.toml（D14）：机型档案归烤机线
+/// 所有——老 tar 把它盖回旧机型/旧 schema，轻则本 gate 读到错的
+/// [device]name，schema 加必填字段时直接开机 fail-fast，与 09-05 同类。
+/// busybox tar 的 --exclude 匹配存储名（无前导斜杠）、flag 须在成员表前
+/// ——设备实测 2026-09-05。
+const STATE_TAR_EXCLUDES: &str = "--exclude=etc/aginx/svc.d --exclude=etc/aginx/secret.policy --exclude=etc/aginx/gateway.toml --exclude=etc/aginx/groups.desc --exclude=etc/aginx/device.toml";
 
 fn swap_header(payload_len: u64, sha256_hex: &str, old_len: u64) -> Vec<u8> {
     let mut h = vec![0u8; SWAP_HDR as usize];
@@ -515,8 +530,26 @@ fn current_version() -> String {
     std::fs::read_to_string("/etc/aginx-version").map(|s| s.trim().to_string()).unwrap_or_else(|_| "unknown".into())
 }
 
+/// D14 cross-machine gate, pure for tests: a manifest baked for another
+/// machine must be refused before anything is staged. The codenames are
+/// compared exactly (they double as devices/<codename>/ dir names).
+fn device_matches(m: &Manifest, me: &str) -> Result<(), String> {
+    if m.device == me {
+        Ok(())
+    } else {
+        Err(format!(
+            "manifest is for device '{}' but this machine is '{}' — refusing (cross-machine update)",
+            m.device, me
+        ))
+    }
+}
+
 fn cmd_apply(src: &str, no_reboot: bool) {
     let m = fetch_manifest(src);
+    // D14 gate before any slot work: who am I comes from the same
+    // single reader every crate uses, never a guess.
+    let me = &hwd::load_or_exit().device.name;
+    device_matches(&m, &me).unwrap_or_else(|e| die(&e));
     let act = active_slot();
     let tgt = other(&act);
     println!("aginx-update: running {} → applying {} to slot {tgt}", current_version(), m.version);
@@ -765,14 +798,50 @@ mod tests {
     fn state_tar_excludes_image_owned_etc_aginx_members() {
         // 2026-09-05 收据：state-restore 整包 tar -xf，N4 state tar 把 N5 烤的
         // policy/groups.desc 盖回老版（网关拿不到 relay.primary 直到重推）。
-        // 四件 image-owned：单元表/策略/网关形状/命令组表。
-        for image_owned in ["svc.d", "secret.policy", "gateway.toml", "groups.desc"] {
+        // 五件 image-owned：单元表/策略/网关形状/命令组表/机型档案（D14——
+        // device.toml 归烤机线，老 tar 盖回=读错机型）。
+        for image_owned in ["svc.d", "secret.policy", "gateway.toml", "groups.desc", "device.toml"] {
             assert!(
                 STATE_TAR_EXCLUDES
                     .contains(&format!("--exclude=etc/aginx/{image_owned}")),
                 "missing --exclude for {image_owned}"
             );
         }
+    }
+
+    #[test]
+    fn manifest_without_device_field_fails_parse() {
+        // D14 fail-closed: a pre-D14 manifest must not parse — the field
+        // has no serde default on purpose.
+        let old = r#"{ "version": "1", "boot": { "url": "/x", "sha256": "00" } }"#;
+        let err = serde_json::from_str::<Manifest>(old).err().expect("must fail parse").to_string();
+        assert!(err.contains("device"), "parse error must name the field: {err}");
+    }
+
+    #[test]
+    fn manifest_with_device_field_parses() {
+        let m: Manifest = serde_json::from_str(
+            r#"{ "version": "1", "device": "deva",
+                 "boot": { "url": "/x", "sha256": "00" } }"#,
+        )
+        .expect("device + version + boot is the minimal shape");
+        assert_eq!(m.device, "deva");
+    }
+
+    #[test]
+    fn device_matches_is_exact_codename() {
+        // The cross-machine refuse: exact match, no prefix/substring
+        // leniency (codenames double as devices/ dir names).
+        let m = Manifest {
+            version: "1".into(),
+            device: "deva".into(),
+            boot: Image { url: "/x".into(), sha256: "00".into(), size: None, pre_staged: false },
+            vendor_boot: None, dtbo: None, vbmeta: None, vbmeta_system: None, rootfs: None,
+        };
+        assert!(device_matches(&m, "deva").is_ok());
+        let err = device_matches(&m, "devb").err().expect("must refuse").to_string();
+        assert!(err.contains("'deva'"), "message names the manifest's device: {err}");
+        assert!(err.contains("'devb'"), "message names this machine: {err}");
     }
 
     #[test]

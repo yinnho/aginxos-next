@@ -69,8 +69,8 @@ pub fn decode_scaled(bytes: &[u8], max_w: u32, max_h: u32) -> Option<Bitmap> {
 }
 
 /// PNG 路径（纯 Rust png crate）：全尺寸解码 → 与 JPEG 路同合同（不超箱、
-/// 保比、可小于箱由调用方居中）。引擎 1080×2340 截图进 1080×2340 面板 =
-/// n=1 原样，缩放只为兜底。
+/// 保比、可小于箱由调用方居中）。引擎全尺寸截图进同尺寸面板 = n=1 原样，
+/// 缩放只为兜底。
 fn decode_png_scaled(bytes: &[u8], max_w: u32, max_h: u32) -> Option<Bitmap> {
     let mut decoder = png::Decoder::new(Cursor::new(bytes));
     // EXPAND：调色板/灰度都抬到 RGB(A)8，下面的 match 才只有两形
@@ -186,8 +186,9 @@ mod tests {
 
     #[test]
     fn png_identity_at_panel_size() {
-        // 引擎场景：1080 宽截图进 1080 宽箱 = 原样不缩
-        let w = 1080u32;
+        // 引擎场景：等宽截图进等宽箱 = 原样不缩（尺寸中性——同合同
+        // 与面板无关，n=1 恒等路径的覆盖）
+        let w = 960u32;
         let h = 8u32;
         let mut rgba = Vec::with_capacity((w * h * 4) as usize);
         for x in 0..w {
@@ -196,7 +197,7 @@ mod tests {
             }
         }
         let png = encode_png(w, h, &rgba);
-        let b = decode_scaled(&png, 1080, 2340).expect("png decode");
+        let b = decode_scaled(&png, w, h * 2).expect("png decode");
         assert_eq!((b.w, b.h), (w, h));
         assert_eq!(b.pix.len(), (w * h) as usize);
     }

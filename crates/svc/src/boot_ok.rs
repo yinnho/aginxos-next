@@ -1,7 +1,7 @@
 // aginx-boot-ok — A/B slot attribute maintenance in the GPT (M16/M14;
 // N4③b 原名 agboot-ok，rcS 调).
 //
-// On redfin the slot state is NOT a bootloader_control block in misc —
+// On redfin the slot state is NOT a bootloader_control block in misc — // D14-exempt: provenance receipt, data at devices/redfin/device.toml [slots]
 // misc's vendor space holds recovery's "theme-dark" string and nothing
 // else (probed 2026-08-31). The store is the GPT itself: the partition
 // entry attribute u64 of every *_a / *_b entry, replicated across the
@@ -60,7 +60,7 @@ const ATTR_UNBOOTABLE: u64 = 1 << 55;
 
 struct Gpt {
     dev: String,
-    /// Logical block size — the redfin UFS LUNs are 4K-block, so the GPT
+    /// Logical block size — the redfin UFS LUNs are 4K-block, so the GPT // D14-exempt: probed fact
     /// header sits at byte 4096, not 512. Read per disk, never assumed.
     lbs: u64,
     hdr: Vec<u8>,

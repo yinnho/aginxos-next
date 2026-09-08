@@ -54,7 +54,27 @@ if [ "${MODE}" != "lint" ]; then
   test "${found}" -gt 0 || { echo "no devices/*/cam/campix_test.c found" >&2; exit 1; }
 fi
 
-# ---- 3. registry lint ------------------------------------------------------
+# ---- 3. D14 grep gate -------------------------------------------------------
+# D14 law 1: no machine strings in platform crates. Every hit must carry
+# an inline `// D14-exempt` marker ON THE SAME LINE (a marker on the line
+# above does not count — per-line filter), each reviewed by hand:
+#   - hwd/img test fixtures asserting the REAL committed device.toml
+#     (schema-truth tests) and their helper fns
+#   - provenance comments in svc/boot_ok.rs pointing at [slots]/[update]
+#     registrations in devices/redfin/device.toml
+#   - first-gen frozen-offset exemptions noted in ARCH.md D14
+if [ "${MODE}" != "lint" ]; then
+  BAD="$(grep -rnE '1080|2340|event[0-9]|qpnp_pon|sm7250|redfin' \
+      "${ROOT}"/crates/*/src --include='*.rs' | grep -v 'D14-exempt' || true)"
+  if [ -n "${BAD}" ]; then
+    echo "D14 gate: machine strings in platform crates (mark reviewed lines" >&2
+    echo "with an inline '// D14-exempt', or move the data to devices/):" >&2
+    echo "${BAD}" >&2
+    exit 1
+  fi
+fi
+
+# ---- 4. registry lint ------------------------------------------------------
 cargo build -p aginx-router --release >/dev/null
 SCRATCH="$(mktemp -d)"
 trap 'rm -rf "${SCRATCH}"' EXIT

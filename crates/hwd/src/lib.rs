@@ -52,7 +52,7 @@ pub struct DeviceSection {
     /// Grouping reference; drives nothing.
     pub soc: String,
     pub kernel: String,
-    /// e.g. "vendor-boot" (redfin) vs a dtbo-style chain (enchilada).
+    /// e.g. "vendor-boot" vs a dtbo-style chain — values per device.
     pub boot_style: String,
 }
 
@@ -228,24 +228,21 @@ pub fn load_or_exit() -> &'static Device {
 mod tests {
     use super::*;
 
-    fn redfin() -> Device {
+    fn redfin() -> Device { // D14-exempt: reads the real committed profile
         let p = Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../../devices/redfin/device.toml");
-        from_path(&p).expect("real redfin profile must parse")
+            .join("../../devices/redfin/device.toml"); // D14-exempt: schema-truth fixture
+        from_path(&p).expect("real redfin profile must parse") // D14-exempt
     }
 
     /// The schema and the real device data stay in lockstep: this reads
     /// the actual committed profile, not a fixture copy.
     #[test]
-    fn redfin_profile_is_schema_truth() {
-        let d = redfin();
+    fn redfin_profile_is_schema_truth() { // D14-exempt: schema-truth test
+        let d = redfin(); // D14-exempt: schema-truth fixture
         assert_eq!(d.device.name, "redfin"); // D14-exempt: asserts real device data
         assert_eq!(d.device.boot_style, "vendor-boot"); // D14-exempt
         assert_eq!((d.panel.width, d.panel.height), (1080, 2340)); // D14-exempt
-        assert_eq!(
-            (d.panel.touch_max_x, d.panel.touch_max_y),
-            (1080, 2340)
-        ); // D14-exempt
+        assert_eq!((d.panel.touch_max_x, d.panel.touch_max_y), (1080, 2340)); // D14-exempt
         assert_eq!(d.input.ptt.device, "/dev/input/event1"); // D14-exempt
         assert_eq!(d.input.ptt.volume_up_device, "/dev/input/event0"); // D14-exempt
         assert_eq!(d.input.ptt.key_volume_down, 114); // D14-exempt
@@ -275,7 +272,7 @@ mod tests {
     /// [v1] registered sections parse and carry their data.
     #[test]
     fn registered_v1_sections_parse() {
-        let d = redfin();
+        let d = redfin(); // D14-exempt: schema-truth fixture
         let u = d.update.as_ref().expect("update registered"); // D14-exempt
         assert_eq!(u.layout.swap_offset_gib, 8); // D14-exempt
         assert_eq!(u.layout.backup_offset_gib, 32); // D14-exempt

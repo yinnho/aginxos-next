@@ -196,6 +196,7 @@ name = "aginx-update"
 version = "0.1.0"
 dependencies = [
  "aginx-sign",
+ "hwd",
  "libc",
  "serde",
  "serde_json",
