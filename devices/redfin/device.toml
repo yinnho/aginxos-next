@@ -1,0 +1,72 @@
+# redfin device profile — D14: 机型是数据，不是代码.
+# Single source for every machine fact the platform crates consume;
+# build-rootfs.sh bakes this file into the image at /etc/aginx/device.toml.
+# Sections marked [v1] are registered but not yet wired — the data has a
+# home before the code catches up (ARCH.md D14 exemption notes).
+
+[device]
+name = "redfin"          # must equal the directory name (bake + update gate check it)
+model = "Pixel 5"
+soc = "sm7250"           # grouping reference, drives nothing
+kernel = "stock-4.19-redfin"
+boot_style = "vendor-boot"
+
+[panel]
+width = 1080             # the only source for non-DRM consumers: voice HTML
+height = 2340            # (three hard pins), cam --aspect, host tests. Runtime
+touch_max_x = 1080       # display size is DRM-enumerated truth; term warns
+touch_max_y = 2340       # (never dies) on a mismatch. touch_*: native sensor
+                         # range — kb.rs TouchReader scaling divisors.
+
+[input.ptt]              # voice/ptt.rs
+device = "/dev/input/event1"            # qpnp_pon: volume-down + power
+volume_up_device = "/dev/input/event0"  # gpio-keys: volume-up
+key_volume_down = 114
+key_volume_up = 115
+key_power = 116          # registered, unused (kept for reference)
+
+[input.term]             # term/main.rs
+touch_device = "/dev/input/event2"
+power_device = "/dev/input/event1"
+
+[audio]                  # voice/audio.rs
+capture_pcm = "/dev/snd/pcmC0D0c"
+playback_pcm = "/dev/snd/pcmC0D0p"
+rate = 48000
+channels = 1             # capture mono is the law (M42a)
+playback_channels = 2
+volume_min = 20          # 0-19 lifted to the 20 floor (2026-09-03 silence receipt)
+
+[quirks]
+playback_dup_mono = true # QUIN_TDM dual-channel L=R copy law; enchilada likely false
+eye_stream_args = ["--rot","90","--preview","720","--vf-window","4",
+                   "--nr","0:0:0:0","--aec","--forever","--jpeg","--stream","--rear"]
+qr_scan_args = ["--slowrear","--gain","8"]
+
+[affinity]
+cam_cores = [6, 7]       # cam-shot viewfinder claims these
+ui_cores = [0, 1, 2, 3, 4, 5]  # term+qr park here while the eye is closed
+big_cores = [6, 7]       # snd-cap/snd-play real-time pin
+
+[camera]                 # timing/registers/calibration live in devices/redfin/cam/
+rear_sensor = "imx481"
+dark_gain = 16
+dark_dgain = 2
+
+[paths]
+power_supply = "/sys/class/power_supply/battery"
+wlan = "wlan0"               # [v1] registered
+drm_card = "/dev/dri/card0"  # [v1] registered
+
+[update.layout]          # [v1] registered only: dual-frozen with the first-gen
+swap_offset_gib = 8      # trampoline (known D14 exemption); single-sided
+backup_offset_gib = 32   # parameterization of these offsets would be a
+state_offset_gib = 64    # disaster — the swapper must move with them.
+
+[slots]                  # [v1] registered only (method name, not mechanism)
+method = "per-lun-gpt"
+luns = ["sda","sdb","sdc","sdd","sde","sdf"]
+
+[adb]
+serial = "aginxosredfin"
+fastboot_serial = "13201FDD4001N8"
