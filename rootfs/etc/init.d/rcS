@@ -66,17 +66,19 @@ done) &
 echo "aginxos: rcS done, rootfs up on userdata" > /dev/kmsg
 date > /etc/.rcs-ran
 
-# Boot card (M5) — the panel UI: AginxOS wordmark + a live checklist of
-# every bring-up stage, fed by /run/boot.state. Starts FIRST because it
-# must own DRM master as soon as the panel registers (it retries until
-# then — msm_drm + panel take ~60 s, loaded by touch-bringup below). It
-# replaces the M3 green splash: bring-up scripts report into the state
-# file instead of painting, and bootcard never exits (dropping master
-# would let dsi_backlight's dpms hooks blank the panel).
+# Boot card (M5 → 开机剧情 #246 rain-only film) — the panel UI: a fixed
+# ~10 s of Matrix rain from panel-light with the latest bring-up event in
+# a dim footer, then exit(0) — the story continues on the panel in
+# aginx-term/aginx-voice. Starts FIRST because it must own DRM master as
+# soon as the panel registers (it retries until then — msm_drm + panel
+# take ~60 s, loaded by touch-bringup below). Dropping master at exit
+# blanks the panel via dsi_backlight's dpms hooks — that beat of black is
+# the act cut; term relights it.
 mkdir -p /run 2>/dev/null
 : > /run/boot.state
 ( exec /bin/bootcard /run/boot.state ) >/var/bootcard.log 2>&1 &
-# aginx-term-handoff (M11) kills bootcard by this pid once boot finishes.
+# aginx-term-handoff (#246) waits for bootcard's self-exit (rain film
+# ends); this pidfile is its kill-timeout fallback.
 echo $! > /run/bootcard.pid
 
 # Touch bring-up (M3) — backgrounded: it waits out the ~60s panel
@@ -104,9 +106,12 @@ echo $! > /run/bootcard.pid
 # seals the subdev registry); camera-bringup encodes that order.
 /etc/init.d/camera-bringup &
 
-# Network bring-up (M5) — backgrounded: waits for wlan0 from radio-bringup,
-# joins /etc/wifi.conf, DHCP, then fetches http://www.baidu.com; every step
-# lands in /run/boot.state and the card flips to the BOOT COMPLETE banner.
+# Network bring-up (M5 → #246 phase split) — backgrounded: phase 1 waits
+# for wlan0 from radio-bringup plus the sibling local verdicts, then
+# writes `done` (the boot verdict no longer waits for the net); phase 2
+# joins /etc/wifi.conf, DHCP, fetches http://www.baidu.com, syncs the
+# clock — every step lands in /run/boot.state, and net failures self-heal
+# (net-watch) without ever marking the boot failed.
 /etc/init.d/net-bringup &
 
 # First-boot provisioning (M10) — waits for net-bringup's internet verdict,
