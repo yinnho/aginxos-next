@@ -15,7 +15,7 @@
 # server，设备回到进场状态（老线不受影响）。
 set -euo pipefail
 
-SERIAL="${ADB_SERIAL:-aginxosredfin}"
+ACCEPT_DEVICE=redfin . "$(dirname "$0")/_serial.sh"  # SERIAL：env 最高，默认读 redfin 档案 [adb]
 TREE=/home/.aginx-n                      # 隔离根：bin/ cmds/ workspaces/
 SOCK=/tmp/aginx-n.sock
 KEYVAR=AGINXBRAIN_API_KEY

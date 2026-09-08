@@ -19,7 +19,7 @@
 # 结束杀试跑 server、验老线 voiced 还活着，设备回进场状态。
 set -euo pipefail
 
-SERIAL="${ADB_SERIAL:-aginxosredfin}"
+ACCEPT_DEVICE=redfin . "$(dirname "$0")/_serial.sh"  # SERIAL：env 最高，默认读 redfin 档案 [adb]
 TREE=/home/.aginx-n
 SOCK=/tmp/aginx-n.sock
 KEYVAR=AGINXBRAIN_API_KEY

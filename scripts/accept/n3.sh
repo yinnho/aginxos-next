@@ -25,7 +25,7 @@
 # （重启后归新 voiced 所有，不再还原）。
 set -euo pipefail
 
-SERIAL="${ADB_SERIAL:-aginxosredfin}"
+ACCEPT_DEVICE=redfin . "$(dirname "$0")/_serial.sh"  # SERIAL：env 最高，默认读 redfin 档案 [adb]
 NROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 TAR="${N3_TAR:-$NROOT/out/aginx-server/aginx-server-v0.1.0-4pc.tar}"
 SHA256="${N3_SHA:-$(shasum -a 256 "$TAR" | cut -d' ' -f1)}"

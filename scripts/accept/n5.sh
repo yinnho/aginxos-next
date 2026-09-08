@@ -26,7 +26,7 @@
 # 文件——两式都不回显。缺密钥 = FAIL（这是收据不是选配）。
 set -euo pipefail
 
-SERIAL="${ADB_SERIAL:-aginxosredfin}"
+ACCEPT_DEVICE=redfin . "$(dirname "$0")/_serial.sh"  # SERIAL：env 最高，默认读 redfin 档案 [adb]
 NROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 ECO="$HOME/Documents/aginx"
 STAMP="${N5_STAMP:-}"

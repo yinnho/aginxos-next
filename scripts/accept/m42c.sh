@@ -23,7 +23,7 @@
 # 自清）；秘密零回显——套件 fixture 是假身份，真秘密永远不进脚本。
 set -euo pipefail
 
-SERIAL="${ADB_SERIAL:-aginxosredfin}"
+ACCEPT_DEVICE=redfin . "$(dirname "$0")/_serial.sh"  # SERIAL：env 最高，默认读 redfin 档案 [adb]
 NROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 FACE=/run/aginx-voice/face
 FACEBAK=/tmp/m42c-face.bak
