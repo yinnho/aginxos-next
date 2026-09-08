@@ -1,0 +1,11 @@
+[package]
+name = "hwd"
+version = "0.1.0"
+edition.workspace = true
+publish = false
+description = "device profile reader — the single legal source of machine facts (D14)"
+
+[dependencies]
+serde.workspace = true
+thiserror.workspace = true
+toml = "0.8"
