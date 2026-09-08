@@ -19,13 +19,26 @@ use std::sync::atomic::{AtomicU8, Ordering};
 use std::sync::{Mutex, OnceLock};
 use std::time::Duration;
 
-pub const PCM_CAP: &str = "/dev/snd/pcmC0D0c";
-pub const PCM_PLAY: &str = "/dev/snd/pcmC0D0p";
 pub const SND_CAP: &str = "/bin/snd-cap";
 pub const SND_PLAY: &str = "/bin/snd-play";
-pub const RATE: u32 = 48_000; // M18 听 recipe 的已证形状（MM1 mono 48k）
-pub const CHANS: u32 = 1;
 pub const CAP_MAX_SECS: u32 = 30;
+
+// ---- 机型事实（D14：唯一来源 device.toml [audio]，hwd 读，无默认）----
+pub fn pcm_cap() -> &'static str {
+    &hwd::load_or_exit().audio.capture_pcm
+}
+pub fn pcm_play() -> &'static str {
+    &hwd::load_or_exit().audio.playback_pcm
+}
+pub fn rate() -> u32 {
+    hwd::load_or_exit().audio.rate
+}
+pub fn chans() -> u32 {
+    hwd::load_or_exit().audio.channels
+}
+pub fn playback_chans() -> u32 {
+    hwd::load_or_exit().audio.playback_channels
+}
 
 // ---- 音量（M42e 产品面：短按音量±键调，长按音量下=PTT）----
 // VOL 75 的观察收据：机身震 + 4.5-6k 破音——功放过推。改 60 起步，用户
@@ -33,12 +46,15 @@ pub const CAP_MAX_SECS: u32 = 30;
 // AG_VOICE_VOL env > 缺省 60。AtomicU8=0 表示未初始化（真值经 clamp_vol 恒 ≥20）。
 static VOL: AtomicU8 = AtomicU8::new(0);
 const VOL_FILE: &str = "/var/lib/aginx/voice/vol";
-/// 地板 20：2026-09-03 设备收据——连续短按音量下到 0 后整机静默，连「音量0」
-/// 播报都被自己的 0 音量吞掉。纯语音产品里 vol=0 等于设备失联，0-19 一律抬 20。
-const VOL_MIN: u8 = 20;
+/// 地板（D14：值在 device.toml [audio] volume_min）：2026-09-03 设备收据——
+/// 连续短按音量下到 0 后整机静默，连「音量0」播报都被自己的 0 音量吞掉。
+/// 纯语音产品里 vol=0 等于设备失联，0-19 一律抬 20。
+fn vol_min() -> u8 {
+    hwd::load_or_exit().audio.volume_min as u8
+}
 
 fn clamp_vol(v: i32) -> u8 {
-    v.clamp(VOL_MIN as i32, 100) as u8
+    v.clamp(vol_min() as i32, 100) as u8
 }
 
 pub fn vol() -> u8 {
@@ -155,7 +171,7 @@ impl Brain {
             "model": "tts",
             "messages": [{ "role": "user", "content": text }],
             "audio_format": "wav",
-            "sample_rate": RATE
+            "sample_rate": rate()
         });
         let resp = self
             .agent
@@ -223,7 +239,7 @@ impl Brain {
 
 /// 放 /tmp/aginx-voice-tts.raw（48k L=R stereo），阻塞到放完。
 fn play_stereo_blocking(samples: usize) -> Result<(), String> {
-    let budget = (samples / RATE as usize + 5) as u32;
+    let budget = (samples / rate() as usize + 5) as u32;
     match play_stereo_spawn()? {
         None => Ok(()), // 短音频在宽限窗内已放完
         Some(mut child) => wait_limited(&mut child, budget),
@@ -239,12 +255,14 @@ fn play_stereo_spawn() -> Result<Option<Child>, String> {
     let mut last_err = String::new();
     for _ in 0..6 {
         let vol_s = vol().to_string();
+        let rate_s = rate().to_string();
+        let ch_s = playback_chans().to_string();
         let mut child = Command::new(SND_PLAY)
             .args([
-                PCM_PLAY,
+                pcm_play(),
                 "/tmp/aginx-voice-tts.raw",
-                &RATE.to_string(),
-                "2",
+                &rate_s,
+                &ch_s,
                 &vol_s,
             ])
             .stdout(Stdio::null())
@@ -273,13 +291,15 @@ fn play_stereo_spawn() -> Result<Option<Child>, String> {
 
 /// 起一次最长 CAP_MAX_SECS 的采集；PTT 松手时 kill，采到多少算多少。
 pub fn capture_start() -> std::io::Result<Child> {
+    let rate_s = rate().to_string();
+    let chans_s = chans().to_string();
     Command::new(SND_CAP)
         .args([
-            PCM_CAP,
+            pcm_cap(),
             &CAP_MAX_SECS.to_string(),
             "/tmp/aginx-voice-cap.raw",
-            &RATE.to_string(),
-            &CHANS.to_string(),
+            &rate_s,
+            &chans_s,
         ])
         .stdout(Stdio::null())
         .stderr(Stdio::null())
@@ -290,10 +310,10 @@ pub fn capture_start() -> std::io::Result<Child> {
 pub fn capture_take() -> Option<Vec<u8>> {
     let raw = fs::read("/tmp/aginx-voice-cap.raw").ok()?;
     let raw = &raw[..raw.len() - raw.len() % 2]; // 整样本截齐
-    if raw.len() < (RATE as usize / 10) * 2 {
+    if raw.len() < (rate() as usize / 10) * 2 {
         return None;
     }
-    Some(wav_wrap(raw, RATE, CHANS))
+    Some(wav_wrap(raw, rate(), chans()))
 }
 
 // ---------------- wav ----------------
@@ -365,19 +385,22 @@ pub fn local_voice_ready() -> bool {
         && std::path::Path::new(ASR_MODEL_DIR).exists()
 }
 
-/// 钉推理子进程到大核（cpu6/7 = A76 2.2-2.4GHz）。不钉则调度器会把两个
-/// 推理线程摊上 A55——实测同一句 11.5s vs 8.7s（M42e）。pre_exec 里只能做
-/// async-signal-safe 的调用；sched_setaffinity 是裸系统调用零 malloc，安全。
-/// 钉不上（非本机拓扑/host 测试）就随它跑，不算错。
+/// 钉推理子进程到大核（拓扑来自 device.toml [affinity] big_cores——A76 大
+/// 核档；不钉则调度器会把两个推理线程摊上小核——实测同一句 11.5s vs
+/// 8.7s，M42e）。pre_exec 里只能做 async-signal-safe 的调用；
+/// sched_setaffinity 是裸系统调用零 malloc，安全（cores Vec 在闭包外构建，
+/// 闭包内只读遍历）。钉不上（拓扑不符/host 测试）就随它跑，不算错。
 #[cfg(target_os = "linux")]
 fn pin_big_cores(cmd: &mut Command) {
     use std::os::unix::process::CommandExt;
+    let cores = hwd::load_or_exit().affinity.big_cores.clone();
     unsafe {
-        cmd.pre_exec(|| {
+        cmd.pre_exec(move || {
             let mut set: libc::cpu_set_t = std::mem::zeroed();
             libc::CPU_ZERO(&mut set);
-            libc::CPU_SET(6, &mut set);
-            libc::CPU_SET(7, &mut set);
+            for &c in &cores {
+                libc::CPU_SET(c as usize, &mut set);
+            }
             libc::sched_setaffinity(0, std::mem::size_of::<libc::cpu_set_t>(), &set);
             Ok(())
         });
@@ -681,7 +704,7 @@ fn speak_streamed(clauses: &[String]) -> Result<(), String> {
             wait_limited(&mut prev, budget).map_err(|e| format!("prev snd-play: {e}"))?;
         }
         if let Some(child) = play_stereo_spawn()? {
-            playing = Some((child, (samples / RATE as usize + 5) as u32));
+            playing = Some((child, (samples / rate() as usize + 5) as u32));
         }
     }
     if let Some((mut last, budget)) = playing.take() {
@@ -694,13 +717,13 @@ fn speak_streamed(clauses: &[String]) -> Result<(), String> {
 /// /tmp/aginx-voice-tts.raw，返回样本数（放音等待预算用）。
 fn stage_wav(wav: &[u8]) -> Result<usize, String> {
     let (off, len) = wav_data_span(wav)?;
-    let rate = wav_rate(wav)?;
-    let up = if rate != RATE {
-        resample(&wav[off..off + len], rate, RATE)?
+    let src_rate = wav_rate(wav)?;
+    let up = if src_rate != rate() {
+        resample(&wav[off..off + len], src_rate, rate())?
     } else {
         wav[off..off + len].to_vec()
     };
-    let up = lowpass(&up, RATE, 7_500.0);
+    let up = lowpass(&up, rate(), 7_500.0);
     let samples = up.len() / 2;
     let mut stereo = Vec::with_capacity(up.len() * 2);
     for s in up.chunks_exact(2) {
@@ -953,7 +976,7 @@ mod tests {
     #[test]
     fn wav_wrap_and_span_roundtrip() {
         let raw = vec![0u8; 1000];
-        let wav = wav_wrap(&raw, RATE, 1);
+        let wav = wav_wrap(&raw, 48_000, 1); // D14-exempt: fixture 速率
         let (off, len) = wav_data_span(&wav).unwrap();
         assert_eq!(&wav[off..off + len], &raw[..]);
         // fmt 块非 data，跳过后命中 data
@@ -982,7 +1005,7 @@ mod tests {
     fn wav_rate_reads_fmt() {
         let raw = vec![0u8; 100];
         assert_eq!(wav_rate(&wav_wrap(&raw, 24_000, 1)).unwrap(), 24_000);
-        assert_eq!(wav_rate(&wav_wrap(&raw, RATE, 1)).unwrap(), RATE);
+        assert_eq!(wav_rate(&wav_wrap(&raw, 48_000, 1)).unwrap(), 48_000); // D14-exempt: fixture
         assert!(wav_rate(b"not a wav").is_err());
     }
 
@@ -1059,7 +1082,16 @@ mod tests {
 
     #[test]
     fn vol_clamped_to_audible_floor() {
-        // 地板 20：键调/文件都不能把纯语音产品调成哑巴（2026-09-03 收据）
+        // D14：地板值来自 device.toml——host 读真档案（本 crate 唯一进 hwd
+        // 的测试，env 无竞态）。红皮档案 volume_min=20：键调/文件都不能把
+        // 纯语音产品调成哑巴（2026-09-03 收据）
+        std::env::set_var(
+            "AGINX_DEVICE_TOML",
+            concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/../../devices/redfin/device.toml"
+            ),
+        );
         assert_eq!(clamp_vol(0), 20);
         assert_eq!(clamp_vol(-30), 20);
         assert_eq!(clamp_vol(19), 20);
