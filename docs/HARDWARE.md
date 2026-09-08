@@ -982,3 +982,776 @@ aginxos-brain-arch-strips-1705.jpg）。
 `~/Documents/aginx/aginxos-svg-zoom-engine-feedback.md` 交接引擎线。
 面板停在 31px 切条版（arch7 在载，渲染同 arch5），等引擎侧缩放支持
 （`Emulation.setPageScaleFactor` 或 svg 尺寸在 paint 生效）后退役切条。
+
+## 2026-09-07 — Bake #19 刷机日：M42c+M47⑤p–u+开机体验①–④ 全折叠入役（n5 45/45 + m42c 15/15 首跑全绿；开机① fresh-boot 竞态立案）
+
+版本线：slot _a `aginxos a0257a8 2026-09-05` → slot _b `aginxos e101f6f 2026-09-07`。
+折叠内容：M42c 命令优先协议（Idle+NetWait 双态、pair 码到手即用）、M47⑤p–u
+相机五修（AEC 幻步护栏/回收移链后/PDEATHSIG/fringe 中性/冷启恢复+NR 关停）
++ ⑤v-1 曝光门减半、开机体验①–④（接线员分流+英文话术、进程内电话铃、
+term 直进 Voice、bootcard Matrix 雨→打字机字标）、aginx-tts/aginx-asr 改姓。
+
+**对账审计（刷前闸）**：dev-push 会话的设备二进制 vs 烤机产物三件
+（voice/term/bootcard）字节不等——根因是 musl target 目录清空后重编，
+非复现构建。分层审计定谳：尺寸差 <0.11%；strings 包含性检验（设备侧
+≥8 字符含字母串全部 `in` 烤机字节）：term/bootcard 真差 0 条，voice 13 条
+全为 rodata 合并/链接序伪差；bootcard 设备版缺 `--ppm-seq`（repo HEAD
+有）→ **repo ≥ 设备**，方向安全。放行刷机。
+
+**刷机数字**（updater-first 闸：先推新 musl aginx-update、`status` 出
+boot 表再动手）：bundle 推 /tmp/agupd/ 后设备侧 sha 逐一合；rootfs 灌注
+`dd bs=4096 seek=2097153` 7.235s（283MB/s）；`apply --no-reboot` 输出
+boot/vendor_boot sha ok、state tar 55865344B、pre_staged rootfs 体
+2147483648B 全哈希合、swap 头 AGXROOT1 提交、`slot _b set active on
+4 disks`；rootfs.img 推送 5.36s。三保险：`.local/backup-n19/` 三 tgz
+双端 md5 已核。
+
+**首启健康**：六单元 ready（gateway/secretd/server/voice/net-watch/
+aginxbrowser——后者经 /var/lib stamps 存活免重装）+ term rcS 拉起；
+wlan0 192.168.0.166；网关 `registered id=cf49973e`；/var/bin 语音栈
+（aginx-asr/ocr/tts + aginxmd）随盘。
+
+**验收**：`n5.sh` 45/45 零修首过（L 段远端真往返+化身负例绿）；`m42c.sh`
+15/15 零修。前三次 n5 跑分 43/1、42/2、43/2，失败两源：① L 段 host 侧
+relay token 失落（下述）；② 二启语音地板偶发=开机①竞态同根（下述）。
+
+**L 段 token 取回法**（值零回显，全程管道）：设备 env 无
+AGINX_RELAY_SECRET（by design，走 sidecar）；admin CLI `aginx-secret get
+relay.primary` 对非 scope-owner 拒读是 policy 设计。运维通道=root 直读
+`/var/lib/aginx/secret/store`（明文 0600 JSON，N5 灌注日本就是 host 持
+值 stdin 灌入——反向取回同一所有权）：`adb shell cat | python raw_decode`
+管道直落 host `/tmp/agc-relay.secret`（0600），只回长度 64。n5.sh 走
+`AGC_SECRET_FILE` 而非 env，.history 无痕。
+
+**开机① fresh-boot 竞态（立案，未修）**：fresh boot 观察——wifi 链全绿
+（boot.state: wifi ok Legrand AP / dhcp / internet / time 全过，约 2–3
+分钟到位），但语音问候走了 DOWN 支（「Warning: I've lost the hardline.」
++自动睁眼对码，face 残留对码行）。根因链：voice `boot_net_state()` 只等
+boot.state 20×1s；超时后 `net_check()` 自己 join，与在途 net-bringup 相撞
+（wifi-join exit 1 → ConfFail）。n5 二启地板偶发同根（撞上 boot 序列持
+voice 的窗口）。修法候选（**待裁决，未动手**）：a) boot.state 等待预算
+20s→180s；b) 网络晚到异步补问候（Ev::NetState 到来时重打 Up 话术）；
+c) net_check 先查 wlan0 有 IP 即 Up，不盲目 join。b 最贴「流程要未来」
+（机器自己把剩下的做完），a+c 是保守补丁。
+
+**收尾态**：设备 slot _b e101f6f 在役、六单元 ready、网关在 relay——
+已知态。#198 真人收据（fresh boot 无 adb 举 AGINXPAIR1 码）待用户侧。
+
+## 2026-09-07 — 面法第一步上机：待机面复刻 END 全帧 + 关机/重启口令闸（六收据全落 + m42c 扩段 21/21 首跑全绿）
+
+dev-push 会话（不烤机，bake #20 折叠另排）：term/voice 新二进制在役。
+
+**待机面（①–④）**：① 重启后屏=bootcard END 像素级复刻（host golden 测试
+`idle_face_matches_bootcard_end` 钉 1080×2340 零 diff；boot.state 14 行全
+ok、term handoff 交接无跳变）；② 音量+→整屏取景（eye.raw mtime 滚动、
+cam.log `vf: pinned to cpu6+cpu7`），音量−→回待机面；③ 待机面四点乱触
+（BACK 条/中心/键盘区/角落）零反应——term pid 不变、日志 md5 不变；④
+电源键短按灭屏→dpms Off，轻触唤醒→dpms On→落待机面（wake 律：Idle/Eye→
+Idle）。
+
+**口令闸（⑤⑥）**：⑤ 未设口令 inject 关机→「关机需要口令，口令还没设置。」
+（fail-closed，无「请说口令」）；fixture 口令 + 错口令×3→「口令三次不对，
+已取消。」；口令尝试原文全程不上脸（psk 同律，device 证）。⑥
+AGINX_POWER_KEY 经 /etc/aginx/env(0600)→unit env_file→make_vm 注入，
+daemon 日志只记 set/unset；script 重启+对口令→Speak 确认话术（阻塞放完）
+→1.5s grace→spawn aginx-reboot→**真重启**，回来 uptime 76s + boot done +
+voice up；env 跨重启留存（两代日志均 power key set）。
+
+**m42c.sh 扩段**：B2 口令闸五查（fail-closed×2 + 三错作废×3，口令=套件
+fixture 字面量，真口令永不进脚本）+ C 末查（真重启→有界 get-state 轮询
+5min→boot done+voice up→uptime<360s）。**21/21 首跑零修全绿**（原 15 +
+新 6）。
+
+**运维教训**：换在跑二进制——adb push 直落 `/usr/bin/<name>.new`（同
+文件系统）再 rename 覆盖；先推 /tmp（tmpfs）再 mv 会跨 fs 退化成
+copy+unlink→ETXTBSY。adb push 在 && 链里会静默失联（只出一声 OK）——
+每次 push 后两端 sha256 对账才动手。断电瞬间抢 /run face 快照必输
+（tmpfs 随整机走）；跨重启证据看 /var/log/aginx-svc/aginx-voice.log。
+RTC 断电后快 ~31min，boot ntpd（`time ok`）会拨回去——`time ok` 之前的
+时间戳不可信。
+
+**收尾态**：设备在役（套件末查真重启后自动回稳）；fixture 口令已撤
+（`power key unset`）——用户真口令待用户定值落 env（fail-closed 兜底在
+位）；开机①竞态候选 a/b/c 仍待裁决；#198 真人收据（含真人语音关机）
+待用户侧。
+
+## 2026-09-07 — 代码雨中屏秒表（bootcard，用户提议当日上机）
+
+雨面正中大秒数（scale 13 C_GREEN，屏心锚定；锚=bootcard 进程起点 t0，与
+退役的页脚 T+ 同源——DRM 等面板吃掉头几十秒，亮屏即中段起数是诚实的开机
+时长）。初版不衬（数字前层，用户眼验「秒数在第一层」）后二裁：字号 13→16、
+数字沉**底层**——数字先画、雨后画，雨从数字前面扫过（09-07 第二轮
+dev-push sha 18797abd…，host --ppm 眼验过雨划过数字笔画）。页脚 T+MM:SS 退役（与中屏秒数重复），右下
+latest 事件行留任。BOOT STOPPED 态雨照下秒照数——正好当卡死计时看。
+
+改动全在 render_rain() 一函数（+15 行）。host `--ppm`/`--ppm-seq` 眼验
+（84/1 两帧：居中、镂空穿透、T+ 无）；zig cc 静态重编（1571688B，比烤机
+版 +80B）同 fs 换铉推 /bin/bootcard（sha 双端合）；重启收据：bootcard
+log 全链 ok、boot.state 17 行 done ok、uptime 73s 回稳。视觉收据=用户
+眼验（面板无 screencap 通道）；烤机折叠随 bake #20。
+
+## 2026-09-07 — 开机剧情重构 #246：雨定时→NEO电话→字标光标（用户定稿「按这版」）
+
+剧情四幕一次落地：① 雨幕固定 10s（锚=panel-light kmsg 时刻，非进程
+起点）演完 exit(0)，中屏秒表随整幕退役（#245 同日两轮调参作废）；
+② NEO 头像（30×36 glyph 密度 ASCII 像，Matrix 绿）+ 电话铃（2s 响/3s
+停，进程内 PCM），铃吸收真实 WiFi 等待、保底一巡、90s 封顶；③a 通：
+NEO 退场→AginxOS 全绿字标+呼吸光标+打字「Operator. Go ahead.」+女声
+同步；③b 断线（wifi/dhcp fail 或封顶）：打字「Warning: I've lost the
+hardline.」→停→「对准配对码或无线码。」→睁眼；④ 配对成：闭眼→黑+
+实心光标→「Connection restored.」+声「Welcome to the real world.」
+→2s→字标呼吸光标。voice=导演（face schema 新 call/line 两键，进程内
+静态量直写）、term=哑渲染（本地打字机 90ms/字，前缀续打）。
+
+配套 init.d 手术：net-bringup 两相拆分——phase 1 等 wlan0+touch/
+battery/modem 三本地判落 `done ok|fail`（不再等网），phase 2 净链
+join/dhcp/internet/ntpd 每步落行、**永不 done fail**（断网=剧情不是
+坏靴）；aginx-term-handoff 改等 bootcard 自退（pidof 有界 320×2s，杀
+仅超时兜底——旧按 done 杀会在雨幕中途截戏）；provision 早退闸改盯
+`^(wifi|dhcp|internet) fail`；n4.sh D 段等待目标 done→time ok（净链
+收口行）。
+
+host 闸：check.sh 全绿；term 17/0（新增 neo_face_is_the_avatar/
+idle_face_is_all_green_wordmark/boot_scenes_type_and_cursor 三金测）、
+voice 40 全过；net-bringup 四情景干跑（A 无 conf=done ok+wifi fail
+rc=0 / B touch fail=done fail rc=1 / C 超时=done fail / D 无 netdev=
+wlan fail+done fail）。
+
+上机 dev-push（三铉四脚本，sha 双端合）：aginx-term 9a517da6、
+aginx-voice 99c72d37、bootcard c111457f（zig cc 静态 1561048B）+
+net-bringup/aginx-term-handoff/provision/rcS。收据两靴（第二靴=
+m42c C 段口令真重启顺带）：
+
+- 靴 1：panel t=35.15s→`rain done — exiting` t=45.06s（9.9s 自退，
+  handoff 无 kill 行）；term 单次起、marker 落；lease t≈70s（铃约
+  4-5 巡内）；answer 走完（face lines 留 Operator. Go ahead.）→
+  clear→待机面；**boot.state `done ok` 落在 `wifi run` 之前**（两相
+  拆分实测生效）；电力→稳态全程 ~80s。
+- 靴 2 活捉：uptime 68s 时 face=`"call":"ring"` 在播、wifi 尚 `run`
+  （NEO+铃面结构性收据）；113s 时 answer 已演完清回待机面。
+- m42c.sh **21/21 首跑全绿**（含 B2 口令闸与 C 段真重启回来 60s）；
+  voice 单元 spawns=1 exits=0，term 无重生环。
+
+诚实缺口：③b 断线幕与 ④ 配对幕本两靴未上机演（wifi.conf 在、两靴
+皆连上）——单测覆盖协议臂，真演需摘 /etc/wifi.conf 重启（另排）；
+铃声音量/NEO 像/字标打字的视觉听觉收据=用户眼验待收。杂音一行：
+ntpd 后随 `SET_TIME: Permission denied`（M10 老现象非本次改动，钟
+照样 sync）。烤机折叠随 bake #20。
+
+### v2 二修（同日）——NEO 退役、铃单节奏、雨续演（用户「就一直代码雨+铃声」）
+
+用户收据 v1 两处退回：① 「两种电话铃声」——boot_scene 停顿环
+`if !first { break; }` 无条件出环，首巡后 3s 停顿名存实亡，第二巡起
+铃连成只剩淡入淡出切口的长音；② NEO 像「很不像」——30×36 密度像
+读不出人形，整件退役（neo.rs/gen_neo.py/测试删净，v1 未提交零
+git 痕）。修法：① 判词门 `!first && verdict.is_some()`（首巡走满
+3s 保底、之后判词一到即收）；② term 新增 Rain 状态机（bootcard 同
+常数移植：CELL 24/GLYPH_H 32/TRAIL 28/头色 C8FFC8/速度 42·66·90/
+1/5 闪换、xorshift64），`call=="ring"` 到达即建、离开即弃，主循环
+40ms 自走 tick（poll 阶梯新 40ms 档在打字 90ms 档之前），雨在
+term 面上与铃同帧续演——「雨不停+铃响」就是电话戏全部脸面。
+
+host 闸：check.sh 全绿；term 17/17（neo 测试换 ring_face_is_the_rain：
+亮头>300/绿主色族/顶部墨>300/tick 必动帧）、voice 40/40；雨面 PPM
+主机眼验（全屏竖落、亮头渐隐、无 UI 残留）。
+
+上机 dev-push（sha 双端合）：aginx-term fa12d60a、aginx-voice
+32680adc（aginx-reboot 重启）。收据（23:12 靴）：
+
+- 剧情链全走：term-up t≈40s → face `call:ring` t=46s → wifi 落地
+  → `call:answer`+line t=71s → ~8s 驻留清回待机面（line 落对话行）。
+- **铃单节奏结构收据**：ring 相 46→71s=25.0s，恰=5×(2s 铃+3s 停)
+  整——旧 bug 下停顿≈0，25s 只能是十几个连排切口；判词落在第 5 巡
+  停顿内、即收即 answer。kmsg 无 ring 报错（每巡 play_ring 皆成）。
+- 守护健康：voice 34.8s ready、term/voice 双进程在役无重生，kmsg 仅
+  term 首帧 PAGE_FLIP relatch 兜底行（已知无害）。
+
+待收：用户眼验二轮（雨续演连续感+单节奏铃声+NEO 无痕）。③b/④
+未演缺口随 v1 继续挂账；烤机折叠随 bake #20。
+
+### v3 三修（同日）——黑拍根除（用户收据「雨不能停，中间黑屏」）
+
+用户眼验 v2 报：两场雨中间断了一下黑屏。根因=**v1 遗留的故意设计**：
+bootcard 退出释放 DRM master 时 dsi_backlight dpms 钩子掐背光
+（bootcard.c:660「that beat of black is the act cut」——NEO 时代的幕间
+效果），v2 雨要连续它就成了断档；再乘 handoff 2s pidof 轮询粒度+term
+冷启动 ≈ 黑 2-3s，且 voice 等 term.up 才写 face → term 首帧闪一帧
+待机面字标才见雨。三处手术（全在 next 仓）：
+
+1. **voice 脸先行**：boot_scene 一进来就写 call=ring，铃环仍等
+   term.up（诚实时钟不变）——term 首帧 poll 到的就是雨，字标闪消失。
+2. **handoff 直通**：不等 bootcard 退，立即 spawn term（respawn 环
+   照旧）；超时杀随等待退役（bootcard 自有退出路径）。
+3. **drm.rs 分级重试**：prepare 的 SET_MASTER 检查 EBUSY→"master
+   busy"早退；wait_up 对它静默 250ms 快轮询（交接常态），其余失败
+   kmsg+2s 慢等照旧（DRM 未起仍 300 次上限）。
+
+上机 dev-push（sha 双端合）：aginx-term eae2e77a、aginx-voice
+a3dbd56a、aginx-term-handoff（cat>）。收据（23:25 靴，kmsg）：
+term **32.83s 即被拉起**（直通铁证；card0 未起→慢轮询一次）→
+bootcard panel 35.15s→rain done **45.04s**→term relatch **45.81s**
+——**黑拍 0.77s**（v2 ≈2-3s），且为内核 dpms-off 一瞬+一个 250ms
+tick；face ring 在 voice ready（34.8s）即上脸，term.up 45.8s 落、
+铃同帧起；剧情链 answer→待机面照常收。m42c.sh **21/21**（含 C 段
+口令真重启回来=直通后重启链完整）。待收：用户眼验三轮（雨连续、
+无黑断、单铃声）。
+
+### #246 v4①——终端化 bootcard + DRM 交接 EINVAL 根修（2026-09-08）
+
+用户判 v1-v3 电话剧场「不理想」，v4 定稿：戏剧全退，屏幕只说真话。
+本段收 v4①：bootcard 换终端风开机画面 + 交接根修。
+
+**v4 bootcard 重写**（bootcard.c，zig cc musl 静态，sha 496f4aec）：
+- 雨/打字机/NEO 全删。render()=AginxOS 字标（全绿 MGREEN 0x0000FF41
+  scale13 水平居中 y≈h·45/100，Google logo 同位）+ 进度行（16 真实 key
+  自 y≈h·56/100：key 暗绿 0x00005A20 + 判词 ok=绿/run=白 0x00F5F7FA/
+  fail=红/pend=暗）+ 右下最新事件行。`--ppm` host 眼验过版式。
+- KEYS 扩 16：kernel/rootfs/display（self_state 合成）+ touch/battery/
+  modem/wlan/wifi/dhcp/internet/cell/audio/camera/time/pkg/py。
+- **退场梯**（替代 RAIN_SECS 定时）：`internet ok|fail`/`wifi fail`/
+  `dhcp fail` 任一 → 持 3s 退；`done fail` → 8s 宽限（离线地板照常进
+  光标面）；面板亮 150s 硬顶。
+
+**DRM 交接 EINVAL 根修**（drm.rs，aginx-term sha 391ad603）：v3 归因
+修正——「EBUSY 快轮询」从未生效：msm_drm 4.19 已有 master 时
+SET_MASTER 返回 **EINVAL(22) 而非 EBUSY(16)**（/tmp/drmprobe 静态探针
+实测），EBUSY-only 检查被穿透 → 实例以非 master 身份走到 SETCRTC 才
+死 → **每轮 boot 2s 一次 crash-loop**（约 18 实例/轮，v3 时代即如此，
+bootcard 在屏故无感；v3 收据「0.77s 黑拍=250ms tick」的真机制其实是
+2s 重生循环的运气值）。修法：SET_MASTER 任何失败一律 "master busy"
+快轮询（wait_up 预算 300→600，覆盖 150s 硬顶）；判别实验：master 在
+役时手动拉第二实例——修复前 4s 内 SETCRTC failed 秒死，修复后静默
+存活轮询。
+
+收据（16:36 靴，kmsg）：bootcard no card0 32.69 → panel up **35.06s**
+→ PAGE_FLIP refused(2) relatch 照旧 → net verdict **70.64s**（internet
+ok www.baidu.com）→ 持 3s → **73.01s boot console done 退场** → term
+**73.89s** present（黑拍 0.88s=250ms tick+term 带起成本，与 v3 的
+0.77s 同机制量级）。boot.state 全链：done ok / wifi ok Legrand AP /
+dhcp ok / internet ok / time ok / pkg ok。**本靴 term 日志零
+SETCRTC failed**（修复前 ≈18 行/靴）；handoff 单实例 33s 拉起静默轮询
+至 73s 接管，pid 432 在役、term.up 落。m42c 未跑（bootcard/term 面
+变更不影响语音协议面，随 v4② 回归）。暂不提交（#246 全树+v4 等用户
+发话）；bootcard/term 均为 dev-push，随 bake #20 折叠。
+
+### #246 v4②——term 光标面 + voice 剧场退役 + 话术走 line（2026-09-08）
+
+term（sha b079dccf）：Rain/ring/boot_answer/boot_msg/wordmark 全删；
+FaceDoc 收成 {eye,result,line}（call/lines 退役，serde 忽略旧键）；新
+prompt() = IDLE_BG 满屏 + MGREEN 块光标（25×40px）在 prompt 原点
+（x=90, y=1310 @1080×2340），transcript 左对齐起于原点按面板宽换行
+（16 汉字/行 @scale5），打字边缘实心光标、打完原地 500ms 闪；result
+面=整屏位图（photo_view 核心，无工具条），poll_result 以 mtime 门
+RESULT_JPG、result 假→真时清 mtime 防陈帧；inotify 唤醒条件与 drain
+同扩为 Eye‖(Idle∧result)（level-triggered 忙等防呆成对改）；Idle∧typing
+时 90ms 打字节奏。host 17/17（prompt 黑+光标/换行打字/满铺位图三钉）。
+
+voice（sha c9cda2d9）：boot_scene 全体+boot_net_fail+play_ring（铃 PCM
+合成）删除；PairApply 臂剧场段删（镜头先收→PairDone 就地喂）；face.rs
+FaceDoc={state,listening,busy,eye,result,line,hint}，BOOT_LINE/set_line
+留作 v4③ 落点。**话术通道重接（套件 14/21 → 21/21 根因）**：旧脸序列
+化 vm.lines 是 m42c 话术断言的通道，lines 退役即断——修法 Out::Say/
+Speak 及 Status/Chat 的 inject_say 消费点统一 `set_line`（话术=光标面
+打字文本，屏幕真话）+ `say/speak` stderr 日志（日志=真源，断言新通
+道）；`--script` 输入回显改步数计数（stdin 可能含口令——口令值零回显
+加固）；m42c 错口令段不再丢 stderr。host 40/40。
+
+**部署陷阱**：unit 起的是 `/usr/bin/aginx-*`；首刀误推 `/bin`（独立
+目录、旧烤机副本）——旧 voice（a3dbd56a）继续在役写旧 schema 脸，
+face mtime 新鲜但内容陈旧差点误判。修正后 /bin 下被覆盖的两个文件无
+unit 引用、无行为影响（烤机正源在 rootfs 镜像）。**换 binary 先
+`readlink /proc/$pid/exe` 对真身**。
+
+收据（17:4x 靴）：bootcard net verdict 70.7s → 持 3s → 73.0s 退场
+→ term 接管；face v4 schema 落地（`--face`：state/listening/busy/eye/
+result:false/line/hint，无 call 无 lines）；`--inject 状态` →
+`line:"17点24分，电池100%，网已连。"`，`--inject 你好` →
+`line:"我在。说连网，或说扫码、念一下。"`（话术真上脸）；m42c
+**21/21**（口令闸/三错作废/原文零回显全绿）；term/voice 单实例零
+panic 无重启环；双端 sha 对齐（term b079dccf、voice c9cda2d9）。
+待真人眼验：开机黑+光标无字标闪、灭屏唤醒回光标面、话术打字动画。
+暂不提交（#246 全树+v4 等用户发话）；dev-push 随 bake #20 折叠。
+
+### #246 v4③——transcript 打出 + 花名册点名（2026-09-08）
+
+**代码**：voice main.rs——PTT Up/--inject 臂 transcript 原子上脸
+（`set_line(transcript)` + write，term 无论在哪一面都被拉回光标面开打）；
+`roster_hit_in()` 读 AGINX_HOME（缺省 $HOME/.aginx）下 `workspaces/`
+目录派生花名册（目录即注册，文件不算，字典序取首个命中，miss 落母体
+不误投）；`chat_front(text, name)` 有点名则 `agent send <名> <text>`
+（server resolve_send 显式臂：存在才路由并挪光标）。protocol.rs 退役
+Chat 前置「问母体，稍等。」Say——那会瞬间顶掉用户刚说出的话（设备实测
+中途脸 busy:true line=问母体 → 改后 line=transcript 全程保住）。
+host 41/41（新增 roster 子串命中/双命中字典序/miss/文件不算 4 断言 +
+前置 Say 退役钉 says==[]）。
+
+**部署**（陷阱已避：/usr/bin + readlink 对真身）：voice 105c2b69 →
+（protocol 修）8a429a39，两刀都重启后 `sha256sum
+$(readlink /proc/$(pidof aginx-voice)/exe)` 对齐在役。
+
+**设备收据**（inject 臂，VOICED_FRONT=/usr/bin/aginx HOME=/home）：
+- transcript 保住：inject 后 3s 抓脸 = `busy:true,
+  line:"帮小喜看看杭州天气"`（transcript 在 brain 途中一直打在光标面）。
+- 花名册点名闭环：`帮小喜查一下北京天气` → 日志 `roster 小喜` →
+  server 会话账 `{"t":"request","avatar":"小喜",...}` → 小喜 带工具环
+  （wttr.in 查天气）→ 满答上脸（后续上海/杭州+广州同法复现）。
+- 不点名落母体：`帮我查一下上海天气` 零 roster 日志 → 母体（无网工具）
+  诚实答「没有实时天气数据」上脸；`回母体` 退房词 → 「（已回到母体）」。
+- 离线降级一等公民：重启后 ~1min（relay 链未稳）inject → brain
+  `http error sending request` → 兜底话「现在连不上母体…」上脸，环不
+  断 state:idle。
+- 词表优先不误投：「小喜你好」命中问好词表走地板应答（不进点名）；
+  「现在几点了」本地状态直答。
+- m42c **21/21**（真重启 C 段含）。
+
+**部署插曲（已结案）**：小喜 旧会话账（M35 时代错误 mem 调用历史）在某
+些 tool 续轮触发 brain 400/1214（messages 参数非法，母体路径复验正常
+）——`main.jsonl → main.jsonl.bak-20260908` 挪开后同轮全通。属陈旧账
+卡路，非 v4③ 回归；400 与续轮形状的因果关系未深挖（挪账即愈，立案
+不查）。
+
+待真人眼验（并 v4② 三条）：说话逐字打出、点名分身执行、灭屏唤醒回
+光标面。暂不提���（#246 全树+v4 等用户发话）；dev-push 随 bake #20 折叠。
+
+### #246 v4④——结果管线：brain 文本 → 引擎截图 → result.img 整屏（2026-09-08）
+
+**代码**：新 `voice/src/render.rs`——Chat 臂进臂快照世代 → reply 已
+set_line 上脸（文本永远先是一等结果）→ 后台线程 markdown-lite（#/##/###/
+**粗体**/`code`/- 列表/| 表格含分隔线跳过；先 HTML 转义再内联替换）→ 磷光
+HTML（三钉烧死：`html,body{background:#000}`、`min-height:2340px`（引擎丢
+vh）、viewport width=1080）→ base64 data: URL → 引擎 REST
+POST /session/create{url,1080,2340,ttl 60} → POST /session/:id/screenshot
+（PNG）→ close 尽力 → tmp+rename /run/aginx-voice/result.img →
+face{result:true}。term 侧 result.img 轮询 mtime（同 eye.jpg 先例）解码
+整屏上帧；magic 嗅探 PNG/JPEG（.img 后缀因内容是 PNG——引擎「Always png
+for now」）。img crate 加 decode_png_scaled（png 0.17 EXPAND；
+next_frame 返回 OutputInfo，buffer_size 取实写量）。降级一等公民：引擎
+缺/拒/超时只 eprintln，文本就是结果，环不断。
+
+**引擎换装（共享状态变更）**：在役引擎原为 M9 裁 feature 版
+（5561e628）——aginxbrowser 全部栅格路径（REST screenshot、CDP
+captureScreenshot/startScreencast）都在 `screenshot` feature 后面，
+无 feature 构建**静默 no-op**（startScreencast 回 {} 不出帧）→ v4④ 换
+装 P0 期带 feature 构建 4b7b6132（aginxbrowser-main 3fd39d8
+--features screenshot）至 /var/bin/aginxbrowser，旧件备份
+/var/bin/aginxbrowser.bak-5561e628（回退=一 mv+单元重启）。⚠️ bake #20
+必须折入此引擎，否则回退无帧。REST 形状（在役实测）：创建走
+/session/create（非 /session）；screenshot 回 image_base64 PNG。
+
+**一次性进程三修（都在收据阶梯里抓的）**：
+1. `--inject/--script` 退出带走后台渲染线程（静默无帧）→ INFLIGHT
+   计数 + wait_all(20s)；计数必须父线程先加再 spawn（线程内加有调度
+   竞态，wait_all 见 0 直接放行）。
+2. ureq 3 String body 是 text/plain → 引擎 415；不拉 json feature，
+   显式 `Content-Type: application/json` 头。
+3. `timeout_recv_body` 不覆盖响应头阶段——引擎 STOP 挂起时请求吊死
+   到 wait_all 预算；补 `timeout_recv_response(10s)`。
+
+**世代护栏两修**：世代快照原在 spawn 时取——brain 慢问句 #1 回来时
+#2 的 bump 已落，#1 取到与 #2 相同世代双双过闸（旧结果盖新对话）；
+改进 Chat 臂即快照、传参进 spawn，brain 等多久都不串。--script 逐行
+bump。设备收据（确定性编舞：render 在飞时 STOP 引擎吊半空 → inject
+词表快答 bump → CONT）：旧渲染**未发布**（result.img mtime 不变、
+face result:false），挂死超时走 fallback 不盖新对话。
+
+**设备收据**（inject，VOICED_FRONT=/usr/bin/aginx HOME=/home）：
+- 全环：inject 问天气 → transcript 上脸 → say（brain 答上脸）→
+  `result up (N bytes)` → result.img PNG magic 89504e47 →
+  face result:true → adb pull 回 host 眼验：黑底磷光、绿标题、白正文、
+  表格绿框、粗体齐，1080×2340 满幅。北京/上海两帧内容正确轮替。
+- 引擎停机降级：STOP 引擎 → inject → say 上脸、result:false、
+  `render fallback: /session/create: timeout: receive response`、
+  不炸；CONT 后引擎健康（/json/version 通）。
+- 重启持久：真重启（m42c C 段）后三 sha 在役对齐（voice 210a3b40 /
+  engine 4b7b6132 / term 1857d6c6），全链复跑 result up + result:true。
+- host：voice 46/46（render 5 测：三钉/标题粗体列表/表格分隔线/转义/
+  段落）、img 8/8（PNG 4 测）、term 17/17。
+- m42c **21/21**（真重启 C 段含）。
+
+待真人眼验（并 v4③ 两条）：HTML 结果整屏观感、再说话回光标面。
+**bake #20 折叠清单 +1：带 screenshot feature 的引擎**（/var/bin/
+aginxbrowser 4b7b6132；不折则烤机回退无帧）。暂不提交（#246 全树+v4
+等用户发话）。
+
+## 2026-09-08 — 开机剧情 v4⑤：bootcard 纯字标 + 顶部呼吸光标（同打字锚）+ 死代码清理（四件 dev-push，m42c 21/21）
+
+用户定稿（09-08）：「google logo后出现AginxOS，检测的那些都不要了，全部成功后显示一个
+呼吸光标就可以了」+ 追加「放在顶部，但是不要太顶，留出摄像头的位置」；第一版把待命
+光标放底部（90,2236），用户当场纠正「呼吸光标在顶部啊，怎么放在底部了」——定稿
+**光标=文本插入点，无文本时就停在打字锚呼吸**，底部版作废。
+
+**三件上机 dev-push（sha 双端合）**：bootcard **82cf68b5**（/bin，落位等重启）、
+term **73a229a3**、voice **1841e69f**（/usr/bin，kill -9 by pid 467/520 → supervisor
+重生 19843/19849，readlink /proc/$pid/exe 真身全对）。m42c 钉死面零破坏：
+face JSON 新形状 `{"state":"idle","eye":false,"result":false,"hint":"按住音量下说话 · 音量+对码"}`
+（listening/busy 退役，state/hint 留——:98/:101 断言仍钉中）。
+
+**重启收据**（bootcard v4⑤ 首靴，kmsg）：32.85s no card0 → **35.23s panel up**（纯
+字标，检测行代码已不在二进制——host PPM 证全屏唯一墨迹 x 273-804 / y 1053-1155 居中
+MGREEN，旧检测行/页脚区全 BG）→ 73.31s net verdict holding 3s → 76.01s exiting →
+76.90s term relatch，**黑拍 0.89s**。boot.state：done ok / wifi ok Legrand AP /
+dhcp ok 192.168.0.166 / internet ok www.baidu.com。
+
+**呼吸光标 + 顶部锚**（term）：待命光标 16 级 × 125ms 三角呼吸（L0=0x00005917 /
+L8=0x0000AB2C / L16=MGREEN，周期 4s，首帧全亮），**停在顶部打字锚 (90,187) 25×40**
+（=下一条 transcript 的起笔行；首版底部 (90,2236) 已被用户纠正作废）；transcript
+打字锚 y=h*8/100=187（前摄 punch-hole 底缘≈110 留 77px），16 汉字/行换行，打字中
+光标实心 MGREEN，打完在文末行尾呼吸。host PPM 三帧像素级对版 + inject 你好上机，
+reply 上脸正常。
+
+**性能 tripwire**：`/var/aginx-term.log` 最新会话 slow present = **0**——呼吸把 idle
+重绘提到 8fps 不触 25ms 警戒线，125ms 档保住（250ms 降档预案不用）。
+
+**死代码清理**（本轮主角「代码太乱」）：term 删 /run/aginx-term.up 写、/run/
+aginx-term.inject 监视+排空、evdev_key()、KeyGeom::cell_w；voice 删 Out::Show（变体
++8 构造点+run_outs no-op 臂）、FaceDoc listening/busy、ASR 失败兜底 Show 循环改直写；
+`Vm::lines()` `#[allow(dead_code)]`→`#[cfg(test)]`（:720/:753/:1044 密钥卫生断言保
+全）；bootcard（老仓）删 render_progress/mark_color/mark_text/latest_ev/ROW_SCALE/
+C_WHITE·C_FAIL·C_PEND·C_DIM/load_state_or_demo/--ppm-seq，--ppm 简化纯字标帧（无参
+statefile），退出梯+DRM 骨架+stderr 诊断零改动；build-rootfs.sh 注释同步。
+
+**host 门**：term 17/17（呼吸几何+档位金测重写钉 0x00005917/0x0000AB2C/MGREEN）、
+voice 46/46、check.sh all green。m42c **21/21**（C 段真重启=第二靴同验新 bootcard）。
+
+**光标挪顶追加收据**（同日，用户纠正后）：term 金测改名
+`prompt_face_idle_breathes_at_top_anchor`（(95,190)/(114,226)==MGREEN、(95,2241)
+==BG、三档色值钉不变）；musl 重编 dev-push，term **062e1e03**（/usr/bin，kill -9
+pid 459 → supervisor 重生 2624，readlink 真身对）；host PPM 复验 idle 光标框
+(95,190)/(114,226) 全亮、暗档 0x00005917、底部/摄像头区全 BG；新会话 slow present
+= **0**。bootcard/voice 82cf68b5/1841e69f 收据不变。
+
+零提交（#246 全树+v4⑤ 等用户发话）。bake #20 折叠清单不变（screenshot 引擎+
+term/voice+AGINX_TERM_INJECT 清理）。
+
+## 2026-09-08 — aginxbrowser v0.2.10 官方 musl 资产换装失败（启动即 SIGSEGV，已回滚自建 4b7b6132）
+
+用户要求结果页引擎换用官方 release 资产（不自编译）。下载 v0.2.10
+`aarch64-unknown-linux-musl-screenshot`（sha 双端合 1a70bd5c…）→ /var/bin 换装 →
+**启动即 SIGSEGV**：裸跑 rc=139 零输出（正常应先打 listening 行），aginx-svcd 下
+`5 exits in breaker window, last exit Some(-11)` 熔断 failed。分诊：**no-feature
+官方资产同样秒崩**（rc=139）��� 非 screenshot 栈问题；官方 darwin/aarch64 资产在本
+Mac 正常秒起 → 代码本体没问题；自建 3fd39d8 --features screenshot（cargo zigbuild，
+4b7b6132）同机同环境正常 → 收敛到官方 release workflow 的 linux-musl 交叉构建。
+设备内核不���用户态 segfault（printk 7 4 1 7）+ 二进制 stripped，无 PC 偏移可采。
+
+**回滚与复验**：/var/bin/aginxbrowser 恢复 4b7b6132（.bak-4b7b6132 保留），svc
+start 后 pid 5132 绑 :8089；adb forward REST 冒烟：/session/create + /session/
+screenshot 返回合法 PNG（30KB）。v4④ 结果管线无损。
+
+**诊断期间两次自伤已纠**：① 后台诊断任务被宿主 TaskStop 杀时，设备侧孤儿 shell+老
+引擎仍持 :8089，导致回滚后 svc 重启连吃 `Address in use (os error 98)` ×5——按 pid
+清孤儿后恢复；② Mac 侧用 pkill -x 清测试实例，可能误停了其他会话的本地 aginxbrowser
+（:8098 日志 08:29 活跃）——该工具按需重建，风险低，已向用户交代。教训：清理进程
+一律记 pid 杀，不用 pkill/TaskStop 一把梭。
+
+反馈文档已写：`~/Documents/aginxbrowser-feedback-20260908.md`（第 3 期：musl 资产
+segfault 证据+对照表+CI smoke 要求；09-06 期 12 条回执：expires_in_secs/click_xy/
+drag/input 事件/console 过滤/clone 已落地）。**换装挂起等修复资产**；svg 五场景+
+screencast 复验随修复后一起补。
+
+## 2026-09-08 — aginxbrowser v0.2.11 复测验收全过（官方资产在役）
+
+反馈文档第 3 期回信：真因=build.rs 在 x86_64 runner 上把 bootstrap.js 编成
+V8 snapshot 埋进 aarch64 二进制（snapshot 架构相关→V8 初始化即崩、main 之前、
+零输出）；修法=musl job 迁 ubuntu-24.04-arm + CI smoke（15s 内须见 listening 行）
++ 未 strip 的 -debug 孪生资产。v0.2.11 已发。
+
+**验收四条全过**：screenshot 资产 sha 双端合 `16c9aeb4…ea2edf`；①裸跑启动即打
+listening 行、进程常驻（观察窗 2s，未采亚秒精度）；②svc 托管 `state ready`、
+`exits 0 in breaker window` 不熔断；③REST create→`s_1`+`expires_in_secs:479`→
+screenshot 合法 PNG（IHDR 实测 1080×2340）；④换装 `/var/bin/aginxbrowser`=v0.2.11
+（pid 31804、readlink 真身、:8089 LISTEN），自建 4b7b6132 退 `.bak-4b7b6132`
+（与 .bak-5561e628 同留）。release notes「devices no longer need to self-build」
+自本轮起成立。
+
+**SVG 冒烟（非正式）**：inline SVG data URL（白底+红圆 r150+绿方 240×240+文本）→
+screenshot→逐像素解 PNG：红 (255,0,0)/绿 (0,128,0)/白 (255,255,255) 三采样点全对
+——v0.2.10 的 SVG v1 修复在设备首批活体信号（自建 4b7b6132 上 SVG 是坏的）。
+SVG 五场景+screencast 属性变更复验按反馈文档约定**单独约时间**再跑正式收据。
+
+设备恢复日常态：voice 489 / term 2624 / 引擎 31804 全在役；adb forward 已摘。
+-debug 资产（0782a14a…）留 host /tmp/abx-v0211/ 备诊断，未上设备。复测回执已
+追加进 `~/Documents/aginxbrowser-feedback-20260908.md`（用户带回给 aginxbrowser）。
+
+## 2026-09-08 — v4⑥S2 设备预检：在役 v0.2.11 CDP/screencast 全闸通过（q60 定档）
+
+产品工程预检（≠ 反馈文档的 SVG 五场景+screencast 正式复验，后者仍单约）。P0 数字
+出自自建 3fd39d8，接线前先对官方资产验同一组线缆。纯探针零部署：/data/local/tmp/
+abx-preflight.py + abx-pf2.py（/var/bin/python3 musl 3.12），引擎 pid 31804 不动。
+
+**四闸全过**：① ~150KB data:URL（142KB HTML/393KB b64，200 节 CJK+围栏+表格，
+scrollHeight 100056px）navigate 397ms errorText 空；② ack 即时序成立——连滚后
+再滚一帧内续流（ack_alive=1）；③ 静页零帧——心跳 evaluate("0")@0.3s 下 5s/3s
+两窗均 0 帧（damage-gated 成立）；④ 磷光渲染眼验——黑底绿白/围栏面板/表格/转义
+（&amp; &lt; 不泄露）全部正确，深滚位（第197-200节）取帧正确。
+
+**fps 口径澄清**：P0 的 148ms/6.2fps 是轻页+20Hz 连滚吞吐口径。本次同口径实测
+17KB 现实页 **3.6fps@q60**（284ms/帧）/ 3.2fps@q80；142KB 怪物页 1.7fps。单滚
+延迟 ~280-300ms（首样本 18-33ms=缓存光栅）。设备本机 loopback 与 Mac forward
+数字相同 → USB 不是变量；cpu7 跑时 2.0GHz → 调频不是变量；**成本大头=视口带
+软件光栅（墨水密度）**。q60→q80 帧字节 347KB→489KB（-30%），36px 字缘眼验无差
+→ **browser.rs startScreencast 定档 q60**（term 侧解码同样受益）。
+
+引擎 RSS：40.8MB 基线 → 52.4MB（三场 attach/closeTarget 全配对的完整会话后）
+——bounded，与 P0 的滞留 target 爬坡（52→124-142MB）形态不同。host 测试脚手架
+/tmp/abx-preflight.py、/tmp/abx-pf2.py、/tmp/vstream.py 留 S3 收据复用；设备侧
+/data/local/tmp/abx-pf*.jpg 已看毕。host：cargo test -p aginx-term 30/30（teardown
+测试修复=flush_out_blocking 返 bool，真冲刷才清 out），check.sh all green。
+
+## 2026-09-08 — v4⑥S3 term 泵接线部署：活体结果面全链收据（f4628f59 在役）
+
+S3 九处编辑全落（edge 双沿+泵+触摸 Drag 滚动+blit_result_direct 直写 back_buf+
+poll 集扩 WS fd+can_present 门），dev-push 双路径部署：`/usr/bin/aginx-term.new`
+→ 双端 sha256 → readlink /proc/$pid/exe 验真身 → mv → chmod 755（push 落地 0600!）
+→ kill -9 按 pid → svcd(455) 重生。**aginx-term f4628f59 pid 8946 在役，全程不重启。**
+
+**活体链路**（shell 手写 result.html 1978B 绕开 voice）：face{result:true} 上升沿 →
+term log `browser live`（独立 CDP：createTarget→attach{flatten}→metrics{1080,2340,
+dsf1,mobile}→navigate→startScreencast q60）→ 注入 evdev 拖滚（protocol B event2，
+24B input_event，TRACKING_ID 7→-1）→ utime 48 ticks/4s ≈ 6-7 帧 JPEG 解码
+（~70ms/帧）=泵+ack 环活性实证；face{result:false} 下降沿 → `browser teardown`
+（session take→browser 域 closeTarget→flush→关 sock）。帧尺寸判别：同参数探针
+（own-connection createTarget→metrics→navigate→screencast q60→SOF0 解析）帧
+=1080×2340 面板原生 → 直写 blit 路径成立（无 canvas 兜底）。**双路径过渡**：f4628f59
+带陈旧 face{result:true} 开机且无 result.html → 干净落 result.img PNG 老路（活体
+后仍作部署序自由垫）。
+
+**口径三注**：①「slow present=0」仅指静置活体面——滚动中 present 走 vblank 等待
+~25ms 警告行属预期非病；②活体上屏真人眼验归 #246/#198；③CPU 账：活体静置窗
+74 ticks/4s（screencast+present），亮屏光标面闲置 41 ticks/4s（v4⑤ 呼吸/眨眼节奏
+既有，非 v4⑥ 新增——teardown 后 live=None 泵零动作），灭屏闲置 **0 ticks/4s**（本
+次实测，屏已灭 bl_power=4）。
+
+**引擎 RSS 有界（含 v0.2.11 引擎新档案三则）**：term 全环前后 99252→86924 kB 净
+降（前值含前任 term 15848 遗留 target——其 teardown 发出 ~1s 后即被 kill -9 换装，
+closeTarget 未必送达）；teardown 后 6s 零流量窗 RSS 平 86924。①跨连接
+`Target.closeTarget` 有效（browser 域，success:true 指定 id 消失）——registry 隔离
+只挡 attach(-32601) 不挡 close；②**/json/list 恒显一条 type:page about:blank 且
+UUID 亚秒级自转**——零客户端 6 连采 6 个新 id、6s 零流量窗照样换 id，但引擎闲置
+CPU 仅 2 ticks/4s(0.5%)、RSS 平 → 引擎自持占位目标非泄漏非 term 所留，「targets
+归零」在此引擎永不可得，收据一律改读 RSS 平+指定 id 消失；③ /json/list title/url
+在 data: 导航后恒 about:blank → 只可作 target 计数器。52.4MB(S2) → 86.9MB(今)
+= 引擎全生命积累（v4④ REST 截图+S2 三会话+kill 遗留），非 v4⑥ 环增；新引擎单
+环数归 S5 真链收据（重启后顺测）。
+
+工程债三笔已还：旧仓 build-phone.sh 会编旧 workspace（062e1e03=陈 binary 陷阱，
+next 仓一律 `cargo zigbuild -p aginx-term --release --target
+aarch64-unknown-linux-musl`）；设备 busybox **wget 段错误**，HTTP/JSON 一律
+/var/bin/python3；fail() 补 best-effort closeTarget（病因常见时 WS 仍活，滞留
+target 是 RSS 爬坡根因）。设备态：term 8946(f4628f59)/voice 489(v4⑤ 旧版待 S4
+翻转)/引擎 31804，face result:false 光标面，灭屏。**零提交。**
+
+## 2026-09-08 — v4⑥S4 voice 翻转部署：纯内容生产者 + 尾翻旗雷修全收据（e006196b 在役）
+
+**代码翻转**：render.rs 重写为纯内容生产者——`stage_reply(state,markdown)`
+（markdown_to_html 同步毫秒级写 /run/aginx-voice/result.html + 暂存 PENDING）+
+`flush_pending()`（run_outs 尾部唯一翻旗点）；ENGINE REST 面/GEN/INFLIGHT/
+bump_generation/wait_all/spawn/post_json/base64 全删（base64 移交 term，
+workspace 净零）；face.rs RESULT_IMG 退役。main.rs：Chat 臂 set_line 后
+stage_reply，尾部 followups 后 flush_pending——v4④ 靠后台线程晚翻旗侥幸避开
+尾部 face::write 清旗，同步化必踩，此序修正为一等。49/49 voice 测试、check.sh
+全绿、0 警告 musl 构建，标准换装序 489→21577（e006196b）。签名偏差记档：计划
+literal 是 `stage_reply(state,question,reply)`，实现弃 question 参数（文本已
+set_line，问题不再进结果页）。
+
+**收据四条**（inject 全带 `VOICED_FRONT=/usr/bin/aginx HOME=/home`——首轮
+exit 1 根因即缺 HOME：`aginx agent send` shell 直跑需 HOME=/home，daemon 有
+env_file 不受影响；HOME 补上后真脑往返 exit=0）：
+
+1. **雷修实证**：inject（一次性进程）退出后 face result:true **持续成立**
+   （PENDING 暂存→尾部 flush 翻旗，face::write 不再清旗），term live 与
+   fallback 页保持——世代护栏退役后失效机制=旗子本身（任何新动作 face 假沿
+   自拆），实锤。
+2. **N+1 串行重发布**：活体在役时再 inject → 边缘 `271 teardown → 275 live`
+   （开场 face::write 假沿拆旧面，尾翻旗立新面）；272-274 为活体泵
+   slow present 26-32ms 计时（present 预算超 16ms 的正常打点，S3 口径
+   「slow present=0=仅灭屏闲时」不冲突），无 fail 无 flap。
+3. **围栏真内容**：「用python写一个快速排序」真脑回复两版快排（face line 全文
+   ~1.8KB），result.html 2650B 含 **2 个 `<pre><code>`**——S1 围栏金测的
+   设备侧闭环，脑回什么形状就渲什么形状。
+4. **引擎停→fail 路径→复活**：kill -9 引擎（RSS 147132 活体在途）→ term
+   `browser fail: ws read/eof` 干净落文本面（face 文件 result:true 未损，
+   屏显=光标面+文本行）→ svcd 30s 巡检拉起新 pid 14072（+35s 验
+   /json/version Chrome/122.0.6261.69 活）→ 再 inject → 边缘 `301 fail →
+   304 live`：term 对新引擎**重取 /json/version 重拨重挂**，全程序零手救。
+
+**RSS 账（S3 档案补完）**：活体泵在途 147-155MB（screencast JPEG 帧缓冲），
+teardown 后回落 35584 vs 新引擎基线 34164（+1.4MB）——爬坡全是泵缓冲，拆台即
+还；targets 恒 1（引擎占位，S3 三则档案照旧）。设备态：term 8946(f4628f59)/
+voice 21577(e006196b)/引擎 14072(svcd 拉起)，face result:false 光标面，灭屏。
+**零提交，待 S5 term 清理 + 真链收据。**
+
+## 2026-09-08 — v4⑥S5 term 清理部署：img 链退役、单真源活体面（46165eae 在役）
+
+**清理**：VOICE_RESULT/result.img 常量、VoiceView.result_mtime/result_img、
+poll() 的 mtime 强制重读块、poll_result()、Render::result_view、
+render_prompt 的 img 分支（化简为纯光标/打字面）、AGINX_TERM_RESULT_DEMO
+ppm 块、result_view_fills_panel 测试——v4④ PNG 链全数退役，29/29 term 测试
+（30−1）、check.sh 全绿、0 警告 musl 构建，标准换装序 8946→15424（46165eae）。
+行为重定义一处：泵出非 1080×2340 帧现在直接丢弃（原塞 img 缓存做兜底渲染）。
+
+**设备收据**：①**缺页护栏**：result.html 删除 + face result:true → 零新
+browser 边缘、光标面保持（原双路径会掉 PNG 兜底；现在缺页=不上屏，语义更
+硬）；②**新 term 全链**：inject（c helloworld）→ `314 live`，页 1458B 含
+围栏 → face false → `318 teardown` 回光标面；③**m42c.sh 21/21**（含 C 段
+真重启收据）；④**重启在役**：套件真重启后 term 457(46165eae)/voice
+489(e006196b)/引擎 500 全自动回位，dev-push binary 过重启（/usr/bin 在
+userdata），face 光标面。
+
+设备态：上述 fresh boot 三件套，灭屏待命。**v4⑥ S1–S5 全部完结；真链 PTT
+（真人按住音量下说话→文本先上→活体接管→拖滚→再说话回光标）归 #198 真人
+收据；#246 全树零提交等用户发话。**
+
+## 2026-09-08 — v4⑥ 补雷二修：daemon 真路径双踩旗 + OTA evdev 验证法（35a3040 在役）
+
+用户两次真人报告「没有变成html输出啊」「还是没有出现html的结果啊」——S4/S5
+的 inject 收据测错了路径（--inject 一次性进程没有 daemon 主循环的尾部写）。
+
+**雷一（heard 块尾部）**：main.rs heard 块出口（原 286 行）无条件
+`face::write(vm,false)` 在 run_outs(272) 返回后立刻执行——run_outs 尾部
+flush_pending 刚翻 result:true，毫秒内被写回 false，term 60ms 轮询永远
+看不见上升沿。收据吻合：result.html 4042B 落盘、回复文字上光标面、
+face result:false、term 重启后零浏览器边缘。修=删除该行（失效归 PTT
+down 231 行等用户动作位）。
+
+**雷二（run_outs 尾部）**：修雷一后 OTA 实测 term「live 几秒后必
+teardown」——run_outs 尾部例行 `face::write(vm,eye)`（原 554 行）对空
+pending 的再入也清旗：35s brain 等待的巨 Tick 喂出协议超时 outs → 二次
+run_outs → 尾写踩掉站立页。修=face.rs 增 RESULT_STANDING 位（唯一置位点
+write_doc(result=true)，任何 result=false 落盘即清），尾写加
+`if !face::result_standing()` 门——**结果页不超时=09-07 屏三态终稿产品线**。
+
+**OTA evdev 验证法（可复用，全环真人路径）**：
+1. `/var/bin/aginx-tts "南京今天天气怎么样" /tmp/t.wav`（44.1k mono）→
+   python3 剥头成 raw；
+2. `sendevent /dev/input/event1 1 114 1`（音量下按下）→ sleep 0.8 →
+   `snd-play /dev/snd/pcmC0D0p /tmp/t.raw 44100 1 100`（扬声器放声麦克风拾）
+   → `sendevent ... 114 0`（松开）；
+3. capture→本地 ASR→transcript 上脸→roster miss 落母体→brain→stage_reply
+   →flush→term CDP 活体，全链自动走完。
+转写经空气偶有垃圾（"到查在60。"）不影响验证——垃圾也走完整 Chat 链。
+
+收据：OTA 全环后 term `browser live` + present 序列；**35s 观察窗零
+teardown**（此前 live 几秒必倒）；face result:true 站立；引擎日志
+execute_scripts 与 result.html mtime 同秒。49/49 + check.sh 绿。voice
+35a3040 在役（svcd 拉起 pid 21221，std 二雷前 0cb996ab）。term 引擎侧
+零改动（46165eae 不变）。#246 全树继续零提交。
+
+## 2026-09-08 D8③ repair 落账 + 回合号贯通（server/runtime 上机收据）
+
+改动面：agi 帧加回合号（Request.turn: u64 serde default；Done.turn:
+Option + at_turn，skip-if-none）——不加新帧型，request 开轮 done 关轮，
+只是编号。server spawn 前先补账（ledger::repair：悬空 tool_call 补合成
+tool_result、未收口轮补 done(interrupted)，尾追加不重写历史）；turn 号
+= 账内 request 计数+1，旧账无字段读 0 自动续号；relay 收到 done 时
+server 统一盖章。runtime 内存 repair 降级为防线保留，并修了一处潜伏
+序错：悬空调用后跟新 request 时合成 tool_result 排到 assistant 之前
+（OpenAI 非法序，严格 brain 拒单形状），两臂换序 + 回归测锁定。
+
+部署：aginx-server/aginx-runtime musl 重编（719791bd/70b1be8d），双端
+sha256 过闸，.new→mv→chmod，server kill-by-pid 480→agsvc 拉起 3750。
+
+设备收据（真 brain 全链）：
+1. **旧账续号**：小喜 162 行老账（31 轮无 turn 字段）原样未动，send 后
+   新 request/done 自动 `turn:32`；再一轮工具调用（sys-status 报电量）
+   收口 `turn:33`。
+2. **残骸补账**：scratch 化身「账验」手植 `request(turn:3)+tool_call r9`
+   无收口 → send 后账上先落 `tool_result r9 ok:false "(会话中断，server
+   补账…)"` + `done interrupted turn:3`，新轮 `turn:4`；server 日志
+   `ledger: repaired 2 frame(s) before turn 4 (1 dangling tool_call,
+   open_turn=Some(3))`。补过的 28 行账重放合法（下一轮 brain 正常收口
+   turn:5）——该轮 12 连工具后一次 brain 400(code 1214) 经对照判定为
+   长工具循环偶发（干净账同法复测正常），与残骸重放无关。
+3. 收据后光标还母体、scratch 化身删除。
+
+host：agi/server/runtime 三 crate 测试全绿（新增 9 测：legacy 兼容、
+repair 幂等、深残骸补账、续号、序错回归），check.sh 绿。
+#246 全树零提交不变。
+
+## 2026-09-08 ①a term 读账重建结果页（崩溃恢复，DSH① 投影面走账·窄版）
+
+背景：DSH-STUDY 优化候选①「投影面走账」——v4⑥ 结果页是 voice 直写
+result.html 的旁路文件，显示不来自真源。①a 为其窄版先行（不碰排版链，
+不依赖 aginxbrowser /render）：结果旗立着但 result.html 没了（voice 死在
+rename 前、/run 被清、term 重启撞上文件丢失）时，term 从会话账 fold 出
+最后一个 done(ok) 文本重建降级页。①b（引擎 /render 落地后退役旁路）另计。
+
+变更（全在 aginx-term）：
+- `main.rs` 新增账本恢复段：workspaces_root（AGINX_HOME 覆写，否则直钉
+  /home/.aginx——term 由 init.d 拉起、环境 HOME=/，按 HOME 推导会落
+  /.aginx 空处，设备实测钉死）；fold_last_done_ok（账尾最后一个非空
+  done(ok)，坏行跳过）；degraded_shell（三钉+磷光可读性地板，原文直进
+  pre，**不做 markdown 化**——排版归 aginxbrowser）；recover_result_html
+  （多化身按账 mtime 从新到旧试，等值护栏=fold 文本必须与 face.line 全同
+  ——母体直答不走账（v0 无账），对不上就放弃恢复；即便命中旧账展示字节
+  也与 line 全同，最坏出处歧义无内容错）。
+- result 上升沿：result.html 缺/空时走恢复；稳态文件接力不变。
+- Cargo.toml +agi 依赖（帧型单一定义，纯 serde）。
+- host 测试 +3（fold 取末个非空 ok、护栏+原文明文+转义、mtime 择新回退
+  旧账）；term 35 测全绿，check.sh 绿。
+
+部署：aginx-term e46b4560（.new 同文件系统→双端 sha256→readlink 验真身
+→mv→kill by pid→init.d 自拉起）。voice/server/引擎零触碰。
+
+收据（全走手写 face+touch 绕开 voice，引擎 v0.2.11 在役）：
+1. **主收据**：rm result.html + face{result:true, line=小喜账尾 turn:33
+   done 文本} → term 日志 `result.html missing, rebuilt from ledger` →
+   `browser live` → 帧流 113140b（降级页；对照旧稳态页 225900b）。term
+   重启/崩溃后结果页可从账重建。
+2. **等值护栏**：face line 换成不在账上的文本 → 静默放弃（无 rebuild 行、
+   无新 target）——母体直答形状不误投影。
+3. **稳态回归**：result.html 在 + 旗假→真 → 走文件路径 `browser live`
+   （帧 102716b），无 rebuild 行——旁路恢复不碰正路。
+4. 附带：13:35 term 重启时站立结果+文件俱在 → 既有重启恢复路径复验。
+
+测试工艺坑（收据过程实录）：adb push 保留源文件 mtime（整秒粒度），
+同一脚本一次写出的 face1a/face1b 推上去 mtime 相同 → term 的 mtime 门控
+poll 永不重读第二份（现象=推脸后完全静默）。voice 真写者是 rename+当前
+时间，永新鲜，产品无此问题；合成测试须 push 后补 `touch /run/aginx-voice/face`。
+
+收尾：face 回 idle（result:false）、合成 result.html 删、teardown 落账、
+Mac 侧临时文件清。result.img 为 00:19 旧残留（v4④ 退役路径），先例存在
+未动。#246 全树零提交不变。
+
+## D9② steer 点亮：运行中插入走工具步边界（2026-09-08）
+
+dsh 词表落地：运行中插入 = steer（下一工具步边界处理）；空闲/撞上收口
+= 下一回合。runtime 侧（agent_loop 工具等待循环收 Frame::Steer、replay
+折 user 轮）与 agi 帧定义早已在位，本次点亮的是 server 进线三路。
+
+实现（server 04ebb072；runtime/term/voice 零触碰）：
+- front.rs：FrontDesk 添 SteerBox（一把锁：running 标记+队列；
+  begin/end_turn 只由持轮线程调——入队成功必有 Delivered/TurnEnded
+  善后，不存在卡死的发送方）。
+- ops.rs op_send 三路：try_turn 空闲即跑；目标=运行中化身 → push_steer
+  入队等回执（Delivered→steered 信封即回；TurnEnded→重分类抢锁当下一
+  回合）；其余照旧排队。resolve_send 提前到抢锁前（光标自带锁，裁决
+  语义=到达时）。
+- turn.rs relay：仅 ToolCall 臂、tool_result 落管之后 drain（管序=账序，
+  tool_result 先 steer 后——runtime 收齐结果再把 steer 折成 user 轮，
+  OpenAI 合法形）；先记账再进管，记账失败该笔 TurnEnded 不断流。
+- 已知 v0 窗口：runtime 已在最终 brain 调用里时 steer 读不到——账上
+  steer 落在 done 前，下一轮重放折成 user 轮（迟到应答，不丢话）。
+- host 测试 +3：steer_box_lifecycle / steer_lands_at_tool_step_boundary
+  （账序 request→tc→tr→steer→done）/ steer_missed_turn_becomes_next_turn
+  （无 steer 帧、两轮各自收口）。
+
+部署（踩 /usr/bin 陷阱实录）：push 到 /usr/bin 后重启，readlink
+/proc/$pid/exe = **/usr/libexec/aginx/aginx-server**——svc.d/
+aginx-server.toml 的 cmd 是 libexec 路径，/usr/bin 是旁路。挪到真身位
+再 kill by pid（agsvc 拉活），exe+sha256 双复验 04ebb072。
+
+收据（真 brain；小喜账 168 行起步，base turn:33）：
+1. **steer 主收据**：A=三城天气（六工具步）跑中，t=12s 并行 send
+   「顺便把北京的天气也查一下，加进对比」→ 回执**「（已插入运行中的
+   回合）」立即返回**（不等轮完）。账序 turn:36：…tc/tr(上海)…
+   tc/tr(广州)→ steer 帧 → tc/tr(成都) → tc/tr(**北京——模型见 steer
+   后主动加查**) → … done(ok，四城合体终稿)。运行中轮的输出被插入语
+   实际改写。
+2. **重分类收据**（先一次 8s 窗口错过）：单工具轮尾部到达的插入语 →
+   end_turn 冲 TurnEnded → 排队成独立 turn:35，不丢话、账上无 steer 帧。
+3. **回归**：status / 普通 send / 含 steer 帧账本冷启重放（后续轮正常
+   fold）全通；check.sh 绿（server 25 测）。
+
+语音不能 steer 是 v0 已知边界（voice 主循环在自己轮里阻塞于
+chat_front）；现役入口 = CLI/远端网关。#246 全树零提交不变。
