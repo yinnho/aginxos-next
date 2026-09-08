@@ -918,8 +918,8 @@ fn scan_qr() -> Result<Vec<String>, String> {
 /// RGB565（term 直读免解码，显示 ~12-15fps）；--jpeg-every-ms 500 把编码
 /// （0.125s/帧@预览宽，实测 2026-09-05——8fps 天花板的全部根因）摊薄成
 /// 慢车道副产物，只剩 QR 在读 eye.jpg（2Hz 限频正好对上）。--aspect 由
-/// [panel] 拼出 = 整屏（2026-09-05 用户收据「界面要做成全屏」），与 term 的
-/// launch::VIEWFINDER_ASPECT 钉在一起（那边 host 测试守着）——布局属性由
+/// [panel] 拼出 = 整屏（2026-09-05 用户收据「界面要做成全屏」），term 侧
+/// eye_box 同样出自 [panel]（launch.rs 测试读同一档案守着）——布局属性由
 /// 本粘合层显式注入，不共享 crate。AEC 状态由 cam-shot 落
 /// /run/aginx-cam/aec.state，下次开眼首帧即正常亮度。
 ///

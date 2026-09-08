@@ -12,8 +12,8 @@
 // main.rs with TextInputEvent — no second input path gets invented.
 //
 // Physical-key shape (inputd): evdev_key() maps a real keyboard's codes
-// to the same KeyEvents. Not wired — redfin's only physical keys
-// (power/volume on qpnp_pon) are device control, not text input.
+// to the same KeyEvents. Not wired — the first target's only physical
+// keys (power/volume on its pon node) are device control, not text input.
 
 /// Terminal-layer byte encoding. `app_cursor` is the child's DECCKM state
 /// (?1): SS3 arrows when set, CSI arrows otherwise.

@@ -28,3 +28,6 @@ serde_json = { workspace = true }
 # v4⑥: 活体结果面 —— WS 帧负载与 data:URL 的 base64 编解码（唯一新依赖，
 # voice 同步 shed 同一枚，workspace 净零；WS 协议本身手写在 browser.rs）
 base64 = "0.22"
+# D14: 机型事实（面板尺寸/输入节点/分核）唯一合法来源 devices/<codename>/
+# device.toml——voice 同款读法层（../hwd，纯 lib，host 测试可 from_path）。
+hwd = { path = "../hwd" }

@@ -19,13 +19,18 @@ description = "QR decode from a camera JPEG (M42b) — pure-Rust quircs + aginx-
 # ——设备的解码二进制必须用**第二次独立 zigbuild**
 # `-p aginx-qr --features aginx-qr/jpeg` 出（scripts/build-rootfs.sh 有断言）。
 default = ["jpeg"]
-decode = ["dep:quircs"]
+# decode 带 dep:hwd（D14：A55 自钉读 [affinity] ui_cores）。hwd 是 optional
+# ——若做普通依赖，aginx-voice 的 default-features=false 档会被织进
+# hwd+toml，破坏上面写明的「纯字符串零依赖」契约。
+decode = ["dep:quircs", "dep:hwd"]
 jpeg = ["decode", "dep:aginx-img"]
 
 [dependencies]
 # quircs：纯 Rust quirc 移植（自带 num-traits/num-derive/thiserror，均纯 Rust）
 quircs = { version = "0.10", optional = true }
 aginx-img = { path = "../img", optional = true }
+# D14: decode 档的自钉核列表（[affinity] ui_cores）——lib 档零依赖不受累
+hwd = { path = "../hwd", optional = true }
 
 # M47⑤t: A55 自钉（sched_setaffinity）——设备面专用，host 测试面不拉
 [target.'cfg(target_os = "linux")'.dependencies]
