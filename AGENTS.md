@@ -1,9 +1,11 @@
 # AginxOS — Agent Guide
 
-Second-generation AginxOS: the architecture constitution (D1–D13) built
+Second-generation AginxOS: the architecture constitution (D1–D14) built
 as a fresh workspace. Since N4 this repo owns the bake chain and the
-device: `scripts/build-rootfs.sh` produces the flashable image, and the
-running Pixel 5 (redfin) is this line's hardware.
+device: `DEVICE=<codename> ./scripts/build-rootfs.sh` bakes a machine's
+flashable image. First machine: Pixel 5 (`redfin`), the daily experiment
+unit; a second bring-up line (OnePlus 6, `enchilada`) exists to keep the
+platform honest — machines are data (D14), living in `devices/<codename>/`.
 
 - `~/Documents/aginxos` — first-generation line, **SEALED 2026-09-08**
   (zero commits; only exception: a disaster-rollback receipt — its
@@ -24,7 +26,8 @@ running Pixel 5 (redfin) is this line's hardware.
 (the mother, aginx), avatars are folders run by a single runtime engine,
 display is request semantics, the session log is the truth source,
 addressing is front-desk registration (进/住/切/退), externals are
-CLI-only (D12), and every command carries the aginx surname (D13).
+CLI-only (D12), every command carries the aginx surname (D13), and
+machines are data, not code (D14).
 **ARCH.md is LOCAL ONLY — never commit or push it** (same treatment as
 the old repo's ARCH/CARRIER/SYSTEM docs; `.gitignore` enforces it).
 
@@ -55,8 +58,15 @@ the old repo's ARCH/CARRIER/SYSTEM docs; `.gitignore` enforces it).
 ## Ground Rules
 
 - Host green before anything: `./scripts/check.sh` (cargo test over the
-  workspace + `aginx commands --check` registry lint) must pass before
+  workspace + per-device camera pixel-chain tests + the D14 machine-string
+  grep gate + `aginx commands --check` registry lint) must pass before
   every commit.
+- Machines are data (D14): platform crates (`crates/` + `rootfs/` +
+  `scripts/`) carry zero machine references; every machine fact lives in
+  `devices/<codename>/` and is read through `crates/hwd` — the single
+  legal source. Machine strings in crates are unconstitutional, there is
+  no default machine (a missing profile fails fast at boot), and device
+  dirs never import each other.
 - The avatar root is `~/.aginx/workspaces` on the device (unit sets
   `AGINX_HOME=/home/.aginx`); `AGINX_HOME` overrides it for host runs.
 - Naming law D13: `aginx` is the only bare command (the router); every
@@ -77,9 +87,10 @@ the old repo's ARCH/CARRIER/SYSTEM docs; `.gitignore` enforces it).
 Host builds/tests run on macOS and Linux with stable Rust (the aginx-svc
 daemon bin is Linux-only — check.sh runs its lib on darwin). The device
 target is `aarch64-unknown-linux-musl` via zig / cargo-zigbuild, fully
-static; `build-rootfs.sh` zigbuilds everything it needs. The four
-brain-facing C tools and /bin internals are zig cc musl statics built
-from the old repo's sources at bake.
+static; `build-rootfs.sh` zigbuilds everything it needs. The brain-facing
+C tools and /bin internals are zig cc musl statics built from the in-tree
+`rootfs/src/` sources (moved from the old repo at P1); the camera chain
+builds from `devices/<codename>/cam/` via `scripts/build-cam.sh`.
 
 ## Layout
 
@@ -90,6 +101,7 @@ from the old repo's sources at bake.
 | `crates/runtime` | `aginx-runtime` — fast-agi engine (avatar runner) |
 | `crates/agi` | fast-agi v0 frame types (both ends share) |
 | `crates/agio` | D1 output envelope |
+| `crates/hwd` | device profile reader — the single legal source of machine facts (D14) |
 | `crates/voice` | `aginx-voice` — the voice dialog daemon (voiced, M42 line) |
 | `crates/wizard` | `aginx-net-wizard` — first-boot Wi-Fi setup TUI |
 | `crates/term` | `aginx-term` — on-device terminal UI (aterm line) |
@@ -104,7 +116,8 @@ from the old repo's sources at bake.
 | `crates/gateway` | `aginx-gateway` — remote channel daemon: registers to relay.aginx.net, collapses external JSON-RPC onto the server's UDS front (ACP.md wire authority = ecosystem repo) |
 | `crates/testkit` | test helpers |
 | `rootfs/` | the image recipe — see `rootfs/README.md` (placement matrix, asset split) |
-| `scripts/build-rootfs.sh` | the bake: recipe + zigbuild + device assets (`.local/device/redfin`) → `out/rootfs.img` |
+| `devices/` | per-machine data, one dir per codename: `device.toml`, `modules.txt`, `bringup/`, `boot/` (pack line), `cam/` — add-a-machine checklist in `devices/README.md` |
+| `scripts/build-rootfs.sh` | the bake, `DEVICE=<codename>`: recipe + zigbuild + that machine's assets (`.local/device/<codename>`) → `out/rootfs.img` |
 | `scripts/accept/` | device acceptance suites (n4.sh switch gate, n5.sh absorption+remote gate, m42c.sh pairing gate) |
 | `shims/` | repo-local `aginx-*` command faces (host trial registry) |
 | `docs/ARCH.md` | the constitution (local only, gitignored) |
@@ -112,9 +125,14 @@ from the old repo's sources at bake.
 
 ## Device Safety
 
-One real device: Pixel 5 redfin, adb serial `aginxosredfin`, fastboot
-`13201FDD4001N8` (the neighboring Huawei `NAB0220B10025626` is NEVER
-touched). Before any destructive fastboot command, confirm the serial.
+Two phones on the bench. Pixel 5 redfin (adb serial `aginxosredfin`,
+fastboot `13201FDD4001N8`) is the experiment unit; OnePlus 6 enchilada
+(`b0d9f7fe`) is the second bring-up machine. The neighboring Huawei
+`NAB0220B10025626` and Redmi 7A (`c353ac919`) are NEVER touched. Before
+any destructive fastboot command, confirm the attached serial is the
+machine you meant — `devices/<codename>/boot/flash-<codename>.sh` gates
+this by the profile's serial; a hand-typed fastboot line must gate
+itself the same way.
 Ground truths inherited from the first-generation receipts (full history
 in the old repo's `docs/HARDWARE.md`):
 
@@ -123,9 +141,10 @@ in the old repo's `docs/HARDWARE.md`):
   (formerly /bin/reboot2). `aginx-reboot bootloader` lands in fastboot.
 - busybox `awk`/`netstat` segfault unconditionally — device scripts use
   sed/`set --` only.
-- Never rmmod on this kernel (panic). Old-repo restore points:
-  `boot/stock-boot.img`, `boot/stock-vendor_boot.img`; last-resort
-  recovery is the old repo's `.factory/` flash-all.
+- Never rmmod on this kernel (panic). Restore points:
+  `.local/device/redfin/stock/stock-boot.img` and
+  `stock-vendor_boot.img`; last-resort recovery is the old repo's
+  `.factory/` flash-all.
 - End every device session in a known state, logged in
   `docs/HARDWARE.md`. "Confirm on device" is not done until someone saw
   it; never promote an expected result to a recorded one.
