@@ -1099,7 +1099,7 @@ mod tests {
             "AGINX_DEVICE_TOML",
             concat!(
                 env!("CARGO_MANIFEST_DIR"),
-                "/../../devices/redfin/device.toml"
+                "/../../devices/redfin/device.toml" // D14-exempt: reads the real profile
             ),
         );
         assert_eq!(clamp_vol(0), 20);

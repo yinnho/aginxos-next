@@ -872,9 +872,9 @@ fn scan_qr() -> Result<Vec<String>, String> {
             .stdout(std::process::Stdio::null())
             .stderr(std::process::Stdio::null());
         if round == 4 {
-            // 末位兜底：imx363 慢模式 #2610（fll 2488 更长积分）+ 模拟增益
-            // ——黑底白码贴纸、夜间的最后一搏
-            cmd.args(["--slowrear", "--gain", "8"]);
+            // 末位兜底（机型参数 [quirks] qr_scan_args）：黑底白码贴纸、
+            // 夜间的最后一搏（本机是慢门模式+模拟增益档）
+            cmd.args(&hwd::load_or_exit().quirks.qr_scan_args);
         }
         let mut child = cmd
             .spawn()
@@ -916,32 +916,36 @@ fn scan_qr() -> Result<Vec<String>, String> {
 /// M47⑤ 眼取景常驻子进程：--forever cam-shot，全屏竖帧原子发布（tmp+rename
 /// 由 cam-shot 自己做）。**双产物**（M47⑤c）：--raw-out eye.raw 每帧出
 /// RGB565（term 直读免解码，显示 ~12-15fps）；--jpeg-every-ms 500 把编码
-/// （0.125s/帧@720×1561，实测 2026-09-05——8fps 天花板的全部根因）摊薄成
-/// 慢车道副产物，只剩 QR 在读 eye.jpg（2Hz 限频正好对上）。--aspect
-/// 1080:2340 = 整屏（2026-09-05 用户收据「界面要做成全屏」），与 term 的
+/// （0.125s/帧@预览宽，实测 2026-09-05——8fps 天花板的全部根因）摊薄成
+/// 慢车道副产物，只剩 QR 在读 eye.jpg（2Hz 限频正好对上）。--aspect 由
+/// [panel] 拼出 = 整屏（2026-09-05 用户收据「界面要做成全屏」），与 term 的
 /// launch::VIEWFINDER_ASPECT 钉在一起（那边 host 测试守着）——布局属性由
 /// 本粘合层显式注入，不共享 crate。AEC 状态由 cam-shot 落
 /// /run/aginx-cam/aec.state，下次开眼首帧即正常亮度。
 ///
-/// ⑤u 两个变化（A/B 2026-09-06）：取景参数加 `--nr 0:0:0:0`——⑤o 全分辨率
-/// demosaic+面积均值已结构性砍掉颗粒（√1.29×），⑤m 整面空间 NR 在这之上
-/// 纯付 17.2ms/帧（fps 26→10.9「可怜感」的主犯之一），取景关 NR、出片仍走
-/// 全 look；子进程 stdout/stderr 不再进 null，落 /run/aginx-voice/cam.log
-/// （每次开眼截断一份）——真实会话第一次可见 aec 走线与 vf: 链路心跳。
+/// argv 分层（D14）：粘合层固定加平台旗标（--stream --rear --forever
+/// --aec --jpeg --jpeg-every-ms 500 + 两个输出落点 + --aspect）；机器尾
+/// （rot/preview/vf-window/nr）整串来自 [quirks] eye_stream_args——换机型
+/// 只改数据。
 ///
-/// ⑤v-1（2026-09-06，P2 探针已证）：`--vf-window 4`——aec_step 的 pending 门
-/// 是 window+3 帧/步（window 8 → 11 帧 ≈0.77s@14fps，场景切换 ~2 粗步+trim
-/// 就是用户判的「曝光 3s」）。window 4 门降到 7 帧，收敛 ~1.9→~1.4s，fps
-/// 无损（P2 实跑 498 帧正常）；ring 更浅只会让 kernel UPDATE 池余量更大。
+/// ⑤u 两个变化（A/B 2026-09-06）：取景关 NR、出片仍走全 look（全分辨率
+/// demosaic+面积均值已结构性砍掉颗粒，整面空间 NR 在这之上纯付帧时）；
+/// 子进程 stdout/stderr 不再进 null，落 /run/aginx-voice/cam.log（每次
+/// 开眼截断一份）——真实会话第一次可见 aec 走线与 vf: 链路心跳。
+///
+/// ⑤v-1（2026-09-06，P2 探针已证）：曝光门减半参数（vf-window）也在
+/// 机器尾里——aec_step 的 pending 门是 window+3 帧/步，收敛 ~1.9→~1.4s，
+/// fps 无损（P2 实跑 498 帧正常）。
 fn eye_spawn() -> Result<std::process::Child, String> {
+    let p = hwd::load_or_exit();
+    let aspect = format!("{}:{}", p.panel.width, p.panel.height);
     let mut cmd = Command::new("/usr/bin/aginx-cam-shot");
-    cmd.args([
-            "--stream", "--rear", "--forever", "--aec", "--rot", "90",
-            "--aspect", "1080:2340", "--preview", "720", "--jpeg",
-            "--jpeg-every-ms", "500",
-            "--nr", "0:0:0:0",
-            "--vf-window", "4",
-        ])
+    cmd.args(["--stream", "--rear", "--forever", "--aec", "--jpeg"])
+        .arg("--jpeg-every-ms")
+        .arg("500")
+        .args(&p.quirks.eye_stream_args)
+        .arg("--aspect")
+        .arg(&aspect)
         .arg("--jpeg-out")
         .arg(face::EYE_JPG)
         .arg("--raw-out")
@@ -1014,8 +1018,15 @@ fn read_text() -> Result<Vec<String>, String> {
             .stdout(std::process::Stdio::null())
             .stderr(std::process::Stdio::null());
         if round == 3 {
-            // 末位兜底：满增益提亮（M45 暗房收据，det 0 框→4 框的档位）
-            cmd.args(["--gain", "16", "--dgain", "2"]);
+            // 末位兜底：满增益提亮（[camera] dark_*——M45 暗房收据，
+            // det 0 框→4 框的档位）
+            let cam = &hwd::load_or_exit().camera;
+            cmd.args([
+                "--gain",
+                &cam.dark_gain.to_string(),
+                "--dgain",
+                &cam.dark_dgain.to_string(),
+            ]);
         }
         let mut child = cmd
             .spawn()
@@ -1123,10 +1134,13 @@ fn status_text() -> String {
             s.trim().trim_start_matches('0').replace("点0", "点")
         })
         .unwrap_or_default();
-    let bat = std::fs::read_to_string("/sys/class/power_supply/battery/capacity")
-        .ok()
-        .and_then(|s| s.trim().parse::<u8>().ok())
-        .unwrap_or(0);
+    let bat = std::fs::read_to_string(format!(
+        "{}/capacity",
+        hwd::load_or_exit().paths.power_supply
+    ))
+    .ok()
+    .and_then(|s| s.trim().parse::<u8>().ok())
+    .unwrap_or(0);
     // 只报连没连——IP 逐位念出来又长又难听（数字展开还多 10s 合成+播放）
     let net = if wlan0_ip().is_some() { "网已连" } else { "没联网" };
     format!("{time}，电池{bat}%，{net}。")

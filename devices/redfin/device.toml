@@ -39,8 +39,12 @@ volume_min = 20          # 0-19 lifted to the 20 floor (2026-09-03 silence recei
 
 [quirks]
 playback_dup_mono = true # QUIN_TDM dual-channel L=R copy law; enchilada likely false
+# Machine-only tail of the eye viewfinder argv. The glue layer (voice
+# eye_spawn) always adds the platform flags — --stream --rear --forever
+# --aec --jpeg --jpeg-every-ms 500 --jpeg-out/--raw-out — and builds
+# --aspect from [panel]; everything below is this panel/sensor's tuning.
 eye_stream_args = ["--rot","90","--preview","720","--vf-window","4",
-                   "--nr","0:0:0:0","--aec","--forever","--jpeg","--stream","--rear"]
+                   "--nr","0:0:0:0"]
 qr_scan_args = ["--slowrear","--gain","8"]
 
 [affinity]
