@@ -193,7 +193,8 @@ flowchart TB
 - Experiment history and receipts live in `docs/HARDWARE.md`, kept local —
   device serials and the full experiment log stay out of the public repo
 
-Milestone history and working rules: `AGENTS.md`.
+Milestone history and working rules: `AGENTS.md`. Architecture:
+[`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md).
 
 ## Ecosystem
 
