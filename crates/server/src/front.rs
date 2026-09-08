@@ -6,10 +6,14 @@
 // - 母体 me 不是文件夹，是前台里的一段代码（见 mother.rs）。
 // - 一次一轮：前台只有一张嘴（单用户手机的物理事实），send 全程持
 //   turn 锁，后来的连线排队等——语音/CLI/未来的 webhook 都一样。
+//   ② steer 支线：目标化身正有轮在跑时，后到的 send 不排队，插进那
+//   轮的下一个工具步边界（dsh 词表：运行中插入=steer，空闲插入=下一
+//   回合）；插不进（母体直答/退房/换化身/轮正好收尾）照旧排队。
 
 use std::io;
 use std::path::PathBuf;
-use std::sync::Mutex;
+use std::sync::mpsc;
+use std::sync::{Mutex, MutexGuard};
 
 /// v0 每化身一个常驻会话；多会话（D10 切会话）后续按 sessions/ 清单加。
 pub const SESSION_MAIN: &str = "main";
@@ -27,16 +31,52 @@ pub fn is_checkout_word(text: &str) -> bool {
     CHECKOUT_WORDS.contains(&t.as_str())
 }
 
+// ---------------- ② steer 支线 ----------------
+//
+// 运行中轮的插入队列。持轮线程（relay 循环）是队列唯一消费者：每个
+// 工具回账后 take_steers 下发；轮收口时 end_turn 把没来得及下发的
+// 一律 TurnEnded——发送方拿到后回头抢锁，那句话重分类为下一回合
+// （dsh：唤醒输入撞上已收口活动 = 下一回合）。同一把 steer 锁里同时
+// 放 running 标记，保证「入队成功」和「有人负责善后」在同一个临界
+// 区内闭合：begin/end 都发生在持轮线程手里，不存在入了队却没人
+// 善后的窗口。
+
+/// steer 发送方的回执：Delivered(回合号) = 已落账并写进 runtime 的
+/// 管；TurnEnded = 轮先收口了，没插进去。
+pub enum SteerOutcome {
+    Delivered(u64),
+    TurnEnded,
+}
+
+/// 一笔待插的主动输入。
+pub(crate) struct SteerReq {
+    pub(crate) text: String,
+    pub(crate) reply: mpsc::Sender<SteerOutcome>,
+}
+
+#[derive(Default)]
+struct SteerBox {
+    /// 正在跑轮的化身（None = 空闲；母体直答不算——没账没轮可插）。
+    running: Option<String>,
+    queue: Vec<SteerReq>,
+}
+
 pub struct FrontDesk {
     /// workspaces 根（AGINX_HOME 下的 workspaces/）。
     root: PathBuf,
     cursor: Mutex<String>,
     turn: Mutex<()>,
+    steer: Mutex<SteerBox>,
 }
 
 impl FrontDesk {
     pub fn new(root: PathBuf) -> FrontDesk {
-        FrontDesk { root, cursor: Mutex::new(MOTHER.to_string()), turn: Mutex::new(()) }
+        FrontDesk {
+            root,
+            cursor: Mutex::new(MOTHER.to_string()),
+            turn: Mutex::new(()),
+            steer: Mutex::new(SteerBox::default()),
+        }
     }
 
     /// 当前住台的化身（"me" = 母体）。
@@ -49,8 +89,45 @@ impl FrontDesk {
     }
 
     /// 全局一轮锁。拿到才许开跑一轮（母体直答或化身 spawn 都算）。
-    pub fn turn_lock(&self) -> std::sync::MutexGuard<'_, ()> {
+    pub fn turn_lock(&self) -> MutexGuard<'_, ()> {
         self.turn.lock().unwrap_or_else(|p| p.into_inner())
+    }
+
+    /// ② 不排队的轮锁探测：Some = 空闲可开跑，None = 有轮在跑。
+    pub fn try_turn(&self) -> Option<MutexGuard<'_, ()>> {
+        self.turn.try_lock().ok()
+    }
+
+    /// ② 登记运行化身（持轮线程在 relay 前调）。此后同目标的 send 走
+    /// steer 入队而不是排队。
+    pub fn begin_turn(&self, avatar: &str) {
+        self.steer.lock().unwrap_or_else(|p| p.into_inner()).running = Some(avatar.to_string());
+    }
+
+    /// ② 轮收口：清运行标记，余下排队 steer 一律 TurnEnded。
+    pub fn end_turn(&self) {
+        let mut b = self.steer.lock().unwrap_or_else(|p| p.into_inner());
+        b.running = None;
+        for r in std::mem::take(&mut b.queue) {
+            let _ = r.reply.send(SteerOutcome::TurnEnded);
+        }
+    }
+
+    /// ② relay 的步边界取走排队 steer（只有持轮的 relay 会调）。
+    pub fn take_steers(&self) -> Vec<SteerReq> {
+        std::mem::take(&mut self.steer.lock().unwrap_or_else(|p| p.into_inner()).queue)
+    }
+
+    /// ② 目标化身正有轮在跑 → 入队，返回回执线；否则 None（调用方走
+    /// 正门排队当下一回合）。
+    pub fn push_steer(&self, avatar: &str, text: &str) -> Option<mpsc::Receiver<SteerOutcome>> {
+        let (tx, rx) = mpsc::channel();
+        let mut b = self.steer.lock().unwrap_or_else(|p| p.into_inner());
+        if b.running.as_deref() != Some(avatar) {
+            return None;
+        }
+        b.queue.push(SteerReq { text: text.to_string(), reply: tx });
+        Some(rx)
     }
 
     /// 花名册：workspaces 下的目录清单，字典序。母体不在册（不是文件夹）。
@@ -219,5 +296,31 @@ mod tests {
         assert_eq!(std::fs::read_to_string(ws.join("SOUL.md")).unwrap(), "你是小满。");
         assert!(ws.join("sessions").is_dir());
         assert!(ws.join("output").is_dir());
+    }
+
+    /// ② steer 队列生命周期：空闲不入队、同名入队异名拒、relay 取走后
+    /// 回执、收口冲掉余量、收口后不再入队。
+    #[test]
+    fn steer_box_lifecycle() {
+        let (d, _dir) = desk("steer");
+        // 空闲：没有轮在跑，谁都插不进
+        assert!(d.push_steer("小满", "x").is_none());
+        d.create_avatar("小满", None).unwrap();
+        // 轮跑起来：同名入队，异名（换化身）不入
+        d.begin_turn("小满");
+        let rx = d.push_steer("小满", "改成上海").unwrap();
+        assert!(d.push_steer("阿宝", "x").is_none());
+        // relay 步边界取走 → 回执 Delivered 带回合号；取空后再取为空
+        let steers = d.take_steers();
+        assert_eq!(steers.len(), 1);
+        assert_eq!(steers[0].text, "改成上海");
+        steers[0].reply.send(SteerOutcome::Delivered(7)).unwrap();
+        assert!(matches!(rx.recv(), Ok(SteerOutcome::Delivered(7))));
+        assert!(d.take_steers().is_empty());
+        // 轮收口：还排着的冲 TurnEnded；此后不再入队
+        let rx2 = d.push_steer("小满", "晚了一步").unwrap();
+        d.end_turn();
+        assert!(matches!(rx2.recv(), Ok(SteerOutcome::TurnEnded)));
+        assert!(d.push_steer("小满", "x").is_none());
     }
 }
