@@ -215,29 +215,43 @@ impl Brain {
         Ok(buf)
     }
 
-    /// 说一句话：TTS → 拆 WAV 头 → 复制成 L=R 立体声 → snd-play 阻塞放完。
+    /// 说一句话：TTS → 拆 WAV 头 → 声道复制（quirk）→ snd-play 阻塞放完。
     /// 音长上限 = 样本数/Rate + 5s 余量，防止挂死。
     ///
-    /// 立体声不是可选的：QUIN_TDM_RX_0 后端是双通道，mono FE 在这张卡上
-    /// 会话健康但无声（2026-09-04 收据：mono rms 26 / dft880 0.2，stereo
-    /// rms 3650 / dft880 2396）。M18 的原收据也是 stereo。
+    /// 声道复制不是可选的（开了 quirk 的机型）：QUIN_TDM_RX_0 后端是双通
+    /// 道，mono FE 会话健康但无声（2026-09-04 收据：mono rms 26 / dft880
+    /// 0.2，stereo rms 3650 / dft880 2396）。M18 的原收据也是 stereo。
     pub fn speak(&self, text: &str) -> Result<(), String> {
         let wav = self.tts(text)?;
         let (off, len) = wav_data_span(&wav)?;
         let raw = &wav[off..off + len];
         let samples = len / 2; // S16 mono in
-        let mut stereo = Vec::with_capacity(len * 2);
-        for s in raw.chunks_exact(2) {
-            stereo.extend_from_slice(s);
-            stereo.extend_from_slice(s); // L = R
-        }
-        let tmp = "/tmp/aginx-voice-tts.raw";
-        fs::write(tmp, &stereo).map_err(|e| format!("tts tmp: {e}"))?;
+        let out = dup_to_playback(raw);
+        fs::write("/tmp/aginx-voice-tts.raw", &out).map_err(|e| format!("tts tmp: {e}"))?;
         play_stereo_blocking(samples)
     }
 }
 
-/// 放 /tmp/aginx-voice-tts.raw（48k L=R stereo），阻塞到放完。
+/// mono S16 → 播放声道布局（D14：行为开关 [quirks] playback_dup_mono，
+/// 槽数 = [audio] playback_channels）。true：每样本复制进全部声道槽
+/// （L=R 铁律，收据见 speak() 注）；false：单声道后端原样直写。两处
+/// TTS 落盘点（brain speak / 本地 stage_wav）共用，行为必须一致。
+fn dup_to_playback(mono: &[u8]) -> Vec<u8> {
+    let p = hwd::load_or_exit();
+    let n = p.audio.playback_channels as usize;
+    if !p.quirks.playback_dup_mono || n <= 1 {
+        return mono.to_vec();
+    }
+    let mut out = Vec::with_capacity(mono.len() * n);
+    for s in mono.chunks_exact(2) {
+        for _ in 0..n {
+            out.extend_from_slice(s);
+        }
+    }
+    out
+}
+
+/// 放 /tmp/aginx-voice-tts.raw（48k，播放声道布局），阻塞到放完。
 fn play_stereo_blocking(samples: usize) -> Result<(), String> {
     let budget = (samples / rate() as usize + 5) as u32;
     match play_stereo_spawn()? {
@@ -577,7 +591,7 @@ pub fn local_asr(wav: &[u8]) -> Result<String, String> {
 /// 文本 → 扬声器：分句流水（M42e 续：整段合成完才放是长句延迟的大头）。
 /// 按句读切句，第一句合成完立即起放音，后续句在放音中由常驻 server
 /// 并行合成——server 是独立进程，snd-play 放音不占它。TTS wav → FIR 升采
-/// 样 48k → L=R 立体声 → snd-play。常驻不可用/中途挂 → 整段一次性兜底。
+/// 样 48k → 声道复制（quirk）→ snd-play。常驻不可用/中途挂 → 整段一次性兜底。
 pub fn local_speak(text: &str) -> Result<(), String> {
     let spoken = expand_digit_chains(text);
     if speak_streamed(&split_clauses(&spoken)).is_ok() {
@@ -713,8 +727,8 @@ fn speak_streamed(clauses: &[String]) -> Result<(), String> {
     Ok(())
 }
 
-/// wav（TTS 产物）→ FIR 升采样 48k → 7.5k 低通 → L=R 立体声写
-/// /tmp/aginx-voice-tts.raw，返回样本数（放音等待预算用）。
+/// wav（TTS 产物）→ FIR 升采样 48k → 7.5k 低通 → 声道布局展开（quirk）
+/// 写 /tmp/aginx-voice-tts.raw，返回样本数（放音等待预算用）。
 fn stage_wav(wav: &[u8]) -> Result<usize, String> {
     let (off, len) = wav_data_span(wav)?;
     let src_rate = wav_rate(wav)?;
@@ -725,12 +739,8 @@ fn stage_wav(wav: &[u8]) -> Result<usize, String> {
     };
     let up = lowpass(&up, rate(), 7_500.0);
     let samples = up.len() / 2;
-    let mut stereo = Vec::with_capacity(up.len() * 2);
-    for s in up.chunks_exact(2) {
-        stereo.extend_from_slice(s);
-        stereo.extend_from_slice(s); // L = R
-    }
-    fs::write("/tmp/aginx-voice-tts.raw", &stereo).map_err(|e| format!("tts tmp: {e}"))?;
+    let out = dup_to_playback(&up);
+    fs::write("/tmp/aginx-voice-tts.raw", &out).map_err(|e| format!("tts tmp: {e}"))?;
     Ok(samples)
 }
 
