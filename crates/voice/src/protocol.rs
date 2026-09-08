@@ -24,10 +24,29 @@ pub enum NetState {
     NoConf,
 }
 
+/// 关机/重启两档（面法B 09-07：两词同一闸，只差落地动作）
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PowerAction {
+    Poweroff,
+    Reboot,
+}
+
+impl PowerAction {
+    pub fn verb(&self) -> &'static str {
+        match self {
+            PowerAction::Poweroff => "关机",
+            PowerAction::Reboot => "重启",
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub enum Ev {
     /// 一段 ASR 识别文本（已归一化由本模块完成，原样传入即可）
     Heard(String),
+    /// daemon 心跳（真实流逝毫秒）。命令优先重写后唯一需要时间的态是
+    /// 口令等待（PowerWait）——安全闸不无界等人，超时作废回 Idle。
+    Tick(u32),
     /// Act::NetConnect 的判定结果（daemon 查 IP/conf 后回喂）
     NetState(NetState),
     /// Act::Join 完成：Ok(ip) / Err(原因)——WIFI: 码路径
@@ -59,6 +78,9 @@ pub enum Act {
     Ocr,
     /// 状态查询（时间/电池/IP）——daemon 读系统后经 inject_say 出声
     Status,
+    /// 口令验证通过，执行关机/重启（面法B）。协议只说结论话术，断电
+    /// 由 daemon spawn aginx-reboot——不进 Act 的路径一条都没有（fail-closed）。
+    PowerExec { action: PowerAction },
     /// 自由文本喂母体/新前台（N2②：aginx agent send）。封闭词表全部
     /// miss 时走这里；前台不可达由 daemon 落回离线地板话。
     Chat(String),
@@ -73,24 +95,41 @@ pub enum Out {
     /// 点名要听：上屏（若文本还不在屏上，调用方先推行）+ 必 TTS。
     /// 「念一下」的 OCR 读、「再念一遍」的回读、「你说给我听」的复述。
     Speak(String),
-    /// 只刷屏不出声（状态变了但不需要说）
-    Show,
     /// 执行动作
     Act(Act),
 }
 
 // ---------------- state ----------------
 
-/// 对话机（M42a 命令优先版）。全流程无驻留态：每个指令一步走完，
+/// 口令等待预算（毫秒）：进 PowerWait 起算，三次尝试共享，超时作废。
+/// 与 EYE_VIEW_SECS 同 30s 量级——安全闸不无界等人。
+pub const POWER_WAIT_MS: u32 = 30_000;
+/// 口令连错上限：第三次错即作废回 Idle（防对着机器穷举）。
+pub const POWER_TRIES: u8 = 3;
+
+/// 面法B 唯一驻留态：等口令。命令优先重写（2026-09-06）砍光了所有等待
+/// 态——等码的长等待归眼取景自己的生命周期；但关机/重启的口令闸必须由
+/// 协议持有（tries 计数是安全语义，不能散进 daemon）。
+struct PowerWait {
+    action: PowerAction,
+    tries: u8,
+    waited_ms: u32,
+}
+
+/// 对话机（M42a 命令优先版）。除口令等待外无驻留态：每个指令一步走完，
 /// 等码的长等待由眼取景自己的生命周期管（30s 上限 + 帧自愈），协议
-/// 不再记「现在在第几步」。state_name 留作屏显与未来状态（点选纠错
-/// 的 Choice 态）的接入缝。
+/// 不再记「现在在第几步」。state_name 留作屏显。
 pub struct Vm {
     /// 对话行（(谁, 文本)），屏显用；cap 8 行滚动
     lines: Vec<(bool, String)>,
     /// 自由文本改投新前台（N2②）。false = 老行为（没听懂地板）。
     /// new() 恒 false——既有测试不动，开前台一律 with_front()。
     front: bool,
+    /// 面法B 关机/重启口令。None = 未设置 = fail-closed（词收下、闸不开、
+    /// 拒绝执行）。daemon 从 env 读入并 norm 后注入；值永不进日志/脸/报告。
+    power_key: Option<String>,
+    /// 关机/重启口令等待（见 PowerWait）
+    power_wait: Option<PowerWait>,
 }
 
 impl Vm {
@@ -98,6 +137,8 @@ impl Vm {
         Vm {
             lines: Vec::new(),
             front: false,
+            power_key: None,
+            power_wait: None,
         }
     }
 
@@ -109,11 +150,24 @@ impl Vm {
         }
     }
 
+    /// 注入口令（面法B）。值须已 norm（daemon 侧做——与 Heard 同一归一化，
+    /// 口令怎么说的就怎么比）。None/空 = 未设置。
+    pub fn with_power_key(mut self, key: Option<String>) -> Vm {
+        self.power_key = key.filter(|k| !k.is_empty());
+        self
+    }
+
     pub fn state_name(&self) -> &'static str {
-        "idle"
+        if self.power_wait.is_some() {
+            "powerwait"
+        } else {
+            "idle"
+        }
     }
 
     /// 屏显对话行：(is_user, text)
+    /// 面已不序列化 lines（v4 退役）；保留给协议测试与文本降级（v4④）。
+    #[cfg(test)]
     pub fn lines(&self) -> &[(bool, String)] {
         &self.lines
     }
@@ -158,27 +212,45 @@ impl Vm {
                     // capture_take 已拦）。不吭声=用户以为死了（2026-09-04
                     // 三连空串实测）。也不进对话行——屏上留空行难看。
                     self.say(&mut outs, "没听清。请按住键说。");
-                    outs.push(Out::Show);
                     return outs;
                 }
-                self.heard_line(&raw);
-                // 取消优先于一切
+                // 取消优先于一切（口令等待一并作废）
                 if is_cancel(&text) {
+                    self.power_wait = None;
+                    self.heard_line(&raw);
                     self.say(&mut outs, "已取消。");
                     outs.push(Out::Act(Act::EyeClose));
-                    outs.push(Out::Show);
                     return outs;
                 }
                 // 点名要听（拉式语音）：复述最近一条机器话语。
                 if is_speak_request(&text) {
+                    self.heard_line(&raw);
                     match self.lines.iter().rev().find(|(u, _)| !u) {
                         Some((_, s)) => outs.push(Out::Speak(s.clone())),
                         None => self.say_loud(&mut outs, "我还没说过话。"),
                     }
-                    outs.push(Out::Show);
                     return outs;
                 }
+                // 口令等待中：这一句就是口令尝试。不上对话行（heard_line 不
+                // 走）——口令是秘密，与 psk 同律：脸/日志里只有机器的判定
+                // 话，没有口令原文。
+                if self.power_wait.is_some() {
+                    self.step_power(&text, &mut outs);
+                    return outs;
+                }
+                self.heard_line(&raw);
                 self.step_idle(&text, &mut outs);
+            }
+            Ev::Tick(ms) => {
+                // daemon 心跳。只有 PowerWait 关心时间：超时作废回 Idle。
+                // 空等 = 空返回（零分配，200ms 一拍不带负担）。
+                if let Some(pw) = &mut self.power_wait {
+                    pw.waited_ms = pw.waited_ms.saturating_add(ms);
+                    if pw.waited_ms >= POWER_WAIT_MS {
+                        self.power_wait = None;
+                        self.say(&mut outs, "太久没说口令，已取消。");
+                    }
+                }
             }
             Ev::NetState(ns) => match ns {
                 NetState::Up => self.say(&mut outs, "网已连。"),
@@ -196,9 +268,12 @@ impl Vm {
             Ev::PairDone(r) => match r {
                 Ok(msg) => {
                     // 脸上留技术细节；收尾句出声（开机体验定档：hardline
-                    // 接回 = 母体重新接通，Matrix 法理即技术真相）。
+                    // 接回 = 母体重新接通，Matrix 法理即技术真相）。配对成功
+                    // 收镜头——码到手取景的活就干完了（开机剧情 Act 4 由
+                    // daemon 在 PairApply 臂先收；这里是语义与兜底）。
                     self.say(&mut outs, &format!("配对完成，{msg}。"));
                     self.say_loud(&mut outs, "Connection restored. Welcome to the real world.");
+                    outs.push(Out::Act(Act::EyeClose));
                 }
                 Err(e) => self.say(&mut outs, &format!("配对没成，{e}。再说连网重试。")),
             },
@@ -263,7 +338,6 @@ impl Vm {
                         Err(_) => self.say(&mut outs, "没拍到二维码，正对着它再说扫码。"),
                     },
                 }
-                outs.push(Out::Show);
             }
             Ev::OcrDone(r) => {
                 // M45 眼分支：识别行全文上屏（每行一条对话行，滚动窗取尾），
@@ -290,10 +364,27 @@ impl Vm {
                         self.say(&mut outs, "没拍到文字，正对着它再说念一下。");
                     }
                 }
-                outs.push(Out::Show);
             }
         }
         outs
+    }
+
+    /// 口令等待中的 Heard（面法B）。对 = 执行；错 = 计数，三错作废。
+    /// 全程 Speak（安全闸的判定必须听得见——这不是闲聊回应，是断电确认）。
+    fn step_power(&mut self, text: &str, outs: &mut Vec<Out>) {
+        let pw = self.power_wait.take().expect("step_power: no PowerWait");
+        if self.power_key.as_deref() == Some(text) {
+            self.say_loud(outs, &format!("口令正确，正在{}。", pw.action.verb()));
+            outs.push(Out::Act(Act::PowerExec { action: pw.action }));
+        } else if pw.tries + 1 >= POWER_TRIES {
+            self.say_loud(outs, "口令三次不对，已取消。");
+        } else {
+            self.power_wait = Some(PowerWait {
+                tries: pw.tries + 1,
+                ..pw
+            });
+            self.say_loud(outs, "口令不对，再说一次。");
+        }
     }
 
     fn step_idle(&mut self, text: &str, outs: &mut Vec<Out>) {
@@ -312,25 +403,50 @@ impl Vm {
         } else if is_status(text) {
             self.say(outs, "看一下。");
             outs.push(Out::Act(Act::Status));
+        } else if is_shutdown(text) || is_reboot(text) {
+            // 面法B 09-07：关机/重启是指令，但要口令（安全考虑——谁都能
+            // 对着手机喊一句话）。口令未设置 = fail-closed：词收下、闸不开。
+            // 物理电源键长按 1.2s 关机不设口令——系统卡死时的兜底阀。
+            let action = if is_shutdown(text) {
+                PowerAction::Poweroff
+            } else {
+                PowerAction::Reboot
+            };
+            match self.power_key {
+                Some(_) => {
+                    self.power_wait = Some(PowerWait {
+                        action,
+                        tries: 0,
+                        waited_ms: 0,
+                    });
+                    self.say_loud(outs, "请说口令。");
+                }
+                None => {
+                    self.say(
+                        outs,
+                        &format!("{}需要口令，口令还没设置。", action.verb()),
+                    );
+                }
+            }
         } else if is_hello(text) {
             self.say(outs, "我在。说连网，或说扫码、念一下。");
         } else if is_help(text) {
             self.say(
                 outs,
-                "我能连网、扫码、念字。回应都在屏幕上，要听我说，说你说给我听。",
+                "我能连网、扫码、念字、关机、重启。回应都在屏幕上，要听我说，说你说给我听。",
             );
         } else {
             if self.front {
                 // N2②：封闭词表 miss = 自由文本 → 母体（新前台）。封闭
                 // 词表本身仍本地优先（连网/扫码/念读是离线地板，不进
                 // brain 往返）；前台不可达由 daemon 收兜底话，这里不降级。
-                self.say(outs, "问母体，稍等。");
+                // v4：transcript 打字就是反馈（PTT/inject 臂已 set_line），
+                // 这里不再前置应答——那会瞬间顶掉用户刚说出的话。
                 outs.push(Out::Act(Act::Chat(text.to_string())));
             } else {
                 self.say(outs, "没听懂。说连网，或扫码，或念一下。");
             }
         }
-        outs.push(Out::Show);
     }
 }
 
@@ -481,6 +597,17 @@ fn is_ocr(t: &str) -> bool {
     )
 }
 
+/// 面法B 关机词。裸「关」不收（「关掉灯」误触）——主动词必须落在机器上。
+fn is_shutdown(t: &str) -> bool {
+    contains_any(t, &["关机", "关掉手机", "关闭手机", "把手机关了"])
+}
+
+/// 面法B 重启词（「重启」是口语主形；「重新启动」不含连续「重启」子串，
+/// 单列）。
+fn is_reboot(t: &str) -> bool {
+    contains_any(t, &["重启", "重新启动", "重启手机"])
+}
+
 // ---------------- tests ----------------
 
 #[cfg(test)]
@@ -621,7 +748,7 @@ mod tests {
     }
 
     #[test]
-    fn pair_done_reports_without_reopening_eye() {
+    fn pair_done_reports_and_closes_the_eye() {
         let mut vm = Vm::new();
         let o = vm.step(Ev::PairDone(Ok("网已连，母体在线".into())));
         assert_eq!(says(&o), vec!["配对完成，网已连，母体在线。"]);
@@ -629,7 +756,8 @@ mod tests {
             speaks(&o),
             vec!["Connection restored. Welcome to the real world."]
         );
-        assert!(acts(&o).is_empty());
+        // 配对成功收镜头（开机剧情 Act 4/#246：码到手取景的活就干完了）
+        assert!(acts(&o).contains(&Act::EyeClose));
         let o = vm.step(Ev::PairDone(Err("时钟没同步".into())));
         assert_eq!(says(&o), vec!["配对没成，时钟没同步。再说连网重试。"]);
         assert!(acts(&o).is_empty()); // 失败不自动循环，人再说连网
@@ -822,7 +950,8 @@ mod tests {
     fn front_on_free_text_routes_to_chat() {
         let mut vm = Vm::with_front();
         let o = heard(&mut vm, "今天北京天气怎么样");
-        assert_eq!(says(&o), vec!["问母体，稍等。"]);
+        // v4：无前置应答——transcript 打字就是反馈，机器不抢行
+        assert!(says(&o).is_empty());
         let chat = o.iter().find_map(|x| match x {
             Out::Act(Act::Chat(t)) => Some(t.clone()),
             _ => None,
@@ -858,5 +987,126 @@ mod tests {
         let _ = heard(&mut vm, "今天北京天气怎么样"); // 问母体（daemon 出去）
         let o = heard(&mut vm, "你说给我听");
         assert_eq!(speaks(&o).len(), 1); // 复述最后一句机器行
+    }
+
+    // ---------------- 面法B：关机/重启口令（2026-09-07） ----------------
+
+    #[test]
+    fn power_words_fail_closed_without_key() {
+        // 未设口令：词收下、闸不开、绝不执行——fail-closed 是安全语义
+        for (w, verb) in [
+            ("关机", "关机"),
+            ("把手机关了", "关机"),
+            ("重启", "重启"),
+            ("重新启动", "重启"),
+            ("重启手机", "重启"),
+        ] {
+            let mut vm = Vm::new();
+            let o = heard(&mut vm, w);
+            assert_eq!(says(&o), vec![format!("{verb}需要口令，口令还没设置。")], "「{w}」");
+            assert!(acts(&o).is_empty(), "「{w}」不该有动作");
+            assert_eq!(vm.state_name(), "idle");
+        }
+        // 空串口令（daemon filter 掉）同未设置
+        let mut vm = Vm::new().with_power_key(Some("".into()));
+        let o = heard(&mut vm, "关机");
+        assert_eq!(says(&o), vec!["关机需要口令，口令还没设置。"]);
+    }
+
+    #[test]
+    fn power_wait_correct_key_executes() {
+        let mut vm = Vm::new().with_power_key(Some(norm("红色药丸")));
+        let o = heard(&mut vm, "关机");
+        assert_eq!(speaks(&o), vec!["请说口令。"]);
+        assert!(acts(&o).is_empty());
+        assert_eq!(vm.state_name(), "powerwait");
+        // 带标点/大小写走同一 norm——口令怎么说的就怎么比
+        let o = heard(&mut vm, "红色药丸。");
+        assert_eq!(speaks(&o), vec!["口令正确，正在关机。"]);
+        assert_eq!(
+            acts(&o),
+            vec![Act::PowerExec {
+                action: PowerAction::Poweroff
+            }]
+        );
+        assert_eq!(vm.state_name(), "idle");
+        // 口令不上对话行（psk 同律）：对错尝试的原文都不在
+        let shown: String = vm.lines().iter().map(|(_, s)| s.as_str()).collect();
+        assert!(!shown.contains("红色药丸"), "口令原文不得上面/脸");
+    }
+
+    #[test]
+    fn power_wait_reboot_uses_reboot_action() {
+        let mut vm = Vm::new().with_power_key(Some("九四八七".into()));
+        let o = heard(&mut vm, "重启");
+        assert_eq!(speaks(&o), vec!["请说口令。"]);
+        let o = heard(&mut vm, "九四八七");
+        assert_eq!(speaks(&o), vec!["口令正确，正在重启。"]);
+        assert_eq!(
+            acts(&o),
+            vec![Act::PowerExec {
+                action: PowerAction::Reboot
+            }]
+        );
+    }
+
+    #[test]
+    fn power_wait_three_wrong_cancels() {
+        let mut vm = Vm::new().with_power_key(Some("对的口令".into()));
+        let _ = heard(&mut vm, "关机");
+        let o = heard(&mut vm, "错的一次");
+        assert_eq!(speaks(&o), vec!["口令不对，再说一次。"]);
+        assert_eq!(vm.state_name(), "powerwait");
+        let _ = heard(&mut vm, "错的两次");
+        assert_eq!(vm.state_name(), "powerwait", "第二次错仍在等");
+        let o = heard(&mut vm, "错的三次");
+        assert_eq!(speaks(&o), vec!["口令三次不对，已取消。"]);
+        assert!(acts(&o).is_empty(), "三错作废，绝不执行");
+        assert_eq!(vm.state_name(), "idle");
+        // 作废不残留：再说关机重新进等待、计数清零
+        let o = heard(&mut vm, "关机");
+        assert_eq!(speaks(&o), vec!["请说口令。"]);
+        let o = heard(&mut vm, "对的口令");
+        assert_eq!(
+            acts(&o),
+            vec![Act::PowerExec {
+                action: PowerAction::Poweroff
+            }]
+        );
+    }
+
+    #[test]
+    fn power_wait_cancel_and_timeout() {
+        let mut vm = Vm::new().with_power_key(Some("口令".into()));
+        let _ = heard(&mut vm, "关机");
+        // 取消：等待作废（EyeClose 是取消的既有落点，没开则空转）
+        let o = heard(&mut vm, "取消");
+        assert_eq!(says(&o), vec!["已取消。"]);
+        assert!(acts(&o).contains(&Act::EyeClose));
+        assert_eq!(vm.state_name(), "idle");
+        // 等待中点名要听：复述「请说口令」（口令等待不吞拉式语音）
+        let _ = heard(&mut vm, "关机");
+        let o = heard(&mut vm, "你说给我听");
+        assert_eq!(speaks(&o), vec!["请说口令。"]);
+        assert_eq!(vm.state_name(), "powerwait");
+        // 超时：Tick 累计到预算 → 作废回 idle（Say——人多半已走开，不喊）
+        assert!(vm.step(Ev::Tick(29_000)).is_empty(), "预算内不吭声");
+        let o = vm.step(Ev::Tick(2_000));
+        assert_eq!(says(&o), vec!["太久没说口令，已取消。"]);
+        assert_eq!(vm.state_name(), "idle");
+        // idle 心跳：空往返零输出
+        assert!(vm.step(Ev::Tick(1_000)).is_empty());
+        // 重启词与关机词同一闸不同动作（超时后换重启重新进等待）
+        let _ = heard(&mut vm, "重启");
+        assert_eq!(vm.state_name(), "powerwait");
+    }
+
+    #[test]
+    fn power_words_are_closed_vocab_not_chat() {
+        // 开前台时关机词仍本地——安全闸不进 brain 往返
+        let mut vm = Vm::with_front().with_power_key(Some("口令".into()));
+        let o = heard(&mut vm, "关机");
+        assert_eq!(speaks(&o), vec!["请说口令。"]);
+        assert!(o.iter().all(|x| !matches!(x, Out::Act(Act::Chat(_)))));
     }
 }
