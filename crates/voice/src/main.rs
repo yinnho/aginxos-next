@@ -180,7 +180,10 @@ fn daemon() {
     let mut vm = make_vm();
     let mut ptt = ptt::Ptt::open();
     if ptt.is_none() {
-        eprintln!("aginx-voice: no {} — PTT dead, face only", ptt::PTT_DEV);
+        eprintln!(
+            "aginx-voice: no {} — PTT dead, face only",
+            hwd::load_or_exit().input.ptt.device
+        );
     }
     face::write(&vm, false);
     eprintln!(

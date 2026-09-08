@@ -8,20 +8,21 @@
 //! gpio-keys(event0)（/proc/bus/input/devices KEY 位图逐位解出 115 与
 //! 114/116，与 HARDWARE.md 2475/5538 收据互证）。只听 event1 时音量上
 //! 永远收不到，Ptt 必须 poll 全部节点。
+//! D14：节点与键码不再是本文件的常量——唯一合法来源是
+//! device.toml 的 [input.ptt]（hwd 读）。
 
 use std::fs::File;
 use std::io::Read;
 use std::os::unix::fs::OpenOptionsExt;
 use std::os::unix::io::AsRawFd;
 
-pub const PTT_DEV: &str = "/dev/input/event1"; // qpnp_pon: 音量下+电源
-pub const VOLUP_DEV: &str = "/dev/input/event0"; // gpio-keys: 音量上
 pub const EV_KEY: u16 = 0x01;
-pub const KEY_VOLUMEDOWN: u16 = 114;
-pub const KEY_VOLUMEUP: u16 = 115;
 
 pub struct Ptt {
     fds: Vec<(&'static str, File)>,
+    /// 每个 fd 盯的键码（来自 [input.ptt]，与 fds 按位配对）：
+    /// [0]=PTT 节点盯音量下，[1]=音量上节点盯音量上。drain 按下标判角色。
+    keys: Vec<u16>,
     buf: [u8; 512],
 }
 
@@ -34,8 +35,14 @@ pub enum PttEv {
 
 impl Ptt {
     pub fn open() -> Option<Ptt> {
+        let p = hwd::load_or_exit();
+        let ipt = &p.input.ptt;
         let mut fds = Vec::new();
-        for dev in [PTT_DEV, VOLUP_DEV] {
+        let mut keys = Vec::new();
+        for (dev, key) in [
+            (&*ipt.device, ipt.key_volume_down),
+            (&*ipt.volume_up_device, ipt.key_volume_up),
+        ] {
             // O_NONBLOCK：主循环 poll 里读，没数据立刻返回
             if let Ok(f) = std::fs::OpenOptions::new()
                 .read(true)
@@ -43,12 +50,13 @@ impl Ptt {
                 .open(dev)
             {
                 fds.push((dev, f));
+                keys.push(key);
             }
         }
         if fds.is_empty() {
             None
         } else {
-            Some(Ptt { fds, buf: [0; 512] })
+            Some(Ptt { fds, keys, buf: [0; 512] })
         }
     }
 
@@ -103,12 +111,12 @@ impl Ptt {
                             self.buf[off + 22],
                             self.buf[off + 23],
                         ]);
-                        if ty == EV_KEY {
-                            match (code, val) {
-                                (KEY_VOLUMEDOWN, 1) => out.push(PttEv::Down),
-                                (KEY_VOLUMEDOWN, 0) => out.push(PttEv::Up),
+                        if ty == EV_KEY && code == self.keys[i] {
+                            match (i, val) {
+                                (0, 1) => out.push(PttEv::Down),
+                                (0, 0) => out.push(PttEv::Up),
                                 // 只认松手沿：一次点按一个事件，repeat(2)忽略
-                                (KEY_VOLUMEUP, 0) => out.push(PttEv::VolUp),
+                                (1, 0) => out.push(PttEv::VolUp),
                                 _ => {}
                             }
                         }
