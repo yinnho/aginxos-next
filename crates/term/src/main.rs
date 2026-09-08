@@ -3,9 +3,9 @@
 // bootcard's DRM path + 5x8 font, a vte-parsed cell grid (black bg, green /
 // white text — the fixed phosphor palette), an openpty child (sh / codex /
 // grok / aclone), an evdev on-screen keyboard (tap = key, drag = scrollback),
-// and a launcher (clone / codex / grok / sh). Started by rcS's aginx-term-handoff.
-// once boot finishes: bootcard never exits on its own and holds DRM master
-// forever, so the handoff kills it by /run/bootcard.pid and takes the panel.
+// and a launcher (clone / codex / grok / sh). Started by rcS's aginx-term-handoff
+// once boot finishes; bootcard is wordmark-only now and self-exits (#246), so the
+// handoff's kill is belt-and-braces.
 //
 // M15 power management: the qpnp_pon power key (event1) blanks the panel
 // (connector DPMS off — the same path that darkened the screen when a DRM
@@ -15,14 +15,13 @@
 //
 // M17 input split: the keyboard hit tests return typed InputEvents
 // (KeyEvent vs TextInputEvent, input.rs) and EVERY write to the pty goes
-// through inject() — the same entry point M18's voice input will call
-// with recognized text. AGINX_TERM_INJECT=1 watches /run/aginx-term.inject: any
-// process drops text there, it types into the session verbatim (that's
-// the voice path, testable without audio).
+// through inject() — the same entry point voice input uses with
+// recognized text.
 //
 // Host verification: `aginx-term --ppm out.ppm` renders the launcher into a P6
 // PPM without touching DRM (same pattern as bootcard --ppm).
 
+mod browser; // v4⑥ 活体结果面 CDP 面板客户端（接线于 main loop）
 mod cjk;
 mod drm;
 mod font;
@@ -49,6 +48,25 @@ const ROW_GAP: usize = 8; // extra px between terminal text rows
 const KEYCAP: u32 = 0x000A1410; // key fill
 const UNAVAIL: u32 = 0x00115A3F; // dimmed green for missing apps
 
+// 面法待机面 (09-07): near-black with a faint green cast; v4⑤ the idle
+// cursor breathes at the top anchor (same line the transcript starts on),
+// typed text anchors there too.
+const IDLE_BG: u32 = 0x00020503; // near-black, faint green cast
+const MGREEN: u32 = 0x0000FF41; // Matrix green — typewriter lines / cursor
+
+// 开机剧情 v4⑤ prompt face: glyph scale 5 (30×40 px cells). Cursor and
+// typed text share the top-left anchor (x=w/12, y=h*8/100 — clears the
+// front camera punch-hole); idle = bare breathing cursor on that line.
+const PROMPT_CS: usize = 5;
+
+/// 呼吸光标 (v4⑤): level 0..=16 → 35%..100% of MGREEN per channel.
+/// L0=0x00005917, L8=0x0000AB2C, L16=MGREEN — the golden tests pin these.
+fn breath_shade(level: u8) -> u32 {
+    let pct = 35 + 65 * level as u32 / 16;
+    let ch = |c: u32| (c * pct + 50) / 100;
+    (ch((MGREEN >> 16) & 0xFF) << 16) | (ch((MGREEN >> 8) & 0xFF) << 8) | ch(MGREEN & 0xFF)
+}
+
 // M40 candidate strip: floats over the terminal's bottom rows while 拼
 // is on — 8 slots (composing buffer, 6 candidates, page arrow).
 const IME_STRIP_H: usize = 120;
@@ -70,6 +88,105 @@ const VOICE_EYE: &str = "/run/aginx-voice/eye.jpg";
 // term blits it with no JPEG decode (the encode+decode round trip stays
 // only for QR, which reads eye.jpg at 2 Hz). Preferred when present.
 const VOICE_EYE_RAW: &str = "/run/aginx-voice/eye.raw";
+// v4⑥: the live result page source — voice publishes the full phosphor
+// HTML here (atomic tmp+rename) before flipping face.result; term attaches
+// it to the engine as a data: URL (browser.rs) and the panel shows the
+// LIVE page (scrollable). The v4④ result.img PNG fallback is retired
+// (v4⑥S5); ①a replaces the do-nothing gap: a missing/empty file now
+// rebuilds the page from the session ledger (below) instead of silently
+// keeping the prompt face.
+const VOICE_RESULT_HTML: &str = "/run/aginx-voice/result.html";
+
+// ---------------- ①a 账本恢复（结果页重建） ----------------
+//
+// 结果旗立着但 result.html 没了（voice 死在 rename 前、/run 被清、term
+// 自己重启撞上文件丢失）——从会话账 fold 出最后一个 done(ok) 文本重建
+// 降级页。稳态不变：result.html 文件接力仍是正路，这里只买崩溃恢复，
+// 显示来自真源（D8 账）而不是又一个旁路文件。
+
+/// 化身根：AGINX_HOME 覆写（试跑隔离），否则直钉平台默认 /home/.aginx
+/// ——与 server unit 钉的 AGINX_HOME=/home/.aginx 同一处（M25 HOME=/home）。
+/// 不走 HOME 推导：term 由 init.d 拉起、环境里 HOME=/（设备实测），按
+/// HOME 解析会落 /.aginx 的空处。
+fn workspaces_root() -> std::path::PathBuf {
+    if let Ok(h) = std::env::var("AGINX_HOME") {
+        return std::path::PathBuf::from(h).join("workspaces");
+    }
+    std::path::PathBuf::from("/home/.aginx/workspaces")
+}
+
+/// 账尾最后一个非空 done(ok) 文本。err/空文本 done 不算结果——旗只在
+/// 成功轮收口后立起。坏行跳过（账可能截在半行上）。
+fn fold_last_done_ok(log: &std::path::Path) -> Option<String> {
+    let content = std::fs::read_to_string(log).ok()?;
+    let mut last: Option<String> = None;
+    for line in content.lines() {
+        if let Ok(agi::Frame::Done(d)) = serde_json::from_str(line.trim()) {
+            if d.ok && !d.text.trim().is_empty() {
+                last = Some(d.text);
+            }
+        }
+    }
+    last
+}
+
+/// 降级壳：三钉（黑底 / min-height 2340 / 视口 1080——引擎收据，voice
+/// render.rs PANEL 同款）+ 磷光可读性地板。**不做 markdown 化**——排版
+/// 归 aginxbrowser（①b 起 term 递原文给引擎 /render），恢复页就是原文。
+fn degraded_shell(md: &str) -> String {
+    let mut esc = String::with_capacity(md.len());
+    for c in md.chars() {
+        match c {
+            '&' => esc.push_str("&amp;"),
+            '<' => esc.push_str("&lt;"),
+            '>' => esc.push_str("&gt;"),
+            other => esc.push(other),
+        }
+    }
+    format!(
+        concat!(
+            "<!doctype html><html><head><meta charset=\"utf-8\">",
+            "<meta name=\"viewport\" content=\"width=1080\">",
+            "<style>body{{background:#000;min-height:2340px}}",
+            "pre{{white-space:pre-wrap;color:#8cffb0;font-size:36px;",
+            "line-height:1.75;padding:24px;margin:0}}</style></head>",
+            "<body><pre>{}</pre></body></html>"
+        ),
+        esc
+    )
+}
+
+/// 从账重建结果页 HTML。等值护栏：fold 出的文本必须与 face.line 一致
+/// ——母体直答不走账（v0 无账），对不上时账尾是别的化身（或旧轮）的
+/// 结果，投上去就是张冠李戴；对不上就放弃恢复（文本面兜底=一等降级）。
+/// 多化身按账 mtime 从新到旧依次试——即便命中旧账，展示的字节也与
+/// line 全同，最坏只是出处歧义，没有内容错。
+fn recover_result_html(root: &std::path::Path, line: Option<&str>) -> Option<String> {
+    let want = line?.trim();
+    if want.is_empty() {
+        return None;
+    }
+    let mut cands: Vec<(std::time::SystemTime, std::path::PathBuf)> = std::fs::read_dir(root)
+        .ok()?
+        .filter_map(|e| e.ok())
+        .filter(|e| e.file_type().map(|t| t.is_dir()).unwrap_or(false))
+        .filter_map(|e| {
+            let log = e.path().join("sessions").join("main.jsonl");
+            let mtime = std::fs::metadata(&log).ok()?.modified().ok()?;
+            Some((mtime, log))
+        })
+        .collect();
+    cands.sort();
+    cands.reverse();
+    for (_, log) in cands {
+        if let Some(text) = fold_last_done_ok(&log) {
+            if text.trim() == want {
+                return Some(degraded_shell(&text));
+            }
+        }
+    }
+    None
+}
 
 fn fill_rect(pix: &mut [u32], pitch: usize, w: usize, h: usize, x: i32, y: i32, rw: i32, rh: i32, c: u32) {
     let (mut x, mut y, mut rw, mut rh) = (x, y, rw, rh);
@@ -240,24 +357,6 @@ fn draw_centered(pix: &mut [u32], pitch: usize, w: usize, h: usize, font: &[[u8;
     draw_text(pix, pitch, w, h, font, (w as i32 - tw) / 2, y, s, scale, c);
 }
 
-/// Truncate a string to `cols` display columns (CJK counts 2, matching
-/// text_w) — voice-face strings come from ASR/SSID scans and can be long.
-fn clip_cols(s: &mut String, cols: usize) {
-    let mut used = 0usize;
-    let mut cut = s.len();
-    for (i, ch) in s.char_indices() {
-        used += if cjk::char_width(ch) == 2 { 2 } else { 1 };
-        if used > cols {
-            cut = i;
-            break;
-        }
-    }
-    if cut < s.len() {
-        s.truncate(cut);
-        s.push('…');
-    }
-}
-
 // ---------------- pty ----------------
 
 struct Child {
@@ -420,33 +519,42 @@ enum Mode {
     /// /home/photos, then a full-frame view with tap-sides paging.
     /// Decode is libjpeg-turbo (no JPEG decode hardware on SM7250).
     Photos(photos::Photos),
-    /// Voice dialog face (launcher VOICE tile, M42a): display-only
-    /// rendering of /run/aginx-voice/face, written by the aginx-voice daemon.
-    /// No pty, no keyboard — PTT (volume-down) is the input path.
-    Voice,
+    /// 待命面 (开机剧情 v4, 面法 09-07 终稿): the resting screen — pure
+    /// Matrix-cast near-black + the blinking block cursor at the prompt
+    /// origin. No wordmark, no targets, no theater: the console only says
+    /// what was actually said. Boot lands here; wake returns here.
+    Idle,
+    /// 眼视图 (面法 09-07, promoted from the M42g voice-face sub-state):
+    /// fullscreen viewfinder. Entered from ANY mode when the aginx-voice
+    /// face opens the eye (eye false→true), left when it closes — the
+    /// prior mode is boxed away and restored. Pure display; close keys
+    /// are physical (音量+ toggles, 音量下 closes).
+    Eye,
 }
 
 // ---------------- voice face ----------------
 
-/// M42a: the JSON aginx-voice writes to /run/aginx-voice/face. Every field defaults
-/// so a partially-written doc never kills the renderer; `alive` lives on
-/// VoiceView, not here — it means "the file read+parsed at least once".
+/// M42a: the JSON aginx-voice writes to /run/aginx-voice/face. 面法 09-07
+/// → 开机剧情 v4: term reads the eye flag, the transcript line and the
+/// result flag (voice may write extra fields; serde ignores them).
+/// `alive` lives on VoiceView, not here — it means "the file read+parsed
+/// at least once" (a vanished file = voice daemon death = eye treated as
+/// closed).
 #[derive(serde::Deserialize, Default)]
 struct FaceDoc {
-    state: String,
     #[serde(default)]
-    listening: bool,
-    #[serde(default)]
-    busy: bool,
-    #[serde(default)]
-    /// M42g: viewfinder on — main area renders eye.jpg, lines demote to a
-    /// bottom strip. Defaults false so face docs from an older aginx-voice
-    /// still render as before.
+    /// M42g: viewfinder on — Mode::Eye takes the whole panel.
     eye: bool,
+    /// 开机剧情 v4: the live result page is on the panel (term attached
+    /// result.html to the engine on this flag's rising edge). Any new turn
+    /// (PTT down / ASR landing) clears it — voice writes result=false.
     #[serde(default)]
-    lines: Vec<(bool, String)>,
+    result: bool,
+    /// The text typed onto the prompt face — the ASR transcript (v4③) or
+    /// a text-fallback reply. '\n' forces a row break; term animates the
+    /// typewriter reveal and wraps at the panel width.
     #[serde(default)]
-    hint: String,
+    line: Option<String>,
 }
 
 #[derive(Default)]
@@ -476,6 +584,16 @@ struct VoiceView {
     /// 2.2 MB file buffer (clear + read_to_end keeps the capacity).
     raw_dirty: bool,
     raw_buf: Vec<u8>,
+    /// 开机剧情 typewriter: chars of doc.line already revealed
+    /// (across '\n'), plus the reveal baseline for the ~90 ms/char clock.
+    /// The daemon swaps the text; an extension (a longer transcript/reply
+    /// replacing a prefix) keeps the revealed prefix and restarts the
+    /// clock from that baseline, anything else types from scratch.
+    line_prog: usize,
+    line_base: usize,
+    line_seen: Option<String>,
+    /// None until the first line lands; Some(t) = the clock started at t
+    type_at: Option<Instant>,
 }
 
 impl VoiceView {
@@ -531,8 +649,7 @@ impl VoiceView {
             // Stamp the session open (see the field doc). Affinity is NOT
             // set here — it follows the eye FLAG from main(), in every
             // mode: the stream can outlive the voice view (the user backs
-            // out while cam-shot keeps going), and this poll only runs in
-            // Mode::Voice.
+            // out while cam-shot keeps going).
             self.eye_open = Some(std::time::SystemTime::now());
         }
         let opened = self.eye_open;
@@ -600,6 +717,16 @@ impl VoiceView {
         }
         upscale565(pix, pitch, dw, dh, bytes, sw, sh);
         true
+    }
+
+    /// 开机剧情 v4: the transcript typewriter is mid-reveal — drives the
+    /// loop's 90 ms poll cadence so the reveal animates smoothly instead
+    /// of jumping 4-5 chars per idle tick.
+    fn typing(&self) -> bool {
+        match self.doc.line.as_ref() {
+            Some(l) if !l.is_empty() => self.line_prog < l.chars().count(),
+            _ => false,
+        }
     }
 }
 
@@ -803,6 +930,7 @@ struct Render<'a> {
 impl<'a> Render<'a> {
     fn launcher(&self, pix: &mut [u32], entries: &[launch::Entry], g: &launch::Geom) {
         fill_rect(pix, self.pitch, self.w, self.h, 0, 0, self.w as i32, self.h as i32, BG);
+        self.toolbar(pix, g.m, g.toolbar_h);
         draw_centered(pix, self.pitch, self.w, self.h, self.font, g.toolbar_h as i32 + 14, "AGINXOS", 5, GREEN);
         for (i, e) in entries.iter().enumerate() {
             let y0 = (g.by0 + i * (g.bh + g.gap)) as i32;
@@ -935,80 +1063,116 @@ impl<'a> Render<'a> {
         draw_centered(pix, self.pitch, self.w, self.h, self.font, self.h as i32 - 30, "< TAP TO PAGE >", 2, DIM);
     }
 
-    /// Voice dialog face (M42a, launcher VOICE tile): pure rendering of
-    /// the doc aginx-voice writes to /run/aginx-voice/face. Phosphor rules — agent
-    /// lines green, user lines white (prefixed ">"), selected SSID white,
-    /// psk shown verbatim (read-back confirmation needs to be visible).
-    /// No touch targets below the BACK toolbar: the screen is a display.
-    ///
-    /// M42g eye=true: the screen is the result canvas, not a chat log — the
-    /// live viewfinder frame takes the body, dialog lines demote to a
-    /// bottom strip (scale 2), and the hint explains the eye keys.
-    fn voice(&self, pix: &mut [u32], v: &VoiceView, g: &launch::Geom) {
+    /// 待命面 (v4⑤): pure near-black + a breathing block cursor. `line`
+    /// (the transcript / text fallback) types left-aligned from the top
+    /// anchor (below the front camera), wrapped at the panel width (~16
+    /// CJK hanzi per row at scale 5); a solid cursor rides the reveal
+    /// edge while typing, then breathes at the end of the last row. With
+    /// nothing typed the cursor breathes at the top anchor. `breath` =
+    /// cursor level 0..=16 (16 = full MGREEN); None = no cursor (demo
+    /// beats that only want text).
+    fn prompt(&self, pix: &mut [u32], line: &str, prog: usize, breath: Option<u8>) {
+        fill_rect(pix, self.pitch, self.w, self.h, 0, 0, self.w as i32, self.h as i32, IDLE_BG);
+        let cs = PROMPT_CS;
+        let x0 = self.w / 12; // bootcard's left column
+        let y0 = self.h * 8 / 100; // below the front camera punch-hole
+        let avail = self.w - x0 - cs * 6; // right margin: one cell
+        let chars: Vec<char> = line.chars().collect();
+        let cw = |ch: char| if cjk::char_width(ch) == 2 { 12 * cs } else { 6 * cs };
+        // wrap into rows at the panel width ('\n' forces a break)
+        let mut rows: Vec<(usize, usize)> = Vec::new(); // (start char, len)
+        let (mut start, mut run_w) = (0usize, 0usize);
+        for (i, &ch) in chars.iter().enumerate() {
+            if ch == '\n' {
+                rows.push((start, i - start));
+                start = i + 1;
+                run_w = 0;
+            } else {
+                let w = cw(ch);
+                if run_w + w > avail && i > start {
+                    rows.push((start, i - start));
+                    start = i;
+                    run_w = w;
+                } else {
+                    run_w += w;
+                }
+            }
+        }
+        if start < chars.len() || rows.is_empty() {
+            rows.push((start, chars.len() - start));
+        }
+        let total = chars.len();
+        let shown_end = prog.min(total);
+        let row_h = 8 * cs + 24;
+        let mut cursor: Option<(i32, i32)> = None;
+        for (ri, &(rs, rl)) in rows.iter().enumerate() {
+            let y = (y0 + ri * row_h) as i32;
+            if y + (8 * cs) as i32 > self.h as i32 - 24 {
+                break; // panel bottom — rows beyond are dropped
+            }
+            let take = shown_end.saturating_sub(rs).min(rl);
+            if take > 0 {
+                let shown: String = chars[rs..rs + take].iter().collect();
+                draw_text(pix, self.pitch, self.w, self.h, self.font, x0 as i32, y, &shown, cs, MGREEN);
+            }
+            if take < rl || (take == rl && shown_end < total) {
+                // the reveal edge lands on/after this row — solid cursor
+                let edge: usize = chars[rs..rs + take].iter().map(|&c| cw(c)).sum();
+                cursor = Some((x0 as i32 + edge as i32, y));
+                break;
+            }
+        }
+        if shown_end == total {
+            // typed out — the cursor breathes at the end of the last row;
+            // empty line = the bare idle face, cursor breathes at the top
+            // anchor (where the next transcript will start typing)
+            let (cx, cy) = if total == 0 {
+                (x0 as i32, y0 as i32)
+            } else {
+                let li = rows.len() - 1;
+                let (lr, ll) = rows[li];
+                let edge: usize = chars[lr..lr + ll].iter().map(|&c| cw(c)).sum();
+                (x0 as i32 + edge as i32, (y0 + li * row_h) as i32)
+            };
+            if let Some(level) = breath {
+                fill_rect(pix, self.pitch, self.w, self.h, cx, cy, (5 * cs) as i32, (8 * cs) as i32, breath_shade(level));
+            }
+        } else if let Some((cx, cy)) = cursor {
+            fill_rect(pix, self.pitch, self.w, self.h, cx, cy, (5 * cs) as i32, (8 * cs) as i32, MGREEN);
+        }
+    }
+
+    /// 眼视图 (面法 09-07, was the M42g eye branch of the voice face):
+    /// fullscreen viewfinder — eye box = whole panel, JPEG frame by
+    /// nearest-neighbor aspect-fill. The raw RGB565 fast path blits fused
+    /// straight into the back buffer at render dispatch and never reaches
+    /// here; this is the JPEG fallback plus the first-frame placeholder.
+    fn eye(&self, pix: &mut [u32], v: &VoiceView, g: &launch::Geom) {
         fill_rect(pix, self.pitch, self.w, self.h, 0, 0, self.w as i32, self.h as i32, BG);
-        self.toolbar(pix, g.m, g.toolbar_h);
-        draw_centered(pix, self.pitch, self.w, self.h, self.font, g.toolbar_h as i32 + 14, "VOICE", 5, GREEN);
-        if !v.alive {
-            draw_centered(pix, self.pitch, self.w, self.h, self.font, (self.h as i32 - 8 * 3) / 2, "(语音服务未运行)", 3, UNAVAIL);
-            return;
-        }
-        let d = &v.doc;
-        // status strip under the title
-        if d.listening {
-            draw_centered(pix, self.pitch, self.w, self.h, self.font, g.toolbar_h as i32 + 90, "正在听", 4, WHITE);
-        } else if d.busy {
-            draw_centered(pix, self.pitch, self.w, self.h, self.font, g.toolbar_h as i32 + 90, "处理中", 4, DIM);
-        }
-        // M47⑤b eye=true: fullscreen viewfinder (user receipt 2026-09-05
-        // 「界面要做成全屏」) — the frame fills the whole panel (eye box =
-        // (0,0,w,h)), covering toolbar/title/strips. Nothing else draws
-        // while frames flow; the close keys are physical (音量+ toggles,
-        // 音量下).
-        if d.eye {
-            fill_rect(pix, self.pitch, self.w, self.h, 0, 0, self.w as i32, self.h as i32, BG);
-            if let Some(b) = &v.eye_img {
-                let (_, _, bw, bh) = g.eye_box();
-                if bh > 0 && b.w > 0 && b.h > 0 {
-                    // aspect-FILL by nearest-neighbor upscale (decode_scaled
-                    // only downscales; 720→1080 upscaling lives here). The
-                    // frame's --aspect already matches the box.
-                    let (dw, dh) = (bw, bh);
-                    let (sw, sh) = (b.w as usize, b.h as usize);
-                    let mut sx = vec![0usize; dw];
-                    for (i, s) in sx.iter_mut().enumerate() {
-                        *s = i * sw / dw;
-                    }
-                    for j in 0..dh {
-                        let row = (j * sh / dh) * sw;
-                        let dst = j * self.pitch;
-                        for i in 0..dw {
-                            pix[dst + i] = b.pix[row + sx[i]];
-                        }
+        if let Some(b) = &v.eye_img {
+            let (_, _, bw, bh) = g.eye_box();
+            if bh > 0 && b.w > 0 && b.h > 0 {
+                // aspect-FILL by nearest-neighbor upscale (decode_scaled
+                // only downscales; 720→1080 upscaling lives here). The
+                // frame's --aspect already matches the box.
+                let (dw, dh) = (bw, bh);
+                let (sw, sh) = (b.w as usize, b.h as usize);
+                let mut sx = vec![0usize; dw];
+                for (i, s) in sx.iter_mut().enumerate() {
+                    *s = i * sw / dw;
+                }
+                for j in 0..dh {
+                    let row = (j * sh / dh) * sw;
+                    let dst = j * self.pitch;
+                    for i in 0..dw {
+                        pix[dst + i] = b.pix[row + sx[i]];
                     }
                 }
-            } else {
-                // 第一帧在路上（cam-shot 3 帧曝光要 ~2s）
-                draw_centered(pix, self.pitch, self.w, self.h, self.font, (self.h as i32 - 8 * 4) / 2, "取景中…", 4, GREEN);
             }
-            return;
+        } else {
+            // 第一帧在路上（cam-shot 3 帧曝光要 ~2s）
+            draw_centered(pix, self.pitch, self.w, self.h, self.font, (self.h as i32 - 8 * 4) / 2, "取景中…", 4, GREEN);
         }
-        // fresh boot, nothing said yet: the one big affordance
-        if d.state == "idle" && d.lines.is_empty() {
-            draw_centered(pix, self.pitch, self.w, self.h, self.font, (self.h as i32 - 8 * 4) / 2, "按住音量下键说：连接无线网络", 4, GREEN);
-        }
-        let mut y = g.toolbar_h as i32 + 170;
-        // dialog transcript: last 6 lines, user white / agent green (user
-        // receipt 2026-09-04: 对话行太小 → scale 4)
-        for (is_user, line) in d.lines.iter().rev().take(6).rev() {
-            let (c, pfx) = if *is_user { (WHITE, ">") } else { (GREEN, "") };
-            let mut s = format!("{pfx}{line}");
-            clip_cols(&mut s, 48);
-            draw_text(pix, self.pitch, self.w, self.h, self.font, g.m as i32, y, &s, 4, c);
-            y += 72;
-        }
-        // hint line (aginx-voice's default: how to talk, how to bail)
-        let hint = if d.hint.is_empty() { "按住音量下键说：连接无线网络" } else { d.hint.as_str() };
-        draw_centered(pix, self.pitch, self.w, self.h, self.font, g.kb_panel_y as i32 - 40, hint, 3, UNAVAIL);
     }
 
     /// Header strip: [BACK] at the right, like the launcher header —
@@ -1250,6 +1414,24 @@ impl<'a> Render<'a> {
     }
 }
 
+/// The prompt face's render (开机剧情 v4): the transcript typewriter face.
+/// `breath` = cursor level 0..=16. The live result page never comes through
+/// here — its frames blit straight into the back buffer (result_frame).
+fn render_prompt(r: &Render, pix: &mut [u32], voice: &VoiceView, breath: u8) {
+    let line = voice.doc.line.as_deref().unwrap_or("");
+    r.prompt(pix, line, voice.line_prog, Some(breath));
+}
+
+/// v4⑥: fullscreen 1:1 row-copy of a live-panel screencast frame straight
+/// into the DRM back buffer — the eye raw path's `direct` sibling. No
+/// canvas, no 10 MB copy. Caller guarantees the frame is panel-sized.
+fn blit_result_direct(back: &mut [u32], pitch: usize, bm: &aginx_img::Bitmap) {
+    let bw = bm.w as usize;
+    for j in 0..bm.h as usize {
+        back[j * pitch..j * pitch + bw].copy_from_slice(&bm.pix[j * bw..j * bw + bw]);
+    }
+}
+
 // ---------------- PPM host mode ----------------
 
 fn ppm_dump(path: &str, pix: &[u32], w: usize, h: usize, pitch: usize) -> std::io::Result<()> {
@@ -1299,6 +1481,40 @@ fn host_ppm(out: &str) {
     let entries = launch::entries();
     let lg = launch::Geom::new(w, h, kg.extra_y, entries.len());
     let r = Render { font: &font, w, h, pitch };
+    // 开机剧情 v4⑤: the prompt-face beats — top-anchor breathing cursor (full
+    // + dim ends of the breath range), mid-typing CJK transcript (wrap
+    // exercise, top anchor), result frame — dumps exist to eyeball every
+    // console beat on the host.
+    {
+        let mut pixi = vec![0u32; pitch * h];
+        r.prompt(&mut pixi, "", 0, Some(16));
+        let path = format!("{}-prompt-idle", out);
+        if let Err(e) = ppm_dump(&path, &pixi, w, h, pitch) {
+            eprintln!("ppm: {e}");
+        }
+        println!("wrote {path}");
+        let mut pixd = vec![0u32; pitch * h];
+        r.prompt(&mut pixd, "", 0, Some(0));
+        let path = format!("{}-prompt-idle-dim", out);
+        if let Err(e) = ppm_dump(&path, &pixd, w, h, pitch) {
+            eprintln!("ppm: {e}");
+        }
+        println!("wrote {path}");
+    }
+    {
+        let mut pixi = vec![0u32; pitch * h];
+        r.prompt(
+            &mut pixi,
+            "帮我把客厅的摄像头画面调出来，再看看今天下午的日程安排",
+            14,
+            None,
+        );
+        let path = format!("{}-prompt-typing", out);
+        if let Err(e) = ppm_dump(&path, &pixi, w, h, pitch) {
+            eprintln!("ppm: {e}");
+        }
+        println!("wrote {path}");
+    }
     r.launcher(&mut pix, &entries, &lg);
     r.keyboard(&mut pix, &kg, &kb0());
 
@@ -1511,10 +1727,24 @@ fn main() {
 
     let mut term = Term::new(term_cols, rows_for(kb_visible, scale));
     let mut parser = vte::Parser::new();
-    // 开机即语音面（开机体验定档）：home=voice，工具栏 BACK 仍回 Launcher。
-    let mut mode = Mode::Voice;
-    // M42a: voice dialog face view (polled from /run/aginx-voice/face)
+    // 开机剧情 v4: boot lands on the prompt face (纯黑+光标). The eye race
+    // still gets one face poll first — the eye open wins if voice already
+    // flagged it.
     let mut voice = VoiceView::default();
+    let mut mode = {
+        voice.poll();
+        if voice.alive && voice.doc.eye {
+            Mode::Eye
+        } else {
+            Mode::Idle
+        }
+    };
+    // 面法: the eye flag drives Mode::Eye transitions in the loop — this
+    // mirrors the loop's edge detector (voice.poll() already ran above).
+    let mut eye_on_prev = voice.alive && voice.doc.eye;
+    // 面法: mode boxed away while Mode::Eye has the screen — restored on
+    // eye close; None (boot straight into the eye) → Idle.
+    let mut mode_before_eye: Option<Box<Mode>> = None;
     // M47⑤t: last affinity decision from the eye flag (see the main-loop
     // watcher) — keeps sched_setaffinity off the no-change path.
     let mut eye_parked = false;
@@ -1531,8 +1761,8 @@ fn main() {
             Err(e) => eprintln!("aginx-term: AGINX_TERM_START spawn: {e}"),
         }
     }
-    // 未连网的开机不再自动拉 wizard：语音面 + 自动睁眼就是装机流程
-    // （警告 → 对准配对码，M42c 链）。WIFI SETUP 仍是 Launcher 瓦片，手动可达。
+    // 未连网的开机不再自动拉 wizard：纯光标面 + PTT 语音流程就是装机流程
+    // （对准配对码，M42c 链）。WIFI SETUP 仍是 Launcher 瓦片，手动可达。
     let mut touch = TouchReader::open("/dev/input/event2", w as i32, h as i32);
     // M15: qpnp_pon keys (power + volume-down) on event1 — hardcoded like
     // the touch node, per HARDWARE.md.
@@ -1560,7 +1790,8 @@ fn main() {
                     r.photos_list(buf, p, &lg);
                 }
             }
-            Mode::Voice => r.voice(buf, &voice, &lg),
+            Mode::Idle => render_prompt(&r, buf, &voice, 16),
+            Mode::Eye => r.eye(buf, &voice, &lg),
             Mode::Running(_) => {
                 fill_rect(buf, pitch, w, h, 0, 0, w as i32, h as i32, BG);
                 r.toolbar(buf, lg.m, lg.toolbar_h);
@@ -1582,19 +1813,24 @@ fn main() {
 
     let mut last_blink = Instant::now();
     let mut blink_on = false;
+    // v4⑤ breath tick: the idle cursor's phase (0..=32, triangle — level
+    // = tick<=16 ? tick : 32-tick), starts full to match the first frame
+    let mut last_breath = Instant::now();
+    let mut breath_tick: u8 = 16;
     let mut kb_dirty = true;
     // Hold-to-repeat (DEL / arrows), Termux-style: the event + next fire
     // deadline. Repeats go through inject() like every other input.
     let mut held: Option<(InputEvent, Instant)> = None;
     let mut down_y = 0usize; // where the current touch started
-    // M17 debug/voice hook: AGINX_TERM_INJECT=1 watches /run/aginx-term.inject —
-    // any process can drop text there and it types into the running
-    // session as TextInputEvent, verbatim (\r included if written). This
-    // is the exact path M18's ASR callback takes, testable without audio.
-    let inject_file = std::env::var("AGINX_TERM_INJECT").ok().as_deref() == Some("1");
     // M47⑤f frame-arrival watch (armed lazily — the directory may not
     // exist yet when term starts at boot).
     let (ino_fd, mut ino_wd) = ino_init();
+    // v4⑥: the live result page — a CDP panel client (browser.rs). Lives
+    // exactly while face.result is set; screencast frames land in
+    // result_frame and present under the Idle && result && !blanked gate.
+    let mut live: Option<browser::Browser> = None;
+    let mut result_frame: Option<aginx_img::Bitmap> = None;
+    let mut result_prev = false;
 
     loop {
         // drain pty output
@@ -1629,8 +1865,8 @@ fn main() {
             }
         }
 
-        // input (touch / power key / pty)
-        let mut fds = [libc::pollfd { fd: -1, events: libc::POLLIN, revents: 0 }; 4];
+        // input (touch / power key / pty / CDP)
+        let mut fds = [libc::pollfd { fd: -1, events: libc::POLLIN, revents: 0 }; 6];
         let mut nfds = 0usize;
         if ino_fd >= 0 && ino_wd < 0 {
             ino_wd = ino_rearm(ino_fd);
@@ -1648,19 +1884,43 @@ fn main() {
             nfds += 1;
         }
         // M47⑤f: the frame-arrival watch rides the poll set while the
-        // voice view is on screen — every eye.raw / eye.jpg / face publish
-        // then wakes the loop the instant it lands.
-        if ino_wd >= 0 && matches!(mode, Mode::Voice) {
+        // eye view is on screen — every eye.raw / eye.jpg / face publish
+        // then wakes the loop the instant it lands. 开机剧情 v4: same while
+        // the result face shows (face/result.jpg publishes wake the loop).
+        if ino_wd >= 0
+            && (matches!(mode, Mode::Eye)
+                || (matches!(mode, Mode::Idle) && voice.doc.result))
+        {
             fds[nfds].fd = ino_fd;
             nfds += 1;
+        }
+        // v4⑥: the live page's CDP socket — POLLIN wakes the pump the
+        // instant a screencast frame (or Setup reply) lands; POLLOUT arms
+        // only while a large command (the ~130 KB navigate) is mid-drain.
+        if let Some(b) = live.as_ref() {
+            if let Some(fd) = b.fd() {
+                fds[nfds].fd = fd;
+                fds[nfds].events = libc::POLLIN
+                    | if b.wants_write() {
+                        libc::POLLOUT
+                    } else {
+                        0
+                    };
+                nfds += 1;
+            }
         }
         let timeout: libc::c_int = if redraw {
             0
         } else if held.is_some() || power_down.is_some() {
             30
-        } else if matches!(mode, Mode::Voice) {
-            // M47⑤b: the voice face polls files on this cadence — 400 ms
-            // capped the viewfinder display at 2.5 fps even with cam-shot
+        } else if live.as_ref().and_then(|b| b.fd()).is_some() {
+            // v4⑥: the panel pump cadence — frames and Setup replies wake
+            // via POLLIN; this timer only carries the 0.3 s heartbeat and
+            // the Setup op pacing.
+            60
+        } else if matches!(mode, Mode::Eye) {
+            // M47⑤b: the eye polls files on this cadence — 400 ms capped
+            // the viewfinder display at 2.5 fps even with cam-shot
             // publishing ~8 fps (user receipt 2026-09-05 「看起来很卡」).
             // M47⑤f: with the frame-arrival watch armed, IN_MOVED_TO wakes
             // the loop the instant a frame or face write lands — the timer
@@ -1670,6 +1930,14 @@ fn main() {
             if ino_wd >= 0 {
                 200
             } else if voice.doc.eye { 12 } else { 30 }
+        } else if matches!(mode, Mode::Idle) && voice.typing() {
+            // 开机剧情 v4: the transcript typewriter animates at ~90 ms/char —
+            // poll the face file on that cadence while the reveal is live
+            90
+        } else if matches!(mode, Mode::Idle) && !voice.doc.result {
+            // v4⑤: the breathing cursor cadence (16 levels × 125 ms ≈ 4 s
+            // period); a result on the panel is static — keep the idle 400 ms
+            125
         } else {
             400
         };
@@ -1686,6 +1954,16 @@ fn main() {
                         // scroll.
                         blanked = false;
                         d.dpms(true);
+                        // 面法 09-07: waking from blank lands on the 待机面
+                        // (eye open → 眼视图). Debug modes (Running/
+                        // Launcher/Picker/Photos) restore in place.
+                        if matches!(mode, Mode::Idle | Mode::Eye) {
+                            mode = if voice.alive && voice.doc.eye {
+                                Mode::Eye
+                            } else {
+                                Mode::Idle
+                            };
+                        }
                         redraw = true;
                     } else {
                     match ev {
@@ -1699,7 +1977,7 @@ fn main() {
                             }
                             if y < lg.toolbar_h {
                                 // BACK fires on press, same as keys
-                                if lg.toolbar_hit(x, y, matches!(mode, Mode::Running(_) | Mode::Picker | Mode::Photos(_) | Mode::Voice))
+                                if lg.toolbar_hit(x, y, matches!(mode, Mode::Running(_) | Mode::Picker | Mode::Photos(_) | Mode::Launcher))
                                     == Some(launch::Toolbar::Back)
                                 {
                                     if let Mode::Running(c) = &mode {
@@ -1714,8 +1992,10 @@ fn main() {
                                         } else {
                                             mode = Mode::Launcher;
                                         }
-                                    } else if matches!(mode, Mode::Voice) {
-                                        mode = Mode::Launcher;
+                                    } else if matches!(mode, Mode::Launcher) {
+                                        // 面法: launcher is a debug face —
+                                        // BACK is the exit back to 待机面
+                                        mode = Mode::Idle;
                                     }
                                     redraw = true;
                                 }
@@ -1750,17 +2030,6 @@ fn main() {
                                             pkgs = read_available();
                                             pk_status.clear();
                                             mode = Mode::Picker;
-                                            redraw = true;
-                                        } else if entries[i2].voice {
-                                            // force the first face read (mtime
-                                            // reset), then poll paints it; the
-                                            // eye frame follows the same rule
-                                            // (M42g) so an open viewfinder
-                                            // paints its current frame at entry
-                                            voice.mtime = None;
-                                            voice.eye_mtime = None;
-                                            voice.raw_mtime = None;
-                                            mode = Mode::Voice;
                                             redraw = true;
                                         } else if entries[i2].photos {
                                             mode = Mode::Photos(photos::Photos::scan());
@@ -1972,13 +2241,22 @@ fn main() {
                         }
                         Touch::Drag(dy) => {
                             held = None; // finger slid off the key
-                            let kb_bot = if kb_visible { kg.extra_y } else { h };
-                            if down_y < kb_bot {
-                                if let Mode::Running(_) = mode {
-                                    let lines = dy / (8 * scale) as isize;
-                                    if lines != 0 {
-                                        term.scroll_view(lines);
-                                        redraw = true;
+                            // v4⑥: the result face is a fullscreen scroll
+                            // area — the live page scrolls directly, no
+                            // keyboard threshold involved.
+                            if matches!(mode, Mode::Idle) && voice.doc.result {
+                                if let Some(b) = live.as_mut() {
+                                    b.scroll_by(dy as isize);
+                                }
+                            } else {
+                                let kb_bot = if kb_visible { kg.extra_y } else { h };
+                                if down_y < kb_bot {
+                                    if let Mode::Running(_) = mode {
+                                        let lines = dy / (8 * scale) as isize;
+                                        if lines != 0 {
+                                            term.scroll_view(lines);
+                                            redraw = true;
+                                        }
                                     }
                                 }
                             }
@@ -2005,6 +2283,16 @@ fn main() {
                                 if blanked {
                                     blanked = false;
                                     d.dpms(true);
+                                    // 面法 09-07: waking from blank lands on
+                                    // the 待机面 (eye open → 眼视图); debug
+                                    // modes restore in place
+                                    if matches!(mode, Mode::Idle | Mode::Eye) {
+                                        mode = if voice.alive && voice.doc.eye {
+                                            Mode::Eye
+                                        } else {
+                                            Mode::Idle
+                                        };
+                                    }
                                     redraw = true;
                                 } else {
                                     blanked = true;
@@ -2022,9 +2310,12 @@ fn main() {
                     redraw = true;
                 }
             }
-            // M47⑤f: frame-arrival wake — just drain; the voice poll below
-            // stats and renders if anything actually changed.
-            if ino_wd >= 0 && matches!(mode, Mode::Voice) {
+            // M47⑤f: frame-arrival wake — just drain; the eye/result poll
+            // below stats and renders if anything actually changed.
+            if ino_wd >= 0
+                && (matches!(mode, Mode::Eye)
+                    || (matches!(mode, Mode::Idle) && voice.doc.result))
+            {
                 let ij = i + if matches!(mode, Mode::Running(_)) { 1 } else { 0 };
                 if ij < nfds && fds[ij].revents & libc::POLLIN != 0 {
                     ino_drain(ino_fd);
@@ -2053,28 +2344,134 @@ fn main() {
             }
         }
 
-        // voice-path hook: file content types into the session, consumed
-        if inject_file {
-            if let Ok(s) = std::fs::read_to_string("/run/aginx-term.inject") {
-                let _ = std::fs::remove_file("/run/aginx-term.inject");
-                if !s.is_empty() {
-                    last_input = Instant::now();
-                    inject(&mut mode, &mut term, &mut parser, &InputEvent::Text(s));
+        // M42a voice face: polled in EVERY mode (⑤t) — the eye flag in this
+        // doc drives this process's CPU affinity. A live frame stream counts
+        // as activity — the screen must not blank mid-flow (a face write
+        // arrives exactly when the eye opens) — but that keep-awake, like
+        // the rendering, is Eye-mode-only.
+        // M42g: the viewfinder frame polls too — a frame landing ~1/s is
+        // activity; decode box is the whole panel.
+        let face = voice.poll();
+        // 面法 09-07: the eye FLAG drives Mode::Eye from ANY mode — open
+        // steals the screen (prior mode boxed away), close hands it back
+        // (dead prior → Idle). A vanished face file (voice daemon death
+        // mid-eye) counts as closed.
+        let eye_on = voice.alive && voice.doc.eye;
+        if eye_on != eye_on_prev {
+            eye_on_prev = eye_on;
+            if eye_on {
+                mode_before_eye = Some(Box::new(std::mem::replace(&mut mode, Mode::Eye)));
+            } else {
+                mode = mode_before_eye.take().map(|m| *m).unwrap_or(Mode::Idle);
+            }
+            redraw = true;
+        }
+        // v4⑥: face.result edges drive the live panel client. Rising: read
+        // result.html (voice publishes it BEFORE the flag; atomic rename)
+        // and dial the engine. ①a: file missing/empty (voice died before
+        // the rename, /run wiped) → rebuild a degraded page from the
+        // session ledger; ledger doesn't corroborate (mother-direct turns
+        // keep no ledger) → keep the prompt face (text stays first-class).
+        // Falls: teardown — closeTarget must go out even best-effort (滞留 target
+        // 会让引擎 RSS 爬坡).
+        let result_on = voice.alive && voice.doc.result;
+        if result_on != result_prev {
+            result_prev = result_on;
+            if result_on {
+                let mut html: Option<String> = None;
+                if let Ok(h) = std::fs::read_to_string(VOICE_RESULT_HTML) {
+                    if !h.trim().is_empty() {
+                        html = Some(h);
+                    }
+                }
+                if html.is_none() {
+                    if let Some(h) =
+                        recover_result_html(&workspaces_root(), voice.doc.line.as_deref())
+                    {
+                        eprintln!("aginx-term: result.html missing, rebuilt from ledger");
+                        html = Some(h);
+                    }
+                }
+                if let Some(h) = html {
+                    live = Some(browser::Browser::start(&h));
+                    result_frame = None;
+                }
+            } else {
+                if let Some(b) = live.as_mut() {
+                    b.teardown();
+                }
+                live = None;
+                result_frame = None;
+            }
+            redraw = true;
+        }
+        // v4⑥: pump the panel client every pass — Setup advances one CDP op,
+        // Live drains the socket (screencast frames: ack first, then decode)
+        // and keeps the 0.3 s heartbeat going. Decode is gated on the frame
+        // actually being presentable (Idle && result && !blanked): with the
+        // eye open or the panel blanked we still ack — the stream must not
+        // stall — but skip the ~70 ms jpeg decode.
+        if let Some(b) = live.as_mut() {
+            let can_present = matches!(mode, Mode::Idle) && voice.doc.result && !blanked;
+            if let Some(bm) = b.pump(Instant::now(), can_present) {
+                if bm.w as usize == w && bm.h as usize == h {
+                    result_frame = Some(bm);
+                } else {
+                    // 诊断期：帧解出但尺寸不合门（不进 result_frame 但仍重绘）
+                    eprintln!(
+                        "aginx-term: frame size {}x{} != panel {}x{}",
+                        bm.w, bm.h, w, h
+                    );
+                }
+                last_input = Instant::now();
+                redraw = true;
+            }
+        }
+        // 开机剧情 typewriter (#246): the daemon swaps doc.line, term owns
+        // the reveal (~90 ms/char, the bootcard END cadence). An extension
+        // keeps the revealed prefix (Act 3b's line 2 types after line 1)
+        // and restarts the clock from that baseline; any other change
+        // types from scratch.
+        let line_now = voice.doc.line.clone();
+        if line_now != voice.line_seen {
+            let extends = match (&voice.line_seen, &line_now) {
+                (Some(a), Some(b)) if b.starts_with(a.as_str()) => true,
+                _ => false,
+            };
+            if !extends {
+                voice.line_prog = 0;
+                voice.line_base = 0;
+            } else {
+                voice.line_base = voice.line_prog;
+            }
+            voice.line_seen = line_now;
+            voice.type_at = Some(Instant::now());
+            redraw = true;
+        }
+        if let Some(l) = voice.doc.line.as_ref() {
+            let total = l.chars().count();
+            // v4⑥ 修：want 是不封顶的时钟，打完后永远 > line_prog —— 不加
+            // typing() 门会每 pass 重绘（静态结果页 8.8 presents/s 白烧）。
+            if voice.line_prog < total {
+                let elapsed = voice
+                    .type_at
+                    .map(|t| t.elapsed().as_millis() as usize / 90)
+                    .unwrap_or(0);
+                let want = voice.line_base + elapsed;
+                if want > voice.line_prog {
+                    voice.line_prog = want.min(total);
                     redraw = true;
                 }
             }
         }
-
-        // M42a voice face: polled in EVERY mode (⑤t) — the eye flag in this
-        // doc drives this process's CPU affinity, and the stream can outlive
-        // the voice view. A live dialog counts as activity — the screen must
-        // not blank mid-flow (a face write arrives exactly when the user
-        // starts talking) — but that keep-awake, like the rendering, is
-        // Voice-mode-only.
-        // M42g: the viewfinder frame polls too — a frame landing ~1/s is
-        // activity; decode box is the body area under the toolbar.
-        let face = voice.poll();
-        if matches!(mode, Mode::Voice) {
+        // 开机剧情 v4: a result on the panel is activity — the page must
+        // not idle-blank while the user reads it (结果页不超时, 面法
+        // 09-07). The bare prompt face blanks normally (60 s): the console
+        // sleeps when you do.
+        if voice.doc.result {
+            last_input = Instant::now();
+        }
+        if matches!(mode, Mode::Eye) {
             let (_, _, eye_w, eye_h) = lg.eye_box();
             let eye = voice.poll_eye(eye_w as u32, eye_h as u32);
             if face || eye {
@@ -2094,14 +2491,24 @@ fn main() {
             set_eye_affinity(eye_parked);
         }
 
-        // blink toggle — repaint only the cursor's row
+        // blink toggle — repaint only the terminal cursor's row
         if last_blink.elapsed() > Duration::from_millis(500) {
             blink_on = !blink_on;
             last_blink = Instant::now();
             if matches!(mode, Mode::Running(_)) && term.view_offset == 0 {
                 term.mark_row(term.cursor_y);
-                redraw = true;
             }
+        }
+        // v4⑤ breath tick — the prompt cursor's only animation: advance the
+        // triangle phase, the next dispatch repaints the face. A result on
+        // the panel holds the frame still (结果页不超时).
+        if matches!(mode, Mode::Idle)
+            && !voice.doc.result
+            && last_breath.elapsed() >= Duration::from_millis(125)
+        {
+            last_breath = Instant::now();
+            breath_tick = (breath_tick + 1) % 32;
+            redraw = true;
         }
 
         // while blanked the framebuffer is not scanned out — skip render
@@ -2131,17 +2538,30 @@ fn main() {
                         r.photos_list(buf, p, &lg);
                     }
                 }
-                Mode::Voice => {
+                Mode::Idle => {
+                    // 开机剧情 v4 dispatch — prompt/result full-covers canvas.
+                    // v4⑥: a cached live-panel frame goes straight into the
+                    // back buffer (the eye raw path's direct sibling); only
+                    // the path between face flag and first frame shows the
+                    // prompt (cursor face).
+                    if let Some(bm) = result_frame.as_ref() {
+                        blit_result_direct(d.back_buf(), pitch, bm);
+                        direct = true;
+                    } else {
+                        let level = if breath_tick <= 16 { breath_tick } else { 32 - breath_tick };
+                        render_prompt(&r, buf, &voice, level);
+                    }
+                }
+                Mode::Eye => {
                     // M47⑤f: a fresh raw viewfinder frame blits fused
                     // (565→888 + upscale) straight into the back buffer — no
                     // Bitmap, no canvas detour, no 10 MB copy. Everything
-                    // else (dialog / 取景中… / the JPEG fallback frame)
-                    // renders into the canvas as before.
-                    direct = voice.doc.eye
-                        && voice.blit_eye_raw(d.back_buf(), pitch, w, h);
+                    // else (取景中… / the JPEG fallback frame) renders into
+                    // the canvas as before.
+                    direct = voice.blit_eye_raw(d.back_buf(), pitch, w, h);
                     if !direct {
-                        // voice() full-covers the canvas
-                        r.voice(buf, &voice, &lg);
+                        // eye() full-covers the canvas
+                        r.eye(buf, &voice, &lg);
                     }
                 }
                 Mode::Running(_) => {
@@ -2231,5 +2651,195 @@ mod tests {
         assert_eq!(lut[0xF800], 0xFF0000, "lut red");
         assert_eq!(lut[0x07E0], 0x00FF00, "lut green");
         assert_eq!(lut[0x001F], 0x0000FF, "lut blue");
+    }
+
+    /// 开机剧情 v4⑤ golden: the idle face is pure near-black + the block
+    /// cursor breathing at the top anchor (x=w/12=90, y=h*8/100=187, 25×40
+    /// at scale 5) — same line the next transcript will start typing on.
+    /// Breath levels 0/8/16 pin the shade ramp; the panel bottom renders
+    /// nothing when idle.
+    #[test]
+    fn prompt_face_idle_breathes_at_top_anchor() {
+        let font = font::font_init();
+        let (w, h) = (1080usize, 2340usize);
+        let r = Render { font: &font, w, h, pitch: w };
+        let at = |pix: &[u32], x: usize, y: usize| pix[y * w + x];
+        let mut pix = vec![0u32; w * h];
+        r.prompt(&mut pix, "", 0, Some(16));
+        assert_eq!(at(&pix, 5, 120), 0x00020503, "near-black BG");
+        assert_eq!(at(&pix, 118, 76), 0x00020503, "camera punch-hole zone empty");
+        assert_eq!(at(&pix, 95, 2241), 0x00020503, "nothing at the panel bottom when idle");
+        assert_eq!(at(&pix, 273, 1355), 0x00020503, "old wordmark spot retired");
+        // the one cursor block at the top anchor
+        assert_eq!(at(&pix, 95, 190), 0x0000FF41, "idle cursor at full breath");
+        assert_eq!(at(&pix, 114, 226), 0x0000FF41, "cursor block spans the cell");
+        // whole-panel palette: exactly the two console colors
+        for &p in &pix {
+            assert!(
+                matches!(p, 0x00020503 | 0x0000FF41),
+                "stray color {p:#010x} — idle face is BG + Matrix green only"
+            );
+        }
+        // breath ramp pins (see breath_shade); None hides the cursor
+        let mut pix0 = vec![0u32; w * h];
+        r.prompt(&mut pix0, "", 0, Some(0));
+        assert_eq!(at(&pix0, 95, 190), 0x00005917, "breath floor 35%");
+        let mut pix8 = vec![0u32; w * h];
+        r.prompt(&mut pix8, "", 0, Some(8));
+        assert_eq!(at(&pix8, 95, 190), 0x0000AB2C, "breath mid");
+        let mut pixn = vec![0u32; w * h];
+        r.prompt(&mut pixn, "", 0, None);
+        assert_eq!(at(&pixn, 95, 190), 0x00020503, "None = no cursor");
+    }
+
+    /// 开机剧情 v4⑤: the transcript types left-aligned from the TOP anchor
+    /// (below the front camera), wraps at the panel width (16 CJK hanzi
+    /// per row at scale 5: 960 px avail / 60 px per hanzi), a solid cursor
+    /// rides the reveal edge mid-type, then the breath cursor waits at the
+    /// end of the last row.
+    #[test]
+    fn prompt_face_types_transcript_wrap() {
+        let font = font::font_init();
+        let (w, h) = (1080usize, 2340usize);
+        let r = Render { font: &font, w, h, pitch: w };
+        let at = |pix: &[u32], x: usize, y: usize| pix[y * w + x];
+        let text = "把客厅摄像头画面调出来看看今天下午的日程安排"; // 22 hanzi → rows of 16+6
+
+        // mid-type (10 of 22): ink in row 1 only (y=187..227), solid cursor
+        // at the edge (x=90+10*60=690), row 2 (y=251) untouched, camera clear
+        let mut pix = vec![0u32; w * h];
+        r.prompt(&mut pix, text, 10, None);
+        let mut ink = 0;
+        for y in 187..227 {
+            for x in 90..690 {
+                if at(&pix, x, y) == 0x0000FF41 {
+                    ink += 1;
+                }
+            }
+        }
+        assert!(ink > 1000, "row-1 CJK ink too sparse: {ink}");
+        assert_eq!(at(&pix, 695, 197), 0x0000FF41, "solid cursor at reveal edge");
+        assert_eq!(at(&pix, 118, 76), 0x00020503, "camera zone clear");
+        assert_eq!(at(&pix, 95, 260), 0x00020503, "row 2 untouched mid-type");
+        for &p in &pix {
+            assert!(matches!(p, 0x00020503 | 0x0000FF41), "palette {p:#010x}");
+        }
+
+        // fully typed: row 2 carries the tail (6 hanzi, y=251..291), the
+        // breath cursor waits at its end (x=90+6*60=450)
+        let mut pix = vec![0u32; w * h];
+        r.prompt(&mut pix, text, 22, Some(16));
+        let mut ink2 = 0;
+        for y in 251..291 {
+            for x in 90..450 {
+                if at(&pix, x, y) == 0x0000FF41 {
+                    ink2 += 1;
+                }
+            }
+        }
+        assert!(ink2 > 400, "row-2 wrap ink too sparse: {ink2}");
+        assert_eq!(at(&pix, 455, 257), 0x0000FF41, "post-type cursor at row-2 end");
+        assert_eq!(at(&pix, 455, 265), 0x0000FF41, "cursor block is tall");
+        // breath floor at the same spot; None hides it
+        let mut pix0 = vec![0u32; w * h];
+        r.prompt(&mut pix0, text, 22, Some(0));
+        assert_eq!(at(&pix0, 455, 257), 0x00005917, "breath floor at text end");
+        let mut pixn = vec![0u32; w * h];
+        r.prompt(&mut pixn, text, 22, None);
+        assert_eq!(at(&pixn, 455, 257), 0x00020503, "None = no cursor");
+    }
+
+    // ---- ①a 账本恢复 ----
+
+    fn write_ledger(root: &std::path::Path, avatar: &str, turns: &[(&str, &str)]) {
+        let d = root.join(avatar).join("sessions");
+        std::fs::create_dir_all(&d).unwrap();
+        let mut s = String::new();
+        for (i, (q, a)) in turns.iter().enumerate() {
+            s.push_str(&format!(
+                concat!(
+                    r#"{{"t":"request","avatar":"{av}","session":"main","text":"{q}","turn":{n}}}"#,
+                    "\n",
+                    r#"{{"t":"done","ok":true,"text":"{a}","error":null,"turn":{n}}}"#,
+                    "\n"
+                ),
+                av = avatar,
+                q = q,
+                a = a,
+                n = i + 1,
+            ));
+        }
+        std::fs::write(d.join("main.jsonl"), s).unwrap();
+    }
+
+    #[test]
+    fn fold_takes_last_nonempty_ok_done() {
+        let root = std::env::temp_dir().join("aginx-term-test-fold");
+        let _ = std::fs::remove_dir_all(&root);
+        // 旧账（无 turn 字段）+ err 轮 + 空 done 轮 + 尾部截断的半行
+        std::fs::create_dir_all(root.join("a/sessions")).unwrap();
+        std::fs::write(
+            root.join("a/sessions/main.jsonl"),
+            concat!(
+                r#"{"t":"request","avatar":"a","session":"main","text":"q1"}"#,
+                "\n",
+                r#"{"t":"done","ok":true,"text":"答1","error":null}"#,
+                "\n",
+                r#"{"t":"request","avatar":"a","session":"main","text":"q2"}"#,
+                "\n",
+                r#"{"t":"done","ok":false,"text":"","error":{"code":"brain","message":"x"}}"#,
+                "\n",
+                r#"{"t":"done","ok":true,"text":"","error":null}"#,
+                "\n",
+                r#"{"t":"requ"#, // 崩溃截断的半行
+            ),
+        )
+        .unwrap();
+        assert_eq!(
+            fold_last_done_ok(&root.join("a/sessions/main.jsonl")).as_deref(),
+            Some("答1")
+        );
+        assert_eq!(fold_last_done_ok(&root.join("nope.jsonl")), None);
+    }
+
+    #[test]
+    fn recover_requires_line_match_and_wraps_raw() {
+        let root = std::env::temp_dir().join("aginx-term-test-recover");
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        write_ledger(&root, "小喜", &[("报状态", "电量 87% <正常> & 信号 3 格")]);
+        let h = recover_result_html(&root, Some("电量 87% <正常> & 信号 3 格")).unwrap();
+        // 三钉 + 磷光地板
+        assert!(h.contains("min-height:2340px"));
+        assert!(h.contains("width=1080"));
+        assert!(h.contains("background:#000"));
+        // 原文直进 pre：转义生效、不做 markdown 化（无 h1/li/blockquote）
+        assert!(h.contains("电量 87% &lt;正常&gt; &amp; 信号 3 格"));
+        assert!(!h.contains("<h1>") && !h.contains("<li>") && !h.contains("<blockquote>"));
+        // 等值护栏：对不上（母体直答、账尾是旧结果）→ 放弃恢复
+        assert!(recover_result_html(&root, Some("别的回复")).is_none());
+        // line 缺席/空白 → 无法验证归属，放弃
+        assert!(recover_result_html(&root, None).is_none());
+        assert!(recover_result_html(&root, Some("  ")).is_none());
+        // 空根（没化身）→ None
+        let empty = std::env::temp_dir().join("aginx-term-test-recover-empty");
+        let _ = std::fs::remove_dir_all(&empty);
+        std::fs::create_dir_all(&empty).unwrap();
+        assert!(recover_result_html(&empty, Some("什么")).is_none());
+    }
+
+    #[test]
+    fn recover_walks_ledgers_newest_first() {
+        // 站立结果出自旧化身，但新化身账更晚（后台轮写账）：从新到旧
+        // 依次试等值护栏，旧账命中也照常恢复——展示字节与 line 全同。
+        let root = std::env::temp_dir().join("aginx-term-test-recover-order");
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        write_ledger(&root, "旧", &[("问", "旧答")]);
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        write_ledger(&root, "新", &[("问", "新答")]);
+        assert!(recover_result_html(&root, Some("新答")).is_some());
+        assert!(recover_result_html(&root, Some("旧答")).is_some());
+        assert!(recover_result_html(&root, Some("谁的都不是")).is_none());
     }
 }

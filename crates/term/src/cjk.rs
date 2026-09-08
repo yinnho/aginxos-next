@@ -162,7 +162,9 @@ pub fn draw(
             let idx = py as usize * pitch + pxx as usize;
             let p = pix[idx];
             let (pr, pg, pb) = ((p >> 16) & 0xFF, (p >> 8) & 0xFF, p & 0xFF);
-            let mix = |f: u32, b: u32| (b + ((f - b) * a) / 255) & 0xFF;
+            // signed: the boot faces draw glyphs over the IDLE_BG cast
+            // (r=0x02) with an r=0x00 foreground — unsigned f-b underflows
+            let mix = |f: u32, b: u32| ((b as i32 + ((f as i32 - b as i32) * a as i32) / 255) as u32) & 0xFF;
             pix[idx] = 0x0000_0000 | (mix(fr, pr) << 16) | (mix(fg, pg) << 8) | mix(fb, pb);
         }
     }

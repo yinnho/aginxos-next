@@ -205,14 +205,26 @@ fn kmsg(s: &str) {
 
 impl Drm {
     /// Retry DRM bring-up for up to ~10 min: msm_drm + the DSI panel take
-    /// ~60 s to register after rcS (bootcard used the same 300x2s wait).
+    /// ~60 s after rcS (bootcard used the same 300x2s wait). 开机剧情
+    /// v2/#246: bootcard 还在演时 SET_MASTER 失败（交接常态）静默 250ms
+    /// 快轮询——bootcard 一退 ≤250ms relight。**任何** SET_MASTER 失败都
+    /// 算 master busy：本机 msm_drm 4.19 在已有 master 时返回的是
+    /// EINVAL 而非 EBUSY（2026-09-08 /tmp/drmprobe 实测 errno=22），只认
+    /// EBUSY 会让实例以非 master 身份穿透到 SETCRTC 才死——每轮 boot
+    /// 2s 一次 crash-loop 直到 bootcard 退场（v3 收据 0.77s 黑拍的真
+    /// 机制是这条重生循环的运气值，不是快轮询）。其余失败（DRM 真没
+    /// 起）才 kmsg + 2s 慢等照旧。
     pub fn wait_up() -> Result<Drm, String> {
-        for _ in 0..300 {
+        for _ in 0..600 {
             match Self::prepare() {
                 Ok(d) => return Ok(d),
                 Err(e) => {
-                    kmsg(&format!("aginx-term: drm not ready ({e})\n"));
-                    std::thread::sleep(Duration::from_secs(2));
+                    if e == "master busy" {
+                        std::thread::sleep(Duration::from_millis(250));
+                    } else {
+                        kmsg(&format!("aginx-term: drm not ready ({e})\n"));
+                        std::thread::sleep(Duration::from_secs(2));
+                    }
                 }
             }
         }
@@ -227,7 +239,12 @@ impl Drm {
             .open("/dev/dri/card0")
             .map_err(|e| format!("open card0: {e}"))?;
         let fd = file.as_raw_fd();
-        unsafe { libc::ioctl(fd, DRM_IOCTL_SET_MASTER as _) };
+        // 开机剧情: 已有 master（bootcard/上一代 term 在役）= 交接常态，
+        // 非故障——任何 SET_MASTER 失败都早退快轮询，不空走 GETRESOURCES
+        // （本机 EINVAL 而非 EBUSY，见 wait_up 注释）。
+        if unsafe { libc::ioctl(fd, DRM_IOCTL_SET_MASTER as _) } != 0 {
+            return Err("master busy".into());
+        }
 
         let mut res = drm_mode_card_res::default();
         if unsafe { libc::ioctl(fd, DRM_IOCTL_MODE_GETRESOURCES as _, &mut res) } != 0 {

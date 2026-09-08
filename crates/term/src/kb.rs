@@ -174,7 +174,6 @@ pub struct KeyGeom {
     pub gap: usize, // uniform keycap gap, H+V (≈0.8% of span)
     pub label_scale: usize, // letter labels: ~half the cap, not edge-to-edge
     pub span: usize,
-    pub cell_w: usize,
     pub cell_h: usize,
 }
 
@@ -200,7 +199,6 @@ impl Kb {
             gap,
             label_scale,
             span,
-            cell_w,
             cell_h,
         }
     }

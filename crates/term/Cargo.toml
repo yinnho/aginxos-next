@@ -17,8 +17,14 @@ aginx-img = { path = "../img" }
 # M16: the launcher's app registry (/var/apps scan + app.toml schema)
 # lives in the aginx-svc crate (N4③b ../svc) so the format has one definition.
 aginx-svc = { path = "../svc" }
+# ①a: result-page crash recovery reads the session ledger — fast-agi frame
+# types have one definition (../agi, pure serde, host-testable).
+agi = { path = "../agi" }
 # M42a: the voice dialog face — aginx-voice (the daemon) is the sole writer of
 # /run/aginx-voice/face; aginx-term parses the JSON to render it. Display-only: the
 # screen has no touch targets in that mode beyond the BACK affordance.
 serde = { workspace = true }
 serde_json = { workspace = true }
+# v4⑥: 活体结果面 —— WS 帧负载与 data:URL 的 base64 编解码（唯一新依赖，
+# voice 同步 shed 同一枚，workspace 净零；WS 协议本身手写在 browser.rs）
+base64 = "0.22"

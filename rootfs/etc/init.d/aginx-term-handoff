@@ -1,30 +1,21 @@
 #!/bin/sh
-# Panel handoff (M11): bootcard -> aginx-term (N4③b 原名 aterm；脚本名
-# 同步改姓 aginx-term-handoff——init.d 的服务面).
+# Panel handoff (M11 → 开机剧情 #246 v2): bootcard -> aginx-term.
 #
-# bootcard never exits on its own — dropping DRM master lets dsi_backlight's
-# dpms hooks blank the panel. So once boot finishes (a "done ok|fail" line
-# lands in /run/boot.state, or a hard 5 min timeout for broken boots), we
-# kill bootcard and start aginx-term. It re-takes master and paints its first
-# frame before SETCRTC, so the panel only dips for the modeset itself.
-# The respawn loop keeps the UI alive if aginx-term ever crashes.
+# bootcard is a fixed ~10 s rain film: it self-exits (RAIN_SECS after
+# panel-light) and dropping DRM master lets dsi_backlight's dpms hooks
+# blank the panel. v2 (「雨不能停」): the handoff no longer waits for that
+# exit — it spawns aginx-term immediately and term's wait_up itself waits
+# for the master (bootcard on stage => SET_MASTER EBUSY => 250 ms fast
+# poll; the moment bootcard exits, term relights within one tick). The
+# old wait-here-then-cold-start put ~3 s of silent black between the two
+# rains; now the only dark beat is the kernel's own dpms-off instant.
+# bootcard always has an exit path (film done, or DRM retries exhausted),
+# so the timeout kill retired with the wait.
 export PATH=/sbin:/bin:/usr/sbin:/usr/bin
 # M17 voice hook: watch /run/aginx-term.inject (ASR text lands there; aginx-term
 # types it into the pty). Was hand-exported since M18 — baked here in
 # #13 so it survives rootfs swaps.
 export AGINX_TERM_INJECT=1
-
-n=0
-while ! grep -q '^done ' /run/boot.state 2>/dev/null && [ $n -lt 150 ]; do
-  sleep 2; n=$((n+1))
-done
-# let the operator see the final boot card for a moment
-sleep 5
-
-[ -f /run/bootcard.pid ] && kill "$(cat /run/bootcard.pid)" 2>/dev/null
-# belt and braces: if the pidfile was lost, kill by name
-pidof bootcard >/dev/null 2>&1 && kill $(pidof bootcard) 2>/dev/null
-sleep 1
 
 ( while :; do
     echo "=== aginx-term start $(date) ===" >> /var/aginx-term.log
