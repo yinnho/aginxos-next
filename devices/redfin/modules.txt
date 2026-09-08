@@ -1,0 +1,30 @@
+# redfin ramdisk 模块清单（D14：顺序即数据）。build-rootfs.sh 依序把 .ko
+# 拷入 /lib/modules，同名 bringup 脚本按此顺序 insmod。# 开头是注释，空行忽略。
+#
+# 触摸/显示链（M3）——/etc/init.d/touch-bringup 加载。vendor_boot 基座只带
+# 64 模块的 USB/存储集；全量 modules.load 会 panic 本内核（2026-08-27 实测，
+# 烧掉一次 slot retry counter）。
+spi-geni-qcom
+rpmsg_core
+qrtr
+qrtr-smd
+ion-alloc
+qseecom
+hdcp_qseecom
+msm_hdcp
+msm_ext_display
+llcc-slice
+dispcc-lito
+qpnp-amoled-regulator
+msm_drm
+# 电池链（M3c）——/etc/init.d/battery-bringup 加载。顺序即依赖：google-bms
+# 提供 gbms_storage，at24 注册 qpnp-qgauge 探测要读的 batt_eeprom，
+# qpnp-qgauge 注册 google-battery 等待的 "bms" psy；qti_qmi_sensor 殿后
+# （charge mitigation，要 vendor 半边的 qmi_helpers）。
+google-bms
+at24
+qpnp-qgauge
+sm7250_bms
+google-battery
+google_charger
+qti_qmi_sensor

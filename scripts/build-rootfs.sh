@@ -3,22 +3,29 @@
 #
 # Assembles the tree from: the recipe in ./rootfs (etc + aginx-* faces +
 # libexec daemons + generic C sources), new-repo musl binaries (zigbuild),
-# and DEVICE ASSETS under .local/device/redfin/ (vendor ramdisk, voice/OCR
+# and DEVICE ASSETS under .local/device/${DEVICE}/ (vendor ramdisk, voice/OCR
 # stacks, dropbear, radio blobs, the frozen aginxos trampoline pair — see
-# devices/redfin/boot/assets.md for the layout and regeneration paths);
+# devices/${DEVICE}/boot/assets.md for the layout and regeneration paths);
 # N5②: every renamed-at-install CLI is rebuilt here instead; the old `ag`
 # router, ag-* shims, carrier daemon and relay do NOT enter the image
 # (切净).
 #
 # Flash with:  fastboot flash userdata out/rootfs.img
 # Boot needs a vendor_boot packed with ROOTFS=1
-# (devices/redfin/boot/pack-vendor-boot.sh).
+# (devices/${DEVICE}/boot/pack-vendor-boot.sh, on the vendor-boot style).
 #
 # Note: mke2fs -d records the building user's uid (501 on macOS) as owner.
 # rcS chowns everything back to 0:0 on first boot — do not "fix" that here.
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-ASSETS="${ROOT}/.local/device/redfin"
+# D14 机型是数据：DEVICE 选 devices/<codename>/（device.toml + modules.txt +
+# bringup/ + cam/）。默认 redfin 只在「不传就烤首目标」的意义上成立——目录
+# 缺失即 die，绝不猜、绝不兜底第二台机的数据。
+DEVICE="${DEVICE:-redfin}"
+DEVDIR="${ROOT}/devices/${DEVICE}"
+test -f "${DEVDIR}/device.toml" \
+  || { echo "unknown device '${DEVICE}' — no ${DEVDIR}/device.toml (see devices/README.md)" >&2; exit 1; }
+ASSETS="${ROOT}/.local/device/${DEVICE}"
 RAMDISK="${ASSETS}/vendor-ramdisk-root"
 TRAMP="${ASSETS}/trampoline"
 RECIPE="${ROOT}/rootfs"
@@ -28,7 +35,7 @@ IMG="${IMG:-${ROOT}/out/rootfs.img}"
 # 2 GB sparse-ish image (bake #18 data: 651M used; N4 drops carrier+relay).
 SIZE="${SIZE:-2g}"
 
-test -x "${RAMDISK}/system/bin/adbd" || { echo "missing ${RAMDISK} — see devices/redfin/boot/assets.md (run pack-vendor-boot.sh)" >&2; exit 1; }
+test -x "${RAMDISK}/system/bin/adbd" || { echo "missing ${RAMDISK} — see devices/${DEVICE}/boot/assets.md (run pack-vendor-boot.sh)" >&2; exit 1; }
 test -x "${RECIPE}/busybox" || { echo "missing ${RECIPE}/busybox recipe asset" >&2; exit 1; }
 MKE2FS="$(command -v mke2fs || true)"
 test -z "${MKE2FS}" && MKE2FS=/opt/homebrew/bin/mke2fs
@@ -42,12 +49,12 @@ test -x "${MKE2FS}" || { echo "mke2fs not found (android-platform-tools provides
 # swapper and the update flow has no rollback story).
 for b in aginxos-init aginxos-agent; do
   test -x "${TRAMP}/${b}" \
-    || { echo "missing ${b} — see devices/redfin/boot/assets.md (frozen trampoline pair)" >&2; exit 1; }
+    || { echo "missing ${b} — see devices/${DEVICE}/boot/assets.md (frozen trampoline pair)" >&2; exit 1; }
 done
 
 # Voice stack (M42d) + OCR (M45) — bionic-static CLIs and their models,
-# first-gen build products (regeneration paths: devices/redfin/boot/
-# assets.md). Voice is the bootstrap human interface (the
+# first-gen build products (regeneration paths:
+# devices/${DEVICE}/boot/assets.md). Voice is the bootstrap human interface (the
 # WiFi-join flow speaks before any network exists) and 念读 is the eye
 # path that must work offline, so the models ride the baked image rather
 # than provision. /var/bin overlaps the provision overlay, but provision
@@ -56,15 +63,15 @@ done
 # ag-ocr→aginx-ocr (spawn paths in crates/voice/src/{audio,main}.rs).
 VOICE="${ASSETS}/voice"
 test -x "${VOICE}/bin/ag-asr" && test -x "${VOICE}/bin/ag-tts" \
-  || { echo "missing ${VOICE}/bin/ag-{asr,tts} — see devices/redfin/boot/assets.md" >&2; exit 1; }
+  || { echo "missing ${VOICE}/bin/ag-{asr,tts} — see devices/${DEVICE}/boot/assets.md" >&2; exit 1; }
 test -s "${VOICE}/models/asr/model.int8.onnx" \
   && test -s "${VOICE}/models/tts/vits-melo-tts-zh_en/model.onnx" \
   && test -s "${VOICE}/models/tts/vits-melo-tts-zh_en/lexicon.txt" \
   && test -s "${VOICE}/models/tts/vits-melo-tts-zh_en/tokens.txt" \
-  || { echo "missing voice models — see devices/redfin/boot/assets.md" >&2; exit 1; }
+  || { echo "missing voice models — see devices/${DEVICE}/boot/assets.md" >&2; exit 1; }
 OCR="${ASSETS}/ocr"
 test -x "${OCR}/bin/ag-ocr" \
-  || { echo "missing ${OCR}/bin/ag-ocr — see devices/redfin/boot/assets.md" >&2; exit 1; }
+  || { echo "missing ${OCR}/bin/ag-ocr — see devices/${DEVICE}/boot/assets.md" >&2; exit 1; }
 test -s "${OCR}/models/det.onnx" && test -s "${OCR}/models/rec.onnx" \
   && test -s "${OCR}/models/dict.txt" \
   || { echo "missing ocr models — see devices/redfin/boot/assets.md" >&2; exit 1; }
@@ -141,22 +148,14 @@ for f in default.prop prop.default *_contexts; do
   cp "${RAMDISK}"/${f} "${TREE}/" 2>/dev/null || true
 done
 
-# Kernel modules for the touch/display chain (M3) — the ramdisk half. The
-# vendor_boot base loads only the 64-module USB/storage set (modules.usb);
-# the full modules.load load panics this kernel (observed 2026-08-27, retry
-# counter burned), so the touch chain is loaded from the rootfs world by
-# /etc/init.d/touch-bringup, in the order proven live. Same .ko files as
-# the ramdisk holds — copied from the local unpack (never committed, §7).
-MODULES="spi-geni-qcom rpmsg_core qrtr qrtr-smd ion-alloc qseecom \
-hdcp_qseecom msm_hdcp msm_ext_display llcc-slice dispcc-lito \
-qpnp-amoled-regulator msm_drm"
-# Battery chain (M3c) — loaded by /etc/init.d/battery-bringup. Order
-# matters: google-bms provides gbms_storage, at24 registers the
-# batt_eeprom entry qpnp-qgauge's probe reads, qpnp-qgauge registers the
-# "bms" psy google-battery waits on. qti_qmi_sensor rides along last
-# (charge mitigation; needs qmi_helpers from the vendor half).
-MODULES="${MODULES} google-bms at24 qpnp-qgauge sm7250_bms google-battery \
-google_charger qti_qmi_sensor"
+# Kernel modules for the touch/display + battery chains (M3/M3c) — machine
+# data (D14): devices/<codename>/modules.txt holds the ordered list. The
+# vendor_boot base loads only the 64-module USB/storage set; the full
+# modules.load panics this kernel (observed 2026-08-27, retry counter
+# burned), so the chains are loaded from the rootfs world by the device's
+# bringup scripts, in the order proven live. Same .ko files as the ramdisk
+# holds — copied from the local unpack (never committed, §7).
+MODULES="$(grep -Ev '^[[:space:]]*(#|$)' "${DEVDIR}/modules.txt")"
 mkdir -p "${TREE}/lib/modules"
 for m in ${MODULES}; do
   cp "${RAMDISK}/lib/modules/${m}.ko" "${TREE}/lib/modules/"
@@ -193,12 +192,12 @@ mkdir -p "${TREE}/bin" "${TREE}/usr/bin"
 # and net-rejoin call /usr/bin/aginx-net-join; wizard scans through
 # /usr/bin/aginx-net-scan; reboot is /usr/bin/aginx-reboot). Default flags
 # for a rear shot: --stream --rear --slowrear --rawvendor [--gain N] [--png].
-# M47①: the camera trio (cam-shot.c + jpegenc.h + raw2jpg.c) moved into
-# THIS repo's rootfs/src — the camera line is owned here now; the old-repo
-# copies are frozen history.
+# M47①: the camera trio (cam-shot.c + campix.h + campix_test.c) lives in
+# devices/<codename>/cam/ (D14 — sensor timing/calibration is machine
+# data); the old-repo copies are frozen history.
 # M47⑤d: encoder = vendored libjpeg-turbo (NEON); the build command (and the
 # source lists it mirrors) lives in build-cam.sh — this script just runs it.
-"${ROOT}/scripts/build-cam.sh"
+"${ROOT}/scripts/build-cam.sh" "${DEVDIR}/cam"
 install -m 755 "${ROOT}/out/cam/aginx-cam-shot" "${TREE}/usr/bin/aginx-cam-shot"
 # raw2jpg (M19c) — RAW10 dump -> JPEG converter, companion to cam-shot's
 # native --jpeg (for converting already-captured dumps).
@@ -323,7 +322,7 @@ if [ -f "${RADIO}/libnl.so" ] && [ -x "${RADIO}/rmt_storage" ] \
      "${TREE}/lib/modules/"
   echo "staged radio payload (libnl.so + patched rmt_storage + cdsp/modem loaders)"
 else
-  echo "NOTE: ${RADIO} incomplete — radio-bringup will fail; see devices/redfin/boot/assets.md" >&2
+  echo "NOTE: ${RADIO} incomplete — radio-bringup will fail; see devices/${DEVICE}/boot/assets.md" >&2
 fi
 
 # Recipe: etc (init.d/aginx/svc.d units/aginx conf/apps.d/crontabs + manifest+sig),
@@ -332,12 +331,23 @@ fi
 mkdir -p "${TREE}/bin" "${TREE}/sbin" "${TREE}/aginxos" "${TREE}/usr/libexec/aginx" "${TREE}/var/bin"
 cp "${RECIPE}/busybox" "${TREE}/bin/busybox"
 cp -R "${RECIPE}/etc/." "${TREE}/etc/"
+# 机型数据注入（D14）：bringup 脚本与 device.toml 都来自 devices/<codename>/。
+# bringup 内容 verbatim 搬运（211 行 mixer recipe 那种收据流不重排）；
+# device.toml 落 /etc/aginx/（hwd::load_or_exit 的读点——烤错档案=开机
+# fail-fast，正脸拒绝）。
+mkdir -p "${TREE}/etc/aginx"
+install -m 644 "${DEVDIR}/device.toml" "${TREE}/etc/aginx/device.toml"
+for b in "${DEVDIR}"/bringup/*; do
+  test -f "${b}" || { echo "missing bringup scripts in ${DEVDIR}/bringup/" >&2; exit 1; }
+  install -m 755 "${b}" "${TREE}/etc/init.d/$(basename "${b}")"
+done
 cp -R "${RECIPE}/usr/bin/." "${TREE}/usr/bin/"
 cp -R "${RECIPE}/libexec/aginx/." "${TREE}/usr/libexec/aginx/"
 cp "${RECIPE}"/var/bin/*.aginxmd "${TREE}/var/bin/"
 # version stamp (M14): what the running image is, for aginx-update
-# status/compare. N4: stamped from THIS repo's git.
-{ git -C "${ROOT}" log -1 --format="aginxos %h %cd" --date=short 2>/dev/null || echo "aginxos unknown"; } > "${TREE}/etc/aginx-version"
+# status/compare. N4: stamped from THIS repo's git; D14: the device rides
+# the stamp — 版本串自证出自哪台机的烤机线。
+{ git -C "${ROOT}" log -1 --format="aginxos ${DEVICE} %h %cd" --date=short 2>/dev/null || echo "aginxos ${DEVICE} unknown"; } > "${TREE}/etc/aginx-version"
 
 # Router (N1④) — the bare `aginx` mother face. Engines stay OUT of the
 # command universe in /usr/libexec/aginx (D13: libexec 是引擎的家).
