@@ -147,12 +147,12 @@ impl Geom {
 
     /// M47⑤b eye viewfinder box (x, y, w, h) = the WHOLE panel. User
     /// receipt 2026-09-05 「界面要做成全屏」: while the eye is open the
-    /// frame fills 1080×2340 — no toolbar, no title, no bottom strip; the
+    /// frame fills the panel — no toolbar, no title, no bottom strip; the
     /// close keys are physical (音量+ toggles, 音量下 closes). This is the
     /// ONE layout authority — voice() blits into it and poll_eye decodes
     /// against it. The aspect must stay what aginx-voice spawns cam-shot
-    /// with (`--aspect 1080:2340`, hardcoded in the glue layer — no shared
-    /// crate); VIEWFINDER_ASPECT + the test below pin the two sides.
+    /// with (--aspect built from [panel] in the glue layer — no shared
+    /// crate); the test below pins both readers to the same profile.
     pub fn eye_box(&self) -> (usize, usize, usize, usize) {
         (0, 0, self.w, self.h)
     }
@@ -184,11 +184,9 @@ impl Geom {
     }
 }
 
-/// cam-shot is spawned with --aspect 1080:2340 (aginx-voice, fullscreen
-/// viewfinder); term's eye box must match — assert via Geom in tests, not
-/// by copying numbers into render.
-#[cfg(test)]
-pub const VIEWFINDER_ASPECT: f64 = 1080.0 / 2340.0;
+/// cam-shot is spawned with --aspect built from [panel] (aginx-voice,
+/// fullscreen viewfinder); term's eye box must match — asserted against
+/// the same profile in tests, not by copying numbers into render.
 
 #[derive(PartialEq)]
 pub enum Toolbar {
@@ -199,20 +197,29 @@ pub enum Toolbar {
 mod tests {
     use super::*;
 
-    /// Real device numbers (redfin 1080x2340): the fullscreen eye box must
-    /// land exactly on the aspect cam-shot is spawned with. If the panel
-    /// geometry ever changes, this test goes red and voice's hardcoded
-    /// `--aspect 1080:2340` must move with it.
+    /// Committed first-target profile (D14-exempt: host reads the real
+    /// file — schema and data stay in lockstep with what gets baked).
+    fn profile_panel() -> (usize, usize) {
+        let p = hwd::from_path(std::path::Path::new(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../devices/redfin/device.toml" // D14-exempt: reads the real profile
+        )))
+        .unwrap();
+        (p.panel.width as usize, p.panel.height as usize)
+    }
+
+    /// The fullscreen eye box must land exactly on the panel the profile
+    /// declares — the same [panel] voice builds cam-shot's --aspect from
+    /// (glue layer, no shared crate). One source of truth, two readers;
+    /// this test pins term's side to it. If the profile's panel ever
+    /// changes, both sides move together or this goes red.
     #[test]
-    fn eye_box_matches_viewfinder_aspect() {
-        let g = Geom::new(1080, 2340, 1748, 5);
-        let (x, y, w, h) = g.eye_box();
+    fn eye_box_is_the_whole_profile_panel() {
+        let (w, h) = profile_panel();
+        let kg = crate::kb::Kb::geom(w, h);
+        let g = Geom::new(w, h, kg.panel_y, 5);
+        let (x, y, ew, eh) = g.eye_box();
         assert_eq!((x, y), (0, 0));
-        assert_eq!((w, h), (1080, 2340));
-        let aspect = w as f64 / h as f64;
-        assert!(
-            (aspect - VIEWFINDER_ASPECT).abs() < 1e-9,
-            "eye box aspect {aspect} != VIEWFINDER_ASPECT {VIEWFINDER_ASPECT}"
-        );
+        assert_eq!((ew, eh), (w, h));
     }
 }

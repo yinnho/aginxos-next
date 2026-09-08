@@ -7,9 +7,9 @@
 // once boot finishes; bootcard is wordmark-only now and self-exits (#246), so the
 // handoff's kill is belt-and-braces.
 //
-// M15 power management: the qpnp_pon power key (event1) blanks the panel
-// (connector DPMS off — the same path that darkened the screen when a DRM
-// master dropped), a second short press or any touch wakes it, 60 s idle
+// M15 power management: the power key (node from [input.term]) blanks the
+// panel (connector DPMS off — the same path that darkened the screen when a
+// DRM master dropped), a second short press or any touch wakes it, 60 s idle
 // blanks too, holding the key ~1.2 s (or the launcher's POWER OFF / RESTART
 // buttons) runs `aginx-reboot poweroff|reboot`.
 //
@@ -130,10 +130,12 @@ fn fold_last_done_ok(log: &std::path::Path) -> Option<String> {
     last
 }
 
-/// 降级壳：三钉（黑底 / min-height 2340 / 视口 1080——引擎收据，voice
-/// render.rs PANEL 同款）+ 磷光可读性地板。**不做 markdown 化**——排版
-/// 归 aginxbrowser（①b 起 term 递原文给引擎 /render），恢复页就是原文。
-fn degraded_shell(md: &str) -> String {
+/// 降级壳：三钉（黑底 / min-height 满屏高 px / 视口=面板宽——引擎收据，
+/// voice render.rs render_html 同款）+ 磷光可读性地板。panel 尺寸是参数
+/// （D14）：产品走 hwd [panel]，host 测试喂 fixture。**不做 markdown 化**
+/// ——排版归 aginxbrowser（①b 起 term 递原文给引擎 /render），恢复页
+/// 就是原文。
+fn degraded_shell(md: &str, pw: u32, ph: u32) -> String {
     let mut esc = String::with_capacity(md.len());
     for c in md.chars() {
         match c {
@@ -144,14 +146,12 @@ fn degraded_shell(md: &str) -> String {
         }
     }
     format!(
-        concat!(
-            "<!doctype html><html><head><meta charset=\"utf-8\">",
-            "<meta name=\"viewport\" content=\"width=1080\">",
-            "<style>body{{background:#000;min-height:2340px}}",
-            "pre{{white-space:pre-wrap;color:#8cffb0;font-size:36px;",
-            "line-height:1.75;padding:24px;margin:0}}</style></head>",
-            "<body><pre>{}</pre></body></html>"
-        ),
+        "<!doctype html><html><head><meta charset=\"utf-8\">\
+<meta name=\"viewport\" content=\"width={pw}\">\
+<style>body{{background:#000;min-height:{ph}px}}\
+pre{{white-space:pre-wrap;color:#8cffb0;font-size:36px;\
+line-height:1.75;padding:24px;margin:0}}</style></head>\
+<body><pre>{}</pre></body></html>",
         esc
     )
 }
@@ -161,7 +161,12 @@ fn degraded_shell(md: &str) -> String {
 /// 结果，投上去就是张冠李戴；对不上就放弃恢复（文本面兜底=一等降级）。
 /// 多化身按账 mtime 从新到旧依次试——即便命中旧账，展示的字节也与
 /// line 全同，最坏只是出处歧义，没有内容错。
-fn recover_result_html(root: &std::path::Path, line: Option<&str>) -> Option<String> {
+fn recover_result_html(
+    root: &std::path::Path,
+    line: Option<&str>,
+    pw: u32,
+    ph: u32,
+) -> Option<String> {
     let want = line?.trim();
     if want.is_empty() {
         return None;
@@ -181,7 +186,7 @@ fn recover_result_html(root: &std::path::Path, line: Option<&str>) -> Option<Str
     for (_, log) in cands {
         if let Some(text) = fold_last_done_ok(&log) {
             if text.trim() == want {
-                return Some(degraded_shell(&text));
+                return Some(degraded_shell(&text, pw, ph));
             }
         }
     }
@@ -517,7 +522,8 @@ enum Mode {
     Picker,
     /// Photo viewer (launcher PHOTOS tile, M39): list screen of
     /// /home/photos, then a full-frame view with tap-sides paging.
-    /// Decode is libjpeg-turbo (no JPEG decode hardware on SM7250).
+    /// Decode is libjpeg-turbo (first target's SoC has no JPEG decode
+    /// hardware — platform-wide policy, not per-device data).
     Photos(photos::Photos),
     /// 待命面 (开机剧情 v4, 面法 09-07 终稿): the resting screen — pure
     /// Matrix-cast near-black + the blinking block cursor at the prompt
@@ -753,8 +759,8 @@ fn lut565() -> &'static [u32; 65536] {
 }
 
 /// Fused 565→888 expand + bilinear upscale (⑤l: nearest left the live view
-/// as a 720-pixel-wide mosaic on the 1080-wide panel — the user saw
-/// 「像素超级低」). All resampling happens AFTER the LUT expand: lerping 565
+/// as a preview-width mosaic on the panel — the user saw 「像素超级低」).
+/// All resampling happens AFTER the LUT expand: lerping 565
 /// codes directly would blend code space (5/6-bit bands), not color.
 /// Source-center phase ((i+0.5)·scale − 0.5, Q8 weights); edges replicate
 /// (x1 clamps to the last source column/row). The Q8·Q8 corner products are
@@ -1153,8 +1159,8 @@ impl<'a> Render<'a> {
             let (_, _, bw, bh) = g.eye_box();
             if bh > 0 && b.w > 0 && b.h > 0 {
                 // aspect-FILL by nearest-neighbor upscale (decode_scaled
-                // only downscales; 720→1080 upscaling lives here). The
-                // frame's --aspect already matches the box.
+                // only downscales; preview→panel upscaling lives here).
+                // The frame's --aspect already matches the box.
                 let (dw, dh) = (bw, bh);
                 let (sw, sh) = (b.w as usize, b.h as usize);
                 let mut sx = vec![0usize; dw];
@@ -1472,9 +1478,29 @@ fn power_off(d: &mut Drm, font: &[[u8; 8]; 128], canvas: &mut [u32], blanked: bo
     std::process::exit(0);
 }
 
+/// Host --ppm panel geometry (D14)：env AGINX_DEVICE_TOML > /etc/aginx/
+/// device.toml > 本仓烤机的真档案（host 转储缺省直指真数据，不落数字）。
+/// env 只在单线程 CLI 入口设置——测试线程下有 OnceLock 竞态（voice
+/// audio.rs 只在测试里 from_path，同一纪律）。
+fn host_panel() -> (usize, usize) {
+    if std::env::var_os(hwd::DEVICE_TOML_ENV).is_none()
+        && !std::path::Path::new(hwd::DEVICE_TOML_PATH).exists()
+    {
+        std::env::set_var(
+            hwd::DEVICE_TOML_ENV,
+            concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/../../devices/redfin/device.toml" // D14-exempt: committed real profile
+            ),
+        );
+    }
+    let p = &hwd::load_or_exit().panel;
+    (p.width as usize, p.height as usize)
+}
+
 fn host_ppm(out: &str) {
     let font = font::font_init();
-    let (w, h) = (1080usize, 2340usize);
+    let (w, h) = host_panel();
     let pitch = w;
     let mut pix = vec![0u32; pitch * h];
     let kg = Kb::geom(w, h);
@@ -1607,26 +1633,38 @@ fn host_ppm(out: &str) {
 // of stat-polling on a timer whose 12 ms cadence misaligned with the 22 ms
 // publish (device probe 2026-09-05). No-op off linux so host tests build.
 
-/// M47⑤t: while the eye streams, park this process on the little cluster
-/// {cpu0..cpu5}. cam-shot pins its process to the big pair {6,7} and the
-/// pixel chain saturates both; term's fused 565→888 + bilinear upscale
-/// measured ~37% of one big core per frame (⑤i probe) and aginx-qr's
-/// decode bursts (2 Hz, 100-300 ms) landed unpinned on the pair — together
-/// they erased the 70 ms fast-frame mode in service (in-service min 83 ms
-/// vs isolated 70 ms, 2026-09-06). The upscale fits in one A55; at eye
-/// close the full mask returns (terminal/photos get the big cores back).
+/// M47⑤t: while the eye streams, park this process on [affinity] ui_cores
+/// (the little cluster). cam-shot pins its process to the big pair
+/// ([affinity] cam_cores) and the pixel chain saturates both; term's fused
+/// 565→888 + bilinear upscale measured ~37% of one big core per frame (⑤i
+/// probe) and aginx-qr's decode bursts (2 Hz, 100-300 ms) landed unpinned
+/// on the pair — together they erased the 70 ms fast-frame mode in service
+/// (in-service min 83 ms vs isolated 70 ms, 2026-09-06). The upscale fits
+/// in one little core; at eye close the full mask returns (terminal/photos
+/// get the big cores back — union of ui+big+cam, sorted+deduped).
 ///
 /// Called from main() on eye-FLAG transitions in ANY mode — the first cut
 /// hooked it inside poll_eye (Mode::Voice only), which leaked the park:
 /// VolUp is handled by the voice daemon regardless of the view on screen,
 /// so the stream can outlive the voice view, and a back-out mid-stream
-/// left this process on {0..5} forever.
+/// left this process parked forever.
 #[cfg(target_os = "linux")]
 fn set_eye_affinity(on: bool) {
+    let a = &hwd::load_or_exit().affinity;
+    let mut cores: Vec<u32> = if on {
+        a.ui_cores.clone()
+    } else {
+        let mut all = a.ui_cores.clone();
+        all.extend_from_slice(&a.big_cores);
+        all.extend_from_slice(&a.cam_cores);
+        all.sort_unstable();
+        all.dedup();
+        all
+    };
     unsafe {
         let mut set: libc::cpu_set_t = std::mem::zeroed();
-        for i in 0..if on { 6 } else { 8 } {
-            libc::CPU_SET(i, &mut set);
+        for &c in &cores {
+            libc::CPU_SET(c as usize, &mut set);
         }
         libc::sched_setaffinity(0, std::mem::size_of::<libc::cpu_set_t>(), &set);
     }
@@ -1700,6 +1738,18 @@ fn main() {
         }
     };
     let (w, h) = (d.width as usize, d.height as usize);
+    // D14 软校验：DRM 枚举是显示真值；[panel] 供非 DRM 消费者（voice HTML
+    // 三钉 / cam --aspect / 触摸缩放）。不符（烤错档案）大声警告，不致命
+    // ——显示继续按 DRM 走，错的是数据侧该修数据。
+    {
+        let p = hwd::load_or_exit();
+        if p.panel.width != d.width || p.panel.height != d.height {
+            eprintln!(
+                "aginx-term: panel mismatch — drm {}x{}, profile {}x{} ({})",
+                d.width, d.height, p.panel.width, p.panel.height, p.device.name
+            );
+        }
+    }
     let pitch = d.pitch_px();
 
     let mut kb = Kb::new();
@@ -1763,10 +1813,11 @@ fn main() {
     }
     // 未连网的开机不再自动拉 wizard：纯光标面 + PTT 语音流程就是装机流程
     // （对准配对码，M42c 链）。WIFI SETUP 仍是 Launcher 瓦片，手动可达。
-    let mut touch = TouchReader::open("/dev/input/event2", w as i32, h as i32);
-    // M15: qpnp_pon keys (power + volume-down) on event1 — hardcoded like
-    // the touch node, per HARDWARE.md.
-    let mut pwr = KeyReader::open("/dev/input/event1");
+    // Input nodes are panel data ([input.term], D14) — touch + the pon
+    // keys (power + volume-down) ride whatever the profile declares.
+    let ipt = hwd::load_or_exit().input.term.clone();
+    let mut touch = TouchReader::open(&ipt.touch_device, w as i32, h as i32);
+    let mut pwr = KeyReader::open(&ipt.power_device);
     // M15 blank state
     let mut blanked = false;
     let mut last_input = Instant::now();
@@ -2385,9 +2436,13 @@ fn main() {
                     }
                 }
                 if html.is_none() {
-                    if let Some(h) =
-                        recover_result_html(&workspaces_root(), voice.doc.line.as_deref())
-                    {
+                    let pn = &hwd::load_or_exit().panel;
+                    if let Some(h) = recover_result_html(
+                        &workspaces_root(),
+                        voice.doc.line.as_deref(),
+                        pn.width,
+                        pn.height,
+                    ) {
                         eprintln!("aginx-term: result.html missing, rebuilt from ledger");
                         html = Some(h);
                     }
@@ -2661,7 +2716,7 @@ mod tests {
     #[test]
     fn prompt_face_idle_breathes_at_top_anchor() {
         let font = font::font_init();
-        let (w, h) = (1080usize, 2340usize);
+        let (w, h) = (1080usize, 2340usize); // D14-exempt: fixture panel geometry
         let r = Render { font: &font, w, h, pitch: w };
         let at = |pix: &[u32], x: usize, y: usize| pix[y * w + x];
         let mut pix = vec![0u32; w * h];
@@ -2700,7 +2755,7 @@ mod tests {
     #[test]
     fn prompt_face_types_transcript_wrap() {
         let font = font::font_init();
-        let (w, h) = (1080usize, 2340usize);
+        let (w, h) = (1080usize, 2340usize); // D14-exempt: fixture panel geometry
         let r = Render { font: &font, w, h, pitch: w };
         let at = |pix: &[u32], x: usize, y: usize| pix[y * w + x];
         let text = "把客厅摄像头画面调出来看看今天下午的日程安排"; // 22 hanzi → rows of 16+6
@@ -2772,6 +2827,12 @@ mod tests {
         std::fs::write(d.join("main.jsonl"), s).unwrap();
     }
 
+    /// host 测试统一入口：fixture 面板（真机首目标尺寸，纯数据不碰
+    /// /etc——browser.rs 的 browser() 同款 D14 切法）。
+    fn recover(root: &std::path::Path, line: Option<&str>) -> Option<String> {
+        recover_result_html(root, line, 1080, 2340) // D14-exempt: fixture panel
+    }
+
     #[test]
     fn fold_takes_last_nonempty_ok_done() {
         let root = std::env::temp_dir().join("aginx-term-test-fold");
@@ -2808,24 +2869,24 @@ mod tests {
         let _ = std::fs::remove_dir_all(&root);
         std::fs::create_dir_all(&root).unwrap();
         write_ledger(&root, "小喜", &[("报状态", "电量 87% <正常> & 信号 3 格")]);
-        let h = recover_result_html(&root, Some("电量 87% <正常> & 信号 3 格")).unwrap();
+        let h = recover(&root, Some("电量 87% <正常> & 信号 3 格")).unwrap();
         // 三钉 + 磷光地板
-        assert!(h.contains("min-height:2340px"));
-        assert!(h.contains("width=1080"));
+        assert!(h.contains("min-height:2340px")); // D14-exempt: fixture panel height
+        assert!(h.contains("width=1080")); // D14-exempt: fixture panel width
         assert!(h.contains("background:#000"));
         // 原文直进 pre：转义生效、不做 markdown 化（无 h1/li/blockquote）
         assert!(h.contains("电量 87% &lt;正常&gt; &amp; 信号 3 格"));
         assert!(!h.contains("<h1>") && !h.contains("<li>") && !h.contains("<blockquote>"));
         // 等值护栏：对不上（母体直答、账尾是旧结果）→ 放弃恢复
-        assert!(recover_result_html(&root, Some("别的回复")).is_none());
+        assert!(recover(&root, Some("别的回复")).is_none());
         // line 缺席/空白 → 无法验证归属，放弃
-        assert!(recover_result_html(&root, None).is_none());
-        assert!(recover_result_html(&root, Some("  ")).is_none());
+        assert!(recover(&root, None).is_none());
+        assert!(recover(&root, Some("  ")).is_none());
         // 空根（没化身）→ None
         let empty = std::env::temp_dir().join("aginx-term-test-recover-empty");
         let _ = std::fs::remove_dir_all(&empty);
         std::fs::create_dir_all(&empty).unwrap();
-        assert!(recover_result_html(&empty, Some("什么")).is_none());
+        assert!(recover(&empty, Some("什么")).is_none());
     }
 
     #[test]
@@ -2838,8 +2899,8 @@ mod tests {
         write_ledger(&root, "旧", &[("问", "旧答")]);
         std::thread::sleep(std::time::Duration::from_millis(20));
         write_ledger(&root, "新", &[("问", "新答")]);
-        assert!(recover_result_html(&root, Some("新答")).is_some());
-        assert!(recover_result_html(&root, Some("旧答")).is_some());
-        assert!(recover_result_html(&root, Some("谁的都不是")).is_none());
+        assert!(recover(&root, Some("新答")).is_some());
+        assert!(recover(&root, Some("旧答")).is_some());
+        assert!(recover(&root, Some("谁的都不是")).is_none());
     }
 }

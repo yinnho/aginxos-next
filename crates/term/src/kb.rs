@@ -147,8 +147,9 @@ pub const KB_B: usize = 24; // bottom margin (px)
 // Rows in the letter block (grid, grid, weighted, bottom) — the M40b iOS
 // layout; the pre-iOS layout had a fifth specials row.
 const KB_ROWS: usize = 4;
-// Row height cap: keeps the terminal area identical to the pre-grid layout
-// on redfin — the h/2 height budget would allow far taller caps.
+// Row height cap: keeps the terminal area identical to the pre-grid
+// layout on the first target panel — the h/2 height budget would allow
+// far taller caps.
 const KB_ROW_H: usize = 118;
 
 pub struct Kb {
@@ -186,7 +187,7 @@ impl Kb {
         let span = w - 2 * KB_M;
         let cell_w = span / 10;
         let cell_h = (h / 2 / 5).min(KB_ROW_H);
-        let gap = span / 128; // ≈0.8% of span: 8 px on the 1080 panel
+        let gap = span / 128; // ≈0.8% of span
         // letter labels: ~half the keycap so rows read as separate keys
         let label_scale = ((cell_w - 24) / 6).min((cell_h - 24) / 8).max(2);
         let panel_y = h - KB_B - cell_h * KB_ROWS;
@@ -458,12 +459,15 @@ pub struct TouchReader {
 impl TouchReader {
     pub fn open(path: &str, screen_w: i32, screen_h: i32) -> Option<TouchReader> {
         let fd = OpenOptions::new().read(true).open(path).ok()?;
-        // Kernel 4.19 reports the panel-native ranges for both axes; scale
-        // to actual fb size.
+        // The touch controller reports its native per-axis range; scale to
+        // actual fb size. Divisors are panel data ([panel] touch_max_*,
+        // D14 — no default; only this device-path fn touches hwd, host
+        // tests never construct a TouchReader).
+        let p = &hwd::load_or_exit().panel;
         Some(TouchReader {
             fd,
-            sx: screen_w as f32 / 1080.0,
-            sy: screen_h as f32 / 2340.0,
+            sx: screen_w as f32 / p.touch_max_x as f32,
+            sy: screen_h as f32 / p.touch_max_y as f32,
             raw_x: 0,
             raw_y: 0,
             down: false,
@@ -581,11 +585,12 @@ impl TouchReader {
 const EV_KEY: u16 = 1;
 pub const KEY_POWER: u16 = 116;
 
-/// Non-touch key events from one evdev node. qpnp_pon (/dev/input/event1)
-/// carries power + volume-down on redfin; we only act on KEY_POWER, whose
-/// presence in the node's KEY bitmap was confirmed via /proc/bus/input
-/// (2026-08-31). qpnp_pon has no EV_REP, so every event is a clean
-/// press (1) or release (0) — value 2 autorepeat never appears.
+/// Non-touch key events from one evdev node ([input.term] power_device,
+/// D14). On the first target it is the SoC's pon block carrying power +
+/// volume-down; we only act on KEY_POWER, whose presence in the node's KEY
+/// bitmap was confirmed via /proc/bus/input (2026-08-31). pon has no EV_REP,
+/// so every event is a clean press (1) or release (0) — value 2 autorepeat
+/// never appears.
 pub struct KeyReader {
     fd: std::fs::File,
 }
@@ -623,7 +628,7 @@ mod tests {
     use super::*;
 
     fn g() -> KeyGeom {
-        Kb::geom(1080, 2340)
+        Kb::geom(1080, 2340) // D14-exempt: fixture panel geometry
     }
 
     fn text_of(ev: Option<InputEvent>) -> String {
@@ -654,7 +659,7 @@ mod tests {
         // bottom row center is space
         assert_eq!(text_of(kb.key_at(&g, 540, g.panel_y + 3 * g.cell_h + 10)), " ");
         // 4 rows in the block (the pre-iOS layout had 5)
-        assert_eq!(g.panel_y + 4 * g.cell_h + KB_B, 2340);
+        assert_eq!(g.panel_y + 4 * g.cell_h + KB_B, 2340); // D14-exempt: fixture panel bottom edge
     }
 
     #[test]

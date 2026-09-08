@@ -5,7 +5,7 @@
 //!
 //! 线序（P0 设备收据）：GET /json/version → webSocketDebuggerUrl → WS →
 //! Target.createTarget → Target.attachToTarget{flatten} →
-//! Emulation.setDeviceMetricsOverride{1080x2340} → Page.navigate(data:URL)
+//! Emulation.setDeviceMetricsOverride{[panel] 尺寸，D14} → Page.navigate(data:URL)
 //! → Page.getLayoutMetrics → Page.startScreencast{jpeg}。screencastFrame
 //! 到达先 ack 后解码（ack 压着引擎 ~150ms 帧预算，解码 ~70ms 串进去掉帧）。
 //! damage-gated：静页一生只发首帧（签名=dom epoch/layout rev/scroll/
@@ -26,8 +26,6 @@ use base64::engine::general_purpose::STANDARD;
 use base64::Engine as _;
 
 const ENGINE_PORT: u16 = 8089;
-const PANEL_W: u32 = 1080;
-const PANEL_H: u32 = 2340;
 const HEARTBEAT: Duration = Duration::from_millis(300);
 /// 帧饥饿看门狗阈值：Live 后这么久仍一帧未解（如过渡帧恰逢合眼被让路），
 /// 重发 startScreencast 换新帧。已解出过一帧后静默是正常态（缓存帧持续
@@ -67,6 +65,11 @@ pub struct Browser {
     wait: Option<(u64, Instant)>,
     setup: Option<SetupStage>,
     html: String,
+    /// 面板尺寸（D14）：构造时从 [panel] 拿到，视口覆盖/布局/解码缩放/
+    /// screencast 上限全部走这两个字段——本模块不碰 hwd，参数化后 host
+    /// 测试喂 fixture 即纯内存。
+    pw: u32,
+    ph: u32,
     target_id: Option<String>,
     session_id: Option<String>,
     scroll: i64,
@@ -82,8 +85,15 @@ pub struct Browser {
 
 impl Browser {
     /// 携带整页 HTML 进入 Dial。网络动作发生在后续 pump 里（Dial 一次性
-    /// 有界阻塞 ~1.5s，主循环可接受）。
+    /// 有界阻塞 ~1.5s，主循环可接受）。产品入口：panel 唯一来源
+    /// device.toml [panel]（D14，无默认）。
     pub fn start(html: &str) -> Browser {
+        let p = &hwd::load_or_exit().panel;
+        Browser::start_panel(html, p.width, p.height)
+    }
+
+    /// host 测试/显式尺寸入口（render_html(md,w,h) 同款切法）。
+    pub fn start_panel(html: &str, pw: u32, ph: u32) -> Browser {
         Browser {
             state: State::Dial,
             sock: None,
@@ -96,6 +106,8 @@ impl Browser {
             wait: None,
             setup: None,
             html: html.to_string(),
+            pw,
+            ph,
             target_id: None,
             session_id: None,
             scroll: 0,
@@ -294,7 +306,7 @@ impl Browser {
                 let id = self.send(
                     "Emulation.setDeviceMetricsOverride",
                     serde_json::json!({
-                        "width": PANEL_W, "height": PANEL_H,
+                        "width": self.pw, "height": self.ph,
                         "deviceScaleFactor": 1, "mobile": true,
                     }),
                 );
@@ -343,8 +355,8 @@ impl Browser {
             Some(SetupStage::Layout) => {
                 let h = resp["result"]["cssContentSize"]["height"]
                     .as_f64()
-                    .unwrap_or(PANEL_H as f64);
-                self.max_off = ((h - PANEL_H as f64).max(0.0)) as i64;
+                    .unwrap_or(self.ph as f64);
+                self.max_off = ((h - self.ph as f64).max(0.0)) as i64;
                 Some(SetupStage::Screencast)
             }
             Some(SetupStage::Screencast) => {
@@ -433,7 +445,7 @@ impl Browser {
         }
         match STANDARD.decode(b64) {
             Ok(jpg) => {
-                match aginx_img::decode_scaled(&jpg, PANEL_W, PANEL_H) {
+                match aginx_img::decode_scaled(&jpg, self.pw, self.ph) {
                     Some(bm) => {
                         self.fresh = Some(bm);
                         self.frame_ok = true;
@@ -469,7 +481,7 @@ impl Browser {
             // 36px 正文字缘眼验无差；帧更小 = term 解码也更便宜。
             serde_json::json!({
                 "format": "jpeg", "quality": 60,
-                "maxWidth": PANEL_W, "maxHeight": PANEL_H,
+                "maxWidth": self.pw, "maxHeight": self.ph,
                 "everyNthFrame": 1,
             }),
         );
@@ -744,6 +756,12 @@ fn ws_dial(host: &str, port: u16, path: &str, seq: u64) -> Result<TcpStream, Str
 mod tests {
     use super::*;
 
+    /// host 测试统一构造：fixture 面板（真实红皮尺寸，纯数据不碰 /etc——
+    /// 与 voice render.rs 的 md() 同款 D14 切法）。
+    fn browser(html: &str) -> Browser {
+        Browser::start_panel(html, 1080, 2340) // D14-exempt: fixture panel geometry
+    }
+
     #[test]
     fn client_frame_small_masked_golden() {
         let mut out = Vec::new();
@@ -860,7 +878,7 @@ mod tests {
     #[test]
     fn setup_walk_in_memory() {
         // 无引擎的内存走查：直接喂响应，验证 Setup 序与 Live 迁移
-        let mut b = Browser::start("<html>x</html>");
+        let mut b = browser("<html>x</html>");
         b.state = State::Setup;
         b.setup = Some(SetupStage::CreateTarget);
         let now = Instant::now();
@@ -884,7 +902,7 @@ mod tests {
         let (id3, _) = b.wait.unwrap();
         let sent = take_out_method(&mut b.out);
         assert!(sent.contains("Emulation.setDeviceMetricsOverride") && sent.contains("\"sessionId\":\"s1\""));
-        assert!(sent.contains("1080") && sent.contains("2340") && sent.contains("\"mobile\":true"));
+        assert!(sent.contains("1080") && sent.contains("2340") && sent.contains("\"mobile\":true")); // D14-exempt: fixture panel asserted on wire
 
         b.handle_msg(&format!(r#"{{"id":{id3},"result":{{}}}}"#), now, false);
         b.setup_tick(now);
@@ -904,7 +922,7 @@ mod tests {
             now,
             false,
         );
-        assert_eq!(b.max_off, 9000 - 2340);
+        assert_eq!(b.max_off, 9000 - 2340); // D14-exempt: fixture panel height
         b.setup_tick(now);
         let (id6, _) = b.wait.unwrap();
         let sent = take_out_method(&mut b.out);
@@ -917,7 +935,7 @@ mod tests {
 
     #[test]
     fn screencast_frame_acks_then_decodes() {
-        let mut b = Browser::start("x");
+        let mut b = browser("x");
         b.state = State::Live;
         b.session_id = Some("s1".into());
         let now = Instant::now();
@@ -937,7 +955,7 @@ mod tests {
 
     #[test]
     fn scroll_clamps_and_sends() {
-        let mut b = Browser::start("x");
+        let mut b = browser("x");
         b.state = State::Live;
         b.session_id = Some("s1".into());
         b.max_off = 1000;
@@ -955,7 +973,7 @@ mod tests {
 
     #[test]
     fn teardown_sends_close_browser_scoped() {
-        let mut b = Browser::start("x");
+        let mut b = browser("x");
         b.state = State::Live;
         b.target_id = Some("t1".into());
         b.session_id = Some("s1".into());
@@ -970,7 +988,7 @@ mod tests {
 
     #[test]
     fn cdp_error_fails() {
-        let mut b = Browser::start("x");
+        let mut b = browser("x");
         b.state = State::Setup;
         b.setup = Some(SetupStage::Attach);
         b.wait = Some((7, Instant::now()));
@@ -983,7 +1001,7 @@ mod tests {
         // v4⑥ 现场雷回归：引擎把首帧紧跟 startScreencast 响应同批冲出，
         // 同一轮 drain 里状态已翻 Live；静页一生只有这帧。这轮必须以真
         // can_present 解码它——否则帧被 ack 后永久丢失（零帧、永远光标面）。
-        let mut b = Browser::start("<html>x</html>");
+        let mut b = browser("<html>x</html>");
         b.state = State::Setup;
         b.setup = Some(SetupStage::Screencast);
         b.session_id = Some("s1".into());
@@ -1008,7 +1026,7 @@ mod tests {
 
     #[test]
     fn starved_live_rearms_until_first_frame() {
-        let mut b = Browser::start("x");
+        let mut b = browser("x");
         b.state = State::Live;
         b.session_id = Some("s1".into());
         let now = Instant::now();
