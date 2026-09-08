@@ -10,37 +10,52 @@ use crate::protocol::Vm;
 use serde::Serialize;
 use std::fs;
 use std::path::Path;
+use std::sync::Mutex;
 
 pub const FACE_DIR: &str = "/run/aginx-voice";
 pub const FACE_FILE: &str = "/run/aginx-voice/face";
 /// 眼取景当前帧（M42g）。voice 原子换名写，term 轮询 mtime 重渲染。
 pub const EYE_JPG: &str = "/run/aginx-voice/eye.jpg";
 
+// 开机剧情 v4：line = 打字文本（ASR transcript v4③ / 文本降级回复，term
+// 本地 ~90ms/char 打字机，换串即换行）。剧场字段 call/lines 已随 v4 退役。
+static BOOT_LINE: Mutex<Option<String>> = Mutex::new(None);
+
+/// 结果页站立中（v4⑥：真人不看日志——结果页不超时是产品线）。唯一置位
+/// 点 write_doc(result=true)，任何 result=false 落盘即清。run_outs 尾部的
+/// 例行刷脸凭它跳过——否则 tick 超时/纯 say 再入 run_outs 会把站立页踩回
+/// 光标面（真人实测第二雷：live 几秒后必 teardown）。
+static RESULT_STANDING: Mutex<bool> = Mutex::new(false);
+
+/// 换打字文本。前缀延长由 term 识别并续打，其余换串从头打。
+pub fn set_line(line: Option<&str>) {
+    *BOOT_LINE.lock().unwrap() = line.map(str::to_string);
+}
+
 #[derive(Serialize)]
 pub struct FaceDoc<'a> {
-    /// 协议状态名（无驻留态状态机恒 "idle"；留作未来 Choice 等状态的缝）
+    /// 协议状态名（无驻留态状态机恒 "idle"；m42c 钉 "state":"idle"）
     pub state: &'a str,
-    /// PTT 按住采集中
-    pub listening: bool,
-    /// ASR/TTS/执行中
-    pub busy: bool,
-    /// 眼取景中：term 主区渲染 eye.jpg，对话行退居底部
+    /// 眼取景中：Mode::Eye 整屏取景
     pub eye: bool,
-    /// 对话行：true=用户说的，false=化身说的
-    pub lines: Vec<(bool, String)>,
+    /// 开机剧情 v4 结果面（#246④）：result.img 已就位，term 整屏上帧
+    pub result: bool,
+    /// 打字文本（transcript/文本回复，'\n' 强制换行）
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub line: Option<String>,
     pub hint: &'a str,
 }
 
 const HINT: &str = "按住音量下说话 · 音量+对码";
 
-pub fn write(vm: &Vm, listening: bool, busy: bool, eye: bool) {
+fn write_doc(state: &str, eye: bool, result: bool) {
+    *RESULT_STANDING.lock().unwrap() = result;
     let _ = fs::create_dir_all(FACE_DIR);
     let doc = FaceDoc {
-        state: vm.state_name(),
-        listening,
-        busy,
+        state,
         eye,
-        lines: vm.lines().to_vec(),
+        result,
+        line: BOOT_LINE.lock().unwrap().clone(),
         hint: HINT,
     };
     let tmp = format!("{FACE_FILE}.tmp");
@@ -49,6 +64,21 @@ pub fn write(vm: &Vm, listening: bool, busy: bool, eye: bool) {
             let _ = fs::rename(&tmp, FACE_FILE);
         }
     }
+}
+
+pub fn write(vm: &Vm, eye: bool) {
+    write_doc(vm.state_name(), eye, false);
+}
+
+/// 结果面（v4④）：render 线程发布 result.img 后调用——state 沿用分���时
+/// 捕获的名字，其余全静，result=true 让 term 从光标面切整屏帧。
+pub fn write_result(state: &str) {
+    write_doc(state, false, true);
+}
+
+/// 结果页站立中（v4⑥）：run_outs 尾部例行刷脸的门。
+pub fn result_standing() -> bool {
+    *RESULT_STANDING.lock().unwrap()
 }
 
 /// aginx-term/调试读面

@@ -269,31 +269,6 @@ fn play_stereo_spawn() -> Result<Option<Child>, String> {
     Err(format!("snd-play: {last_err}"))
 }
 
-/// 老式电话铃（Matrix 问候起手）：440+480Hz 双音 ~2s，两端 0.1s 淡入淡出
-/// 去咔哒。进程内合成无资产文件；与 TTS 同链（48k L=R 立体声，mono 铁律）。
-pub fn play_ring() -> Result<(), String> {
-    const SECS: usize = 2;
-    let n = RATE as usize * SECS;
-    let mut stereo = Vec::with_capacity(n * 4);
-    for i in 0..n {
-        let t = i as f32 / RATE as f32;
-        let env = if t < 0.1 {
-            t / 0.1
-        } else if t > 1.9 {
-            (SECS as f32 - t) / 0.1
-        } else {
-            1.0
-        };
-        let s = (2.0 * std::f32::consts::PI * 440.0 * t).sin()
-            + (2.0 * std::f32::consts::PI * 480.0 * t).sin();
-        let v = (s * 0.25 * env * 32767.0) as i16;
-        stereo.extend_from_slice(&v.to_le_bytes());
-        stereo.extend_from_slice(&v.to_le_bytes());
-    }
-    fs::write("/tmp/aginx-voice-tts.raw", &stereo).map_err(|e| format!("ring tmp: {e}"))?;
-    play_stereo_blocking(n)
-}
-
 // ---------------- capture ----------------
 
 /// 起一次最长 CAP_MAX_SECS 的采集；PTT 松手时 kill，采到多少算多少。
