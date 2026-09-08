@@ -94,6 +94,7 @@ from the old repo's sources at bake.
 | `crates/pkg` | `aginx-pkg` — package manager (signed manifest, 四件套) |
 | `crates/svc` | `aginx-svcd` + `aginx-svc` + `aginx-boot-ok` — supervisor, control, A/B marker |
 | `crates/sign` | `aginx-sign` — host signer/verifier (ed25519; keys in `.local/keys/`) |
+| `crates/pair` | `aginx-pair` — host-only pairing-code minter: AGINXPAIR1 bundle → PNG QR (five fields never echoed) |
 | `crates/qr`, `crates/img` | `aginx-qr` — QR decode CLI (quircs + jpeg decode face); vendored libjpeg-turbo |
 | `crates/download`, `crates/update` | `aginx-download`/`aginx-update` — HTTPS fetch + signed A/B rootfs updater |
 | `crates/done` | `aginx-done` — provision done-marker discipline |
@@ -102,7 +103,7 @@ from the old repo's sources at bake.
 | `crates/testkit` | test helpers |
 | `rootfs/` | the image recipe — see `rootfs/README.md` (placement matrix, asset split) |
 | `scripts/build-rootfs.sh` | the bake: recipe + zigbuild + OLD= assets → `out/rootfs.img` |
-| `scripts/accept/` | device acceptance suites (n4.sh switch gate, n5.sh absorption+remote gate) |
+| `scripts/accept/` | device acceptance suites (n4.sh switch gate, n5.sh absorption+remote gate, m42c.sh pairing gate) |
 | `shims/` | repo-local `aginx-*` command faces (host trial registry) |
 | `docs/ARCH.md` | the constitution (local only, gitignored) |
 | `docs/HARDWARE.md` | device experiment log — this repo's receipts from N4 on |

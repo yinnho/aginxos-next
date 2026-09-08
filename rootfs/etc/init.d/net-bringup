@@ -1,16 +1,30 @@
 #!/bin/sh
-# Network bring-up (M5) — the Wi-Fi half of the boot card.
-# Waits for radio-bringup's wlan0, joins the AP from /etc/wifi.conf with
-# our own supplicant (aginx-net-join, 原名 wifi-join: scan -> assoc ->
-# WPA2-PSK 4-way handshake -> key install, M4), gets a lease with udhcpc
-# (default.script applies it
-# and writes /etc/resolv.conf), then proves DNS + TCP + HTTP by fetching
-# http://www.baidu.com with busybox wget.
-# Every milestone is reported to /run/boot.state for the boot card:
+# Network bring-up (M5 → 开机剧情 #246 phase split) — two phases, one file.
+#
+# Phase 1, the LOCAL verdict: wait for radio-bringup's wlan0 and the
+# sibling bring-up verdicts (touch/battery/modem — each written by its own
+# rcS script), then write `done ok|fail`. `done` gates the boot-verdict
+# consumers (agboot-ok slot marking, suites); since the boot story (ring →
+# answer) starts at panel-light with the net still in flight, `done` no
+# longer waits for Wi-Fi. Only a LOCAL key failure (no netdev, or a
+# touch/battery/modem fail line) is a broken boot.
+#
+# Phase 2, the NET chain — never `done fail`: join /etc/wifi.conf with our
+# own supplicant (aginx-net-join, 原名 wifi-join: scan -> assoc -> WPA2-PSK
+# 4-way handshake -> key install, M4), get a lease with udhcpc
+# (default.script applies it and writes /etc/resolv.conf), then prove
+# DNS + TCP + HTTP by fetching http://www.baidu.com with /bin/httpget,
+# then the bounded ntpd clock sync. Any net failure writes its fail line
+# and exits 0: the voice daemon's boot scene reads wifi/dhcp fail for the
+# lost-hardline path (对准配对码), provision exits early on them, and
+# net-watch self-heals the link in service.
+# Every milestone lands in /run/boot.state:
+#   wlan fail "no netdev"   (the ok line belongs to radio-bringup)
 #   wifi run|ok|fail [ssid]
 #   dhcp run|ok|fail [ip]
 #   internet run|ok|fail [detail]
-#   done ok            <- only on full success; bootcard shows the banner
+#   time run|ok|fail [date]
+#   done ok|fail            <- phase 1 LOCAL verdict; never on net failure
 # /etc/wifi.conf is KEY=VALUE (ssid=/psk=) and lives on the device only —
 # the repo ships etc/wifi.conf.example; credentials never get committed.
 export PATH=/sbin:/bin:/usr/sbin:/usr/bin
@@ -21,6 +35,7 @@ echo "=== net bring-up $(date) ==="
 STATE=/run/boot.state
 say() { echo "$1 $2 $3" >>"$STATE"; echo "net: $1 $2 $3"; }
 
+# ---- phase 1: local verdict (wlan0 + sibling bring-ups -> done) ---------
 # radio-bringup gets here eventually (modem PIL ~10 s, driver+FW after);
 # poll long enough that a slow boot is a late ok, not a false fail.
 n=0
@@ -35,11 +50,37 @@ if [ ! -e /sys/class/net/wlan0 ]; then
 fi
 echo "wlan0 present after $((n*2))s $(date)"
 
-# Credentials. Missing config is a clean fail, not a guess.
+# The touch/battery/modem verdicts are written by their own rcS siblings;
+# wait for all three (bounded 480 s — every sibling script is bounded well
+# inside it, same budget as the wlan0 wait). A fail line among them is an
+# honest broken boot; running out the clock without three oks is too.
+LOCAL_OK=0
+n=0
+while [ $n -lt 240 ]; do
+  if grep -q '^touch ok' "$STATE" 2>/dev/null && \
+     grep -q '^battery ok' "$STATE" 2>/dev/null && \
+     grep -q '^modem ok' "$STATE" 2>/dev/null; then
+    LOCAL_OK=1
+    break
+  fi
+  # a fail line is final for that key — no point waiting for the rest
+  grep -qE '^(touch|battery|modem) fail' "$STATE" 2>/dev/null && break
+  sleep 2; n=$((n+1))
+done
+if [ "$LOCAL_OK" -ne 1 ]; then
+  say done fail "local bring-up"
+  exit 1
+fi
+say done ok
+echo "=== local verdict: done ok (net chain continues) $(date) ==="
+
+# ---- phase 2: net chain (never done fail) -------------------------------
+# Credentials. Missing config is a clean fail, not a guess — and not a
+# broken boot: it is the Act 3b story (对准配对码), provision retries next
+# boot (M27 discipline), net-watch may still heal once a conf appears.
 if [ ! -f /etc/wifi.conf ]; then
   say wifi fail "no /etc/wifi.conf"
-  say done fail
-  exit 1
+  exit 0
 fi
 SSID=; PSK=
 while IFS='=' read -r k v; do
@@ -53,8 +94,7 @@ SSID=$(printf '%s' "$SSID" | tr -d '\r')
 PSK=$(printf '%s' "$PSK" | tr -d '\r')
 if [ -z "$SSID" ] || [ -z "$PSK" ]; then
   say wifi fail "wifi.conf incomplete"
-  say done fail
-  exit 1
+  exit 0
 fi
 echo "joining ssid '$SSID' $(date)"
 
@@ -75,8 +115,7 @@ while [ $attempt -lt 2 ]; do
     jrc=$?
     if [ $attempt -ge 2 ]; then
       say wifi fail "join rc=$jrc"
-      say done fail
-      exit 1
+      exit 0
     fi
     say wifi run "retry"
     continue
@@ -92,8 +131,7 @@ while [ $attempt -lt 2 ]; do
 done
 if [ -z "$IP" ]; then
   say dhcp fail "rc=$rc"
-  say done fail
-  exit 1
+  exit 0
 fi
 say dhcp ok "$IP"
 echo "lease $IP applied $(date)"
@@ -111,14 +149,15 @@ if HTTP=$(/bin/httpget http://www.baidu.com/ /tmp/baidu.html 2>&1); then
   # Clock sync (M10) — TLS certificate validation needs a roughly-correct
   # clock, and this kernel boots at the build epoch (observed 1970/2029
   # drift). busybox date -s misparses GNU formats, so ntpd is the only
-  # trusted path. Best-effort: a failed sync must not fail the boot.
+  # trusted path. Best-effort: a failed sync must not fail anything.
   # N4④ 真修 (#112 立案的邻居): one-shot ntpd is a coin flip when the
   # AP's DNS/pass-through lags the link — bounded retry instead: up to
   # 12 tries x 10 s alternating ntp.aliyun.com / cn.pool.ntp.org, gated
   # on the wall clock actually landing in the present (date is the only
   # verdict a 1970 boot clock can't fake). Budget ~120 s stays inside
-  # provision's 180 s clock-gate wait, and time run/ok/fail + done 行序
-  # 不变 (net-bringup 写完 done 才轮到 provision 的 pkg 线).
+  # provision's 180 s clock-gate wait — time ok|fail is phase 2's LAST
+  # line (#246: done already landed in phase 1; provision's pkg line
+  # still waits on internet ok + this verdict).
   say time run
   TSYNCED=1
   t=0
@@ -147,11 +186,9 @@ if HTTP=$(/bin/httpget http://www.baidu.com/ /tmp/baidu.html 2>&1); then
     say time fail "ntpd"
     echo "ntpd failed after bounded retry — TLS validation may break until the clock is fixed"
   fi
-  say done ok
   echo "=== net up: $IP via $SSID $(date) ==="
   exit 0
 fi
 say internet fail "$HTTP"
-say done fail
 echo "=== internet check failed: $HTTP $(date) ==="
-exit 1
+exit 0

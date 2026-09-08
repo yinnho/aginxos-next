@@ -74,10 +74,10 @@ drv "grep -c \"^$KEYVAR=\" /etc/aginx/env"
 expect_out "brain key 键名在 /etc/aginx/env（只数行不回显）" '^1$'
 
 echo "==> D 首启（boot.state 六行 → 恰五单元 → 引擎落位 → provision 回面）"
-# done ok：net-bringup 收口（含有界 ntpd 钟闸）。冷首启 Wi-Fi+校时走完
-# 才轮到 provision，给足预算。
+# time ok：#246 后 done 是本地判（phase 1，先落）；net 链的收口行是
+# time ok（phase 2 最后一步，internet 之后）。等它，五行必已齐。
 for i in $(seq 1 24); do
-  drv "grep -q '^done ok' /run/boot.state"; [ "${DRV_RC:-}" = "0" ] && break; sleep 15
+  drv "grep -q '^time ok' /run/boot.state"; [ "${DRV_RC:-}" = "0" ] && break; sleep 15
 done
 for k in wifi dhcp internet time done; do
   drv "grep -q '^$k ok' /run/boot.state"

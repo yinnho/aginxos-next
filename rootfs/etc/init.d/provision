@@ -25,8 +25,10 @@
 #               marker (state-tar loss) means a clean re-run. First
 #               real tenant is M28 (python + pip). Structure here now.
 #
-# net-bringup writes "internet ok|fail ..." and finally "done ok|fail" —
-# this script writes ONLY the pkg lines.
+# net-bringup writes the net lines (wifi/dhcp/internet ok|fail) and — since
+# the 开机剧情 #246 phase split — the phase-1 LOCAL verdict "done ok|fail";
+# net failures never write done fail (they are the lost-hardline story, not
+# a broken boot). This script writes ONLY the pkg lines.
 export PATH=/sbin:/bin:/usr/sbin:/usr/bin:/var/bin
 
 STATE=/run/boot.state
@@ -43,7 +45,10 @@ grep -qE '^[a-z]' /etc/agpkg.manifest || exit 0   # all entries commented
 n=0
 while [ $n -lt 180 ]; do
   grep -q '^internet ok' "$STATE" 2>/dev/null && break
-  grep -q '^done fail' "$STATE" 2>/dev/null && exit 0
+  # #246: `done` is the local verdict now and lands long before the net
+  # chain — the net-verdict early-outs are the wifi/dhcp/internet fail
+  # lines instead of done fail (retries next boot, M27 discipline).
+  grep -qE '^(wifi|dhcp|internet) fail' "$STATE" 2>/dev/null && exit 0
   sleep 2; n=$((n+1))
 done
 grep -q '^internet ok' "$STATE" || exit 0
@@ -52,9 +57,10 @@ grep -q '^internet ok' "$STATE" || exit 0
 # sets the wall clock dies on cert validation ("not valid yet" vs the
 # 1970 boot clock) — a fresh /var/bin after a rootfs swap made every
 # mirror fetch fail this way while sync raced ahead of net-bringup's
-# ntpd. net-bringup writes `time ok|fail` synchronously before `done`,
-# so this wait is bounded by the boot itself; on time fail we still
-# try (the RTC may be right — failure is then honest and logged).
+# ntpd. The time verdict trails internet ok by net-bringup's bounded ntpd
+# retry (~120 s, phase 2's last line — `done` landed back in phase 1),
+# inside this 180 s wait; on time fail we still try (the RTC may be
+# right — failure is then honest and logged).
 n=0
 while [ $n -lt 90 ]; do
   grep -qE '^time (ok|fail)' "$STATE" 2>/dev/null && break

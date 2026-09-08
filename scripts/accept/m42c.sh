@@ -11,6 +11,13 @@
 #   B 协议  --inject 你好（地板词表）/ --inject 状态 / --inject 连网（已
 #          连网 → 「网已连」，不碰 wifi.conf）/ face 新 schema（无
 #          list/psk 段、hint 带对码、state=idle）
+#   B2 面法 关机/重启口令闸（09-07）：未设口令=fail-closed 拒绝话术；
+#          fixture 口令 + 错口令×3 → 三错作废。口令值是套件字面量（同
+#          host 测试的 p4ss w0rd!），真口令永不进脚本；口令尝试不上脸
+#          （psk 同律）——expect_no 钉的就是这条。
+#   C 面法  末查=真重启：script 重启+对口令 → PowerExec → aginx-reboot
+#          → 设备断开真重启 → 回来 uptime 翻新 + boot done 即收据。
+#          真关机/真人语音收据属 #198，不进套件。
 #
 # 纪律同 n5：钉死 serial；只读为主（face 快照 + EXIT 归还原位；/tmp 标记
 # 自清）；秘密零回显——套件 fixture 是假身份，真秘密永远不进脚本。
@@ -24,6 +31,7 @@ WORK="$(mktemp -d "${TMPDIR:-/tmp}/m42c-host.XXXXXX")"
 
 PASS=0
 FAIL=0
+REBOOTED=0
 
 adbx() { adb -s "$SERIAL" "$@"; }
 
@@ -40,7 +48,12 @@ expect_out() { printf '%s' "${DRV_OUT:-}" | grep -Eq -- "$2" && { echo "ok   - $
 expect_no()  { printf '%s' "${DRV_OUT:-}" | grep -Eq -- "$2" && { echo "FAIL - $1（不该出现: $2）"; echo "       out=$(printf '%s' "${DRV_OUT:-}" | head -2)"; FAIL=$((FAIL+1)); } || { echo "ok   - $1"; PASS=$((PASS+1)); } }
 
 cleanup() {
-  drv "cp $FACEBAK $FACE 2>/dev/null; rm -f $FACEBAK /tmp/m42c-pair.jpg; true"
+  # C 段真重启后 /run 是新世界——face 快照不再回灌（daemon 自己会写）
+  if [ "$REBOOTED" = 0 ]; then
+    drv "cp $FACEBAK $FACE 2>/dev/null; rm -f $FACEBAK /tmp/m42c-pair.jpg; true"
+  else
+    drv "rm -f $FACEBAK /tmp/m42c-pair.jpg; true"
+  fi
   rm -rf "$WORK"
 }
 trap cleanup EXIT
@@ -94,6 +107,52 @@ expect_out "状态报网已连"                    '网已连'
 drv "/usr/bin/aginx-voice --inject 连网; sleep 1; /usr/bin/aginx-voice --face"
 expect_out "连网在已连网设备=网已连（不问不扫）" '网已连'
 expect_no  "连网未触发表态流程（无对码话）"   '对准配对码'
+
+echo "==> B2 面法口令闸（fail-closed / 三错作废；口令=套件 fixture 字面量）"
+# 未设口令（adb shell 无 env_file → AGINX_POWER_KEY 缺席）：词收下、闸不开
+drv "/usr/bin/aginx-voice --inject 关机; sleep 1; /usr/bin/aginx-voice --face"
+expect_out "未设口令=fail-closed 拒绝话术"      '关机需要口令，口令还没设置。'
+expect_no  "未设口令不开闸（无 请说口令）"      '请说口令'
+
+# 错口令×3 → 作废回 Idle；口令尝试原文不上脸（psk 同律）。
+# v4② 话术断言走 stderr 日志（say/speak 行）+ 脸终值，不再丢 stderr。
+drv "printf '关机\n第一遍错的\n第二遍错的\n第三遍错的\n' | AGINX_POWER_KEY=面法五号口令 /usr/bin/aginx-voice --script >/dev/null; sleep 1; /usr/bin/aginx-voice --face"
+expect_out "进过口令等待（请说口令）"            '请说口令。'
+expect_out "三错作废水术"                       '口令三次不对，已取消。'
+expect_no  "口令尝试原文不上脸（psk 同律）"     '第一遍错的'
+
+echo "==> C 面法末查（口令对 → PowerExec → 真重启 → 回来即收据）"
+drv "printf '重启\n面法五号口令\n' | AGINX_POWER_KEY=面法五号口令 /usr/bin/aginx-voice --script >/dev/null 2>&1 || true"
+sleep 3
+# 有界等回 adb（5 分钟；macOS 无 timeout，靠 get-state 轮询）
+BACK=0
+for _ in $(seq 1 60); do
+  adbx get-state 2>/dev/null | grep -q device && { BACK=1; break; }
+  sleep 5
+done
+if [ "$BACK" = 1 ]; then
+  # 等整机走完：boot done + 语音守护起（预算 5 分钟）
+  UP_OK=0
+  for _ in $(seq 1 60); do
+    drv "grep -q '^done' /run/boot.state 2>/dev/null && pidof aginx-voice >/dev/null"
+    if [ "${DRV_RC:-}" = 0 ]; then UP_OK=1; break; fi
+    sleep 5
+  done
+  if [ "$UP_OK" = 1 ]; then
+    REBOOTED=1
+    drv "cut -d. -f1 /proc/uptime"
+    UPNOW="${DRV_OUT:-999999}"
+    if [ "${UPNOW:-999999}" -lt 360 ]; then
+      echo "ok   - 真重启回来（uptime ${UPNOW}s + boot done + voice up）"; PASS=$((PASS+1))
+    else
+      echo "FAIL - uptime ${UPNOW}s 不像刚重启"; FAIL=$((FAIL+1))
+    fi
+  else
+    echo "FAIL - 5 分钟内未见 boot done + voice up"; FAIL=$((FAIL+1))
+  fi
+else
+  echo "FAIL - 重启后 5 分钟设备未回 adb"; FAIL=$((FAIL+1))
+fi
 
 echo
 echo "m42c: $PASS passed, $FAIL failed（真配对收据属 #198：fresh boot 无 adb 举码）"

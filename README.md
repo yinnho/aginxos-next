@@ -143,6 +143,7 @@ flowchart TB
 | `crates/pkg` | `aginx-pkg` | package manager — signed manifest, 四件套 tars |
 | `crates/svc` | `aginx-svcd`/`aginx-svc`/`aginx-boot-ok` | supervisor, control client, A/B slot marker |
 | `crates/sign` | `aginx-sign` | host-side ed25519 signer/verifier |
+| `crates/pair` | `aginx-pair` | host-only pairing-code minter — AGINXPAIR1 bundle → PNG QR, device decodes via `aginx-qr` |
 | `crates/qr` | `aginx-qr` | QR decode CLI — quircs + jpeg decode face (built in its own zigbuild pass) |
 | `crates/img` | `aginx-img` | vendored libjpeg-turbo decode (shared FFI) |
 | `crates/download` | `aginx-download` | HTTPS downloader — streaming, .part+rename |

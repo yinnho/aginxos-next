@@ -277,10 +277,10 @@ done
   -o "${TREE}/bin/snd-mixer" "${ORECIPE}/src/snd-mixer.c"
 "${ZIG}" cc -target aarch64-linux-musl -static -O2 \
   -o "${TREE}/bin/i2c-reg" "${ORECIPE}/src/i2c-reg.c"
-# Boot card (M5): DRM boot-status renderer — polls /run/boot.state and
-# paints the AginxOS bring-up checklist on the panel. Holds DRM master
-# for its whole life (it replaces the M3 green splash). Same zig static
-# build; host-side layout check via `bootcard --ppm out.ppm [state]`.
+# Boot card (v4⑤): DRM boot console — paints the AginxOS wordmark only
+# (checklist retired 09-08) and exits on the net-verdict ladder. Holds DRM
+# master for its whole life (it replaces the M3 green splash). Same zig
+# static build; host-side check via `bootcard --ppm out.ppm`.
 "${ZIG}" cc -target aarch64-linux-musl -static -O2 \
   -o "${TREE}/bin/bootcard" "${ORECIPE}/src/bootcard.c"
 # Patched vendor ko override (boot-wedge defense, #228): camera-bringup
