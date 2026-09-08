@@ -45,11 +45,13 @@ binder-init、qrtr-lookup、qmi-req、
 raw2jpg、snd-*、i2c-reg、bootcard、httpget、wdt、rtcal、fake-sm、dropbear、
 rmt_storage、busybox）**保原名**，照抄老仓脚本落 /bin。
 
-## 老仓资产引用（OLD=，单一权威源纪律——不复制进本仓）
+## 设备资产（.local/device/redfin/，gitignored）
 
-busybox、rootfs/src/*.c、vendor-ramdisk-root（内核模块）、out/voice+models、
-out/ocr+models、.local/dropbear、.local/radio、out/cacert.pem、字体、
-usr/share/ocr 字典。密钥在**本仓** `.local/keys/`（N4② 落位）。
+vendor-ramdisk-root（内核模块）、voice+models、ocr+models、dropbear、
+radio、冻结 trampoline 对、stock 两镜像、qmi 头——2026-09-08 自老仓
+sha256 验收迁入；重生成法见 `devices/redfin/boot/assets.md`。
+密钥在**本仓** `.local/keys/`（N4② 落位）。老仓已封存
+（`docs/ARCHIVED.md` there）。
 
 ## lint
 

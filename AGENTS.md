@@ -5,14 +5,16 @@ as a fresh workspace. Since N4 this repo owns the bake chain and the
 device: `scripts/build-rootfs.sh` produces the flashable image, and the
 running Pixel 5 (redfin) is this line's hardware.
 
-- `~/Documents/aginxos` — first-generation line, now an ASSET LIBRARY.
-  `build-rootfs.sh` references it read-only via `OLD=` (default
-  `~/Documents/aginxos`) for: busybox, `rootfs/src/*.c`, the unpacked
-  vendor ramdisk, voice/OCR builds+models, dropbear, radio blobs, fonts,
-  and the frozen aginxos trampoline pair (aginxos-init/aginxos-agent —
-  deliberately not absorbed: the swapper of the rootfs swap stays
-  first-gen). Do not build on its code; its `docs/HARDWARE.md` holds
-  every device receipt before N4.
+- `~/Documents/aginxos` — first-generation line, **SEALED 2026-09-08**
+  (zero commits; only exception: a disaster-rollback receipt — its
+  `.factory` flash-all stays that repo's authority). Its `docs/ARCHIVED.md`
+  holds the asset map and history guide. Everything this repo's bake
+  consumes now lives HERE under gitignored `.local/device/redfin/`
+  (vendor ramdisk, voice/OCR builds+models, dropbear, radio blobs, the
+  frozen aginxos trampoline pair — regeneration paths in
+  `devices/redfin/boot/assets.md`); busybox, fonts and the C sources are
+  in-tree (`rootfs/`). The trampoline pair stays deliberately first-gen:
+  the swapper of the rootfs swap is frozen (see assets.md).
 - `~/Documents/aginx` — ecosystem (aginx-carrier, aginx daemon,
   aginxbrowser, memory server). Source of import seams, not development.
 
@@ -102,7 +104,7 @@ from the old repo's sources at bake.
 | `crates/gateway` | `aginx-gateway` — remote channel daemon: registers to relay.aginx.net, collapses external JSON-RPC onto the server's UDS front (ACP.md wire authority = ecosystem repo) |
 | `crates/testkit` | test helpers |
 | `rootfs/` | the image recipe — see `rootfs/README.md` (placement matrix, asset split) |
-| `scripts/build-rootfs.sh` | the bake: recipe + zigbuild + OLD= assets → `out/rootfs.img` |
+| `scripts/build-rootfs.sh` | the bake: recipe + zigbuild + device assets (`.local/device/redfin`) → `out/rootfs.img` |
 | `scripts/accept/` | device acceptance suites (n4.sh switch gate, n5.sh absorption+remote gate, m42c.sh pairing gate) |
 | `shims/` | repo-local `aginx-*` command faces (host trial registry) |
 | `docs/ARCH.md` | the constitution (local only, gitignored) |

@@ -46,4 +46,4 @@ fi
 echo
 echo "Unpacked. Next:"
 echo "  cat ${OUT}/info.txt"
-echo "  ./boot/pack-boot.sh"
+echo "  ./devices/redfin/boot/pack-boot.sh"

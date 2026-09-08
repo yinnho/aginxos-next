@@ -39,7 +39,7 @@ if [ "$got" != "$STOCK_MD5" ]; then
   exit 1
 fi
 
-mkdir -p "${ROOT}/.local/modules.aginx"
+mkdir -p "${REPO}/.local/modules.aginx"
 
 python3 - "$SRC" "$OUT" <<'EOF'
 import struct, sys

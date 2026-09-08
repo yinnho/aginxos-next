@@ -2,25 +2,25 @@
 # Build the N4 AginxOS rootfs image — the new repo owns the bake chain.
 #
 # Assembles the tree from: the recipe in ./rootfs (etc + aginx-* faces +
-# libexec daemons), new-repo musl binaries (zigbuild), and FIRST-GEN
-# ASSETS referenced in place from the old repo (OLD=, single-source
-# discipline — busybox, C tools, vendor ramdisk, voice/OCR stacks,
-# dropbear, radio blobs, fonts) plus the frozen aginxos trampoline pair
-# (N5②: every renamed-at-install CLI is now rebuilt here instead); the
-# old `ag` router, ag-* shims, carrier daemon and relay do NOT enter
-# the image (切净).
+# libexec daemons + generic C sources), new-repo musl binaries (zigbuild),
+# and DEVICE ASSETS under .local/device/redfin/ (vendor ramdisk, voice/OCR
+# stacks, dropbear, radio blobs, the frozen aginxos trampoline pair — see
+# devices/redfin/boot/assets.md for the layout and regeneration paths);
+# N5②: every renamed-at-install CLI is rebuilt here instead; the old `ag`
+# router, ag-* shims, carrier daemon and relay do NOT enter the image
+# (切净).
 #
 # Flash with:  fastboot flash userdata out/rootfs.img
-# Boot needs a vendor_boot packed with ROOTFS=1 (old repo pack-vendor-boot.sh).
+# Boot needs a vendor_boot packed with ROOTFS=1
+# (devices/redfin/boot/pack-vendor-boot.sh).
 #
 # Note: mke2fs -d records the building user's uid (501 on macOS) as owner.
 # rcS chowns everything back to 0:0 on first boot — do not "fix" that here.
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-OLD="${OLD:-$HOME/Documents/aginxos}"
-RAMDISK="${OLD}/boot/out/vendor-ramdisk-root"
-ORECIPE="${OLD}/boot/rootfs"
-OTARGET="${OLD}/target/aarch64-unknown-linux-musl/release"
+ASSETS="${ROOT}/.local/device/redfin"
+RAMDISK="${ASSETS}/vendor-ramdisk-root"
+TRAMP="${ASSETS}/trampoline"
 RECIPE="${ROOT}/rootfs"
 TARGET="${ROOT}/target/aarch64-unknown-linux-musl/release"
 TREE="${TREE:-/tmp/aginxos-n4-rootfs}"
@@ -28,8 +28,8 @@ IMG="${IMG:-${ROOT}/out/rootfs.img}"
 # 2 GB sparse-ish image (bake #18 data: 651M used; N4 drops carrier+relay).
 SIZE="${SIZE:-2g}"
 
-test -x "${RAMDISK}/system/bin/adbd" || { echo "missing ${RAMDISK} — old repo boot/unpack-boot.sh first" >&2; exit 1; }
-test -x "${ORECIPE}/busybox" || { echo "missing ${ORECIPE}/busybox (old repo asset)" >&2; exit 1; }
+test -x "${RAMDISK}/system/bin/adbd" || { echo "missing ${RAMDISK} — see devices/redfin/boot/assets.md (run pack-vendor-boot.sh)" >&2; exit 1; }
+test -x "${RECIPE}/busybox" || { echo "missing ${RECIPE}/busybox recipe asset" >&2; exit 1; }
 MKE2FS="$(command -v mke2fs || true)"
 test -z "${MKE2FS}" && MKE2FS=/opt/homebrew/bin/mke2fs
 test -x "${MKE2FS}" || { echo "mke2fs not found (android-platform-tools provides it)" >&2; exit 1; }
@@ -41,32 +41,33 @@ test -x "${MKE2FS}" || { echo "mke2fs not found (android-platform-tools provides
 # deliberately (aginxos-init owns the userdata rootfs swap — swap the
 # swapper and the update flow has no rollback story).
 for b in aginxos-init aginxos-agent; do
-  test -x "${OTARGET}/${b}" \
-    || { echo "missing old ${b} — old repo ./scripts/build-phone.sh musl first" >&2; exit 1; }
+  test -x "${TRAMP}/${b}" \
+    || { echo "missing ${b} — see devices/redfin/boot/assets.md (frozen trampoline pair)" >&2; exit 1; }
 done
 
 # Voice stack (M42d) + OCR (M45) — bionic-static CLIs and their models,
-# first-gen build products. Voice is the bootstrap human interface (the
+# first-gen build products (regeneration paths: devices/redfin/boot/
+# assets.md). Voice is the bootstrap human interface (the
 # WiFi-join flow speaks before any network exists) and 念读 is the eye
 # path that must work offline, so the models ride the baked image rather
 # than provision. /var/bin overlaps the provision overlay, but provision
 # only fills manifest items (asr/tts/ocr are not in it) and never wipes
 # extras. Renamed at install: ag-asr→aginx-asr, ag-tts→aginx-tts,
 # ag-ocr→aginx-ocr (spawn paths in crates/voice/src/{audio,main}.rs).
-VOICE="${OLD}/out/voice"
+VOICE="${ASSETS}/voice"
 test -x "${VOICE}/bin/ag-asr" && test -x "${VOICE}/bin/ag-tts" \
-  || { echo "missing old out/voice/bin/ag-{asr,tts} — run scripts/build-voice.sh there" >&2; exit 1; }
+  || { echo "missing ${VOICE}/bin/ag-{asr,tts} — see devices/redfin/boot/assets.md" >&2; exit 1; }
 test -s "${VOICE}/models/asr/model.int8.onnx" \
   && test -s "${VOICE}/models/tts/vits-melo-tts-zh_en/model.onnx" \
   && test -s "${VOICE}/models/tts/vits-melo-tts-zh_en/lexicon.txt" \
   && test -s "${VOICE}/models/tts/vits-melo-tts-zh_en/tokens.txt" \
-  || { echo "missing voice models — old repo scripts/fetch-voice-models.sh" >&2; exit 1; }
-OCR="${OLD}/out/ocr"
+  || { echo "missing voice models — see devices/redfin/boot/assets.md" >&2; exit 1; }
+OCR="${ASSETS}/ocr"
 test -x "${OCR}/bin/ag-ocr" \
-  || { echo "missing old out/ocr/bin/ag-ocr — run scripts/build-ocr.sh there" >&2; exit 1; }
+  || { echo "missing ${OCR}/bin/ag-ocr — see devices/redfin/boot/assets.md" >&2; exit 1; }
 test -s "${OCR}/models/det.onnx" && test -s "${OCR}/models/rec.onnx" \
   && test -s "${OCR}/models/dict.txt" \
-  || { echo "missing ocr models — old repo scripts/fetch-ocr-models.sh" >&2; exit 1; }
+  || { echo "missing ocr models — see devices/redfin/boot/assets.md" >&2; exit 1; }
 
 echo "==> zigbuild 新仓 musl 件（缓存则秒过）"
 (cd "${ROOT}" && cargo zigbuild --release --target aarch64-unknown-linux-musl \
@@ -174,17 +175,17 @@ test -x "${ZIG}" || { echo "zig not found (needed for splash2/binder-init)" >&2;
 # (aginx-cam-shot/net-scan/net-join/reboot) are zig-built straight into it.
 mkdir -p "${TREE}/bin" "${TREE}/usr/bin"
 "${ZIG}" cc -target aarch64-linux-musl -static -O2 \
-  -o "${TREE}/bin/splash" "${ORECIPE}/src/splash2.c"
+  -o "${TREE}/bin/splash" "${RECIPE}/src/splash2.c"
 "${ZIG}" cc -target aarch64-linux-musl -static -O2 \
-  -o "${TREE}/bin/binder-init" "${ORECIPE}/src/binder-init.c"
+  -o "${TREE}/bin/binder-init" "${RECIPE}/src/binder-init.c"
 # QRTR observability (M3d): qrtr-lookup snapshots/watches the name service,
 # qmi-req sends one raw QMI request. radio-bringup starts a qrtr-lookup
 # watcher before the modem boot trigger to record the fresh-boot service
 # registration order (WLFW 0x45 transient vs never-present).
 "${ZIG}" cc -target aarch64-linux-musl -static -O2 \
-  -o "${TREE}/bin/qrtr-lookup" "${ORECIPE}/src/qrtr-lookup.c"
+  -o "${TREE}/bin/qrtr-lookup" "${RECIPE}/src/qrtr-lookup.c"
 "${ZIG}" cc -target aarch64-linux-musl -static -O2 \
-  -o "${TREE}/bin/qmi-req" "${ORECIPE}/src/qmi-req.c"
+  -o "${TREE}/bin/qmi-req" "${RECIPE}/src/qmi-req.c"
 # cam-shot (M19) — the IFE/RDI stills capture tool. Vendor sensor register
 # tables are decoded into the source; vendor module bins stay local and
 # gitignored. N4: the four brain-facing C tools take their D13 /usr/bin
@@ -212,42 +213,42 @@ install -m 755 "${ROOT}/out/cam/raw2jpg" "${TREE}/bin/raw2jpg"
 NDK_CC="${HOME}/Library/Android/sdk/ndk/27.0.12077973/toolchains/llvm/prebuilt/darwin-x86_64/bin/aarch64-linux-android24-clang"
 test -x "${NDK_CC}" || { echo "NDK clang not found (needed for preload .so)" >&2; exit 1; }
 mkdir -p "${TREE}/lib"
-"${NDK_CC}" -shared -fPIC -O2 -o "${TREE}/lib/trace_open.so" "${ORECIPE}/src/trace_open.c"
-"${NDK_CC}" -shared -fPIC -O2 -o "${TREE}/lib/fake-props.so" "${ORECIPE}/src/fake-props.c"
+"${NDK_CC}" -shared -fPIC -O2 -o "${TREE}/lib/trace_open.so" "${RECIPE}/src/trace_open.c"
+"${NDK_CC}" -shared -fPIC -O2 -o "${TREE}/lib/fake-props.so" "${RECIPE}/src/fake-props.c"
 echo "built preload helpers (trace_open.so, fake-props.so)"
 # fake-sm: minimal binder context manager (musl-static) answering every
 # transaction with Status-ok. Without a CM on /dev/binder, vendor libbinder
 # clients (cnss-daemon, pm-service) spin forever in "Waiting 1s on context
 # object" before ever reaching their QMI work.
 "${ZIG}" cc -target aarch64-linux-musl -static -O2 \
-  -o "${TREE}/bin/fake-sm" "${ORECIPE}/src/fake-sm.c"
+  -o "${TREE}/bin/fake-sm" "${RECIPE}/src/fake-sm.c"
 # aginx-reboot (原 reboot2): raw reboot(LINUX_REBOOT_CMD_RESTART2) — toybox
 # reboot signals init (we run none) and adb reboot needs adbd's sys.powerctl
 # handling. With no args it plain-reboots; "bootloader" lands in fastboot
 # for re-flashing.
 "${ZIG}" cc -target aarch64-linux-musl -static -O2 \
-  -o "${TREE}/usr/bin/aginx-reboot" "${ORECIPE}/src/reboot2.c"
+  -o "${TREE}/usr/bin/aginx-reboot" "${RECIPE}/src/reboot2.c"
 # wdt (M20c): watchdog probe/arm/starve for /dev/watchdog. The dog itself
 # is armed and petted by aginx-svcd (crates/svc); this is the diagnostics
 # tool that proved the platform story (softdog behind msm_watchdog,
 # hardware bark resources absent) and the live-fire starve reset.
 "${ZIG}" cc -target aarch64-linux-musl -static -O2 \
-  -o "${TREE}/bin/wdt" "${ORECIPE}/src/wdt.c"
+  -o "${TREE}/bin/wdt" "${RECIPE}/src/wdt.c"
 # rtcal (M23b): pm8xxx RTC alarm arm/read + `sync` — the suspend probes' wake
 # path ("set <epoch>" semantics kept from the /tmp zig one-off). net-bringup
 # runs `rtcal sync` after ntpd to fix the RTC's -53y offset, which also makes
 # early-boot wall time true on the next HCTOSYS pass.
 "${ZIG}" cc -target aarch64-linux-musl -static -O2 \
-  -o "${TREE}/bin/rtcal" "${ORECIPE}/src/rtcal.c"
+  -o "${TREE}/bin/rtcal" "${RECIPE}/src/rtcal.c"
 # Ops channel sshd (#142, 2026-09-04) — the maintenance face: ssh in over
 # Wi-Fi or `adb forward tcp:2222 tcp:22` when the subnets differ. Static
-# musl dropbear triplet from the old repo's scripts/build-dropbear.sh
-# (zig cc; the AR must be LLVM's — macOS BSD ar archives break lld member
-# resolution). rcS starts the daemon key-only with the host key under
-# /root/.ssh.
-DROPBEAR="${OLD}/.local/dropbear/bin"
+# musl dropbear triplet (first-gen build product, zig cc; the AR must be
+# LLVM's — macOS BSD ar archives break lld member resolution; regeneration
+# in devices/redfin/boot/assets.md). rcS starts the daemon key-only with
+# the host key under /root/.ssh.
+DROPBEAR="${ASSETS}/dropbear/bin"
 for b in dropbear dbclient dropbearkey; do
-  test -x "${DROPBEAR}/${b}" || { echo "missing ${b} — old repo scripts/build-dropbear.sh" >&2; exit 1; }
+  test -x "${DROPBEAR}/${b}" || { echo "missing ${b} — see devices/redfin/boot/assets.md" >&2; exit 1; }
   cp "${DROPBEAR}/${b}" "${TREE}/bin/${b}"
   chmod 755 "${TREE}/bin/${b}"
 done
@@ -255,34 +256,34 @@ done
 # has no wireless tools and we ship no libnl. Our WLAN operability check
 # (M3f); the wizard scans through it.
 "${ZIG}" cc -target aarch64-linux-musl -static -O2 \
-  -o "${TREE}/usr/bin/aginx-net-scan" "${ORECIPE}/src/nlscan.c"
+  -o "${TREE}/usr/bin/aginx-net-scan" "${RECIPE}/src/nlscan.c"
 # aginx-net-join (原 wifi-join, M4): self-contained WPA2-PSK supplicant —
 # CONNECT, EAPOL 4-way handshake over an AF_PACKET socket, NEW_KEY installs;
 # then udhcpc owns IP provisioning. wifi-trace flips QCA vendor dp-trace
 # levels for TX/RX logs (internal, /bin).
 "${ZIG}" cc -target aarch64-linux-musl -static -O2 \
-  -o "${TREE}/usr/bin/aginx-net-join" "${ORECIPE}/src/wifi-join.c"
+  -o "${TREE}/usr/bin/aginx-net-join" "${RECIPE}/src/wifi-join.c"
 "${ZIG}" cc -target aarch64-linux-musl -static -O2 \
-  -o "${TREE}/bin/wifi-trace" "${ORECIPE}/src/wifi-trace.c"
+  -o "${TREE}/bin/wifi-trace" "${RECIPE}/src/wifi-trace.c"
 # M18 audio I/O: bare-ioctl PCM pair (no alsa-lib) — capture is the
 # agent's "listen" path, playback its "speak" path. Shared uapi header.
 "${ZIG}" cc -target aarch64-linux-musl -static -O2 \
-  -o "${TREE}/bin/snd-cap" "${ORECIPE}/src/snd-cap.c"
+  -o "${TREE}/bin/snd-cap" "${RECIPE}/src/snd-cap.c"
 "${ZIG}" cc -target aarch64-linux-musl -static -O2 \
-  -o "${TREE}/bin/snd-play" "${ORECIPE}/src/snd-play.c"
+  -o "${TREE}/bin/snd-play" "${RECIPE}/src/snd-play.c"
 # snd-mixer: ctl get/set (no alsa-lib) — audio-bringup's whole routing
 # recipe runs through it. i2c-reg: rt5514 register peek/poke over
 # /dev/i2c-N (kernel has no debugfs here — see audio-bringup notes).
 "${ZIG}" cc -target aarch64-linux-musl -static -O2 \
-  -o "${TREE}/bin/snd-mixer" "${ORECIPE}/src/snd-mixer.c"
+  -o "${TREE}/bin/snd-mixer" "${RECIPE}/src/snd-mixer.c"
 "${ZIG}" cc -target aarch64-linux-musl -static -O2 \
-  -o "${TREE}/bin/i2c-reg" "${ORECIPE}/src/i2c-reg.c"
+  -o "${TREE}/bin/i2c-reg" "${RECIPE}/src/i2c-reg.c"
 # Boot card (v4⑤): DRM boot console — paints the AginxOS wordmark only
 # (checklist retired 09-08) and exits on the net-verdict ladder. Holds DRM
 # master for its whole life (it replaces the M3 green splash). Same zig
 # static build; host-side check via `bootcard --ppm out.ppm`.
 "${ZIG}" cc -target aarch64-linux-musl -static -O2 \
-  -o "${TREE}/bin/bootcard" "${ORECIPE}/src/bootcard.c"
+  -o "${TREE}/bin/bootcard" "${RECIPE}/src/bootcard.c"
 # Patched vendor ko override (boot-wedge defense, #228): camera-bringup
 # prefers /lib/modules.aginx over vendor. Blob stays out of git (.local) —
 # regenerate with scripts/patch-vsync-ko.sh.
@@ -293,11 +294,11 @@ fi
 # httpget: minimal HTTP fetch for the boot internet check — busybox's wget
 # applet segfaults in this build (2026-08-28), so net-bringup uses ours.
 "${ZIG}" cc -target aarch64-linux-musl -static -O2 \
-  -o "${TREE}/bin/httpget" "${ORECIPE}/src/httpget.c"
+  -o "${TREE}/bin/httpget" "${RECIPE}/src/httpget.c"
 # udhcpc event hook (compiled-in default path) — without it udhcpc wins a
 # lease but nothing applies it to the interface.
 mkdir -p "${TREE}/usr/share/udhcpc"
-cp "${ORECIPE}/usr/share/udhcpc/default.script" "${TREE}/usr/share/udhcpc/"
+cp "${RECIPE}/usr/share/udhcpc/default.script" "${TREE}/usr/share/udhcpc/"
 chmod 755 "${TREE}/usr/share/udhcpc/default.script"
 
 # Radio bring-up payload (M3d). libnl.so is the bionic build cnss-daemon
@@ -306,10 +307,11 @@ chmod 755 "${TREE}/usr/share/udhcpc/default.script"
 # cdsp-loader.ko with module/driver/sysfs names renamed (compat + code
 # untouched — it binds soc:qcom,msm-cdsp-loader and boots the CDSP) and
 # modem-npucc-loader.ko is the modem variant re-anchored to the npucc
-# node. See the old repo's .local/radio/README.md. All are vendor-derived
-# blobs: they live only in gitignored .local/radio/ and are copied in when
-# present. scripts/build-radio-blobs.sh (old repo) regenerates them.
-RADIO="${OLD}/.local/radio"
+# node. See radio/README.md in the asset dir. All are vendor-derived
+# blobs: they live only in gitignored .local/device/redfin/radio/ and are
+# copied in when present. The sealed first-gen repo's
+# scripts/build-radio-blobs.sh regenerates them.
+RADIO="${ASSETS}/radio"
 if [ -f "${RADIO}/libnl.so" ] && [ -x "${RADIO}/rmt_storage" ] \
    && [ -f "${RADIO}/cdsp-cdsp-loader.ko" ] \
    && [ -f "${RADIO}/modem-npucc-loader.ko" ]; then
@@ -321,14 +323,14 @@ if [ -f "${RADIO}/libnl.so" ] && [ -x "${RADIO}/rmt_storage" ] \
      "${TREE}/lib/modules/"
   echo "staged radio payload (libnl.so + patched rmt_storage + cdsp/modem loaders)"
 else
-  echo "NOTE: .local/radio incomplete — radio-bringup will fail; run scripts/build-radio-blobs.sh" >&2
+  echo "NOTE: ${RADIO} incomplete — radio-bringup will fail; see devices/redfin/boot/assets.md" >&2
 fi
 
 # Recipe: etc (init.d/aginx/svc.d units/aginx conf/apps.d/crontabs + manifest+sig),
 # usr/bin (bridge sh faces + .aginxmd sidecars), libexec/aginx
 # (net-watch/net-rejoin), var/bin sidecars. All D13 knowledge lives here.
 mkdir -p "${TREE}/bin" "${TREE}/sbin" "${TREE}/aginxos" "${TREE}/usr/libexec/aginx" "${TREE}/var/bin"
-cp "${ORECIPE}/busybox" "${TREE}/bin/busybox"
+cp "${RECIPE}/busybox" "${TREE}/bin/busybox"
 cp -R "${RECIPE}/etc/." "${TREE}/etc/"
 cp -R "${RECIPE}/usr/bin/." "${TREE}/usr/bin/"
 cp -R "${RECIPE}/libexec/aginx/." "${TREE}/usr/libexec/aginx/"
@@ -379,11 +381,11 @@ cp -R "${VOICE}/models/tts/vits-melo-tts-zh_en" \
   "${TREE}/var/models/tts/vits-melo-tts-zh_en"
 rm -f "${TREE}/var/models/tts/vits-melo-tts-zh_en/model.int8.onnx"
 # CJK font subset (M38a) — aginx-term cjk.rs rasterizes through ab_glyph;
-# GB2312 full + ASCII + punct rows, ~1.5MB (old repo subset-cjk-font.sh).
-cp -R "${ORECIPE}/usr/share/fonts" "${TREE}/usr/share/fonts"
-# Trampoline (M2/M22) — unmodified first-gen pair; aginxos-init performs
-# the userdata rootfs swap the update flow relies on.
-cp "${OTARGET}/aginxos-init" "${OTARGET}/aginxos-agent" "${TREE}/aginxos/"
+# GB2312 full + ASCII + punct rows, ~1.5MB (first-gen subset-cjk-font.sh).
+cp -R "${RECIPE}/usr/share/fonts" "${TREE}/usr/share/fonts"
+# Trampoline (M2/M22) — frozen first-gen pair (assets.md); aginxos-init
+# performs the userdata rootfs swap the update flow relies on.
+cp "${TRAMP}/aginxos-init" "${TRAMP}/aginxos-agent" "${TREE}/aginxos/"
 
 # Exec bits: git may not carry them through cp for every recipe file, and a
 # non-executable init script or shim is invisible at boot. Sidecars (.aginxmd)
@@ -415,10 +417,10 @@ ln -sf ../bin/busybox "${TREE}/sbin/ifconfig"
 # TLS trust store: codex (and anything using system-native cert roots)
 # fails with "waiting for network" without it. Cached under out/ so the
 # download happens once per host, not once per build — falls back to the
-# old repo's cache before hitting the network.
+# staged bundle in .local/assets before hitting the network.
 CACERT="${ROOT}/out/cacert.pem"
-if [ ! -s "${CACERT}" ] && [ -s "${OLD}/out/cacert.pem" ]; then
-  cp "${OLD}/out/cacert.pem" "${CACERT}"
+if [ ! -s "${CACERT}" ] && [ -s "${ROOT}/.local/assets/cacert.pem" ]; then
+  cp "${ROOT}/.local/assets/cacert.pem" "${CACERT}"
 fi
 if [ ! -s "${CACERT}" ]; then
   curl -sL --max-time 120 -o "${CACERT}" https://curl.se/ca/cacert.pem

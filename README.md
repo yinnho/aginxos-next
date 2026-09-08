@@ -157,7 +157,8 @@ flowchart TB
 - `./scripts/check.sh` — host gate (workspace tests + registry lint), before
   every commit
 - `./scripts/build-rootfs.sh` — bake the flashable image (`out/rootfs.img`;
-  first-gen assets referenced via `OLD=`), see `rootfs/README.md`
+  device assets staged under `.local/device/redfin` — see
+  `devices/redfin/boot/assets.md`), see `rootfs/README.md`
 - `./scripts/accept/*.sh` — device acceptance suites, pinned to the
   experiment unit's serial
 - Experiment history and receipts live in `docs/HARDWARE.md`, kept local —
