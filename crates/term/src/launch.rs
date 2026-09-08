@@ -31,10 +31,6 @@ pub struct Entry {
     /// "PHOTOS" tile: opens the M39 photo viewer (Mode::Photos) instead
     /// of spawning. Same non-terminal pattern as the picker.
     pub photos: bool,
-    /// "VOICE" tile: opens the M42a voice dialog face (Mode::Voice) —
-    /// the product's primary input modality. Pure aginx-term state; content
-    /// comes from polling /run/aginx-voice/face (written by the aginx-voice daemon).
-    pub voice: bool,
 }
 
 /// Registry apps first (alphabetical by id), then the system actions.
@@ -56,7 +52,6 @@ fn app_entry(a: AppEntry) -> Entry {
         scale: a.scale,
         picker: false,
         photos: false,
-        voice: false,
     }
 }
 
@@ -70,11 +65,13 @@ fn builtins() -> Vec<Entry> {
         scale: 5,
         picker: true,
         photos: false,
-        voice: false,
     }];
+    // 面法 09-07: no VOICE tile — the voice dialog face is retired; the
+    // eye enters from ANY mode on the face flag, and the resting screen is
+    // Mode::Idle. This list is the debug launcher (reachable only via pty
+    // exit / debug paths), not the product face.
     v.extend(
         [
-            ("VOICE", "", &[][..], 5usize),
             ("PHOTOS", "", &[][..], 5),
             ("SH", BIN_SH, &[][..], 5),
             ("WIFI SETUP", BIN_WIZARD, &[][..], 5),
@@ -86,18 +83,16 @@ fn builtins() -> Vec<Entry> {
             label: label.into(),
             bin: bin.into(),
             args: args.iter().map(|s| s.to_string()).collect(),
-            // the voice face and the photo viewer are pure aginx-term state —
-            // always available; sh and aginx-reboot ship in the base image; the
+            // the photo viewer is pure aginx-term state — always
+            // available; sh and aginx-reboot ship in the base image; the
             // wizard is a rootfs binary that always exists post-M5
-            avail: label == "VOICE"
-                || label == "PHOTOS"
+            avail: label == "PHOTOS"
                 || bin == BIN_SH
                 || bin == BIN_AGINX_REBOOT
                 || std::path::Path::new(bin).is_file(),
             scale,
             picker: false,
             photos: label == "PHOTOS",
-            voice: label == "VOICE",
         })
         .collect::<Vec<_>>(),
     );
@@ -192,6 +187,7 @@ impl Geom {
 /// cam-shot is spawned with --aspect 1080:2340 (aginx-voice, fullscreen
 /// viewfinder); term's eye box must match — assert via Geom in tests, not
 /// by copying numbers into render.
+#[cfg(test)]
 pub const VIEWFINDER_ASPECT: f64 = 1080.0 / 2340.0;
 
 #[derive(PartialEq)]

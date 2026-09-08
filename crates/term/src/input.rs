@@ -51,27 +51,6 @@ pub fn repeatable(ev: &InputEvent) -> bool {
     )
 }
 
-/// Evdev codes → KeyEvent for a physical keyboard. Arrows only for now —
-/// the vocabulary matches the on-screen key table; letters would need
-/// modifier state, which a real inputd would track on top of this map.
-/// Unused until something plugs a keyboard in.
-#[allow(dead_code)]
-pub fn evdev_key(code: u16) -> Option<KeyEvent> {
-    use Dir::*;
-    use KeyEvent::*;
-    Some(match code {
-        1 => Esc,
-        14 => Backspace,
-        15 => Tab,
-        28 => Enter,
-        103 => Arrow(Up),
-        105 => Arrow(Left),
-        106 => Arrow(Right),
-        108 => Arrow(Down),
-        _ => return None,
-    })
-}
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Dir {
     Up,
