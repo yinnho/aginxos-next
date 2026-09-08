@@ -1,0 +1,30 @@
+#!/bin/sh
+# busybox udhcpc event script — applied at /usr/share/udhcpc/default.script
+# (the compiled-in default path). Applies the lease to the interface and
+# writes /etc/resolv.conf; udhcpc -n -q runs this on bound|renew.
+# busybox sh, no bashisms.
+
+case "$1" in
+	deconfig)
+		ip addr flush dev "$interface" 2>/dev/null
+		;;
+	bound|renew)
+		ip addr flush dev "$interface" 2>/dev/null
+		ip addr add "$ip/${mask:-24}" dev "$interface"
+		if [ -n "$router" ]; then
+			ip route del default 2>/dev/null
+			for r in $router; do
+				ip route add default via "$r" dev "$interface"
+				break
+			done
+		fi
+		: > /etc/resolv.conf
+		for d in $dns; do
+			echo "nameserver $d" >> /etc/resolv.conf
+		done
+		;;
+	leasefail|nak)
+		echo "udhcpc: $1 on $interface" >&2
+		;;
+esac
+exit 0

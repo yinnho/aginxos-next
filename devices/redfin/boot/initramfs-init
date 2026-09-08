@@ -1,0 +1,42 @@
+#!/bin/sh
+# AginxOS early initramfs init (Pixel 5 bring-up).
+# Goal: mount essentials, log to /dev/kmsg, drop to a shell if busybox is present.
+# Later: USB gadget net + switch_root into real rootfs.
+
+export PATH=/bin:/sbin:/usr/bin:/usr/sbin
+
+klog() {
+  echo "aginxos-init: $*" > /dev/kmsg 2>/dev/null || echo "aginxos-init: $*"
+}
+
+klog "starting"
+
+# Minimal mounts (busybox or toybox-style)
+mount -t proc proc /proc 2>/dev/null
+mount -t sysfs sysfs /sys 2>/dev/null
+mount -t devtmpfs devtmpfs /dev 2>/dev/null || mount -t tmpfs tmpfs /dev 2>/dev/null
+
+mkdir -p /dev/pts /tmp /sysroot
+mount -t devpts devpts /dev/pts 2>/dev/null
+mount -t tmpfs tmpfs /tmp 2>/dev/null
+
+klog "mounts done"
+if [ -x /bin/aginxos-probe ]; then
+  klog "running aginxos-probe"
+  /bin/aginxos-probe > /tmp/probe.txt 2>&1 || true
+  cat /tmp/probe.txt > /dev/kmsg 2>/dev/null || cat /tmp/probe.txt
+fi
+
+# If a real root is specified later, switch_root here.
+# Example: root=/dev/mapper/... or PARTLABEL=
+# For now, stay in ramdisk.
+
+if [ -x /bin/sh ]; then
+  klog "dropping to shell"
+  exec /bin/sh
+fi
+
+klog "no shell; spinning"
+while true; do
+  sleep 60
+done

@@ -19,21 +19,20 @@
 # Symbol table, modversions CRCs and CFI metadata are untouched (function
 # bodies only), so cam_isp's insmod dependency still resolves.
 #
-# Source ko is md5-pinned to the stock vendor_dlkm build (old repo
-# boot/out/vendor-modules, matches /vendor_a on the device). Offsets are
-# symbol-derived from that exact file — the asserts below refuse to patch
-# anything else.
+# Source ko is md5-pinned to the stock vendor_dlkm build (.local/device/
+# redfin/vendor-modules, staged from the sealed first-gen repo's unpack;
+# matches /vendor_a on the device). Offsets are symbol-derived from that
+# exact file — the asserts below refuse to patch anything else.
 #
 # Output: .local/modules.aginx/cam_sensor_vsync_dev.ko (gitignored blob;
 # build-rootfs.sh copies it to /lib/modules.aginx in the image).
 set -euo pipefail
-ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-OLD="${OLD:-$HOME/Documents/aginxos}"
-SRC="${OLD}/boot/out/vendor-modules/cam_sensor_vsync_dev.ko"
-OUT="${ROOT}/.local/modules.aginx/cam_sensor_vsync_dev.ko"
+REPO="$(cd "$(dirname "$0")/../../.." && pwd)"
+SRC="${REPO}/.local/device/redfin/vendor-modules/cam_sensor_vsync_dev.ko"
+OUT="${REPO}/.local/modules.aginx/cam_sensor_vsync_dev.ko"
 STOCK_MD5="9f9a60fc26f47d9e1805c3713e49f82a"
 
-test -f "$SRC" || { echo "missing $SRC (old repo vendor_dlkm unpack)" >&2; exit 1; }
+test -f "$SRC" || { echo "missing $SRC (vendor_dlkm unpack — see devices/redfin/boot/assets.md)" >&2; exit 1; }
 got=$(md5 -q "$SRC")
 if [ "$got" != "$STOCK_MD5" ]; then
   echo "stock ko md5 drift: got $got want $STOCK_MD5 — offsets are symbol-derived, refusing" >&2
