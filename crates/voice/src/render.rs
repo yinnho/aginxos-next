@@ -12,8 +12,11 @@ use std::sync::Mutex;
 
 use crate::face;
 
-const PANEL_W: u32 = 1080;
-const PANEL_H: u32 = 2340;
+/// 产品入口：panel 尺寸唯一来源 device.toml [panel]（D14，无默认）。
+pub fn markdown_to_html(md: &str) -> String {
+    let p = hwd::load_or_exit();
+    render_html(md, p.panel.width, p.panel.height)
+}
 
 /// 结果页 HTML（v4⑥）。voice 原子换名写；term face 假→真沿读（同 face
 /// mtime 先例）。旧 result.img PNG 链在 S5 前保留为部署序垫。
@@ -54,9 +57,11 @@ fn ordered_item(l: &str) -> Option<&str> {
 /// ``` 围栏（原文捕获，内部 # 不成标题、缩进空白保留）、#/##/### 标题、
 /// **粗体**、`code`、- 无序与 1. 有序列表、> 引用、--- 分隔线、| 表格、段落。
 /// 先 HTML 转义再内联替换——内容永远是文本，不是标签。
-/// 三钉烧死（引擎收据）：黑底、min-height 2340px（引擎丢 vh 单位）、视口
-/// 1080 宽；配色与字阶=磷光终端（黑底绿白字，P0 ASK_TMPL 语言）。
-pub fn markdown_to_html(md: &str) -> String {
+/// 三钉烧死（引擎收据）：黑底、min-height 满屏高 px（引擎丢 vh 单位）、
+/// 视口=面板宽；配色与字阶=磷光终端（黑底绿白字，P0 ASK_TMPL 语言）。
+/// panel 尺寸是参数（D14）：产品走 markdown_to_html（hwd [panel]），
+/// host 测试喂 fixture——纯函数两种调用方都不碰 /etc。
+pub fn render_html(md: &str, panel_w: u32, panel_h: u32) -> String {
     let mut body = String::new();
     let lines: Vec<&str> = md.lines().collect();
     let mut i = 0;
@@ -171,9 +176,9 @@ pub fn markdown_to_html(md: &str) -> String {
     }
     format!(
         "<!DOCTYPE html><html><head><meta charset=\"utf-8\">\
-<meta name=\"viewport\" content=\"width={PANEL_W}\">\
+<meta name=\"viewport\" content=\"width={panel_w}\">\
 <style>html,body{{background:#000}}\
-body{{min-height:{PANEL_H}px;color:#8cffb0;font:36px/1.75 sans-serif;\
+body{{min-height:{panel_h}px;color:#8cffb0;font:36px/1.75 sans-serif;\
 padding:56px 48px;margin:0}}\
 h1{{font-size:52px;color:#eaffea;margin:0.8em 0 0.4em;font-weight:700}}\
 h2{{font-size:46px;color:#eaffea;margin:0.8em 0 0.4em;font-weight:700}}\
@@ -227,17 +232,31 @@ fn inline(s: &str) -> String {
 mod tests {
     use super::*;
 
+    /// host 测试统一入口：fixture 面板（真实红皮尺寸，纯数据不碰 /etc）。
+    fn md(s: &str) -> String {
+        render_html(s, 1080, 2340) // D14-exempt: fixture panel geometry
+    }
+
     #[test]
     fn html_has_three_pins() {
-        let h = markdown_to_html("你好");
+        let h = md("你好");
         assert!(h.contains("background:#000"));
-        assert!(h.contains("min-height:2340px"));
-        assert!(h.contains("width=1080"));
+        assert!(h.contains("min-height:2340px")); // D14-exempt: fixture pin
+        assert!(h.contains("width=1080")); // D14-exempt: fixture pin
+    }
+
+    #[test]
+    fn pins_follow_panel_params() {
+        // 面板参数真的进了三钉——不是碰巧写死
+        let h = render_html("x", 720, 1600);
+        assert!(h.contains("min-height:1600px"));
+        assert!(h.contains("width=720"));
+        assert!(!h.contains("2340")); // D14-exempt: fixture pin must not leak
     }
 
     #[test]
     fn headings_bold_code_list() {
-        let h = markdown_to_html("# 大\n## 中\n**杭州** `26度`\n- 甲\n- 乙\n");
+        let h = md("# 大\n## 中\n**杭州** `26度`\n- 甲\n- 乙\n");
         assert!(h.contains("<h1>大</h1>"));
         assert!(h.contains("<h2>中</h2>"));
         assert!(h.contains("<b>杭州</b>"));
@@ -249,7 +268,7 @@ mod tests {
 
     #[test]
     fn table_with_separator_row() {
-        let h = markdown_to_html("| 城市 | 温度 |\n|---|---|\n| 杭州 | 26 |\n");
+        let h = md("| 城市 | 温度 |\n|---|---|\n| 杭州 | 26 |\n");
         assert!(h.contains("<th>城市</th>"));
         assert!(h.contains("<th>温度</th>"));
         assert!(h.contains("<td>杭州</td>"));
@@ -259,21 +278,21 @@ mod tests {
 
     #[test]
     fn content_is_escaped_never_tags() {
-        let h = markdown_to_html("<script>&x</script>");
+        let h = md("<script>&x</script>");
         assert!(h.contains("&lt;script&gt;&amp;x&lt;/script&gt;"));
         assert!(!h.contains("<script>"));
     }
 
     #[test]
     fn paragraph_wraps_plain_line() {
-        let h = markdown_to_html("今天晴，26 度。");
+        let h = md("今天晴，26 度。");
         assert!(h.contains("<p>今天晴，26 度。</p>"));
     }
 
     #[test]
     fn fence_keeps_raw_lines_and_no_headings() {
-        let md = "```python\n# 注释不是标题\n    缩进保留\nx = 1\n```\n后文\n";
-        let h = markdown_to_html(md);
+        let md_src = "```python\n# 注释不是标题\n    缩进保留\nx = 1\n```\n后文\n";
+        let h = md(md_src);
         assert!(h.contains("<pre><code>"));
         assert!(h.contains("# 注释不是标题"));
         assert!(!h.contains("<h1>"), "围栏内 # 绝不变成标题");
@@ -284,13 +303,13 @@ mod tests {
 
     #[test]
     fn fence_escapes_html_no_inline() {
-        let h = markdown_to_html("```\n<b>&i\n```");
+        let h = md("```\n<b>&i\n```");
         assert!(h.contains("&lt;b&gt;&amp;i"));
     }
 
     #[test]
     fn ordered_list_blockquote_hr() {
-        let h = markdown_to_html("1. 甲\n2. 乙\n\n> 引用行\n\n---\n收尾\n");
+        let h = md("1. 甲\n2. 乙\n\n> 引用行\n\n---\n收尾\n");
         assert!(h.contains("<ol>"));
         assert!(h.contains("<li>甲</li>"));
         assert!(h.contains("<li>乙</li>"));
