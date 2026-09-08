@@ -11,12 +11,17 @@ authors.workspace = true
 # staging on userdata. Deliberately dependency-starved: serde for the
 # manifest, libc for pwrite/statfs, and the shared ed25519 verify from
 # aginx-sign (same key pair as the package chain). No tokio, no ureq —
-# HTTPS fetches shell out to aginx-download.
+# HTTPS fetches shell out to aginx-download. One exception to the
+# starvation: hwd — the cross-machine update gate (manifest.device vs
+# this machine's /etc/aginx/device.toml) must read the profile through
+# the same single reader as everyone else (D14 law 1); a hand-rolled
+# parse here would be a second authority for machine identity.
 [dependencies]
 serde = { workspace = true }
 serde_json = { workspace = true }
 libc = { workspace = true }
 aginx-sign = { path = "../sign" }
+hwd = { path = "../hwd" }
 
 [[bin]]
 name = "aginx-update"
