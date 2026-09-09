@@ -48,28 +48,28 @@ drv() {
 }
 
 expect_rc()  { [ "${DRV_RC:-}" = "0" ] && { echo "ok   - $1"; PASS=$((PASS+1)); } || { echo "FAIL - $1 (rc=${DRV_RC:-?})"; FAIL=$((FAIL+1)); } }
-expect_norc(){ [ "${DRV_RC:-}" != "0" ] && { echo "ok   - $1 (rc=${DRV_RC:-?})"; PASS=$((PASS+1)); } || { echo "FAIL - $1（rc=0，不该成功）"; FAIL=$((FAIL+1)); } }
+expect_norc(){ [ "${DRV_RC:-}" != "0" ] && { echo "ok   - $1 (rc=${DRV_RC:-?})"; PASS=$((PASS+1)); } || { echo "FAIL - ${1}（rc=0，不该成功）"; FAIL=$((FAIL+1)); } }
 expect_out() { printf '%s' "${DRV_OUT:-}" | grep -Eq -- "$2" && { echo "ok   - $1"; PASS=$((PASS+1)); } || { echo "FAIL - $1"; echo "       out=$(printf '%s' "${DRV_OUT:-}" | head -2)"; FAIL=$((FAIL+1)); } }
-expect_no()  { printf '%s' "${DRV_OUT:-}" | grep -Eq -- "$2" && { echo "FAIL - $1（不该出现: $2）"; echo "       out=$(printf '%s' "${DRV_OUT:-}" | head -2)"; FAIL=$((FAIL+1)); } || { echo "ok   - $1"; PASS=$((PASS+1)); } }
+expect_no()  { printf '%s' "${DRV_OUT:-}" | grep -Eq -- "$2" && { echo "FAIL - ${1}（不该出现: ${2}）"; echo "       out=$(printf '%s' "${DRV_OUT:-}" | head -2)"; FAIL=$((FAIL+1)); } || { echo "ok   - $1"; PASS=$((PASS+1)); } }
 
 wait_ready() { # name label tries
   local i
   for i in $(seq 1 "${3:-10}"); do
     drv "/usr/bin/aginx-svc status $1"
-    printf '%s' "${DRV_OUT:-}" | grep -q "ready" && { echo "ok   - $2（ready）"; PASS=$((PASS+1)); return 0; }
+    printf '%s' "${DRV_OUT:-}" | grep -q "ready" && { echo "ok   - ${2}（ready）"; PASS=$((PASS+1)); return 0; }
     sleep 3
   done
-  echo "FAIL - $2（未 ready）"; echo "       out=$(printf '%s' "${DRV_OUT:-}" | head -3)"; FAIL=$((FAIL+1)); return 1
+  echo "FAIL - ${2}（未 ready）"; echo "       out=$(printf '%s' "${DRV_OUT:-}" | head -3)"; FAIL=$((FAIL+1)); return 1
 }
 
 wait_8443() { # label
   local i
   for i in $(seq 1 20); do
     drv "grep -q ':${PORT_HEX} 01 ' /proc/net/tcp /proc/net/tcp6 2>/dev/null"
-    [ "${DRV_RC:-}" = "0" ] && { echo "ok   - $1（8443 ESTABLISHED）"; PASS=$((PASS+1)); return 0; }
+    [ "${DRV_RC:-}" = "0" ] && { echo "ok   - ${1}（8443 ESTABLISHED）"; PASS=$((PASS+1)); return 0; }
     sleep 3
   done
-  echo "FAIL - $1（8443 未 ESTABLISHED）"; FAIL=$((FAIL+1)); return 1
+  echo "FAIL - ${1}（8443 未 ESTABLISHED）"; FAIL=$((FAIL+1)); return 1
 }
 
 # 8 stamps 全落（C 段安装完成信号；term 自动 sync 不写 boot.state，
@@ -85,7 +85,7 @@ wait_core8_stamps() { # label tries sleep_secs
     [ -z "$missing" ] && { echo "ok   - $1"; PASS=$((PASS+1)); return 0; }
     sleep "${3:-15}"
   done
-  echo "FAIL - $1（15min 窗内未齐，缺:$missing）"; FAIL=$((FAIL+1)); return 1
+  echo "FAIL - ${1}（15min 窗内未齐，缺:${missing}）"; FAIL=$((FAIL+1)); return 1
 }
 
 phase_pre() {
@@ -141,7 +141,7 @@ phase_paired() {
     drv "test -f /var/lib/aginx/stamps/$n.version"
     expect_rc  "version stamp 在：$n"
     drv "test -e /var/bin/$n && test -f /var/bin/$n.aginxmd"
-    expect_rc  "face + sidecar 在：$n（#284 闭环）"
+    expect_rc  "face + sidecar 在：${n}（#284 闭环）"
   done
   drv "test -d /var/models/asr && test -d /var/models/ocr"
   expect_rc  "模型树经 symlink 可达（dangling→真身）"
@@ -161,6 +161,9 @@ phase_paired() {
   echo "==> D 等价（与整机同待遇）"
   drv "aginx agent send 现在几点了"
   expect_rc  "send rc=0（母体应答）"
+  # 错误行本身是中文（「母体 brain 调用失败…」），[一-龥] 单查会误过——
+  # 先证非错误前缀，再证有字。
+  expect_no  "send 非报错行（无 aginx agent: 前缀）" '^aginx agent:'
   expect_out "send 真回复（非空有字）" "[一-龥]"
   wait_8443   "网关远端通道"
   drv "grep -rq 'local=true' /var/log/aginx-svc/ 2>/dev/null"
@@ -218,6 +221,7 @@ phase_steady() {
   expect_out "六单元恰 ready" '^6$'
   drv "aginx agent send 现在几点了"
   expect_rc  "二启后母体仍应答"
+  expect_no  "send 非报错行（无 aginx agent: 前缀）" '^aginx agent:'
   expect_out "二启后母体真回复" "[一-龥]"
   drv "aginx-pkg sync"
   expect_rc  "sync rc=0"
@@ -260,6 +264,7 @@ phase_egg2() {
   done
   drv "aginx agent send 现在几点了"
   expect_rc  "换蛋后母体仍应答"
+  expect_no  "send 非报错行（无 aginx agent: 前缀）" '^aginx agent:'
   expect_out "换蛋后母体真回复" "[一-龥]"
   wait_8443   "换蛋后网关重连"
 }
