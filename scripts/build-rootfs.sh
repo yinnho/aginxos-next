@@ -34,6 +34,11 @@ TREE="${TREE:-/tmp/aginxos-n4-rootfs}"
 IMG="${IMG:-${ROOT}/out/rootfs.img}"
 # 2 GB sparse-ish image (bake #18 data: 651M used; N4 drops carrier+relay).
 SIZE="${SIZE:-2g}"
+# 蛋档（2026-09-09 蛋案）：EGG=1 烤「壳+网+安装器」——server/runtime/
+# gateway/secretd/voice 五件与 asr/tts/ocr 模型树不烤，aginx 体系包走
+# 清单（EGG manifest 组装见 etc 装配段）。裸蛋=哑终端：显示/触摸/扫码/
+# 联网在，六单元靠装完后 svcd 30s 复查出生 + 下一靴 provision resync。
+EGG="${EGG:-0}"
 
 test -x "${RAMDISK}/system/bin/adbd" || { echo "missing ${RAMDISK} — see devices/${DEVICE}/boot/assets.md (run pack-vendor-boot.sh)" >&2; exit 1; }
 test -x "${RECIPE}/busybox" || { echo "missing ${RECIPE}/busybox recipe asset" >&2; exit 1; }
@@ -62,19 +67,22 @@ done
 # extras. Renamed at install: ag-asr→aginx-asr, ag-tts→aginx-tts,
 # ag-ocr→aginx-ocr (spawn paths in crates/voice/src/{audio,main}.rs).
 VOICE="${ASSETS}/voice"
-test -x "${VOICE}/bin/ag-asr" && test -x "${VOICE}/bin/ag-tts" \
-  || { echo "missing ${VOICE}/bin/ag-{asr,tts} — see devices/${DEVICE}/boot/assets.md" >&2; exit 1; }
-test -s "${VOICE}/models/asr/model.int8.onnx" \
-  && test -s "${VOICE}/models/tts/vits-melo-tts-zh_en/model.onnx" \
-  && test -s "${VOICE}/models/tts/vits-melo-tts-zh_en/lexicon.txt" \
-  && test -s "${VOICE}/models/tts/vits-melo-tts-zh_en/tokens.txt" \
-  || { echo "missing voice models — see devices/${DEVICE}/boot/assets.md" >&2; exit 1; }
 OCR="${ASSETS}/ocr"
-test -x "${OCR}/bin/ag-ocr" \
-  || { echo "missing ${OCR}/bin/ag-ocr — see devices/${DEVICE}/boot/assets.md" >&2; exit 1; }
-test -s "${OCR}/models/det.onnx" && test -s "${OCR}/models/rec.onnx" \
-  && test -s "${OCR}/models/dict.txt" \
-  || { echo "missing ocr models — see devices/redfin/boot/assets.md" >&2; exit 1; }
+# 蛋档跳过 voice/ocr 资产核对（不烤它们）——同段 bionic 拷贝也走同门。
+if [ "${EGG}" = "0" ]; then
+  test -x "${VOICE}/bin/ag-asr" && test -x "${VOICE}/bin/ag-tts" \
+    || { echo "missing ${VOICE}/bin/ag-{asr,tts} — see devices/${DEVICE}/boot/assets.md" >&2; exit 1; }
+  test -s "${VOICE}/models/asr/model.int8.onnx" \
+    && test -s "${VOICE}/models/tts/vits-melo-tts-zh_en/model.onnx" \
+    && test -s "${VOICE}/models/tts/vits-melo-tts-zh_en/lexicon.txt" \
+    && test -s "${VOICE}/models/tts/vits-melo-tts-zh_en/tokens.txt" \
+    || { echo "missing voice models — see devices/${DEVICE}/boot/assets.md" >&2; exit 1; }
+  test -x "${OCR}/bin/ag-ocr" \
+    || { echo "missing ${OCR}/bin/ag-ocr — see devices/${DEVICE}/boot/assets.md" >&2; exit 1; }
+  test -s "${OCR}/models/det.onnx" && test -s "${OCR}/models/rec.onnx" \
+    && test -s "${OCR}/models/dict.txt" \
+    || { echo "missing ocr models — see devices/redfin/boot/assets.md" >&2; exit 1; }
+fi
 
 echo "==> zigbuild 新仓 musl 件（缓存则秒过）"
 (cd "${ROOT}" && cargo zigbuild --release --target aarch64-unknown-linux-musl \
@@ -97,6 +105,17 @@ VOICE_SZ_BEFORE="$(stat -f%z "${TARGET}/aginx-voice")"
 VOICE_SZ_AFTER="$(stat -f%z "${TARGET}/aginx-voice")"
 [[ "${VOICE_SZ_BEFORE}" == "${VOICE_SZ_AFTER}" ]] \
   || { echo "FATAL: aginx-voice changed size across the aginx-qr build (${VOICE_SZ_BEFORE} → ${VOICE_SZ_AFTER}) — feature unification leak; keep the two zigbuild invocations separate" >&2; exit 1; }
+
+# 蛋案 C3/C10：设备面 aginx-pair 走第三次独立调用（--no-default-features
+# 是调用级旗标——并进上面任一次调用都会把 mint 的 qrcodegen/jpeg-encoder
+# 连带 aginx-qr/jpeg 的 quircs+aginx-img 织进其它包）。设备只要 apply 面
+# （stdin payload，C4 voice 依赖）；铸码在 host 跑 default 特性。两档都装。
+# <2MB 绊网同律：尺寸变化=feature 折叠事故。
+(cd "${ROOT}" && cargo zigbuild --release --target aarch64-unknown-linux-musl \
+  -p aginx-pair --no-default-features)
+PAIR_SZ="$(stat -f%z "${TARGET}/aginx-pair")"
+[ "${PAIR_SZ}" -lt 2097152 ] \
+  || { echo "FATAL: aginx-pair is ${PAIR_SZ}B (≥2MiB) — mint feature leaked into the device build" >&2; exit 1; }
 
 # Package manifest rides SIGNED: the on-device default path requires a
 # detached sig or every `aginx-pkg sync` refuses (fail-closed). Content-
@@ -341,21 +360,109 @@ for b in "${DEVDIR}"/bringup/*; do
   test -f "${b}" || { echo "missing bringup scripts in ${DEVDIR}/bringup/" >&2; exit 1; }
   install -m 755 "${b}" "${TREE}/etc/init.d/$(basename "${b}")"
 done
+# ---- 蛋块（EGG=1；只改 TREE 副本，配方不动——蛋转正后配方单元翻正式
+# 路径、此块退役）-----------------------------------------------------------
+# ① 单元 cmd → /var/bin 包 face。absent 容忍（aginxbrowser 先例）：svcd
+#    30s 复查出生 + provision 装后 revive（包名=单元名自动对上）。
+#    AGINX_BIN/VOICED_FRONT 指 /usr/bin/aginx 不变（router 在蛋里）。
+# ② server 单元 AGINX_RUNTIME_BIN 同改（runtime 也是包）。
+# ③ 清单组装：基础 manifest + 8 行 core 附加。sha 取 out/pkgs 产物（不
+#    手维护）；url/version/deps 取 pkgs/<name>/pkg.toml——配方 bump 了
+#    version 没重跑 build-pkg → sha 文件名对不上 → die（宁死不烤错清单）。
+#    组装进树后签名（.sig 是构建产物，不回写配方；签的是树里的组装件）。
+if [ "${EGG}" = "1" ]; then
+  egg_unit() {
+    sed -e "s#^cmd = /usr/libexec/aginx/$1\$#cmd = /var/bin/$1#" \
+        -e "s#^cmd = /usr/bin/$1\$#cmd = /var/bin/$1#" \
+        "${TREE}/etc/aginx/svc.d/$1.toml" > "${TREE}/etc/aginx/svc.d/$1.toml.new" \
+      && mv "${TREE}/etc/aginx/svc.d/$1.toml.new" "${TREE}/etc/aginx/svc.d/$1.toml"
+  }
+  egg_unit aginx-server
+  egg_unit aginx-gateway
+  egg_unit aginx-secretd
+  egg_unit aginx-voice
+  sed -e "s#AGINX_RUNTIME_BIN=/usr/libexec/aginx/aginx-runtime#AGINX_RUNTIME_BIN=/var/bin/aginx-runtime#" \
+    "${TREE}/etc/aginx/svc.d/aginx-server.toml" > "${TREE}/etc/aginx/svc.d/aginx-server.toml.new" \
+    && mv "${TREE}/etc/aginx/svc.d/aginx-server.toml.new" "${TREE}/etc/aginx/svc.d/aginx-server.toml"
+  # 改写自检：四单元 cmd 全在 /var/bin、runtime env 已翻、无 libexec 残留
+  for u in aginx-server aginx-gateway aginx-secretd aginx-voice; do
+    grep -q "^cmd = /var/bin/${u}\$" "${TREE}/etc/aginx/svc.d/${u}.toml" \
+      || { echo "FATAL: EGG unit rewrite missed ${u}" >&2; exit 1; }
+  done
+  grep -q "AGINX_RUNTIME_BIN=/var/bin/aginx-runtime" "${TREE}/etc/aginx/svc.d/aginx-server.toml" \
+    || { echo "FATAL: EGG AGINX_RUNTIME_BIN rewrite missed" >&2; exit 1; }
+  grep -rEq "/usr/libexec/aginx/aginx-(server|runtime|gateway|secretd)" "${TREE}/etc/aginx/svc.d/" \
+    && { echo "FATAL: EGG svc.d still references a stripped engine" >&2; exit 1; }
+
+  CORE_ADD="${TMPDIR:-/tmp}/agpkg-core-add.$$"
+  : > "${CORE_ADD}"
+  for p in aginx-runtime aginx-server aginx-gateway aginx-secretd \
+           aginx-asr aginx-tts aginx-ocr aginx-voice; do
+    R="pkgs/${p}"
+    p_ver="$(sed -n 's/^version *= *"\([^"]*\)"/\1/p' "${R}/pkg.toml" | sed -n '1p')"
+    p_url="$(sed -n 's/^url *= *"\([^"]*\)"/\1/p' "${R}/pkg.toml" | sed -n '1p')"
+    p_dep="$(sed -n 's/^depends *= *"\([^"]*\)"/\1/p' "${R}/pkg.toml" | sed -n '1p')"
+    sha_file="${ROOT}/out/pkgs/${p}-v${p_ver}-4pc.tar.sha256"
+    [ -n "${p_ver}" ] && [ -n "${p_url}" ] \
+      || { echo "FATAL: ${R}/pkg.toml 缺 version/url" >&2; exit 1; }
+    [ -s "${sha_file}" ] \
+      || { echo "FATAL: EGG manifest needs ${sha_file} — run ./scripts/build-pkg.sh ${p} first" >&2; exit 1; }
+    p_sha="$(sed -n '1p' "${sha_file}")"
+    case "${p_sha}" in
+      ''|*[!0-9a-f]*) echo "FATAL: bad sha in ${sha_file}: '${p_sha}'" >&2; exit 1 ;;
+    esac
+    [ "${#p_sha}" -eq 64 ] \
+      || { echo "FATAL: sha not 64 hex chars in ${sha_file}" >&2; exit 1; }
+    printf '%s %s %s core %s%s\n' "${p}" "${p_url}" "${p_sha}" "${p_ver}" "${p_dep:+ ${p_dep}}" >> "${CORE_ADD}"
+  done
+  cat "${RECIPE}/etc/agpkg.manifest" "${CORE_ADD}" > "${TREE}/etc/agpkg.manifest"
+  cp "${CORE_ADD}" "${ROOT}/out/pkgs/agpkg.core.add"
+  rm -f "${CORE_ADD}"
+  [ -f "${ROOT}/.local/keys/aginx.key" ] \
+    || { echo "FATAL: EGG manifest signing needs .local/keys/aginx.key" >&2; exit 1; }
+  (cd "${ROOT}" && cargo run -q -p aginx-sign -- sign .local/keys/aginx.key "${TREE}/etc/agpkg.manifest")
+  (cd "${ROOT}" && cargo run -q -p aginx-sign -- verify .local/keys/aginx.pub "${TREE}/etc/agpkg.manifest") \
+    || { echo "FATAL: EGG manifest sig does not verify" >&2; exit 1; }
+  echo "==> EGG manifest: 基础清单 + 8 行 core 附加已签名进树"
+fi
 cp -R "${RECIPE}/usr/bin/." "${TREE}/usr/bin/"
 cp -R "${RECIPE}/libexec/aginx/." "${TREE}/usr/libexec/aginx/"
 cp "${RECIPE}"/var/bin/*.aginxmd "${TREE}/var/bin/"
+# 剥件的配方 sidecar 出蛋（须在配方拷贝之后——上面三行会把它们灌回来）：
+# voice 的 usr/bin 件 + asr/tts/ocr 的 var/bin 件。蛋上这些面的元数据归
+# 安装器从 pkg.toml 生成（C1），孤儿 sidecar 是出厂面的过期文档；装包时
+# 安装器覆写同名件。
+if [ "${EGG}" = "1" ]; then
+  rm -f "${TREE}/usr/bin/aginx-voice.aginxmd" \
+        "${TREE}/var/bin/aginx-asr.aginxmd" "${TREE}/var/bin/aginx-tts.aginxmd" \
+        "${TREE}/var/bin/aginx-ocr.aginxmd"
+fi
 # version stamp (M14): what the running image is, for aginx-update
 # status/compare. N4: stamped from THIS repo's git; D14: the device rides
-# the stamp — 版本串自证出自哪台机的烤机线。
-{ git -C "${ROOT}" log -1 --format="aginxos ${DEVICE} %h %cd" --date=short 2>/dev/null || echo "aginxos ${DEVICE} unknown"; } > "${TREE}/etc/aginx-version"
+# the stamp — 版本串自证出自哪台机的烤���线。EGG 档行尾加 ` egg`（n6
+# 预检的蛋形戳）。
+STAMP="$(git -C "${ROOT}" log -1 --format="aginxos ${DEVICE} %h %cd" --date=short 2>/dev/null || echo "aginxos ${DEVICE} unknown")"
+if [ "${EGG}" = "1" ]; then
+  STAMP="${STAMP} egg"
+fi
+echo "${STAMP}" > "${TREE}/etc/aginx-version"
 
 # Router (N1④) — the bare `aginx` mother face. Engines stay OUT of the
 # command universe in /usr/libexec/aginx (D13: libexec 是引擎的家).
 install -m 755 "${TARGET}/aginx" "${TREE}/usr/bin/aginx"
-install -m 755 "${TARGET}/aginx-server" "${TARGET}/aginx-runtime" "${TREE}/usr/libexec/aginx/"
+# 蛋档：server/runtime 不烤（aginx-server 包 face 在 /var/bin，单元 cmd
+# 已改写——见 etc 装配段蛋块）。
+if [ "${EGG}" = "0" ]; then
+  install -m 755 "${TARGET}/aginx-server" "${TARGET}/aginx-runtime" "${TREE}/usr/libexec/aginx/"
+fi
 # Platform CLIs (new-repo builds; N4③b 改姓四件 + voice + wizard).
-install -m 755 "${TARGET}/aginx-voice" "${TARGET}/aginx-net-wizard" \
-  "${TARGET}/aginx-term" "${TARGET}/aginx-pkg" "${TREE}/usr/bin/"
+# aginx-pair 两档都装（C4 起 voice 的配网五步委外 /usr/bin/aginx-pair
+# apply）。蛋档 voice 不烤（aginx-voice 包 face /var/bin/aginx-voice）。
+install -m 755 "${TARGET}/aginx-net-wizard" "${TARGET}/aginx-term" \
+  "${TARGET}/aginx-pkg" "${TARGET}/aginx-pair" "${TREE}/usr/bin/"
+if [ "${EGG}" = "0" ]; then
+  install -m 755 "${TARGET}/aginx-voice" "${TREE}/usr/bin/"
+fi
 install -m 755 "${TARGET}/aginx-svc" "${TARGET}/aginx-boot-ok" "${TREE}/usr/bin/"
 install -m 755 "${TARGET}/aginx-svcd" "${TREE}/usr/libexec/aginx/"
 # N5① 吸收件：updater/download 改由本仓重编（修了三死路径的活版本），
@@ -369,27 +476,44 @@ install -m 755 "${TARGET}/aginx-qr" "${TARGET}/aginx-done" "${TARGET}/aginx-secr
 # N5⑨ 定数收据件：QR fixture 进镜像（首烤漏装——套件 I 段靠它出定数）。
 mkdir -p "${TREE}/usr/share/aginx"
 install -m 644 "${RECIPE}/usr/share/aginx/n5-qr.jpg" "${TREE}/usr/share/aginx/"
-install -m 755 "${TARGET}/aginx-secretd" "${TREE}/usr/libexec/aginx/"
+if [ "${EGG}" = "0" ]; then
+  install -m 755 "${TARGET}/aginx-secretd" "${TREE}/usr/libexec/aginx/"
+fi
 # N5⑥ 网关：远端通道守护落 libexec（引擎的家）；id/secret 都不进镜像——
-# env_file 与 sidecar 在刷机日灌注（runbook 步 11）。
-install -m 755 "${TARGET}/aginx-gateway" "${TREE}/usr/libexec/aginx/"
+# env_file 与 sidecar 在刷机日灌注（runbook 步 11）。蛋档不烤（包 face
+# /var/bin/aginx-gateway；relay.primary allow 已双条目）。
+if [ "${EGG}" = "0" ]; then
+  install -m 755 "${TARGET}/aginx-gateway" "${TREE}/usr/libexec/aginx/"
+fi
 # Voice/OCR CLIs (bionic-static) + models. TTS: melo (vits-melo-tts-zh_en)
 # is the product mouth; the 170MB fp32 model.onnx is the real weights — the
 # tarball's model.int8.onnx is a 133B git-lfs pointer (release packaging
 # accident, M42e receipt); bake the fp32 only. kokoro dropped: nothing
 # references it by default. NOT in the aginx-update state tar: models ride
 # every baked image instead (voice is the bootstrap interface — see above).
-install -m 755 "${VOICE}/bin/ag-asr" "${TREE}/var/bin/aginx-asr"
-install -m 755 "${VOICE}/bin/ag-tts" "${TREE}/var/bin/aginx-tts"
-install -m 755 "${OCR}/bin/ag-ocr" "${TREE}/var/bin/aginx-ocr"
-mkdir -p "${TREE}/var/models/ocr"
-cp "${OCR}/models/det.onnx" "${OCR}/models/rec.onnx" \
-   "${OCR}/models/dict.txt" "${TREE}/var/models/ocr/"
-mkdir -p "${TREE}/var/models/tts"
-cp -R "${VOICE}/models/asr" "${TREE}/var/models/asr"
-cp -R "${VOICE}/models/tts/vits-melo-tts-zh_en" \
-  "${TREE}/var/models/tts/vits-melo-tts-zh_en"
-rm -f "${TREE}/var/models/tts/vits-melo-tts-zh_en/model.int8.onnx"
+# 蛋档（2026-09-09）：三件与模型都不烤——aginx-{asr,tts,ocr} 包随清单走
+# （D15 边界律：大件可重下物既不烤也不进 state tar），改种三条 dangling
+# symlink 指向 pkgfiles 未来真身；装包前 test -e 恒假（哑终端无害），
+# C9 provision ensure 每靴幂等对账。
+if [ "${EGG}" = "0" ]; then
+  install -m 755 "${VOICE}/bin/ag-asr" "${TREE}/var/bin/aginx-asr"
+  install -m 755 "${VOICE}/bin/ag-tts" "${TREE}/var/bin/aginx-tts"
+  install -m 755 "${OCR}/bin/ag-ocr" "${TREE}/var/bin/aginx-ocr"
+  mkdir -p "${TREE}/var/models/ocr"
+  cp "${OCR}/models/det.onnx" "${OCR}/models/rec.onnx" \
+     "${OCR}/models/dict.txt" "${TREE}/var/models/ocr/"
+  mkdir -p "${TREE}/var/models/tts"
+  cp -R "${VOICE}/models/asr" "${TREE}/var/models/asr"
+  cp -R "${VOICE}/models/tts/vits-melo-tts-zh_en" \
+    "${TREE}/var/models/tts/vits-melo-tts-zh_en"
+  rm -f "${TREE}/var/models/tts/vits-melo-tts-zh_en/model.int8.onnx"
+else
+  mkdir -p "${TREE}/var/models/tts"
+  ln -s /var/lib/aginx/pkgfiles/aginx-asr/models/asr "${TREE}/var/models/asr"
+  ln -s /var/lib/aginx/pkgfiles/aginx-tts/models/tts/vits-melo-tts-zh_en \
+    "${TREE}/var/models/tts/vits-melo-tts-zh_en"
+  ln -s /var/lib/aginx/pkgfiles/aginx-ocr/models/ocr "${TREE}/var/models/ocr"
+fi
 # CJK font subset (M38a) — aginx-term cjk.rs rasterizes through ab_glyph;
 # GB2312 full + ASCII + punct rows, ~1.5MB (first-gen subset-cjk-font.sh).
 cp -R "${RECIPE}/usr/share/fonts" "${TREE}/usr/share/fonts"

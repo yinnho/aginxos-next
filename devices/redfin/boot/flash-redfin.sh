@@ -29,6 +29,10 @@
 # Dry-run by default: prints the plan and exits. GO=1 executes.
 # SKIP_PACK=1 reuses the already-packed vendor_boot (quick re-flash of
 # a new rootfs with an unchanged boot side).
+# SKIP_STATE=1 skips the state pre-arm below (C10 蛋案): a fresh EGG
+# image WANTS the factory shape — no capture, no marker, first boot
+# comes up stateless (扫码配网起步). Normal (full-image / upgrade-path)
+# flash days keep the capture.
 #
 # Recovery: fastboot flash vendor_boot the stock image
 # (.local/device/redfin/stock/stock-vendor_boot.img) returns the slot
@@ -107,8 +111,11 @@ if [ -z "${GO:-}" ]; then
   exit 0
 fi
 
-capture_state \
-  || say "WARNING: flashing without a fresh state capture — first boot of the new image may come up stateless"
+if [ -n "${SKIP_STATE:-}" ]; then
+  say "SKIP_STATE=1 — state pre-arm SKIPPED (蛋出厂形状：无 marker，首启无 state-restore)"
+elif ! capture_state; then
+  say "WARNING: flashing without a fresh state capture — first boot of the new image may come up stateless"
+fi
 
 ATTACHED="$(fastboot devices 2>/dev/null || true)"
 echo "${ATTACHED}" | grep -q "${FB_SERIAL}" \
