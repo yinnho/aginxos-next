@@ -11,9 +11,8 @@
 // (DECCKM), not a keyboard concern. M18's PTT path calls inject() in
 // main.rs with TextInputEvent — no second input path gets invented.
 //
-// Physical-key shape (inputd): evdev_key() maps a real keyboard's codes
-// to the same KeyEvents. Not wired — the first target's only physical
-// keys (power/volume on its pon node) are device control, not text input.
+// Physical keys: not wired — the first target's only physical keys
+// (power/volume on its pon node) are device control, not text input.
 
 /// Terminal-layer byte encoding. `app_cursor` is the child's DECCKM state
 /// (?1): SS3 arrows when set, CSI arrows otherwise.

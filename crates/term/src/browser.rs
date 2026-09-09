@@ -119,12 +119,6 @@ impl Browser {
         }
     }
 
-    /// 主循环只认 pump/fd/scroll_by/teardown；state 供测试与现场对账。
-    #[allow(dead_code)]
-    pub fn state(&self) -> State {
-        self.state
-    }
-
     /// poll 集：Setup|Live 才有 WS fd。
     pub fn fd(&self) -> Option<std::os::fd::RawFd> {
         if matches!(self.state, State::Setup | State::Live) {
@@ -422,12 +416,10 @@ impl Browser {
 
     fn on_frame(&mut self, v: &serde_json::Value, now: Instant, can_present: bool) {
         self.last_frame = now;
-        // 诊断期：到达即记（含 can_present），分辨「帧没来/来了没让解/解败」
-        eprintln!(
-            "aginx-term: frame arrive {}b present={}",
-            v["params"]["data"].as_str().map(|s| s.len()).unwrap_or(0),
-            can_present
-        );
+        if !can_present {
+            // 帧到了但不让解（渲染通道忙）——只记这一类异常，常态到达不刷屏
+            eprintln!("aginx-term: frame arrive but present busy");
+        }
         let sid = v["params"]["sessionId"].as_str().unwrap_or("").to_string();
         // 先 ack 后解码：ack 不出手引擎就不再发帧，解码的 ~70ms 不能串进引擎帧预算
         self.send(

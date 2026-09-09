@@ -1,11 +1,11 @@
 // Launcher (M16, docs/SYSTEM.md §12.3): app buttons come from the
 // registry at /var/apps/<id>/app.toml — scanned at every launcher draw,
 // so a new app appears by dropping a file (aginx-pkg or the app-registry
-// seeder write them), no OS source change. Four system actions (sh /
-// wifi setup / restart / power off) stay built in, plus a thin toolbar
-// strip above the keyboard ([SH] always, [BACK] when an app runs).
-// Program exit -> back to launcher. Touch regions are computed from the
-// keyboard geometry so the layout scales with panel size.
+// seeder write them), no OS source change. Seven built-in tiles stay
+// (+ picker / photos / install / sh / wifi setup / restart / power off),
+// plus a thin toolbar strip above the content ([BACK] when a toolbar face
+// is up). Program exit -> back to launcher. Touch regions are computed
+// from the keyboard geometry so the layout scales with panel size.
 
 use aginx_svc::{scan_apps, AppEntry, APPS_DIR};
 
@@ -180,8 +180,10 @@ impl Geom {
         None
     }
 
-    /// Toolbar regions while an app runs: BACK at the right (kill app,
-    /// return to launcher). Nothing else — the header stays clean.
+    /// Toolbar regions while a toolbar face is up (running app or a list
+    /// face — picker/photos/install/launcher): BACK at the right. In a
+    /// running app it kills the child; the list faces use it as their
+    /// exit. Nothing else — the header stays clean.
     pub fn toolbar_hit(&self, x: usize, y: usize, running: bool) -> Option<Toolbar> {
         if y >= self.toolbar_h {
             return None;

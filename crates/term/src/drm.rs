@@ -13,7 +13,6 @@
 use std::fs::{File, OpenOptions};
 use std::os::unix::fs::OpenOptionsExt;
 use std::os::unix::io::AsRawFd;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 const DRM_IOCTL_BASE: u32 = b'd' as u32;
@@ -178,8 +177,6 @@ const DRM_FORMAT_XRGB8888: u32 = 0x34325258;
 const DRM_MODE_PAGE_FLIP_EVENT: u32 = 0x01;
 const DRM_EVENT_VBLANK: u32 = 0x01;
 const DRM_EVENT_FLIP_COMPLETE: u32 = 0x02;
-
-pub static BLINK: AtomicBool = AtomicBool::new(false);
 
 pub struct Drm {
     file: File,
@@ -539,9 +536,6 @@ impl Drm {
         // the back buffer. present() is event-driven, so relatch every call.
         if self.modeset(self.fb[next]).is_ok() {
             self.cur = next;
-        }
-        if BLINK.swap(false, Ordering::Relaxed) {
-            unsafe { libc::ioctl(fd, DRM_IOCTL_SET_MASTER as _) };
         }
     }
 }
