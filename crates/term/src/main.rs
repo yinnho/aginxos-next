@@ -2492,7 +2492,8 @@ fn main() {
         }
     }
     // 未连网的开机不再自动拉 wizard：纯光标面 + PTT 语音流程就是装机流程
-    // （对准配对码，M42c 链）。WIFI SETUP 仍是 Launcher 瓦片，手动可达。
+    // （对准配对码，M42c 链）。批② C2（09-10）：瓦片也摘了，wizard 仅
+    // AGINX_TERM_START 调试路径可达。
     // Input nodes are panel data ([input.term], D14) — touch + the pon
     // keys (power + volume-down) ride whatever the profile declares.
     let ipt = hwd::load_or_exit().input.term.clone();
