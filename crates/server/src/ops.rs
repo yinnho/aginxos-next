@@ -209,6 +209,21 @@ mod tests {
         assert_eq!(r["error"]["code"], json!("empty_text"));
     }
 
+    /// D16 派活端到端：不点名 + 光标在母体 + 册上有人 → 假 runtime 应答
+    /// （不是 mother_reply 的 brain 单发），回执 avatar 是化身，光标随迁。
+    #[test]
+    fn unnamed_send_delegates_to_first_avatar() {
+        let (desk, cfg, _dir) = desk_cfg("delegate");
+        let r = handle_line(&desk, &cfg, r#"{"op":"create","avatar":"小喜","soul":"你是小喜"}"#);
+        assert_eq!(r["ok"], json!(true));
+        let r = handle_line(&desk, &cfg, r#"{"op":"send","text":"南京天气怎么样"}"#);
+        assert_eq!(r["ok"], json!(true));
+        assert_eq!(r["data"]["avatar"], json!("小喜")); // 派给化身，不是 me
+        assert_eq!(r["data"]["text"], json!("化身回话"));
+        let r = handle_line(&desk, &cfg, r#"{"op":"status"}"#);
+        assert_eq!(r["data"]["cursor"], json!("小喜")); // 光标随迁
+    }
+
     fn make_exec(p: &std::path::Path) {
         use std::os::unix::fs::PermissionsExt;
         std::fs::set_permissions(p, std::fs::Permissions::from_mode(0o755)).unwrap();

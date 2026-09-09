@@ -1,9 +1,12 @@
-// front — 前台（宪法 D10/D11）。登记语义：进/住/切/退。
+// front — 前台（宪法 D10/D11/D16）。登记语义：进/住/切/退。
 //
 // - 光标是纯内存状态：开机 = 母体 me（D10），重启即回 me——这不是丢失，
 //   这就是语义（退房是登记行为，不是数据）。
 // - 花名册 = workspaces 目录清单派生（D5：化身 = 文件夹，目录即注册）。
 // - 母体 me 不是文件夹，是前台里的一段代码（见 mother.rs）。
+// - 派活（D16）：不点名且光标在母体 → 册上有人就交给字典序首个化身，
+//   光标随迁（= 隐式进）；空册 = 自举地板，母体直答（母体是无工具的
+//   单发 brain，答题会角色扮演——所以有化身在册就别让母体答题）。
 // - 一次一轮：前台只有一张嘴（单用户手机的物理事实），send 全程持
 //   turn 锁，后来的连线排队等——语音/CLI/未来的 webhook 都一样。
 //   ② steer 支线：目标化身正有轮在跑时，后到的 send 不排队，插进那
@@ -165,11 +168,12 @@ impl FrontDesk {
         Ok(ws)
     }
 
-    /// send 的目标裁决（D10）：
+    /// send 的目标裁决（D10 + D16 派活）：
     /// - 退房词优先于一切：说退房就是退房，回母体。
     /// - 显式点名（进/切）：光标落到该化身；不存在 = NotFound（前台不
     ///   顺便造人——建化身是 create，说话是 send，两件事分开）。
-    /// - 不点名（住）：光标是谁就给谁；开机状态落在母体。
+    /// - 不点名（住）：光标是谁就给谁；光标在母体且册上有化身 → 派给
+    ///   字典序首个（光标随迁），空册才是母体直答。
     pub fn resolve_send(&self, explicit: Option<&str>, text: &str) -> Result<SendTarget, String> {
         if is_checkout_word(text) {
             self.set_cursor(MOTHER);
@@ -190,7 +194,17 @@ impl FrontDesk {
             None => {
                 let cur = self.cursor();
                 if cur == MOTHER {
-                    Ok(SendTarget::Mother)
+                    // D16 派活：母体是派活台，不是答题人。光标在母体 +
+                    // 册上有人 → 交给字典序首个化身，光标随迁（= 隐式进，
+                    // 追问自然落进那位的会话）；空册 = 自举地板，母体
+                    // 自己顶上（首建化身之前机器还能说话）。
+                    match self.roster().into_iter().next() {
+                        Some(first) => {
+                            self.set_cursor(&first);
+                            Ok(SendTarget::Avatar(first))
+                        }
+                        None => Ok(SendTarget::Mother),
+                    }
                 } else {
                     Ok(SendTarget::Avatar(cur))
                 }
@@ -247,10 +261,34 @@ mod tests {
     }
 
     #[test]
-    fn boot_cursor_is_mother_and_stay_routes_to_cursor() {
+    fn empty_roster_mother_answers_directly() {
         let (d, _dir) = desk("boot");
         assert_eq!(d.cursor(), MOTHER);
+        // 空册 = 自举地板：不点名仍母体直答（首建化身之前）
         assert!(matches!(d.resolve_send(None, "你好"), Ok(SendTarget::Mother)));
+        assert_eq!(d.cursor(), MOTHER);
+    }
+
+    /// D16 派活：不点名 + 光标在母体 → 字典序首个化身接活，光标随迁；
+    /// 追问留在那位；退房回母体；再不点名再派（母体从不答题）。
+    #[test]
+    fn mother_delegates_to_first_roster_avatar() {
+        let (d, _dir) = desk("delegate");
+        d.create_avatar("阿宝", None).unwrap();
+        d.create_avatar("小喜", None).unwrap();
+        assert_eq!(d.roster(), vec!["小喜", "阿宝"]); // 字典序：小喜在前
+        // 不点名：派给小喜，光标随迁（隐式进）
+        assert!(matches!(d.resolve_send(None, "南京天气怎么样"), Ok(SendTarget::Avatar(n)) if n == "小喜"));
+        assert_eq!(d.cursor(), "小喜");
+        // 追问：住台，还是小喜
+        assert!(matches!(d.resolve_send(None, "那上海呢"), Ok(SendTarget::Avatar(n)) if n == "小喜"));
+        // 退房：回母体
+        assert!(matches!(d.resolve_send(None, "再见"), Ok(SendTarget::Checkout)));
+        assert_eq!(d.cursor(), MOTHER);
+        // 再不点名：再派（派活是常态，不是一次性行为）
+        assert!(matches!(d.resolve_send(None, "帮我查点东西"), Ok(SendTarget::Avatar(n)) if n == "小喜"));
+        // 显式 me 仍母体直答（点名优先于派活）
+        assert!(matches!(d.resolve_send(Some("me"), "你是谁"), Ok(SendTarget::Mother)));
     }
 
     #[test]
