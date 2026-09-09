@@ -1936,3 +1936,43 @@ check.sh 绿（D14 门：注释里不得写机型段，脚本名已改称）。
 刷机日新律（flash-day-laws 同步）：**fastboot 前先
 `./flash-redfin.sh capture`**（adb 还在时；手动 Power+VolDown 之后这靴
 就晚了）。
+
+## 2026-09-09 — #282/#283 开机①竞态 b 修 + 问句常驻（dev push，same-image）
+
+用户裁决（09-08 b 案）：「系统都处理好后，等网络，网络是最后一步，光标
+出现后这些信息都可以显示；用户问的问题一直显示，不要在答案出来后消失」。
+三件 dev push（.new→mv→chmod 755，sha 双端合，bootcard=zig cc 静态
+`ac5735b0…`；voice `f104d81a…`/term `5d466429…`）：
+
+**#282 bootcard 阶梯重键**：退场只盯 phase-1 `done`——ok 持 3s、fail 持
+8s、150s 硬顶不变；K_WIFI/K_DHCP/K_INTERNET 死键删除。两轮 fresh boot
+kmsg：`local bring-up done (ok) — holding 3s` @57.1s→退出 60.0s；@56.8s
+→59.0s——**光标不再等网**（phase-2 wifi 在 done 之后才 join）。
+
+**#282 voice 开机等网 watch**（折进 200ms 主循环，无线程）：三道门
+（uptime ≤180s / wifi.conf 在 / 网未通）布防 → 光标面打字行
+「正在联网…」→ boot.state `internet ok` → 问候 **"Operator. Go
+ahead."** 上脸退役；300s 窗尽/行易主静默退役；问候前跨进程护栏
+（face 文件仍含等待行才覆盖——防 --inject 一次性进程的 Q\nA 被
+clobber）。只显示不出声不连网。日志 `boot net watching` → `boot net
+up — greeted`，当日累计 **6/6 全 greet**（m42c C / n4 G / n5 M×2 四轮
+真重启 + 首轮 fresh boot 全走同路）。mid-day svc 重启不布防（uptime 闸，
+已验证：换装后 3h18m uptime 重启无 watching 行）。
+
+**#283 问句常驻**：Chat 臂 face.line = `问句\n回复`（term 前缀续打答句；
+下次说话整行替换即清场）；result.html 问句块（转义原文直进不进
+markdown，`.q` 磷光绿边样式，正文上方）。term ①a 恢复护栏认两形状
+（整行=旧账纯回复 / 尾段=新 Q\nA；问句含换行的三段形状安全放弃）。
+render 重构：`page_html(question, md, w, h)` 唯一入口，
+markdown_to_html/render_html 死码删除；host 金测 51+38 全绿、
+musl 零警告（顺修 term set_eye_affinity 遗留 unused_mut）。
+
+**设备收据**：`--inject "杭州明天会下雨吗"` → face.line =
+`杭州明天会下雨吗\n我没有联网查天气的能力…`、result:true、result.html
+含 `class="q">杭州明天会下雨吗`；**m42c 21/21**、n4 53/1、n5 43/2——
+失败 3 条全是版本戳折债（设备烤 b399b7b vs HEAD ce0ee9b，与 #281
+update capture 同乘下一 bake #21），功能段（D/E/F/G、L 远端往返、M
+二启网关重连）全绿。
+
+**收尾态**：slot _b b399b7b + 三件 dev push 在役，六单元 ready。全树
+（#246 系+#282/#283）零提交待用户发话。
