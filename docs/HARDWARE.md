@@ -2199,3 +2199,21 @@ face JSON 的 hint 段（v4 退役），应答行自 M42c 起就是「说扫码�
 
 **收尾态**：蛋世界在役（六单元 ready），设备健康靴稳态，无 fastboot
 滞留。批②五项（V5/V3/A2/C2/C1）待用户裁决，未动。
+
+## 2026-09-10 批② V5 上机：状态查询收进拉式语音（30b068c）
+
+用户裁决「V5 状态话术删」。改动一行主刀：`run_outs` 的
+`Act::Status` 臂删去 `say(&s, brain)`——它是全程序唯一一个 Say 类
+输出还走 TTS 的口子（Say 语义=上脸+stderr，Speak 才出声）。状态
+从此与所有 Say 同律：`--inject 状态` → face line
+`22点41分，电池100%，网已连。`，要听跟「你说给我听」。
+protocol.rs 两处「出声」注释同步改真（09-05 定档的 Say 屏显义）。
+
+**部署照三律**：readlink 真身 `/var/bin/aginx-voice`（pid 490）→
+push /var/.stage-voice + chmod 755 + md5 `66e9da7b…` = 本地构建 →
+同 fs mv 落位 + 末路 md5 同 → `aginx-svc restart` → 新 pid 23172
+readlink 同真身。m42c **22/22**（C 段第三次真重启健回，uptime 60s +
+boot done + voice up）。voice@/var/bin 在役 md5：
+`66e9da7b54d61bd450bde55ee3fb5a80`（旧 01c51c62 退役）。
+
+批② 余四项（V3/A2/C2/C1）详解已报，待逐项点头。
