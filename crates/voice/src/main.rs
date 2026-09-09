@@ -175,6 +175,107 @@ fn eye_respawn(ev: &mut EyeView) -> Result<(), String> {
     Ok(())
 }
 
+// ---- #282 开机等网（网络是最后一步）--------------------------------------
+// bootcard 已改盯 phase-1 `done` 退场（光标不等网），等网的故事搬到这里：
+// 光标面上「正在联网…」打字行 → boot.state `internet ok` → 问候上脸。
+// 只显示、不出声、不自己连网（net-bringup phase 2 / net-watch 是写者）。
+// 跑在主循环 200ms 节拍里（内部 5s 轮询门），无线程无阻塞。
+const BOOT_STATE: &str = "/run/boot.state";
+/// 轮询间隔：boot.state phase 2 每步落行，5s 粒度足够。
+const BOOT_NET_POLL: Duration = Duration::from_secs(5);
+/// 等网窗口：超过即静默退役（红警面接着讲无网的故事，等待行留着不撤）。
+const BOOT_NET_WATCH: Duration = Duration::from_secs(300);
+/// 只在开机窗内布防：中午 svc 重启不问候——问候是开机的事，不是重启的事。
+const BOOT_NET_UPTIME_GATE_SECS: f64 = 180.0;
+/// 未配对机不布防（无 wifi.conf）：它的路是配对面，不是等网。
+const WIFI_CONF: &str = "/etc/wifi.conf";
+const BOOT_NET_WAITING: &str = "正在联网…";
+const BOOT_NET_GREET: &str = "Operator. Go ahead.";
+
+struct BootNet {
+    /// 我们放上的等待行（所有权判据：还等于它才是我们的台）。
+    mine: Option<&'static str>,
+    armed_at: Instant,
+    last_poll: Instant,
+}
+
+fn boot_state_has_internet() -> bool {
+    // 行形如 `internet ok www.baidu.com`；run/fail/缺行都算未通。
+    std::fs::read_to_string(BOOT_STATE)
+        .map(|s| s.lines().any(|l| l.trim_start().starts_with("internet ok")))
+        .unwrap_or(false)
+}
+
+fn uptime_secs() -> f64 {
+    // 读不到（非 Linux host 测试）按超窗处理——不布防。
+    std::fs::read_to_string("/proc/uptime")
+        .ok()
+        .and_then(|s| s.split_whitespace().next().and_then(|t| t.parse().ok()))
+        .unwrap_or(f64::MAX)
+}
+
+/// daemon 启动时布防。三道门：开机窗（uptime ≤180s）、已配对（wifi.conf
+/// 在）、网未通（已通就直接问候，不占台）。voice 由 svc 拉起 ~35s uptime，
+/// 正常开机两道门都过；face::write 在此窗内安全——站立结果页与等待行
+/// 互斥（任何 Chat 回合先 set_line(transcript) 破所有权）。
+fn boot_net_arm(vm: &Vm) -> BootNet {
+    let idle = || BootNet {
+        mine: None,
+        armed_at: Instant::now(),
+        last_poll: Instant::now(),
+    };
+    if uptime_secs() > BOOT_NET_UPTIME_GATE_SECS || !std::path::Path::new(WIFI_CONF).exists() {
+        return idle();
+    }
+    if boot_state_has_internet() {
+        face::set_line(Some(BOOT_NET_GREET));
+        face::write(vm, false);
+        eprintln!("aginx-voice: boot net up before voice — greeted");
+        return idle();
+    }
+    face::set_line(Some(BOOT_NET_WAITING));
+    face::write(vm, false);
+    eprintln!("aginx-voice: boot net watching");
+    BootNet {
+        mine: Some(BOOT_NET_WAITING),
+        armed_at: Instant::now(),
+        last_poll: Instant::now(),
+    }
+}
+
+/// 主循环每拍调用。三路静默退出：行易主（用户说话/一次性进程改了面）→
+/// 退役；窗口尽（300s）→ 退役；internet ok → 问候上脸后退役。
+fn boot_net_tick(bn: &mut BootNet, vm: &Vm) {
+    let Some(mine) = bn.mine else { return };
+    if face::current_line().as_deref() != Some(mine) {
+        bn.mine = None;
+        eprintln!("aginx-voice: boot net line taken — retire");
+        return;
+    }
+    if bn.armed_at.elapsed() >= BOOT_NET_WATCH {
+        bn.mine = None;
+        eprintln!("aginx-voice: boot net window over — no greet");
+        return;
+    }
+    if bn.last_poll.elapsed() < BOOT_NET_POLL {
+        return;
+    }
+    bn.last_poll = Instant::now();
+    if boot_state_has_internet() {
+        // 跨进程护栏：--inject 一次性进程写的是面文件、改不到本进程静态量
+        // ——问候覆盖前再读一次面，等待行不在了就放弃（不clobber别人的台）。
+        if !face::read().is_some_and(|f| f.contains(mine)) {
+            bn.mine = None;
+            eprintln!("aginx-voice: boot net line taken — retire");
+            return;
+        }
+        face::set_line(Some(BOOT_NET_GREET));
+        face::write(vm, false);
+        bn.mine = None;
+        eprintln!("aginx-voice: boot net up — greeted");
+    }
+}
+
 fn daemon() {
     let brain = audio::Brain::from_env();
     let mut vm = make_vm();
@@ -199,6 +300,9 @@ fn daemon() {
     if audio::local_voice_ready() {
         audio::warm_local_voice();
     }
+
+    // #282 开机等网：光标面上「正在联网…」→ internet ok → 问候。
+    let mut boot_net = boot_net_arm(&vm);
 
     let mut capturing: Option<std::process::Child> = None;
     // 音量下键按下时刻：短按(<300ms)=音量−10、长按=PTT（M42e 产品面）
@@ -390,6 +494,9 @@ fn daemon() {
             }
         }
 
+        // ---- #282 开机等网（5s 节拍非阻塞；行易主/窗口尽即静默退役） ----
+        boot_net_tick(&mut boot_net, &vm);
+
         // ---- 口令等待心跳（面法B）：真实流逝喂进状态机 ----
         // run_outs 可能阻塞数秒（TTS/brain 往返）——喂真实 dt，等待按
         // 人间的钟作废。空等 = 空返回，无输出零成本。
@@ -543,13 +650,17 @@ fn run_outs(
                                 .to_string()
                         }
                     };
-                    // 拉式：回复上脸不出声，点名（你说给我听）才 Speak
+                    // 拉式：回复上脸不出声，点名（你说给我听）才 Speak。
+                    // #283 问句常驻：行=「问句\n回复」——问句整段打完，回复
+                    // 换行续打（term 前缀续打识别）；下一次用户说话
+                    // set_line(transcript) 整行替换，即自然清场。
                     eprintln!("aginx-voice: say {reply}");
-                    face::set_line(Some(&reply));
+                    face::set_line(Some(&format!("{text}\n{reply}")));
                     // v4⑥：文本已上脸，同步写结果页（term 独立 attach 上屏）；
                     // 翻旗归 run_outs 尾部 flush_pending——这里早翻会被本回合
                     // 后续 face::write 清掉。写失败则文本就是结果（降级一等）。
-                    render::stage_reply(vm.state_name(), &reply);
+                    // 结果页同律带问句块（#283：问句在答句上方）。
+                    render::stage_reply(vm.state_name(), &text, &reply);
                 }
             },
         }

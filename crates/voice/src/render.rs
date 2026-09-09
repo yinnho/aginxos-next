@@ -12,12 +12,6 @@ use std::sync::Mutex;
 
 use crate::face;
 
-/// 产品入口：panel 尺寸唯一来源 device.toml [panel]（D14，无默认）。
-pub fn markdown_to_html(md: &str) -> String {
-    let p = hwd::load_or_exit();
-    render_html(md, p.panel.width, p.panel.height)
-}
-
 /// 结果页 HTML（v4⑥）。voice 原子换名写；term face 假→真沿读（同 face
 /// mtime 先例）。旧 result.img PNG 链在 S5 前保留为部署序垫。
 pub const RESULT_HTML: &str = "/run/aginx-voice/result.html";
@@ -26,9 +20,11 @@ pub const RESULT_HTML: &str = "/run/aginx-voice/result.html";
 static PENDING: Mutex<Option<String>> = Mutex::new(None);
 
 /// Chat 臂：同步写 result.html（毫秒级，无线程无引擎往返），暂存 state
-/// 待尾部翻旗。文本先行不变——调用方必须已 set_line(reply)。
-pub fn stage_reply(state: &str, markdown: &str) {
-    let html = markdown_to_html(markdown);
+/// 待尾部翻旗。文本先行不变——调用方必须已 set_line(Q\nA)。问句块
+/// #283 常驻：面板上问句在答句上方，与光标面同形状。
+pub fn stage_reply(state: &str, question: &str, markdown: &str) {
+    let p = hwd::load_or_exit();
+    let html = page_html(question, markdown, p.panel.width, p.panel.height);
     let tmp = format!("{RESULT_HTML}.tmp");
     if std::fs::write(&tmp, html).is_ok() && std::fs::rename(&tmp, RESULT_HTML).is_ok() {
         *PENDING.lock().unwrap() = Some(state.to_string());
@@ -59,9 +55,10 @@ fn ordered_item(l: &str) -> Option<&str> {
 /// 先 HTML 转义再内联替换——内容永远是文本，不是标签。
 /// 三钉烧死（引擎收据）：黑底、min-height 满屏高 px（引擎丢 vh 单位）、
 /// 视口=面板宽；配色与字阶=磷光终端（黑底绿白字，P0 ASK_TMPL 语言）。
-/// panel 尺寸是参数（D14）：产品走 markdown_to_html（hwd [panel]），
+/// 问句块（#283 常驻）：用户原话转义直进，不进 markdown——问的是什么
+/// 就显示什么。panel 尺寸是参数（D14）：产品走 stage_reply（hwd [panel]），
 /// host 测试喂 fixture——纯函数两种调用方都不碰 /etc。
-pub fn render_html(md: &str, panel_w: u32, panel_h: u32) -> String {
+pub fn page_html(question: &str, md: &str, panel_w: u32, panel_h: u32) -> String {
     let mut body = String::new();
     let lines: Vec<&str> = md.lines().collect();
     let mut i = 0;
@@ -174,6 +171,12 @@ pub fn render_html(md: &str, panel_w: u32, panel_h: u32) -> String {
             i += 1;
         }
     }
+    let q = question.trim();
+    let qblock = if q.is_empty() {
+        String::new()
+    } else {
+        format!("<div class=\"q\">{}</div>\n", escape(q))
+    };
     format!(
         "<!DOCTYPE html><html><head><meta charset=\"utf-8\">\
 <meta name=\"viewport\" content=\"width={panel_w}\">\
@@ -199,7 +202,9 @@ blockquote{{margin:24px 0;padding:12px 28px;border-left:6px solid #1f6f3f;color:
 blockquote p{{margin:10px 0}}\
 hr{{border:none;border-top:2px solid #0f3d1e;margin:40px 0}}\
 .meta{{font-size:26px;color:#3d6b4f}}\
-</style></head><body>{body}</body></html>"
+.q{{color:#3d6b4f;font-size:32px;line-height:1.6;margin:0 0 44px;\
+padding:20px 28px;border-left:6px solid #1f6f3f;white-space:pre-wrap}}\
+</style></head><body>{qblock}{body}</body></html>"
     )
 }
 
@@ -232,9 +237,10 @@ fn inline(s: &str) -> String {
 mod tests {
     use super::*;
 
-    /// host 测试统一入口：fixture 面板（真实红皮尺寸，纯数据不碰 /etc）。
+    /// host 测试统一入口：无问句整页 + fixture 面板（真实红皮尺寸，纯数据
+    /// 不碰 /etc）。
     fn md(s: &str) -> String {
-        render_html(s, 1080, 2340) // D14-exempt: fixture panel geometry
+        page_html("", s, 1080, 2340) // D14-exempt: fixture panel geometry
     }
 
     #[test]
@@ -248,7 +254,7 @@ mod tests {
     #[test]
     fn pins_follow_panel_params() {
         // 面板参数真的进了三钉——不是碰巧写死
-        let h = render_html("x", 720, 1600);
+        let h = page_html("", "x", 720, 1600); // D14-exempt: fixture panel
         assert!(h.contains("min-height:1600px"));
         assert!(h.contains("width=720"));
         assert!(!h.contains("2340")); // D14-exempt: fixture pin must not leak
@@ -316,5 +322,20 @@ mod tests {
         assert!(h.contains("<blockquote><p>引用行</p></blockquote>"));
         assert!(h.contains("<hr>"));
         assert!(h.contains("<p>收尾</p>"));
+    }
+
+    #[test]
+    fn reply_page_keeps_question_block_above_body() {
+        // #283 问句常驻：问句块在正文上方，转义原文不进 markdown；
+        // 无问句（render_html 老入口）不出现空块。
+        let h = page_html("现在几点了？<b>", "**17** 点", 1080, 2340); // D14-exempt: fixture panel
+        let q = h.find("class=\"q\"").expect("question block present");
+        let body = h.find("<b>17</b>").expect("markdown body rendered");
+        assert!(q < body, "question sits above the reply body");
+        assert!(
+            h.contains("现在几点了？&lt;b&gt;"),
+            "question escaped verbatim, no markdown"
+        );
+        assert!(!page_html("", "答", 1080, 2340).contains("class=\"q\"")); // D14-exempt: fixture panel
     }
 }
