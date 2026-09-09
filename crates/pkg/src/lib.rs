@@ -3,12 +3,15 @@
 //! v0 semantics preserved (docs/SYSTEM.md §6.1): a package is a static
 //! musl binary at /var/bin/<name> with /var/bin/.<name>.prev for
 //! rollback and /var/apps/<name>/ as its data dir; manifest lines are
-//! `<name> <url> <sha256> [core|opt] [version]` with absent 4th field =
-//! core and an absent 5th field = no version (display-only — sha256
-//! equality stays the only truth); `sync` self-heals core entries only;
-//! `opt-in` installs an opt entry and seeds its launcher registry entry;
-//! installs are atomic (.new → rename) and keep the previous binary on
-//! any failure.
+//! `<name> <url> <sha256> [core|opt] [version] [deps]` with absent 4th
+//! field = core, an absent 5th field = no version (display-only — sha256
+//! equality stays the only truth), and an optional 6th comma-separated
+//! dep list (sync installs deps first); `sync` self-heals core entries
+//! only; `opt-in` installs an opt entry and seeds its launcher registry
+//! entry; installs are atomic (.new → rename) and keep the previous
+//! binary on any failure. Mutating verbs hold a cross-process lock
+//! (`PkgLock`) — a concurrent install makes the late caller yield
+//! rc=0, never a boot.state failure.
 //!
 //! M26 adds the signed chain and the 四件套:
 //!
@@ -36,7 +39,7 @@
 //! Paths are env-overridable (AGINX_PKG_BINDIR etc.) for host tests; on the
 //! phone nobody sets them and the constants below are the truth.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -58,6 +61,7 @@ pub struct Paths {
     pub downloader: PathBuf,
     pub svcctl: PathBuf,
     pub apps_d: PathBuf,
+    pub lockdir: PathBuf,
 }
 
 fn envp(var: &str, default: &str) -> PathBuf {
@@ -78,6 +82,7 @@ impl Paths {
             downloader: envp("AGINX_PKG_AGDL", "/usr/bin/aginx-download"),
             svcctl: envp("AGINX_PKG_AGCTL", "/usr/bin/aginx-svc"),
             apps_d: envp("AGINX_PKG_APPS_D", "/etc/apps.d"),
+            lockdir: envp("AGINX_PKG_LOCK", "/var/tmp/aginx-pkg.lock"),
         }
     }
 }
@@ -135,9 +140,12 @@ pub struct Entry {
     /// 5th manifest column, display-only (sha256 equality stays the
     /// only truth — version never gates an install decision).
     pub version: Option<String>,
+    /// 6th manifest column, comma-separated package names this one
+    /// needs installed first (sync installs deps before dependents).
+    pub deps: Vec<String>,
 }
 
-/// Parse manifest text: `<name> <url> <sha256> [core|opt] [version]`,
+/// Parse manifest text: `<name> <url> <sha256> [core|opt] [version] [deps]`,
 /// '#' comments and blank lines skipped. A line with a name but no
 /// url/sha256 is a hard parse error (v0 warned per-line at sync; the
 /// Rust gate refuses the whole file so a typo can never silently
@@ -151,16 +159,21 @@ pub fn parse_manifest(src: &str) -> Result<Vec<Entry>, String> {
         }
         let f: Vec<&str> = l.split_whitespace().collect();
         if f.len() < 3 {
-            return Err(format!("line {}: want '<name> <url> <sha256> [core|opt] [version]'", i + 1));
+            return Err(format!("line {}: want '<name> <url> <sha256> [core|opt] [version] [deps]'", i + 1));
         }
         let tier = if f.get(3) == Some(&"opt") { Tier::Opt } else { Tier::Core };
         let version = f.get(4).filter(|v| !v.is_empty()).map(|v| v.to_string());
+        let deps = f
+            .get(5)
+            .map(|d| d.split(',').map(|s| s.trim().to_string()).filter(|s| !s.is_empty()).collect())
+            .unwrap_or_default();
         out.push(Entry {
             name: f[0].to_string(),
             url: f[1].to_string(),
             sha256: f[2].to_string(),
             tier,
             version,
+            deps,
         });
     }
     Ok(out)
@@ -825,6 +838,115 @@ pub fn seed_app(p: &Paths, name: &str) -> Result<(), Fail> {
 
 // -------------------------------------------------------- subcommands
 
+/// Dependency-ordered manifest entries (deps before dependents). A
+/// dependency CYCLE is a manifest bug and refuses the whole sync — the
+/// same law as a parse error, never silently drop self-heal. A dep
+/// that is named but missing from the manifest fails only its entry
+/// (resilient, like a network failure) and rides in `broken`.
+fn dep_order(entries: &[Entry]) -> Result<(Vec<&Entry>, Vec<(String, Fail)>), Fail> {
+    // 0 = unvisited, 1 = on the current DFS path, 2 = emitted
+    let mut state: std::collections::HashMap<&str, u8> = HashMap::new();
+    let mut out: Vec<&Entry> = Vec::new();
+    let mut broken: Vec<(String, Fail)> = Vec::new();
+    let mut stack: Vec<&str> = Vec::new();
+
+    fn visit<'a>(
+        e: &'a Entry,
+        entries: &'a [Entry],
+        state: &mut std::collections::HashMap<&'a str, u8>,
+        out: &mut Vec<&'a Entry>,
+        broken: &mut Vec<(String, Fail)>,
+        stack: &mut Vec<&'a str>,
+    ) -> Result<(), Fail> {
+        match state.get(e.name.as_str()) {
+            Some(2) => return Ok(()),
+            Some(1) => {
+                let ring: Vec<&str> = stack[stack.iter().position(|n| *n == e.name.as_str()).unwrap()..].to_vec();
+                return Err(Fail::new(
+                    ErrorType::Usage,
+                    "pkg_dep_cycle",
+                    format!("dependency cycle: {} -> {}", ring.join(" -> "), e.name),
+                )
+                .with_hint("fix the manifest — a package cannot (transitively) depend on itself"));
+            }
+            _ => {}
+        }
+        state.insert(&e.name, 1);
+        stack.push(&e.name);
+        for d in &e.deps {
+            match entries.iter().find(|x| x.name == *d) {
+                Some(dep) => visit(dep, entries, state, out, broken, stack)?,
+                None => broken.push((
+                    e.name.clone(),
+                    Fail::new(ErrorType::NotFound, "pkg_dep_missing", format!("{} depends on '{}' which is not in the manifest", e.name, d))
+                        .with_hint(format!("add a line for {d}, or drop it from {}'s deps column", e.name)),
+                )),
+            }
+        }
+        stack.pop();
+        state.insert(&e.name, 2);
+        out.push(e);
+        Ok(())
+    }
+
+    for e in entries {
+        visit(e, entries, &mut state, &mut out, &mut broken, &mut stack)?;
+    }
+    Ok((out, broken))
+}
+
+/// Cross-process install mutex: a lock DIRECTORY (mkdir is atomic on
+/// local filesystems) holding the holder's pid. A stale lock (holder
+/// died) is cleared and taken over; a live holder is reported as
+/// `pkg_busy` — the CLI turns that into rc=0 (yield), because
+/// provision's boot.state `pkg ok` must not record a failure just
+/// because a tap-install was mid-flight.
+#[derive(Debug)]
+pub struct PkgLock {
+    dir: PathBuf,
+}
+
+impl PkgLock {
+    /// Err(code = "pkg_busy") means another install is genuinely running.
+    pub fn acquire(p: &Paths) -> Result<PkgLock, Fail> {
+        let take = |dir: &Path| -> std::io::Result<()> {
+            std::fs::create_dir(dir)?;
+            write_644(&dir.join("pid"), format!("{}\n", std::process::id()).as_bytes())
+        };
+        match take(&p.lockdir) {
+            Ok(()) => Ok(PkgLock { dir: p.lockdir.clone() }),
+            Err(_) => {
+                // exists: live holder, or a corpse
+                let pid: i32 = std::fs::read_to_string(p.lockdir.join("pid"))
+                    .ok()
+                    .and_then(|s| s.trim().parse().ok())
+                    .unwrap_or(0);
+                let alive = pid > 0 && {
+                    let r = unsafe { libc::kill(pid, 0) };
+                    // EPERM = the pid exists but belongs to someone else
+                    r == 0 || (r == -1 && std::io::Error::last_os_error().raw_os_error() == Some(libc::EPERM))
+                };
+                if alive {
+                    return Err(Fail::new(
+                        ErrorType::State,
+                        "pkg_busy",
+                        format!("another install running (pid {pid}) — yielding"),
+                    ));
+                }
+                let _ = std::fs::remove_dir_all(&p.lockdir);
+                take(&p.lockdir).map_err(|e| io_fail("pkg_lock", format!("{}: {e}", p.lockdir.display())))?;
+                Ok(PkgLock { dir: p.lockdir.clone() })
+            }
+        }
+    }
+}
+
+impl Drop for PkgLock {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.dir);
+    }
+}
+
 /// One row of output for the query commands. `lines` is the human face
 /// (printed in order); `data`/`meta` carry the --json envelope payload.
 #[derive(Debug, Default)]
@@ -850,9 +972,21 @@ pub fn cmd_sync(p: &Paths, manifest: Option<&Path>, pubkey_b64: &str) -> Result<
         return Ok(0);
     }
     let entries = load_manifest(path, manifest.is_some() || std::env::var_os("AGPKG_MANIFEST").is_some(), pubkey_b64)?;
+    // Deps before dependents; a cycle already aborted above (hard Err).
+    let (ordered, broken) = dep_order(&entries)?;
     let mut rc = 0;
-    for e in &entries {
+    for (name, f) in &broken {
+        eprintln!("aginx-pkg: {name} skipped ({}): {}", f.code, f.message);
+        rc = 1;
+    }
+    let broken_names: Vec<&str> = broken.iter().map(|(n, _)| n.as_str()).collect();
+    for e in ordered {
         if e.tier == Tier::Opt {
+            continue;
+        }
+        // reported above as pkg_dep_missing — riding in `ordered` (its own
+        // dependents may still be fine) but must not itself install
+        if broken_names.contains(&e.name.as_str()) {
             continue;
         }
         // up-to-date = stamp matches AND the binary is actually there.
@@ -920,6 +1054,23 @@ pub fn cmd_opt_in(p: &Paths, name: &str, pubkey_b64: &str) -> Result<(), Fail> {
     })?;
     if e.tier != Tier::Opt {
         return Err(usage_fail(format!("{name} is not an opt entry (sync handles core)")));
+    }
+    // Deps must at least exist in the manifest — opt-in never
+    // auto-installs them (sync owns core deps; the error names what's
+    // absent so the caller knows to sync first).
+    let missing: Vec<&str> = e
+        .deps
+        .iter()
+        .filter(|d| !entries.iter().any(|x| x.name == **d))
+        .map(|d| d.as_str())
+        .collect();
+    if !missing.is_empty() {
+        return Err(Fail::new(
+            ErrorType::NotFound,
+            "pkg_dep_missing",
+            format!("{name} depends on {} not in the manifest", missing.join(", ")),
+        )
+        .with_hint(format!("run aginx-pkg sync first — core deps install with the rest")));
     }
     let cur = sha256_file(&p.bindir.join(name)).ok();
     if cur.as_deref() == Some(e.sha256.as_str()) {
@@ -1023,6 +1174,7 @@ mod tests {
             downloader: root.join("downloader"),
             svcctl: root.join("svcctl"),
             apps_d: root.join("apps.d"),
+            lockdir: root.join("lock"),
         }
     }
 
@@ -1093,6 +1245,11 @@ mod tests {
         let es = parse_manifest(src).unwrap();
         assert_eq!(es[0].version.as_deref(), Some("0.9.1"));
         assert_eq!(es[1].version, None);
+        // 6th column deps: comma-separated, trimmed, empties dropped
+        let es = parse_manifest("a u c1 core 1.0 b,c\nb u c2 core 1.0 ,\nc u c3 core 1.0\n").unwrap();
+        assert_eq!(es[0].deps, vec!["b".to_string(), "c".to_string()]);
+        assert!(es[1].deps.is_empty());
+        assert!(es[2].deps.is_empty());
         assert!(parse_manifest("broken\n").is_err());
     }
 
@@ -1514,6 +1671,80 @@ mod tests {
     }
 
     #[test]
+    fn dep_order_chain_cycle_and_missing() {
+        // chain c -> b -> a: deps install first regardless of manifest order
+        let es = parse_manifest("c u c3 core 1.0 b\nb u c2 core 1.0 a\na u c1 core 1.0\n").unwrap();
+        let (ordered, broken) = dep_order(&es).unwrap();
+        let names: Vec<&str> = ordered.iter().map(|e| e.name.as_str()).collect();
+        assert_eq!(names, vec!["a", "b", "c"]);
+        assert!(broken.is_empty());
+
+        // cycle refuses the whole set — same law as a parse error
+        let es = parse_manifest("x u c1 core 1.0 y\ny u c2 core 1.0 x\n").unwrap();
+        let f = dep_order(&es).unwrap_err();
+        assert_eq!(f.code, "pkg_dep_cycle");
+        assert!(f.message.contains("x -> y") || f.message.contains("y -> x"), "{}", f.message);
+
+        // missing dep: entry reported broken (still ordered — its own
+        // dependents may be fine), the clean entry untouched
+        let es = parse_manifest("b u c2 core 1.0 ghost\na u c1 core 1.0\n").unwrap();
+        let (ordered, broken) = dep_order(&es).unwrap();
+        assert_eq!(broken.len(), 1);
+        assert_eq!(broken[0].0, "b");
+        assert_eq!(broken[0].1.code, "pkg_dep_missing");
+        assert!(broken[0].1.hint.is_some());
+        assert_eq!(ordered.len(), 2);
+    }
+
+    #[test]
+    fn sync_skips_dep_missing_but_installs_the_rest() {
+        let root = tmp("depsync");
+        let p = paths(&root);
+        let payload = root.join("payload.bin");
+        fs::write(&payload, b"NEWBIN").unwrap();
+        let stub = root.join("downloader");
+        fs::write(&stub, format!("#!/bin/sh\ncp '{}' \"$2\"\n", payload.display())).unwrap();
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(&stub, fs::Permissions::from_mode(0o755)).unwrap();
+        let sha = sha256_hex(b"NEWBIN");
+        // evil depends on ghost (not in the manifest) — skipped rc=1;
+        // plain has no deps and installs normally
+        let m = root.join("m");
+        fs::write(&m, format!("evil http://x {sha} core 1.0 ghost\nplain http://x {sha} core 1.0\n")).unwrap();
+        assert_eq!(cmd_sync(&p, Some(&m), "irrelevant").unwrap(), 1);
+        assert!(p.bindir.join("plain").exists());
+        assert!(!p.bindir.join("evil").exists());
+    }
+
+    #[test]
+    fn pkg_lock_busy_stale_and_drop() {
+        let root = tmp("lock");
+        let p = paths(&root);
+        // held lock names a live pid (ours) -> busy, typed state error
+        let l = PkgLock::acquire(&p).unwrap();
+        assert!(p.lockdir.join("pid").exists());
+        let f = PkgLock::acquire(&p).unwrap_err();
+        assert_eq!(f.code, "pkg_busy");
+        assert_eq!(f.envelope()["error"]["type"], "state");
+        // drop releases -> re-acquirable
+        drop(l);
+        assert!(!p.lockdir.exists());
+        let l2 = PkgLock::acquire(&p).unwrap();
+        drop(l2);
+        // stale lock naming a reaped pid is taken over
+        let mut child = std::process::Command::new("true").spawn().unwrap();
+        let dead = child.id() as i32;
+        let _ = child.wait();
+        fs::create_dir_all(&p.lockdir).unwrap();
+        fs::write(p.lockdir.join("pid"), format!("{dead}\n")).unwrap();
+        drop(PkgLock::acquire(&p).unwrap());
+        // unparseable pid file = corpse too
+        fs::create_dir_all(&p.lockdir).unwrap();
+        fs::write(p.lockdir.join("pid"), "not-a-pid\n").unwrap();
+        drop(PkgLock::acquire(&p).unwrap());
+    }
+
+    #[test]
     fn opt_in_tier_and_seed_rules() {
         let root = tmp("optin");
         let (sk, pub_b64) = keypair();
@@ -1534,6 +1765,12 @@ mod tests {
         let app = fs::read_to_string(p.appdir.join("optpkg").join("app.toml")).unwrap();
         assert!(app.contains("scale = 3"));
         assert!(app.contains("/bin/optpkg"));
+        // dep not in the manifest -> typed refusal before any fetch
+        p.manifest = write_signed(&root, "m2", &format!("depclient http://x {sha} opt 1.0 libx\n"), &sk);
+        let f = cmd_opt_in(&p, "depclient", &pub_b64).unwrap_err();
+        assert_eq!(f.code, "pkg_dep_missing");
+        assert!(f.message.contains("libx"));
+        assert!(!p.bindir.join("depclient").exists());
     }
 
     #[test]

@@ -9,7 +9,24 @@
 use std::path::Path;
 use std::process::exit;
 
-use aginx_pkg::{cmd_available, cmd_list, cmd_opt_in, cmd_rollback, cmd_sync, install_file, usage, Fail, Paths};
+use aginx_pkg::{
+    cmd_available, cmd_list, cmd_opt_in, cmd_rollback, cmd_sync, install_file, usage, Fail, Paths, PkgLock,
+};
+
+/// Acquire the cross-process install lock, or yield. A live concurrent
+/// install makes THIS caller exit rc=0 — provision's boot.state `pkg ok`
+/// must not record a failure just because a tap-install was mid-flight
+/// (the running process owns the outcome; rollback reads no lock).
+fn lock_or_yield(p: &Paths, json: bool) -> PkgLock {
+    match PkgLock::acquire(p) {
+        Ok(l) => l,
+        Err(f) if f.code == "pkg_busy" => {
+            eprintln!("aginx-pkg: {}", f.message);
+            exit(0);
+        }
+        Err(f) => fail(f, json),
+    }
+}
 
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
@@ -33,6 +50,7 @@ fn main() {
                 [n, s, h] => (*n, *s, *h),
                 _ => die_usage(),
             };
+            let _lock = lock_or_yield(&p, json);
             match install_file(&p, name, Path::new(src), sha) {
                 Ok(aginx_pkg::Kind::Binary) => println!("aginx-pkg: installed {name} ({sha})"),
                 Ok(aginx_pkg::Kind::Bundle { unit, .. }) => {
@@ -43,7 +61,11 @@ fn main() {
         }
         "sync" => {
             let mf = rest.first().map(Path::new);
-            exit(cmd_sync(&p, mf, pubkey).unwrap_or_else(|f| fail(f, json)));
+            let _lock = lock_or_yield(&p, json);
+            let rc = cmd_sync(&p, mf, pubkey).unwrap_or_else(|f| fail(f, json));
+            // process::exit skips destructors — release the lock first
+            drop(_lock);
+            exit(rc);
         }
         "available" => {
             let mf = rest.first().map(Path::new);
@@ -57,6 +79,7 @@ fn main() {
                 [n] => *n,
                 _ => die_usage(),
             };
+            let _lock = lock_or_yield(&p, json);
             if let Err(f) = cmd_opt_in(&p, name, pubkey) {
                 fail(f, json);
             }
