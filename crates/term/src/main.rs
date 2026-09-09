@@ -59,6 +59,17 @@ const MGREEN: u32 = 0x0000FF41; // Matrix green — typewriter lines / cursor
 // front camera punch-hole); idle = bare breathing cursor on that line.
 const PROMPT_CS: usize = 5;
 
+// 警告注册表 (2026-09-09): /run/aginx-warn/ — one warning = one file
+// (filename = source tag, content = one-line CJK message). v0 sole
+// writer is net-watch; future daemons (battery/storage/thermal…) drop a
+// file in without a term change (the D12 registry shape). Non-empty →
+// the idle face paints a red center zone; empty dir = normal face.
+const WARN_DIR: &str = "/run/aginx-warn";
+const WARN_RED: u32 = 0x00FF3B30;
+const WARN_WM_SCALE: usize = 13; // bootcard wordmark scale — same geometry
+const WARN_LINE_SCALE: usize = 5; // warning lines below the wordmark (= transcript cell)
+const WARN_MAX: usize = 4; // lines cap — the face is a glance, not a log
+
 /// 呼吸光标 (v4⑤): level 0..=16 → 35%..100% of MGREEN per channel.
 /// L0=0x00005917, L8=0x0000AB2C, L16=MGREEN — the golden tests pin these.
 fn breath_shade(level: u8) -> u32 {
@@ -1148,6 +1159,20 @@ impl<'a> Render<'a> {
         }
     }
 
+    /// 警告注册表红警区 (2026-09-09): red AginxOS wordmark at bootcard's
+    /// exact anchor (centered, y = h*45/100, scale 13) + one red line per
+    /// warning file below it. Drawn AFTER prompt() — the top transcript
+    /// and the breathing cursor are not touched.
+    fn warn(&self, pix: &mut [u32], warns: &[String]) {
+        let y = (self.h * 45 / 100) as i32;
+        draw_centered(pix, self.pitch, self.w, self.h, self.font, y, "AginxOS", WARN_WM_SCALE, WARN_RED);
+        let mut ly = self.h * 45 / 100 + 8 * WARN_WM_SCALE + 60;
+        for msg in warns {
+            draw_centered(pix, self.pitch, self.w, self.h, self.font, ly as i32, msg, WARN_LINE_SCALE, WARN_RED);
+            ly += 8 * WARN_LINE_SCALE + 24;
+        }
+    }
+
     /// 眼视图 (面法 09-07, was the M42g eye branch of the voice face):
     /// fullscreen viewfinder — eye box = whole panel, JPEG frame by
     /// nearest-neighbor aspect-fill. The raw RGB565 fast path blits fused
@@ -1420,12 +1445,40 @@ impl<'a> Render<'a> {
     }
 }
 
+/// Poll the warning registry (/run/aginx-warn/): entries sorted by
+/// filename (= source tag), first line of each file, capped at WARN_MAX.
+/// Missing dir / unreadable entries read as "no warnings" — a red face
+/// must never come from a reader glitch.
+fn read_warnings() -> Vec<String> {
+    read_warnings_dir(WARN_DIR)
+}
+
+fn read_warnings_dir(dir: &str) -> Vec<String> {
+    let entries = match std::fs::read_dir(dir) {
+        Ok(rd) => rd,
+        Err(_) => return Vec::new(),
+    };
+    let mut paths: Vec<_> = entries.flatten().map(|e| e.path()).collect();
+    paths.sort();
+    paths
+        .iter()
+        .filter_map(|p| std::fs::read_to_string(p).ok())
+        .map(|s| s.lines().next().unwrap_or("").trim().to_string())
+        .filter(|s| !s.is_empty())
+        .take(WARN_MAX)
+        .collect()
+}
+
 /// The prompt face's render (开机剧情 v4): the transcript typewriter face.
 /// `breath` = cursor level 0..=16. The live result page never comes through
 /// here — its frames blit straight into the back buffer (result_frame).
-fn render_prompt(r: &Render, pix: &mut [u32], voice: &VoiceView, breath: u8) {
+fn render_prompt(r: &Render, pix: &mut [u32], voice: &VoiceView, breath: u8, warns: &[String]) {
     let line = voice.doc.line.as_deref().unwrap_or("");
     r.prompt(pix, line, voice.line_prog, Some(breath));
+    // 警告注册表非空 → 中屏红警区叠加；顶部 transcript+呼吸光标不动
+    if !warns.is_empty() {
+        r.warn(pix, warns);
+    }
 }
 
 /// v4⑥: fullscreen 1:1 row-copy of a live-panel screencast frame straight
@@ -1537,6 +1590,18 @@ fn host_ppm(out: &str) {
         );
         let path = format!("{}-prompt-typing", out);
         if let Err(e) = ppm_dump(&path, &pixi, w, h, pitch) {
+            eprintln!("ppm: {e}");
+        }
+        println!("wrote {path}");
+    }
+    {
+        // 警告注册表 (2026-09-09): idle + red center zone — the standby
+        // face a dead network leaves on screen (top cursor untouched).
+        let mut pixw = vec![0u32; pitch * h];
+        r.prompt(&mut pixw, "", 0, Some(16));
+        r.warn(&mut pixw, &["无网络 · 自动重连中".to_string()]);
+        let path = format!("{}-prompt-warn", out);
+        if let Err(e) = ppm_dump(&path, &pixw, w, h, pitch) {
             eprintln!("ppm: {e}");
         }
         println!("wrote {path}");
@@ -1823,6 +1888,10 @@ fn main() {
     let mut last_input = Instant::now();
     let mut power_down: Option<Instant> = None;
 
+    // 警告注册表 (2026-09-09): polled on the idle tick; the first frame
+    // carries whatever is already on disk (net down at term start → red
+    // from the very first paint).
+    let mut warns: Vec<String> = read_warnings();
     // Persistent canvas: renderers repaint only damaged rows into it, and
     // each present() memcpy's it into the back buffer (~10 MB, ~1 ms) so
     // double-buffer semantics survive partial redraws.
@@ -1841,7 +1910,7 @@ fn main() {
                     r.photos_list(buf, p, &lg);
                 }
             }
-            Mode::Idle => render_prompt(&r, buf, &voice, 16),
+            Mode::Idle => render_prompt(&r, buf, &voice, 16, &warns),
             Mode::Eye => r.eye(buf, &voice, &lg),
             Mode::Running(_) => {
                 fill_rect(buf, pitch, w, h, 0, 0, w as i32, h as i32, BG);
@@ -1868,6 +1937,9 @@ fn main() {
     // = tick<=16 ? tick : 32-tick), starts full to match the first frame
     let mut last_breath = Instant::now();
     let mut breath_tick: u8 = 16;
+    // 警告注册表 poll (2026-09-09): 2 s cadence on the idle face; repaint
+    // only when the set changes.
+    let mut last_warn_poll = Instant::now();
     let mut kb_dirty = true;
     // Hold-to-repeat (DEL / arrows), Termux-style: the event + next fire
     // deadline. Repeats go through inject() like every other input.
@@ -2565,6 +2637,19 @@ fn main() {
             breath_tick = (breath_tick + 1) % 32;
             redraw = true;
         }
+        // 警告注册表 poll (2026-09-09): /run/aginx-warn/ 非空 → idle 面中屏
+        // 红警。变化才重画；结果页持帧期间不抢（结果页不超时）。
+        if matches!(mode, Mode::Idle)
+            && !voice.doc.result
+            && last_warn_poll.elapsed() >= Duration::from_secs(2)
+        {
+            last_warn_poll = Instant::now();
+            let now = read_warnings();
+            if now != warns {
+                warns = now;
+                redraw = true;
+            }
+        }
 
         // while blanked the framebuffer is not scanned out — skip render
         // and present entirely (pty keeps draining above, output renders
@@ -2604,7 +2689,7 @@ fn main() {
                         direct = true;
                     } else {
                         let level = if breath_tick <= 16 { breath_tick } else { 32 - breath_tick };
-                        render_prompt(&r, buf, &voice, level);
+                        render_prompt(&r, buf, &voice, level, &warns);
                     }
                 }
                 Mode::Eye => {
@@ -2802,6 +2887,87 @@ mod tests {
         let mut pixn = vec![0u32; w * h];
         r.prompt(&mut pixn, text, 22, None);
         assert_eq!(at(&pixn, 455, 257), 0x00020503, "None = no cursor");
+    }
+
+    /// 警告注册表 (2026-09-09) golden: non-empty registry → red AginxOS
+    /// wordmark at bootcard's anchor (centered, y=h*45/100=1053, scale 13)
+    /// + one red line per warning file below it; the top-anchor cursor
+    /// keeps breathing green — the two zones coexist, palette grows by
+    /// exactly one color.
+    #[test]
+    fn warn_zone_red_wordmark_and_lines() {
+        let font = font::font_init();
+        let (w, h) = (1080usize, 2340usize); // D14-exempt: fixture panel geometry
+        let r = Render { font: &font, w, h, pitch: w };
+        let at = |pix: &[u32], x: usize, y: usize| pix[y * w + x];
+        let mut pix = vec![0u32; w * h];
+        r.prompt(&mut pix, "", 0, Some(16));
+        r.warn(&mut pix, &["无网络 · 自动重连中".to_string()]);
+        // wordmark band (y=1053..1157, x=267..813): red ink present
+        let mut red = 0;
+        for y in 1053..1157 {
+            for x in 267..813 {
+                if at(&pix, x, y) == 0x00FF3B30 {
+                    red += 1;
+                }
+            }
+        }
+        assert!(red > 500, "wordmark red ink too sparse: {red}");
+        assert_eq!(at(&pix, 95, 190), 0x0000FF41, "top-anchor cursor untouched");
+        // one red warning line below (y=1217..1257, scale 5 = transcript cell)
+        let mut line = 0;
+        for y in 1217..1257 {
+            for x in 0..w {
+                if at(&pix, x, y) == 0x00FF3B30 {
+                    line += 1;
+                }
+            }
+        }
+        assert!(line > 200, "warning line red ink too sparse: {line}");
+        for &p in &pix {
+            assert!(
+                matches!(p, 0x00020503 | 0x0000FF41 | 0x00FF3B30),
+                "palette {p:#010x} — BG + green + warn red only"
+            );
+        }
+        // multiple warnings stack a row each (second line at y=1281..1321)
+        let mut pix2 = vec![0u32; w * h];
+        r.prompt(&mut pix2, "", 0, None);
+        r.warn(
+            &mut pix2,
+            &["无网络 · 自动重连中".to_string(), "电量低".to_string()],
+        );
+        let mut line2 = 0;
+        for y in 1281..1321 {
+            for x in 0..w {
+                if at(&pix2, x, y) == 0x00FF3B30 {
+                    line2 += 1;
+                }
+            }
+        }
+        assert!(line2 > 100, "second warning stacks below the first: {line2}");
+    }
+
+    /// 警告注册表 reader: sorted by filename (= source tag), first line
+    /// only, empty files / subdirs / missing dir read as nothing.
+    #[test]
+    fn warn_registry_reader_sorts_and_trims() {
+        use std::fs;
+        let dir = std::env::temp_dir().join(format!("aginx-warn-test-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(dir.join("net"), "无网络 · 自动重连中\n").unwrap();
+        fs::write(dir.join("battery"), "电量低\n第二行不该上屏\n").unwrap();
+        fs::write(dir.join("empty"), "\n").unwrap();
+        fs::create_dir_all(dir.join("asubdir")).unwrap();
+        let warns = read_warnings_dir(&dir.to_string_lossy());
+        assert_eq!(
+            warns,
+            vec!["电量低".to_string(), "无网络 · 自动重连中".to_string()],
+            "battery < net lexicographically; second line trimmed; empty dropped"
+        );
+        fs::remove_dir_all(&dir).unwrap();
+        assert!(read_warnings_dir("/nonexistent-aginx-warn").is_empty(), "missing dir = no warnings");
     }
 
     // ---- ①a 账本恢复 ----
