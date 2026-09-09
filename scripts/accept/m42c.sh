@@ -10,7 +10,7 @@
 #          → AGINXPAIR1 五段 payload round-trip（JPEG 进——设备只解 JPEG）
 #   B 协议  --inject 你好（地板词表）/ --inject 状态 / --inject 连网（已
 #          连网 → 「网已连」，不碰 wifi.conf）/ face 新 schema（无
-#          list/psk 段、hint 带对码、state=idle）
+#          list/psk/hint 段——hint v4 退役，自举入口改走应答行、state=idle）
 #   B2 面法 关机/重启口令闸（09-07）：未设口令=fail-closed 拒绝话术；
 #          fixture 口令 + 错口令×3 → 三错作废。口令值是套件字面量（同
 #          host 测试的 p4ss w0rd!），真口令永不进脚本；口令尝试不上脸
@@ -68,6 +68,12 @@ fi
 drv "ip -4 addr show wlan0 | grep -q inet"
 expect_rc "设备在网（连网 inject 走 Up 快路，不碰 conf）"
 
+# voice 的家随世界不同：全量镜像烤在 /usr/bin，蛋世界是包管的 /var/bin
+# （体系包装的）。两条世界都跑这条套件——按在位者解析，谁都别硬编码。
+drv 'V=$([ -x /usr/bin/aginx-voice ] && echo /usr/bin/aginx-voice || echo /var/bin/aginx-voice); test -x "$V" && echo "$V"'
+VOICE="${DRV_OUT:-}"
+[ -n "$VOICE" ] || { echo "m42c: aginx-voice 不在 /usr/bin 也不在 /var/bin"; exit 1; }
+
 echo "==> A 铸解（fixture 配对码：host 铸 → 设备解 → 五段 round-trip）"
 MINT_OUT="$(cd "$WORK" && "$PAIR" \
   --ssid aginx-m42c-fixture \
@@ -93,36 +99,37 @@ echo "==> B 协议（命令优先 inject 冒烟：地板/状态/连网/face 新 
 drv "cp $FACE $FACEBAK 2>/dev/null; ls $FACEBAK"
 expect_rc "face 快照（EXIT 归还原位）"
 
-drv "/usr/bin/aginx-voice --inject 你好; sleep 1; /usr/bin/aginx-voice --face"
+drv "$VOICE --inject 你好; sleep 1; $VOICE --face"
 expect_out "地板词表应答（我在）"            '我在'
 expect_out "state=idle（无驻留态状态机）"    '"state":"idle"'
 expect_no  "face 无 list 段（新 schema）"    '"list"'
 expect_no  "face 无 psk 段（新 schema）"     '"psk"'
-expect_out "提示语带对码（一眼自举）"        '对码'
+expect_no  "face 无 hint 段（v4 退役）"    '"hint"'
+expect_out "应答带自举入口（说扫码）"      '说扫码'
 
-drv "/usr/bin/aginx-voice --inject 状态; sleep 1; /usr/bin/aginx-voice --face"
+drv "$VOICE --inject 状态; sleep 1; $VOICE --face"
 expect_out "状态话术（电池）"                '电池'
 expect_out "状态报网已连"                    '网已连'
 
-drv "/usr/bin/aginx-voice --inject 连网; sleep 1; /usr/bin/aginx-voice --face"
+drv "$VOICE --inject 连网; sleep 1; $VOICE --face"
 expect_out "连网在已连网设备=网已连（不问不扫）" '网已连'
 expect_no  "连网未触发表态流程（无对码话）"   '对准配对码'
 
 echo "==> B2 面法口令闸（fail-closed / 三错作废；口令=套件 fixture 字面量）"
 # 未设口令（adb shell 无 env_file → AGINX_POWER_KEY 缺席）：词收下、闸不开
-drv "/usr/bin/aginx-voice --inject 关机; sleep 1; /usr/bin/aginx-voice --face"
+drv "$VOICE --inject 关机; sleep 1; $VOICE --face"
 expect_out "未设口令=fail-closed 拒绝话术"      '关机需要口令，口令还没设置。'
 expect_no  "未设口令不开闸（无 请说口令）"      '请说口令'
 
 # 错口令×3 → 作废回 Idle；口令尝试原文不上脸（psk 同律）。
 # v4② 话术断言走 stderr 日志（say/speak 行）+ 脸终值，不再丢 stderr。
-drv "printf '关机\n第一遍错的\n第二遍错的\n第三遍错的\n' | AGINX_POWER_KEY=面法五号口令 /usr/bin/aginx-voice --script >/dev/null; sleep 1; /usr/bin/aginx-voice --face"
+drv "printf '关机\n第一遍错的\n第二遍错的\n第三遍错的\n' | AGINX_POWER_KEY=面法五号口令 $VOICE --script >/dev/null; sleep 1; $VOICE --face"
 expect_out "进过口令等待（请说口令）"            '请说口令。'
 expect_out "三错作废水术"                       '口令三次不对，已取消。'
 expect_no  "口令尝试原文不上脸（psk 同律）"     '第一遍错的'
 
 echo "==> C 面法末查（口令对 → PowerExec → 真重启 → 回来即收据）"
-drv "printf '重启\n面法五号口令\n' | AGINX_POWER_KEY=面法五号口令 /usr/bin/aginx-voice --script >/dev/null 2>&1 || true"
+drv "printf '重启\n面法五号口令\n' | AGINX_POWER_KEY=面法五号口令 $VOICE --script >/dev/null 2>&1 || true"
 sleep 3
 # 有界等回 adb（5 分钟；macOS 无 timeout，靠 get-state 轮询）
 BACK=0
