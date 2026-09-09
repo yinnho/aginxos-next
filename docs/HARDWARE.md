@@ -2063,3 +2063,42 @@ seek=16777216 count=1 conv=notrunc，mirror state-restore 自己的姿势），
 
 **收尾态**：/usr/bin/aginx-update 为 C9 版（三树排除在役）；
 aginx-ocr 包在装（惰性，voice 仍用烤机真身模型）；其余未动。
+
+## 2026-09-09 C10 蛋烤（EGG=1 首颗）——152M 出像，两档互证
+
+`EGG=1 ./scripts/build-rootfs.sh`（macOS host）：出像 **152M**（tree 86M；
+全量档同源对照烤 664M/tree 含模型），剥后树 `aginx commands --check`
+**20 commands OK**（全量 24——差 4 = voice/asr/tts/ocr 四张剥除面）。
+
+**蛋形收据**（/tmp/aginxos-n4-rootfs 逐项 ls/grep）：
+- `/usr/libexec/aginx/` 仅 svcd + net-watch + net-rejoin；八剥件
+  （server/runtime/gateway/secretd/voice/asr/tts/ocr）在 usr/bin、
+  libexec、var/bin 三处全无。
+- `/var/models/{asr, ocr, tts/vits-melo-tts-zh_en}` 三条 **dangling
+  symlink** → pkgfiles 未来真身（装包前 `test -e` 恒假，哑终端无害）。
+- svc.d 四单元 `cmd` 全 `/var/bin/<name>`；server 单元
+  `AGINX_RUNTIME_BIN=/var/bin/aginx-runtime` 已翻；
+  `AGINX_BIN`/`VOICED_FRONT` 仍 `/usr/bin/aginx`（router 在蛋里）。
+- 版本戳 `aginxos redfin 532cb27 2026-09-09 egg`（尾缀 = n6 蛋形预检）。
+- **EGG manifest**：基础清单 + 8 行 core 附加（sha 读 out/pkgs 产物，
+  asr 为 SKILL.md 更新后重打包的新 sha 51cc73c4…；server 带
+  `aginx-runtime` 依赖列、voice 带 asr,tts,ocr 三依赖），aginx-sign
+  签名 + verify 过；调试副本 out/pkgs/agpkg.core.add。
+
+**两处烤中修正**：① 首烤发现孤儿 sidecar——配方 `usr/bin/aginx-voice
+.aginxmd` + `var/bin/aginx-{asr,tts,ocr}.aginxmd` 在蛋块剥除后又被
+:428-430 配方拷贝段灌回（顺序：蛋块 → 配方 usr/bin/var/bin 拷贝），
+剥除挪到配方拷贝之后才真出蛋（复烤 ls 复核 var/bin 仅剩
+aginx-web.aginxmd——aginx-web 桥壳在蛋里，sidecar 合法）。② asr tar
+骑旧 SKILL.md（C9 改文在 C8 打包之后）——重跑 build-pkg aginx-asr
+出新 sha 后才组清单（build 门：recipe bump 不重打包 → sha 文件名对
+不上 → die，此机制即为此类事故设）。
+
+**flash-redfin SKIP_STATE=1 闸**（C10）：GO 路径机会式 capture 包进
+`[ -n "${SKIP_STATE:-}" ]` 门——蛋刷机日 `SKIP_STATE=1 GO=1` 出厂形状
+（无 marker、首启无 state-restore、扫码配网起步）；常规刷机日照常
+capture。bash -n 两脚本过。
+
+**收尾态**：out/rootfs.img = 蛋像（152M du）待 C11 刷机；
+out/rootfs-full-check.img = 全量对照烤（验 EGG=0 无回归，可删）。
+设备未动（在役 b399b7b slot _b + C9 updater）。
