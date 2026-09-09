@@ -552,6 +552,10 @@ enum Mode {
     /// prior mode is boxed away and restored. Pure display; close keys
     /// are physical (音量+ toggles, 音量下 closes).
     Eye,
+    /// 软件清单面 (C7, 蛋的安装入口): manifest×stamps×bindir 行集 + 翻页 +
+    /// 点击催装。job 槽在 main()（auto 触发与手动点击同一条单飞），面的
+    /// 状态行读 install_line（idle 面同源）。
+    Install(InstallView),
 }
 
 // ---------------- voice face ----------------
@@ -1182,7 +1186,7 @@ impl<'a> Render<'a> {
     }
 
     /// C6 底部双目标条（未配对蛋面的入口）：y∈[h-200,h-60] 高 140，左=
-    /// 扫码配网（GREEN，本面）、右=软件清单（UNAVAIL 占位——C7 接线）。
+    /// 扫码配网（GREEN，本面）、右=软件清单（GREEN，C7 Mode::Install）。
     /// 命中几何 `pair_bar_hit` 用同一套数字（测试钉住）。
     fn pair_bar(&self, pix: &mut [u32]) {
         let (w, h) = (self.w, self.h);
@@ -1204,7 +1208,85 @@ impl<'a> Render<'a> {
             draw_text(pix, self.pitch, w, h, self.font, tx, ty, label, bs, c);
         };
         cell(60, (w / 2 - 30) as i32, "扫码配网", GREEN);
-        cell((w / 2 + 30) as i32, (w - 60) as i32, "软件清单", UNAVAIL);
+        cell((w / 2 + 30) as i32, (w - 60) as i32, "软件清单", GREEN);
+    }
+
+    /// C7 软件清单面：picker 同款行几何，行 = 名 + v版本 + 右对齐状态标
+    /// （✓=就绪 DIM / 装·更新·选装=GREEN 可点）。翻页条只在多页时画
+    /// （几何与 `install_page_hit` 同一套数字）。状态行优先级：job 进度
+    /// 行 > 无网提示（有未完成行时）> 全部就绪 / 点击提示。
+    fn install_list(
+        &self,
+        pix: &mut [u32],
+        v: &InstallView,
+        status: Option<&str>,
+        net_ok: bool,
+        g: &launch::Geom,
+    ) {
+        fill_rect(pix, self.pitch, self.w, self.h, 0, 0, self.w as i32, self.h as i32, BG);
+        self.toolbar(pix, g.m, g.toolbar_h);
+        draw_centered(pix, self.pitch, self.w, self.h, self.font, g.toolbar_h as i32 + 14, "软件清单", 5, GREEN);
+        let pending = v.rows.iter().any(|r| r.state != RowState::Ready);
+        if v.rows.is_empty() {
+            draw_centered(pix, self.pitch, self.w, self.h, self.font, (self.h as i32 - 24) / 2, "(无清单)", 3, UNAVAIL);
+        }
+        let start = v.page * INSTALL_ROWS_PAGE;
+        for (i, row) in v.rows.iter().skip(start).take(INSTALL_ROWS_PAGE).enumerate() {
+            let y0 = (g.by0 + i * (g.bh + g.gap)) as i32;
+            fill_rect(pix, self.pitch, self.w, self.h, g.bx as i32, y0, g.bw as i32, 3, DIM);
+            fill_rect(pix, self.pitch, self.w, self.h, g.bx as i32, y0 + g.bh as i32 - 3, g.bw as i32, 3, DIM);
+            fill_rect(pix, self.pitch, self.w, self.h, g.bx as i32, y0, 3, g.bh as i32, DIM);
+            fill_rect(pix, self.pitch, self.w, self.h, (g.bx + g.bw - 3) as i32, y0, 3, g.bh as i32, DIM);
+            let ty = y0 + (g.bh as i32 - 8 * 5) / 2;
+            // 名（截尾防溢出）+ v版本（DIM）+ 右对齐状态标
+            let name: String = row.name.chars().take(16).collect();
+            draw_text(pix, self.pitch, self.w, self.h, self.font, g.bx as i32 + 30, ty, &name, 5, GREEN);
+            if let Some(ver) = &row.version {
+                let vs = format!("v{ver}");
+                let vw = text_w(&vs, 3) as i32;
+                let nw = text_w(&name, 5) as i32;
+                // 挤到状态标就丢版本（名是真源，版本是装饰）
+                let vx = g.bx as i32 + 40 + nw;
+                if vx + vw < (g.bx + g.bw - 160) as i32 {
+                    draw_text(pix, self.pitch, self.w, self.h, self.font, vx, ty + 16, &vs, 3, DIM);
+                }
+            }
+            let (tag, tc) = match row.state {
+                RowState::Ready => ("✓", DIM),
+                RowState::Stale => ("更新", GREEN),
+                RowState::Missing => ("装", GREEN),
+                RowState::OptReady => ("选装", GREEN),
+            };
+            let tw = text_w(tag, 4) as i32;
+            draw_text(pix, self.pitch, self.w, self.h, self.font, (g.bx + g.bw - 40) as i32 - tw, ty + 8, tag, 4, tc);
+        }
+        // 翻页条（多页才有）：<格 | 页码 | >格——几何 install_page_hit 同数
+        let pages = v.pages();
+        if pages > 1 {
+            let y0 = g.kb_panel_y.saturating_sub(150) as i32;
+            let mut cell = |x0: i32, x1: i32, label: &str, c: u32| {
+                fill_rect(pix, self.pitch, self.w, self.h, x0, y0, x1 - x0, 80, KEYCAP);
+                fill_rect(pix, self.pitch, self.w, self.h, x0, y0, x1 - x0, 2, DIM);
+                fill_rect(pix, self.pitch, self.w, self.h, x0, y0 + 78, x1 - x0, 2, DIM);
+                let tw = text_w(label, 4) as i32;
+                draw_text(pix, self.pitch, self.w, self.h, self.font, x0 + ((x1 - x0) - tw) / 2, y0 + (80 - 8 * 4) / 2, label, 4, c);
+            };
+            let pc = if v.page == 0 { DIM } else { GREEN };
+            let nl = if v.page + 1 >= pages { DIM } else { GREEN };
+            cell(60, 300, if v.page == 0 { "·" } else { "<" }, pc);
+            cell((self.w - 300) as i32, (self.w - 60) as i32, if v.page + 1 >= pages { "·" } else { ">" }, nl);
+            let mid = format!("{} / {}", v.page + 1, pages);
+            let mw = text_w(&mid, 3) as i32;
+            draw_text(pix, self.pitch, self.w, self.h, self.font, (self.w as i32 - mw) / 2, y0 + (80 - 8 * 3) / 2, &mid, 3, pc);
+        }
+        // 状态行（picker 脚注位）
+        let (line, lc) = match status {
+            Some(s) => (s.to_string(), GREEN),
+            None if !net_ok && pending => ("无网络 · 连网后自动安装".to_string(), UNAVAIL),
+            None if !pending => ("全部就绪".to_string(), GREEN),
+            _ => ("点击行催装".to_string(), UNAVAIL),
+        };
+        draw_centered(pix, self.pitch, self.w, self.h, self.font, g.kb_panel_y as i32 - 40, &line, 3, lc);
     }
 
     /// 眼视图 (面法 09-07, was the M42g eye branch of the voice face):
@@ -1609,7 +1691,7 @@ const TEYE_QR_EVERY: Duration = Duration::from_millis(400);
 const PAIR_JOB_BUDGET: Duration = Duration::from_secs(300);
 
 /// C6 底部双目标条（未配对蛋面的入口）：左=扫码配网（本条）、右=软件
-/// 清单（C7 接线——C6 只画占位，点按无动作）。几何与 `Render::pair_bar` /
+/// 清单（C7 开 Mode::Install——蛋的安装入口）。几何与 `Render::pair_bar` /
 /// `pair_bar_hit` 同一套数字（测试钉住）。条画在键盘带——idle 面 kb 恒
 /// 隐藏，那里本是死区，不与任何既有触摸目标重叠。
 enum PairBar {
@@ -1786,16 +1868,176 @@ fn spawn_pair_apply(payload: &str) -> Option<PairJob> {
 }
 
 /// idle 面状态行的所有权（纯函数）：voice 在 → 它的面（term 状态行让位，
-/// 同 selfnet 让位律）；否则 配网行（String）> selfnet 静态行 > None。
+/// 同 selfnet 让位律）；否则 配网行（String）> 装软件行 > selfnet 静态行
+/// > None。装软件行压过 selfnet：配网刚成的靴上 sync 是当下的事。
 fn idle_status(
     voice_alive: bool,
     pair_line: &Option<String>,
+    install_line: &Option<String>,
     selfnet_line: Option<&'static str>,
 ) -> Option<String> {
     if voice_alive {
         return None;
     }
-    pair_line.clone().or_else(|| selfnet_line.map(|s| s.to_string()))
+    pair_line
+        .clone()
+        .or_else(|| install_line.clone())
+        .or_else(|| selfnet_line.map(|s| s.to_string()))
+}
+
+// ---------------- C7: 软件清单面（蛋的安装入口） ----------------
+
+/// 判等用路径（pkg Paths 同款真值；不走 env 覆写——显示面读真源）。
+const MANIFEST_PATH: &str = "/etc/agpkg.manifest";
+const STAMPS_DIR: &str = "/var/lib/aginx/stamps";
+const PKG_BINDIR: &str = "/var/bin";
+/// 行 UI 每页行数（picker 同上限——Geom 行算术无符号，滚动分页顶替）。
+const INSTALL_ROWS_PAGE: usize = 12;
+/// 面开着时的行刷新节拍（manifest/stamps 都是小文件，读真源不缓存）。
+const INSTALL_REFRESH: Duration = Duration::from_secs(5);
+/// aginx-pkg job 挂死保险：首拉 8 包 ~700MB 国内镜像 ~10min，30min 才 kill。
+const INSTALL_JOB_BUDGET: Duration = Duration::from_secs(1800);
+
+#[derive(PartialEq, Clone, Copy, Debug)]
+enum RowTier {
+    Core,
+    Opt,
+}
+
+/// 行四态：就绪（stamp 等且真身在）/ 待更（真身在 stamp 不等）/ 缺装
+/// （core 没真身）/ 选装（opt 没真身——opt-in 装）。
+#[derive(PartialEq, Clone, Copy, Debug)]
+enum RowState {
+    Ready,
+    Stale,
+    Missing,
+    OptReady,
+}
+
+#[derive(PartialEq, Debug)]
+struct InstallRow {
+    name: String,
+    version: Option<String>,
+    tier: RowTier,
+    state: RowState,
+}
+
+/// 清单行（纯函数，判等法照 pkg cmd_sync：stamp==sha 且真身在 = up to
+/// date）。**不做** sync 的二进制自哈希复活（对 239MB 的 asr 哈希会把
+/// 渲染循环冻住）——显示面只看 stamp+存在性，真判等归 `aginx-pkg sync`；
+/// manifest 直读文本不验签（sig 门归 aginx-pkg）。坏行跳过不炸面。
+fn install_rows(
+    manifest_text: &str,
+    stamps_dir: &std::path::Path,
+    bindir: &std::path::Path,
+) -> Vec<InstallRow> {
+    let mut rows = Vec::new();
+    for raw in manifest_text.lines() {
+        let l = raw.trim();
+        if l.is_empty() || l.starts_with('#') {
+            continue;
+        }
+        let f: Vec<&str> = l.split_whitespace().collect();
+        if f.len() < 3 {
+            continue;
+        }
+        let tier = if f.get(3) == Some(&"opt") { RowTier::Opt } else { RowTier::Core };
+        let version = f.get(4).filter(|v| !v.is_empty()).map(|v| v.to_string());
+        let bin = bindir.join(f[0]);
+        let stamp = std::fs::read_to_string(stamps_dir.join(f[0]))
+            .ok()
+            .map(|s| s.trim().to_string());
+        let state = if bin.exists() && stamp.as_deref() == Some(f[2]) {
+            RowState::Ready
+        } else if tier == RowTier::Opt {
+            RowState::OptReady
+        } else if bin.exists() {
+            RowState::Stale
+        } else {
+            RowState::Missing
+        };
+        rows.push(InstallRow { name: f[0].to_string(), version, tier, state });
+    }
+    rows
+}
+
+/// 设备真源读一行集（auto 触发门与面刷新共用）。
+fn device_install_rows() -> Vec<InstallRow> {
+    let manifest = std::fs::read_to_string(MANIFEST_PATH).unwrap_or_default();
+    install_rows(&manifest, std::path::Path::new(STAMPS_DIR), std::path::Path::new(PKG_BINDIR))
+}
+
+/// 装软件 job（C7）：`aginx-pkg sync` / `opt-in <name>` 异步单飞。auto
+/// 触发与清单面点击共用这一个槽——同一引擎无旁路（provision resync 的
+/// 配网当靴补跑）。
+struct InstallJob {
+    child: std::process::Child,
+    since: Instant,
+}
+
+fn spawn_install_job(args: &[&str]) -> Option<InstallJob> {
+    match std::process::Command::new(launch::BIN_AGINX_PKG)
+        .args(args)
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+    {
+        Ok(child) => Some(InstallJob { child, since: Instant::now() }),
+        Err(e) => {
+            eprintln!("aginx-term: aginx-pkg spawn: {e}");
+            None
+        }
+    }
+}
+
+/// 清单面状态（Mode::Install 的负载）：行集 + 页码。状态行不在此——
+/// job 进度是 main() 的 install_line（idle 面与清单面同源）。
+struct InstallView {
+    rows: Vec<InstallRow>,
+    page: usize,
+    last_refresh: Instant,
+}
+
+impl InstallView {
+    fn new() -> InstallView {
+        InstallView { rows: device_install_rows(), page: 0, last_refresh: Instant::now() }
+    }
+
+    fn refresh(&mut self) -> bool {
+        let rows = device_install_rows();
+        if rows == self.rows {
+            return false;
+        }
+        self.rows = rows;
+        // 页码夹回有效域（行数缩了不悬空）
+        let pages = self.pages();
+        if self.page >= pages {
+            self.page = pages.saturating_sub(1);
+        }
+        true
+    }
+
+    fn pages(&self) -> usize {
+        self.rows.len().div_ceil(INSTALL_ROWS_PAGE)
+    }
+}
+
+/// 翻页条命中：Some(-1)=上一页、Some(1)=下一页（条画在 kb_panel_y-150
+/// 高 80，左右各 240px 格；几何与 `Render::install_list` 同一套数字，
+/// 测试钉住）。
+fn install_page_hit(x: usize, y: usize, w: usize, kb_panel_y: usize) -> Option<i32> {
+    let y0 = kb_panel_y.saturating_sub(150);
+    if y >= y0 && y < y0 + 80 {
+        if x >= 60 && x < 300 {
+            Some(-1)
+        } else if x >= w.saturating_sub(300) && x < w.saturating_sub(60) {
+            Some(1)
+        } else {
+            None
+        }
+    } else {
+        None
+    }
 }
 
 /// The prompt face's render (开机剧情 v4): the transcript typewriter face.
@@ -2223,6 +2465,13 @@ fn main() {
     let mut term_eye: Option<TermEye> = None;
     let mut pair_line: Option<String> = None;
     let mut pair_job: Option<PairJob> = None;
+    // C7 装软件 job 槽（单飞）：auto 触发与清单面点击共用同一条引擎。
+    // install_line 是 idle 面与清单面共用的状态行；install_auto 只点火一次
+    // ——把 provision resync 在配网当靴补跑（蛋首启 provision 早退在
+    // wifi fail，配网成功后由这里接管安装承诺）。
+    let mut install_job: Option<InstallJob> = None;
+    let mut install_line: Option<String> = None;
+    let mut install_auto = false;
     // 面法: mode boxed away while Mode::Eye has the screen — restored on
     // eye close; None (boot straight into the eye) → Idle.
     let mut mode_before_eye: Option<Box<Mode>> = None;
@@ -2282,9 +2531,12 @@ fn main() {
                 &voice,
                 16,
                 &warns,
-                idle_status(voice.alive, &pair_line, selfnet.line).as_deref(),
+                idle_status(voice.alive, &pair_line, &install_line, selfnet.line).as_deref(),
             ),
             Mode::Eye => r.eye(buf, &voice, &lg),
+            Mode::Install(v) => {
+                r.install_list(buf, v, install_line.as_deref(), boot_state_has_internet(), &lg)
+            }
             Mode::Running(_) => {
                 fill_rect(buf, pitch, w, h, 0, 0, w as i32, h as i32, BG);
                 r.toolbar(buf, lg.m, lg.toolbar_h);
@@ -2473,7 +2725,7 @@ fn main() {
                             }
                             if y < lg.toolbar_h {
                                 // BACK fires on press, same as keys
-                                if lg.toolbar_hit(x, y, matches!(mode, Mode::Running(_) | Mode::Picker | Mode::Photos(_) | Mode::Launcher))
+                                if lg.toolbar_hit(x, y, matches!(mode, Mode::Running(_) | Mode::Picker | Mode::Photos(_) | Mode::Install(_) | Mode::Launcher))
                                     == Some(launch::Toolbar::Back)
                                 {
                                     if let Mode::Running(c) = &mode {
@@ -2488,6 +2740,9 @@ fn main() {
                                         } else {
                                             mode = Mode::Launcher;
                                         }
+                                    } else if matches!(mode, Mode::Install(_)) {
+                                        // C7 清单面：BACK 回待机面
+                                        mode = Mode::Idle;
                                     } else if matches!(mode, Mode::Launcher) {
                                         // 面法: launcher is a debug face —
                                         // BACK is the exit back to 待机面
@@ -2529,6 +2784,10 @@ fn main() {
                                             redraw = true;
                                         } else if entries[i2].photos {
                                             mode = Mode::Photos(photos::Photos::scan());
+                                            redraw = true;
+                                        } else if entries[i2].install {
+                                            // C7 调试入口：INSTALL 瓦片开清单面
+                                            mode = Mode::Install(InstallView::new());
                                             redraw = true;
                                         } else if entries[i2].avail {
                                             let prog = entries[i2].bin.as_str();
@@ -2603,6 +2862,42 @@ fn main() {
                                             entries = launch::entries();
                                             pkgs = read_available();
                                             redraw = true;
+                                        }
+                                    }
+                                } else if let Mode::Install(v) = &mut mode {
+                                    // C7 清单面：翻页条优先（条在 kb_panel_y-150，
+                                    // 与行区不重叠）；行点按按态分诊催装（单飞槽，
+                                    // job 在跑就只重画）。Ready 不点。
+                                    if let Some(dp) = install_page_hit(x, y, w, lg.kb_panel_y) {
+                                        let pages = v.pages();
+                                        let np =
+                                            ((v.page as isize + dp as isize).clamp(0, pages as isize - 1)) as usize;
+                                        if np != v.page {
+                                            v.page = np;
+                                            redraw = true;
+                                        }
+                                    } else if let Some(i2) = lg.button_at(x, y, INSTALL_ROWS_PAGE) {
+                                        if let Some(row) = v.rows.get(v.page * INSTALL_ROWS_PAGE + i2) {
+                                            match row.state {
+                                                RowState::Missing | RowState::Stale => {
+                                                    if install_job.is_none()
+                                                        && spawn_install_job(&["sync"]).is_some()
+                                                    {
+                                                        install_line = Some("同步中…".into());
+                                                    }
+                                                    redraw = true;
+                                                }
+                                                RowState::OptReady => {
+                                                    let name = row.name.clone();
+                                                    if install_job.is_none()
+                                                        && spawn_install_job(&["opt-in", &name]).is_some()
+                                                    {
+                                                        install_line = Some(format!("装 {name} 中…"));
+                                                    }
+                                                    redraw = true;
+                                                }
+                                                RowState::Ready => {}
+                                            }
                                         }
                                     }
                                 } else if let Mode::Photos(p) = &mut mode {
@@ -2680,38 +2975,45 @@ fn main() {
                             }
                             // C6 未配对蛋面入口：双目标条画在键盘带（idle
                             // 面 kb 恒隐藏，那里本是死区）。左格=扫码配网；
-                            // 右格=软件清单（C7 接线，先占位无动作）。
+                            // 右格=软件清单（C7 开 Mode::Install）。
                             if matches!(mode, Mode::Idle)
                                 && pair_bar_visible(
                                     voice.alive,
                                     std::path::Path::new(WIFI_CONF_PATH).exists(),
                                 )
                             {
-                                if let Some(PairBar::Scan) = pair_bar_hit(x, y, w, h) {
-                                    // 配网 job 在跑 → 单飞让路（「配网中…」
-                                    // 行已在陈述状态）
-                                    if pair_job.is_none() {
-                                        // paint-first：第一帧 ~2s 在路上，
-                                        // 「取景中…」先上屏再开相机
-                                        {
-                                            let r = Render { font: &font, w, h, pitch };
-                                            r.eye(&mut canvas[..], &voice, &lg);
-                                            d.back_buf().copy_from_slice(&canvas);
-                                            d.present();
-                                        }
-                                        match term_eye_spawn() {
-                                            Ok(te) => {
-                                                term_eye = Some(te);
-                                                mode = Mode::Eye;
-                                                redraw = true;
+                                match pair_bar_hit(x, y, w, h) {
+                                    Some(PairBar::Scan) => {
+                                        // 配网 job 在跑 → 单飞让路（「配网中…」
+                                        // 行已在陈述状态）
+                                        if pair_job.is_none() {
+                                            // paint-first：第一帧 ~2s 在路上，
+                                            // 「取景中…」先上屏再开相机
+                                            {
+                                                let r = Render { font: &font, w, h, pitch };
+                                                r.eye(&mut canvas[..], &voice, &lg);
+                                                d.back_buf().copy_from_slice(&canvas);
+                                                d.present();
                                             }
-                                            Err(e) => {
-                                                eprintln!("aginx-term: eye spawn {e}");
-                                                pair_line = Some("相机没起来，再试一次。".into());
-                                                redraw = true;
+                                            match term_eye_spawn() {
+                                                Ok(te) => {
+                                                    term_eye = Some(te);
+                                                    mode = Mode::Eye;
+                                                    redraw = true;
+                                                }
+                                                Err(e) => {
+                                                    eprintln!("aginx-term: eye spawn {e}");
+                                                    pair_line = Some("相机没起来，再试一次。".into());
+                                                    redraw = true;
+                                                }
                                             }
                                         }
                                     }
+                                    Some(PairBar::Install) => {
+                                        mode = Mode::Install(InstallView::new());
+                                        redraw = true;
+                                    }
+                                    None => {}
                                 }
                             } else if matches!(mode, Mode::Eye) && term_eye.is_some() {
                                 // C6 自持取景的点按退出（voice 的眼由音量键
@@ -3194,6 +3496,77 @@ fn main() {
                 redraw = true;
             }
         }
+        // ---- C7 装软件 job：auto 触发 + 收割（同 pair_job 形状——每拍
+        // try_wait，绝不阻塞等；预算尽才 kill）。auto 门：net ok 且有
+        // 未完成的 core 行，只点火一次（单飞槽与手动点击同引擎，C2 进程
+        // 锁兜并发）；触发即撤配网行——装软件行接台讲当下的故事。----
+        if install_job.is_none() && !install_auto && boot_state_has_internet() {
+            install_auto = true;
+            let rows = device_install_rows();
+            if rows.iter().any(|r| r.tier == RowTier::Core && r.state != RowState::Ready) {
+                eprintln!("aginx-term: net ok, core pending — auto sync");
+                match spawn_install_job(&["sync"]) {
+                    Some(job) => {
+                        install_job = Some(job);
+                        install_line = Some("正在装软件…".into());
+                        pair_line = None;
+                    }
+                    None => install_line = Some("安装没起来，去清单面再试。".into()),
+                }
+            }
+        }
+        if let Some(mut job) = install_job.take() {
+            let mut done = false;
+            let mut ok = false;
+            match job.child.try_wait() {
+                Ok(Some(st)) => {
+                    done = true;
+                    ok = st.success();
+                    if ok {
+                        let mut out = String::new();
+                        if let Some(mut r) = job.child.stdout.take() {
+                            let _ = std::io::Read::read_to_string(&mut r, &mut out);
+                        }
+                        // 末行：sync 全程打多行进度，收官行是结论（pair_job
+                        // 收首行——那边 apply 只出一行）
+                        let line = out
+                            .lines()
+                            .rev()
+                            .find(|l| !l.trim().is_empty())
+                            .map(|l| l.trim().to_string());
+                        install_line = Some(
+                            line.filter(|l| !l.is_empty())
+                                .unwrap_or_else(|| "软件装好了。".into()),
+                        );
+                    } else {
+                        eprintln!("aginx-term: pkg job exit {}", st.code().unwrap_or(-1));
+                    }
+                }
+                Ok(None) => {
+                    if job.since.elapsed() >= INSTALL_JOB_BUDGET {
+                        eprintln!("aginx-term: pkg job budget over — kill");
+                        let _ = job.child.kill();
+                        let _ = job.child.wait();
+                        done = true;
+                    } else {
+                        install_job = Some(job); // 还在拉
+                    }
+                }
+                Err(_) => {
+                    done = true;
+                }
+            }
+            if done {
+                if !ok {
+                    install_line = Some("安装没成，再试一次。".into());
+                }
+                // 面开着 → 行集重读（stamps 刚落）
+                if let Mode::Install(v) = &mut mode {
+                    v.refresh();
+                }
+                redraw = true;
+            }
+        }
         // M47⑤t: park on {0..5} while the eye streams, full mask when it
         // stops — keyed on the FLAG, any mode (the voice daemon opens and
         // closes the eye with VolUp no matter which view is showing).
@@ -3241,6 +3614,16 @@ fn main() {
         if selfnet.tick(voice.alive) {
             redraw = true;
         }
+        // C7 清单面行刷新：5s 节拍重读真源（manifest/stamps 都是小文件），
+        // 行集变了才重画（页码在 refresh 内夹回有效域）。
+        if let Mode::Install(v) = &mut mode {
+            if v.last_refresh.elapsed() >= INSTALL_REFRESH {
+                v.last_refresh = Instant::now();
+                if v.refresh() {
+                    redraw = true;
+                }
+            }
+        }
 
         // while blanked the framebuffer is not scanned out — skip render
         // and present entirely (pty keeps draining above, output renders
@@ -3286,7 +3669,8 @@ fn main() {
                             &voice,
                             level,
                             &warns,
-                            idle_status(voice.alive, &pair_line, selfnet.line).as_deref(),
+                            idle_status(voice.alive, &pair_line, &install_line, selfnet.line)
+                                .as_deref(),
                         );
                     }
                 }
@@ -3301,6 +3685,10 @@ fn main() {
                         // eye() full-covers the canvas
                         r.eye(buf, &voice, &lg);
                     }
+                }
+                Mode::Install(v) => {
+                    // install_list() full-covers the canvas
+                    r.install_list(buf, v, install_line.as_deref(), boot_state_has_internet(), &lg);
                 }
                 Mode::Running(_) => {
                     r.terminal(buf, &term, area_top, area_bottom(kb_visible) - area_top, scale, blink_on, lg.m);
@@ -3779,20 +4167,102 @@ mod tests {
         assert_eq!(pick_pair_payload(&two).as_deref(), Some(full));
     }
 
-    /// C6 idle 面状态行所有权：voice 在 → None（它的面）；否则 配网行 >
-    /// selfnet 静态行 > None（三层让位链）。
+    /// C6/C7 idle 面状态行所有权：voice 在 → None（它的面）；否则 配网行 >
+    /// 装软件行 > selfnet 静态行 > None（四层让位链）。
     #[test]
     fn idle_status_ownership_chain() {
         let pair = Some("配网中…".to_string());
+        let inst = Some("正在装软件…".to_string());
         let net: Option<&'static str> = Some(SELFNET_WAITING);
         // voice 活着：term 的一切状态行让位
-        assert_eq!(idle_status(true, &pair, net), None);
-        assert_eq!(idle_status(true, &None, net), None);
-        // 配网行压过 selfnet（配网是当下的事，等网是背景）
-        assert_eq!(idle_status(false, &pair, net).as_deref(), Some("配网中…"));
-        // 无配网行 → selfnet 行
-        assert_eq!(idle_status(false, &None, net), Some(SELFNET_WAITING.to_string()));
-        // 都没有 → 无人（transcript 打字机照旧）
-        assert_eq!(idle_status(false, &None, None), None);
+        assert_eq!(idle_status(true, &pair, &inst, net), None);
+        assert_eq!(idle_status(true, &None, &None, net), None);
+        // 配网行压过装软件行（配网是当下的事，装软件等网）
+        assert_eq!(idle_status(false, &pair, &inst, net).as_deref(), Some("配网中…"));
+        // 无配网行 → 装软件行压过 selfnet（刚连上网的靴上 sync 是当下的
+        // 事——auto 触发撤 pair_line 后就是这层在讲）
+        assert_eq!(idle_status(false, &None, &inst, net).as_deref(), Some("正在装软件…"));
+        // 都没有 → selfnet 行
+        assert_eq!(idle_status(false, &None, &None, net), Some(SELFNET_WAITING.to_string()));
+        // 全空 → 无人（transcript 打字机照旧）
+        assert_eq!(idle_status(false, &None, &None, None), None);
+    }
+
+    // ---- C7 软件清单面 ----
+
+    /// install_rows 四态真值（判等法照 pkg cmd_sync：stamp==sha 且真身在
+    /// = up to date）：core+stamp+bin→Ready；core+bin+stamp 不等→Stale；
+    /// core 无 bin→Missing（有 stamp 也不算——真身不在就是缺）；opt 无
+    /// bin→OptReady；opt+bin+stamp→Ready。版本=第 5 列可选；注释/空/坏行
+    /// （<3 字段）跳过不炸面；目录缺失不炸。
+    #[test]
+    fn install_rows_four_states() {
+        let dir = std::env::temp_dir().join(format!("aginx-install-rows-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let stamps = dir.join("stamps");
+        let bindir = dir.join("bin");
+        std::fs::create_dir_all(&stamps).unwrap();
+        std::fs::create_dir_all(&bindir).unwrap();
+        // Ready：stamp 等且真身在
+        std::fs::write(stamps.join("aginx-server"), "aaaa\n").unwrap();
+        std::fs::write(bindir.join("aginx-server"), b"bin").unwrap();
+        // Stale：真身在、stamp 不等
+        std::fs::write(bindir.join("aginx-runtime"), b"bin").unwrap();
+        std::fs::write(stamps.join("aginx-runtime"), "bbbb").unwrap();
+        // Missing：stamp 在（还等）、真身不在——core 缺装
+        std::fs::write(stamps.join("aginx-gateway"), "cccc").unwrap();
+        // OptReady：opt 行无真身
+        std::fs::write(stamps.join("grok"), "dddd").unwrap();
+        // opt+真身+stamp 等 → Ready
+        std::fs::write(stamps.join("codex"), "eeee").unwrap();
+        std::fs::write(bindir.join("codex"), b"bin").unwrap();
+        let m = concat!(
+            "# 蛋的必装清单（sha 是占位假值）\n",
+            "aginx-server https://example.invalid/1 aaaa core 0.9.0\n",
+            "aginx-runtime https://example.invalid/2 rrrr core\n",
+            "aginx-gateway https://example.invalid/3 cccc core 0.2.1\n",
+            "grok https://example.invalid/4 dddd opt\n",
+            "codex https://example.invalid/5 eeee opt 1.0\n",
+            "\n",
+            "badline\n",
+        );
+        let rows = install_rows(m, &stamps, &bindir);
+        let find = |n: &str| rows.iter().find(|r| r.name == n).unwrap();
+        assert_eq!(rows.len(), 5, "comment/blank/bad lines skipped");
+        assert_eq!(find("aginx-server").state, RowState::Ready);
+        assert_eq!(find("aginx-server").tier, RowTier::Core);
+        assert_eq!(find("aginx-server").version.as_deref(), Some("0.9.0"));
+        assert_eq!(find("aginx-runtime").state, RowState::Stale);
+        assert_eq!(find("aginx-runtime").version, None, "missing col 5 = None");
+        assert_eq!(find("aginx-gateway").state, RowState::Missing);
+        assert_eq!(find("grok").state, RowState::OptReady);
+        assert_eq!(find("grok").tier, RowTier::Opt);
+        assert_eq!(find("codex").state, RowState::Ready);
+        assert_eq!(find("codex").version.as_deref(), Some("1.0"));
+        std::fs::remove_dir_all(&dir).unwrap();
+        // 目录全缺不炸：core 无 bin → Missing（蛋首启的真形状）
+        let rows = install_rows(
+            "aginx-server https://x/aaaa core\n",
+            std::path::Path::new("/nonexistent-aginx-stamps"),
+            std::path::Path::new("/nonexistent-aginx-bin"),
+        );
+        assert_eq!(rows[0].state, RowState::Missing);
+    }
+
+    /// C7 翻页条命中几何：y∈[kb_panel_y-150, kb_panel_y-70)（下含上不含），
+    /// 左格 x∈[60,300)=-1、右格 x∈[w-300, w-60)=+1，缝隙/边外 None。
+    #[test]
+    fn install_page_hit_geometry() {
+        let (w, kb) = (1080usize, 1700usize); // D14-exempt: fixture geometry
+        assert_eq!(install_page_hit(60, kb - 150, w, kb), Some(-1), "left cell, top edge inclusive");
+        assert_eq!(install_page_hit(299, kb - 71, w, kb), Some(-1));
+        assert_eq!(install_page_hit(300, kb - 100, w, kb), None, "gap between cells");
+        assert_eq!(install_page_hit(w - 300, kb - 100, w, kb), Some(1));
+        assert_eq!(install_page_hit(w - 61, kb - 71, w, kb), Some(1));
+        assert_eq!(install_page_hit(w - 60, kb - 100, w, kb), None, "right margin out");
+        assert_eq!(install_page_hit(100, kb - 151, w, kb), None, "above the strip");
+        assert_eq!(install_page_hit(100, kb - 70, w, kb), None, "below the strip (bottom edge exclusive)");
+        // 小面板不炸：饱和减法把条顶到 y0=0——只钉住不 panic
+        let _ = install_page_hit(100, 10, 400, 100);
     }
 }
