@@ -19,18 +19,41 @@
 # boot.state reporting). We stay hands-off until it has written its
 # `done` verdict (ok or fail), up to 10 min. No /etc/wifi.conf yet
 # (first boot, wizard not run): idle in a slow loop instead of
-# attempting anything.
+# attempting anything — and no warn file either (unpaired ≠ offline).
+#
+# Warn duty (2026-09-09): the same probe loop is the v0 writer of the
+# warning registry /run/aginx-warn/ — link lost (2 probes) →
+# 「无网络 · 自动重连中」, upstream dead (gateway ok, wan down 8 probes) →
+# 「无网络 · 上游断连」, both-up is the only clear.
 export PATH=/sbin:/bin:/usr/sbin:/usr/bin
 
+# 警告注册表 (2026-09-09): /run/aginx-warn/ — one warning = one file
+# (filename = source tag, content = one-line CJK message). v0 sole writer
+# is this daemon; the term standby face polls the dir and paints a red
+# center zone while non-empty (same shape as the D12 file-system
+# registry — future daemons drop a file in, no term change).
 IF=${IF:-wlan0}
 WAN_PROBE=223.5.5.5   # anycast IP — deliberately DNS-free
 FAILS_TRIP=3
+WARN_TRIP=2           # probes before the red face (FAILS_TRIP rejoin-only)
 LOG=/var/log/net-watch.log
 STATE=/run/boot.state
+WARN_DIR=/run/aginx-warn
+WARN_NET=$WARN_DIR/net
 
 log() { echo "$(date +%m%d-%H:%M:%S) $*" >>"$LOG"; }
 
+# atomic tmp+rename like the face file (sole writer / poll reader)
+warn_net() { # $1 message; empty = clear
+  if [ -n "$1" ]; then
+    printf '%s\n' "$1" >"$WARN_NET.t" 2>/dev/null && mv "$WARN_NET.t" "$WARN_NET"
+  else
+    rm -f "$WARN_NET"
+  fi
+}
+
 log "net-watch start (pid $$)"
+mkdir -p "$WARN_DIR"
 n=0
 while [ $n -lt 600 ]; do
   grep -q '^done' "$STATE" 2>/dev/null && break
@@ -53,15 +76,22 @@ while :; do
   # sed parse, or gw is always empty and we rejoin a healthy net every 45 s.
   gw=$(ip route 2>/dev/null | sed -n 's/^default via \([0-9.][0-9.]*\) .*/\1/p' | head -n 1)
   if [ -n "$gw" ] && ping -c1 -W3 "$gw" >/dev/null 2>&1; then
-    wanfail=$(( wanfail + 1 ))
-    if [ $wanfail -eq 8 ]; then
-      log "wan down 8 probes (gateway ok) — ap-side, not rejoining"
-    elif ping -c1 -W3 "$WAN_PROBE" >/dev/null 2>&1; then
+    if ping -c1 -W3 "$WAN_PROBE" >/dev/null 2>&1; then
       wanfail=0
+      warn_net ''   # 链路+外网全通才撤红警；半恢复不算恢复
+    else
+      wanfail=$(( wanfail + 1 ))
+      if [ $wanfail -eq 8 ]; then
+        log "wan down 8 probes (gateway ok) — ap-side, not rejoining"
+      fi
+      [ $wanfail -ge 8 ] && warn_net '无网络 · 上游断连'
     fi
   else
     wanfail=0
     fail=$((fail+1))
+    # 红警先于 rejoin 落（WARN_TRIP=2）：单次探测抖动不闪红，断链
+    # ~15-30s 上屏；rejoin 阻塞期间文件自然持留。
+    [ $fail -ge $WARN_TRIP ] && warn_net '无网络 · 自动重连中'
     if [ $fail -ge $FAILS_TRIP ]; then
       carrier=$(cat /sys/class/net/$IF/carrier 2>/dev/null || echo '?')
       log "link lost ($fail probes, carrier=$carrier gw=${gw:-none}) — rejoining"
