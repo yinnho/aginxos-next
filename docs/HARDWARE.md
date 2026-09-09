@@ -2002,3 +2002,34 @@ rc=0。file/mem 桥壳 summary 同步去行话（agf/agmem re-cut 仍立案）�
 n5 runtime 对 `agb` 零依赖（工具发现走 `aginx commands --json`），
 换装不动在跑单元。pkgs.aginx.net 镜像回填待 bake #21 前（manifest
 URL 已指向 aginx-web/v0.3.0/）。
+
+## 2026-09-09 — #285/#286 母体派活（D16）上机：天气真答收据
+
+用户判词：「母体要交给化身去回答啊」。根因：mother_reply 是无工具的
+单发 brain（tools 空），拿它答天气只能角色扮演——问「南京天气怎么样」
+收「（正在查询南京天气…）」假动作。
+
+**改法**（server `resolve_send` 不点名臂，2508ab1）：光标在母体 + 册上
+有人 → set_cursor(字典序首个) + SendTarget::Avatar，光标随迁（= 隐式
+进，追问自然落进那位会话）；空册 = 自举地板母体直答；退房词/显式点名
+/me 不变。派活是常态：退房回母体后再不点名再派。UTF-8 字节序事实：
+小喜(E5)排在阿宝(E9)前，roster()[0]=小喜。
+
+**设备收据**（bake #20 镜像 b399b7b 之上 dev push aginx-server 2508ab1，
+readlink 对真身后 mv 换装 + aginx-svc restart）：不点名「南京天气怎么样」
+→ 小喜真答（实况 08:06、26°C、湿度 53%、北北东风 17km/h、日出 05:45
+/日落 18:19——wttr.in 活数据，末段还带郑州对照=会话记忆）；账本全链
+request(turn 9) → tool_call `web fetch wttr.in/Nanjing?lang=zh&format=j1`
+→ tool_result HTTP 200 → done；`aginx agent status` 光标随迁小喜；
+「再见」checkout 回母体（光标=me）。
+
+**套件**（N4_STAMP/N5_STAMP 用设备实况 b399b7b，server 为 dev push）：
+n4 **54/54**、n5 **45/45**（L 远端往返走显式 /me=母体直答路径，不受
+派活影响；AGC_SECRET_FILE=/tmp/agc-relay.secret 0600 件）、m42c
+**21/21**——三套件合计 3 次真重启全过；裸 send 断言（AginxOS 介绍/
+电池读数/几点了）全走小喜真轮，电池读数从「疑似角色扮演」变真工具
+回路。
+
+**收尾态**：slot _b b399b7b + dev push（aginx-server 2508ab1；#282/#283
+三件 voice/term/bootcard）在役，六单元 ready。bake #21 折债清单 +1：
+派活 server 提交。已知语义（非债）：光标纯内存，重启回母体=登记语义。
