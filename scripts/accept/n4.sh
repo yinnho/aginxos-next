@@ -8,7 +8,7 @@
 # relay（切净）。控制面 /usr/bin/aginx-svc；重启 /usr/bin/aginx-reboot。
 #
 #   预检  serial 钉死 / 版本戳期望值 env 传入 / brain key 键名在
-#   D 首启  boot.state 六行全绿 / 恰五单元 / 引擎在 libexec / 面回归
+#   D 首启  boot.state 六行全绿 / 恰六单元 / 引擎在 libexec / 面回归
 #   E 切净  无老单元 / 无 /var/bin/aginx / 无 ag 无 ag-* / 老遗留清
 #   F 收获  裸 aginx 真回复 / 工具回路 / 语音两路（封闭+自由）
 #   G 二启  aginx-reboot → 自起 → 钟闸门 → send/face 再通
@@ -73,7 +73,7 @@ expect_out "设备版本戳 = 烤机戳（${STAMP}）" "^${STAMP}$"
 drv "grep -c \"^$KEYVAR=\" /etc/aginx/env"
 expect_out "brain key 键名在 /etc/aginx/env（只数行不回显）" '^1$'
 
-echo "==> D 首启（boot.state 六行 → 恰五单元 → 引擎落位 → provision 回面）"
+echo "==> D 首启（boot.state 六行 → 恰六单元 → 引擎落位 → provision 回面）"
 # time ok：#246 后 done 是本地判（phase 1，先落）；net 链的收口行是
 # time ok（phase 2 最后一步，internet 之后）。等它，五行必已齐。
 for i in $(seq 1 24); do
@@ -93,9 +93,11 @@ wait_ready aginx-server  "单元 aginx-server"  15
 wait_ready aginx-voice   "单元 aginx-voice"   15
 wait_ready aginxbrowser  "单元 aginxbrowser"  15
 wait_ready aginx-secretd "单元 aginx-secretd" 15
-wait_ready net-watch      "单元 net-watch"     15
+wait_ready net-watch     "单元 net-watch"     15
+# N5 起 gateway 是烤装单元（六单元 = N5 以后的产品态）
+wait_ready aginx-gateway "单元 aginx-gateway" 15
 drv "/usr/bin/aginx-svc list | grep -c ready"
-expect_out "恰五单元 ready（无多余）" '^5$'
+expect_out "恰六单元 ready（无多余）" '^6$'
 drv "ls -l $SOCK"
 expect_rc "server 起在默认 $SOCK"
 drv "pgrep -a aginx-server"
@@ -108,7 +110,7 @@ drv "ls /var/bin/aginxbrowser /var/bin/python3 /var/bin/codex /var/bin/dup /var/
 expect_rc "provision 回面：7 core 件全在（codex 含）"
 drv "ls /var/models/tts/vits-melo-tts-zh_en/model.onnx /var/models/asr/model.int8.onnx /var/models/ocr/rec.onnx"
 expect_rc "语音/OCR 模型入盘（不走红毯 provision）"
-drv "ls /var/lib/agpkg/stamps/aginxbrowser /var/lib/agpkg/stamps/python3 /var/lib/agpkg/stamps/agb"
+drv "ls /var/lib/aginx/stamps/aginxbrowser /var/lib/aginx/stamps/python3 /var/lib/aginx/stamps/agb"
 expect_rc "stamps 记账在"
 
 echo "==> E 切净（无老线：单元/relay 面/ag 路由器/ag-* 壳/老遗留）"
@@ -119,7 +121,7 @@ drv "test ! -e /var/bin/aginx"
 expect_rc  "/var/bin/aginx 不存在（sync 后仍不存在）"
 drv "ls /usr/bin | grep -c '^ag-\|^ag\$'"
 expect_out "/usr/bin 无 ag 无 ag-*（D13 不留过渡别名）" '^0$'
-drv "test ! -e /var/lib/agpkg/stamps/aginx && test ! -e /var/lib/agpkg/stamps/aginx-carrier"
+drv "test ! -e /var/lib/aginx/stamps/aginx && test ! -e /var/lib/aginx/stamps/aginx-carrier"
 expect_rc  "老包 stamps 不在（切净不是遮住）"
 drv "test ! -e /home/.aginx-n"
 expect_rc  "N 并行试验 HOME（.aginx-n）已清"
