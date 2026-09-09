@@ -1,0 +1,8 @@
+# aginx-gateway — 远端通道守护的包形态（C8 蛋案）。
+# id/secret 走 env_file（刷机日灌注），不进包不进库。
+# 见 ../aginx-server/pkg.toml 头注：单元/打包线键同律。
+name = "aginx-gateway"
+version = "0.1.0"
+summary = "远端通道守护：8443 长连、agc 往返（凭据走 env 不进包）"
+group = "net"
+url = "https://pkgs.aginx.net/aginx-gateway/v0.1.0/aginx-gateway-v0.1.0-4pc.tar"

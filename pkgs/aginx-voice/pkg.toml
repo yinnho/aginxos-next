@@ -1,0 +1,10 @@
+# aginx-voice — 语音对话守护的包形态（C8 蛋案）。
+# 嘴耳三件是硬依赖：缺 aginx-asr/tts/ocr 时落 brain 云（离线即产品，
+# 所以 depends 声明全三）。
+# 见 ../aginx-server/pkg.toml 头注：单元/打包线键同律。
+name = "aginx-voice"
+version = "0.1.0"
+summary = "语音对话守护：PTT 嘴耳 + 眼取景，脸写 /run/aginx-voice/face"
+group = "snd"
+depends = "aginx-asr,aginx-tts,aginx-ocr"
+url = "https://pkgs.aginx.net/aginx-voice/v0.1.0/aginx-voice-v0.1.0-4pc.tar"

@@ -1,0 +1,12 @@
+# aginx-tts — 离线语音合成（C8 蛋案：二进制+模型一树）。
+# 同 ../aginx-asr/pkg.toml 头注。模型树只带 vits-melo-tts-zh_en（产品嘴，
+# M42e 定档）：fp32 model.onnx 170MB 是真权重，tarball 里的
+# model.int8.onnx 是 133B git-lfs 指针（release 包装事故）——打包线
+# rm 掉，与整机烤机逐字节同律（build-rootfs.sh 同段）。kokoro/matcha
+# 不随包（烤机也不带）。
+name = "aginx-tts"
+version = "0.1.0"
+summary = "离线语音合成：文本进 WAV 出，vits-melo zh_en 模型树随包"
+group = "snd"
+exec = "bin/ag-tts"
+url = "https://pkgs.aginx.net/aginx-tts/v0.1.0/aginx-tts-v0.1.0-4pc.tar"

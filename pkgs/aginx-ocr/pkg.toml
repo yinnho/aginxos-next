@@ -1,0 +1,10 @@
+# aginx-ocr — 离线文字识别（C8 蛋案：二进制+模型一树）。
+# 同 ../aginx-asr/pkg.toml 头注。模型三件 det.onnx/rec.onnx/dict.txt
+# （PP-OCRv5 mobile int8）——ch_PP-OCRv5_* 同名副本与 asan/host 构建件
+# 都不进包，与整机烤机同律。
+name = "aginx-ocr"
+version = "0.1.0"
+summary = "离线文字识别：图片进 text 出，PP-OCRv5 det/rec/dict 模型随包"
+group = "cam"
+exec = "bin/ag-ocr"
+url = "https://pkgs.aginx.net/aginx-ocr/v0.1.0/aginx-ocr-v0.1.0-4pc.tar"

@@ -1,0 +1,8 @@
+# aginx-secretd — 秘密守护的包形态（C8 蛋案）。
+# 密文在 /var/lib/aginx/secret（进 state tar），policy 在 /etc/aginx/。
+# 见 ../aginx-server/pkg.toml 头注：单元/打包线键同律。
+name = "aginx-secretd"
+version = "0.1.0"
+summary = "秘密守护：policy 生证与加密存储（人面是 aginx-secret）"
+group = "sec"
+url = "https://pkgs.aginx.net/aginx-secretd/v0.1.0/aginx-secretd-v0.1.0-4pc.tar"

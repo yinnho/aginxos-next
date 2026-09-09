@@ -1,0 +1,12 @@
+# aginx-asr — 离线语音识别（C8 蛋案：二进制+模型一树）。
+# 冻结一代 bionic-static 件（.local/device/redfin/voice，再生路径
+# devices/redfin/boot/assets.md）——独立升级本不存在，模型路径是预编译
+# 二进制里的编译期常量，所以模型随包走，provision 每靴幂等 symlink
+# /var/models/asr 指进 pkgfiles（C9）。exec 指 files/bin/ag-asr，装机面
+# 是 /var/bin/aginx-asr 符号链（与整机烤机同形——voice spawn 同路径）。
+name = "aginx-asr"
+version = "0.1.0"
+summary = "离线语音识别：WAV 进文本出，sherpa-onnx int8 模型树随包"
+group = "snd"
+exec = "bin/ag-asr"
+url = "https://pkgs.aginx.net/aginx-asr/v0.1.0/aginx-asr-v0.1.0-4pc.tar"

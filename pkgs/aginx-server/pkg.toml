@@ -1,0 +1,11 @@
+# aginx-server — 平台心脏的包形态（C8 蛋案：必装清单项）。
+# 单元不进包（aginxbrowser 先例）：svc.d/aginx-server 烤在蛋里，EGG=1
+# 烤机组把 cmd sed 到 /var/bin/aginx-server——重装包不与烤机单元抢归属。
+# url/depends 是打包线键：安装器只读 name/version/summary/args/examples/
+# group（unknown keys 直通），C10 EGG 清单组装从这里收 url+version+deps。
+name = "aginx-server"
+version = "0.1.0"
+summary = "平台心脏：化身登记、会话光标、请求路由，UDS /run/aginx.sock"
+group = "agent"
+depends = "aginx-runtime"
+url = "https://pkgs.aginx.net/aginx-server/v0.1.0/aginx-server-v0.1.0-4pc.tar"
