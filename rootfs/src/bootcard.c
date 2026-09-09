@@ -177,68 +177,42 @@ static int draw_text(int x, int y, const char *s, int scale, uint32_t c) {
 }
 
 /* ---------------- boot state ----------------
- * The real boot.state key set (what the bring-up scripts append). v4⑤:
- * the checklist render is retired; #282 re-keyed the exit ladder onto
- * `done` alone, so the table now feeds only that key and the stderr
- * diagnostics. */
-#define NKEYS 16
-static const char *KEYS[NKEYS] = {
-  "kernel", "rootfs", "display", "touch", "battery",
-  "modem", "wlan", "wifi", "dhcp", "internet",
-  "cell", "audio", "camera", "time", "pkg", "py",
-};
-enum { ST_PEND = 0, ST_RUN, ST_OK, ST_FAIL };
-static int st_status[NKEYS];
-static char st_detail[NKEYS][80];
+ * v4⑤ retired the checklist render; 批② A2 (09-10) retired the 16-key
+ * table with it — /run/boot.state stays rcS's own readable account
+ * (cat the file), and bootcard keys its exit ladder on `done` alone. */
 static int done_ok, done_seen;
 
-struct snapshot { int status[NKEYS]; char detail[NKEYS][80]; int d[2]; };
-static int read_state(const char *path) {
-  struct snapshot before, after;
-  memset(&before, 0, sizeof before);
-  memcpy(before.status, st_status, sizeof st_status);
-  memcpy(before.detail, st_detail, sizeof st_detail);
-  before.d[0] = done_ok; before.d[1] = done_seen;
-
+static void read_state(const char *path) {
   FILE *f = fopen(path, "r");
-  if (f) {
-    char line[256];
-    while (fgets(line, sizeof line, f)) {
-      char key[32], val[32], det[80];
-      int n = sscanf(line, "%31s %31s %79[^\n]", key, val, det);
-      if (n < 2) continue;
-      char *d = det;
-      while (*d == ' ' || *d == '\t') d++;
-      if (!strcmp(key, "done")) {
-        done_seen = 1;
-        if (!strcmp(val, "ok")) done_ok = 1;
-        continue;
-      }
-      for (int i = 0; i < NKEYS; i++)
-        if (!strcmp(key, KEYS[i])) {
-          st_status[i] = !strcmp(val, "ok") ? ST_OK
-                       : !strcmp(val, "fail") ? ST_FAIL
-                       : !strcmp(val, "run") ? ST_RUN : ST_PEND;
-          if (n >= 3) {
-            strncpy(st_detail[i], d, sizeof st_detail[i] - 1);
-            st_detail[i][sizeof st_detail[i] - 1] = 0;
-          }
-        }
+  if (!f) return;
+  char line[256];
+  while (fgets(line, sizeof line, f)) {
+    char key[32], val[32];
+    if (sscanf(line, "%31s %31s", key, val) < 2) continue;
+    if (!strcmp(key, "done")) {
+      done_seen = 1;
+      if (!strcmp(val, "ok")) done_ok = 1;
     }
-    fclose(f);
   }
-  memset(&after, 0, sizeof after);
-  memcpy(after.status, st_status, sizeof st_status);
-  memcpy(after.detail, st_detail, sizeof st_detail);
-  after.d[0] = done_ok; after.d[1] = done_seen;
-  return memcmp(&before, &after, sizeof before) != 0;
+  fclose(f);
+}
+
+/* No-panel loops log the verdict once (the exit ladder itself can't hand
+ * anything off without a panel, so those loops stay forever). */
+static void log_done_once(const char *path) {
+  static int logged;
+  read_state(path);
+  if (!logged && done_seen) {
+    logged = 1;
+    fprintf(stderr, "bootcard: done %s (no panel)\n", done_ok ? "ok" : "fail");
+  }
 }
 
 /* ---------------- v4⑤ boot console: wordmark only ----------------
  * 开机剧情 v4⑤ (09-08): 检测行全部不要 — the boot.state checklist
  * (render_progress / marks / latest-event footer) retired with its
  * palette. The console is one centered wordmark in term's MGREEN; the
- * state table keeps feeding the exit ladder and stderr only. */
+ * state file feeds the exit ladder (`done`) only. */
 #define WM_SCALE  13
 
 static void render_wordmark(void) {
@@ -395,20 +369,6 @@ static int ppm_write(const char *path) {
   return 0;
 }
 
-static void self_state(void) {
-  st_status[0] = ST_OK;                       /* kernel */
-  char rel[64] = "";
-  int fd = open("/proc/sys/kernel/osrelease", O_RDONLY);
-  if (fd >= 0) {
-    int n = read(fd, rel, sizeof rel - 1);
-    close(fd);
-    if (n > 0) { rel[n] = 0; rel[strcspn(rel, "\n")] = 0; }
-  }
-  snprintf(st_detail[0], sizeof st_detail[0], "%s", rel);
-  st_status[1] = ST_OK;                       /* rootfs */
-  snprintf(st_detail[1], sizeof st_detail[1], "ext4 / userdata");
-}
-
 int main(int argc, char **argv) {
   font_init();
 
@@ -422,7 +382,6 @@ int main(int argc, char **argv) {
   }
 
   const char *statepath = argc > 1 ? argv[1] : "/run/boot.state";
-  self_state();
 
   int fd = -1;
   for (int tries = 0; tries < 300; tries++) {
@@ -434,15 +393,10 @@ int main(int argc, char **argv) {
     kmsg("bootcard: DRM never came up; staying alive to log state\n");
     fprintf(stderr, "bootcard: no panel; logging state only\n");
     for (;;) {
-      if (read_state(statepath)) {
-        for (int i = 0; i < NKEYS; i++)
-          fprintf(stderr, "state: %s %d %s\n", KEYS[i], st_status[i], st_detail[i]);
-      }
+      log_done_once(statepath);
       sleep(1);
     }
   }
-  st_status[2] = ST_OK;                       /* display: we are about to prove it */
-  snprintf(st_detail[2], sizeof st_detail[2], "%ux%u DSI", fb_w, fb_h);
   pitch_px = g_pitch_px;
 
   /* FIRST frame before the mode set — see the drm_prepare comment: the
@@ -452,8 +406,7 @@ int main(int argc, char **argv) {
   if (drm_modeset(fd, g_fb[0])) {
     kmsg("bootcard: modeset failed; logging state only\n");
     for (;;) {
-      if (read_state(statepath))
-        fprintf(stderr, "bootcard: state changed (no panel)\n");
+      log_done_once(statepath);
       sleep(1);
     }
   }
@@ -497,14 +450,7 @@ int main(int argc, char **argv) {
       kmsg("bootcard: boot console done — exiting (term takes the panel)\n");
       exit(0);
     }
-    int changed = read_state(statepath);
-    if (changed)
-      for (int i = 0; i < NKEYS; i++)
-        if (st_status[i] != ST_PEND || st_detail[i][0])
-          fprintf(stderr, "bootcard: %s %s %s\n", KEYS[i],
-                  st_status[i] == ST_OK ? "ok" : st_status[i] == ST_FAIL ? "fail"
-                  : st_status[i] == ST_RUN ? "run" : "-",
-                  st_detail[i]);
+    read_state(statepath);   /* feeds the ladder above on the next pass */
     int next = 1 - g_cur;
     pix = g_map[next];
     render();
