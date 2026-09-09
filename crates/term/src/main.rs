@@ -1,9 +1,10 @@
 // aginx-term — AginxOS on-device terminal (M11 aterm; N4③b 改姓).
 //
 // bootcard's DRM path + 5x8 font, a vte-parsed cell grid (black bg, green /
-// white text — the fixed phosphor palette), an openpty child (sh / codex /
-// grok / aclone), an evdev on-screen keyboard (tap = key, drag = scrollback),
-// and a launcher (clone / codex / grok / sh). Started by rcS's aginx-term-handoff
+// white text — the fixed phosphor palette), an openpty child (sh / registry
+// apps like codex / grok), an evdev on-screen keyboard (tap = key, drag =
+// scrollback), and a debug launcher (sh / wifi setup / photos / install /
+// restart / power off). Started by rcS's aginx-term-handoff
 // once boot finishes; bootcard is wordmark-only now and self-exits (#246), so the
 // handoff's kill is belt-and-braces.
 //
@@ -91,9 +92,8 @@ const IDLE_BLANK: Duration = Duration::from_secs(60);
 // aginx-term only polls mtime and renders. Display-only modality.
 const VOICE_FACE: &str = "/run/aginx-voice/face";
 // M42g eye viewfinder frame: same writer, same atomic rename, same poll
-// pattern. When face.eye is set this is the view's main area — the screen
-// is the result canvas, not a chat log, so the live frame takes the body
-// and dialog lines demote to a bottom strip.
+// pattern. When face.eye is set the viewfinder takes the whole panel
+// (M47⑤b) — the close keys are physical, not on-screen.
 const VOICE_EYE: &str = "/run/aginx-voice/eye.jpg";
 // M47⑤c raw fast path: cam-shot --raw-out publishes RGB565 every frame;
 // term blits it with no JPEG decode (the encode+decode round trip stays
@@ -656,7 +656,7 @@ impl VoiceView {
     }
 
     /// M42g: poll the viewfinder frame. eye=false → drop the cached bitmap
-    /// (one repaint so the dialog view comes back clean); eye=true → stat
+    /// (one repaint so the prior face comes back clean); eye=true → stat
     /// the frame file and flag a change. Returns true when a repaint is
     /// due; the pixel work itself happens at render time (M47⑤f: the raw
     /// path blits fused straight into the back buffer — a 45 fps publish
@@ -718,7 +718,7 @@ impl VoiceView {
     /// straight into `pix` (the DRM back buffer; every dst pixel written,
     /// so no BG clear needed). Returns false when there is no fresh frame
     /// (or a bad one — the next mtime change retries); the caller then
-    /// runs the normal canvas render (dialog / 取景中 / JPEG fallback).
+    /// runs the normal canvas render (取景中 / JPEG fallback).
     fn blit_eye_raw(&mut self, pix: &mut [u32], pitch: usize, dw: usize, dh: usize) -> bool {
         if !self.raw_dirty {
             return false;
@@ -1334,7 +1334,7 @@ impl<'a> Render<'a> {
     /// Row-damaged render: only rows the Term marked dirty are repainted
     /// (bg fill + glyphs + cursor). The full-screen fill is gone — the
     /// canvas in main() persists between frames.
-    fn terminal(&self, pix: &mut [u32], t: &Term, area_top: usize, _area_h: usize, scale: usize, blink_on: bool, x_off: usize) {
+    fn terminal(&self, pix: &mut [u32], t: &Term, area_top: usize, scale: usize, blink_on: bool, x_off: usize) {
         let (w, h) = (self.w, self.h);
         let cell_w = 6 * scale;
         let cell_h = 8 * scale;
@@ -2215,7 +2215,7 @@ fn host_ppm(out: &str) {
     let mut pix2 = vec![0u32; pitch * h];
     fill_rect(&mut pix2, pitch, w, h, 0, 0, w as i32, h as i32, BG);
     r.toolbar(&mut pix2, kb::KB_M, lg.toolbar_h);
-    r.terminal(&mut pix2, &t, area_top0, area_h0, sc0, true, kb::KB_M);
+    r.terminal(&mut pix2, &t, area_top0, sc0, true, kb::KB_M);
     r.keyboard(&mut pix2, &kg, &kb0());
     let term_path = format!("{}-term", out);
     if let Err(e) = ppm_dump(out, &pix, w, h, pitch) {
@@ -2267,7 +2267,7 @@ fn host_ppm(out: &str) {
         let mut pix4 = vec![0u32; pitch * h];
         fill_rect(&mut pix4, pitch, w, h, 0, 0, w as i32, h as i32, BG);
         r.toolbar(&mut pix4, kb::KB_M, lg.toolbar_h);
-        r.terminal(&mut pix4, &t, area_top0, area_h0, sc0, true, kb::KB_M);
+        r.terminal(&mut pix4, &t, area_top0, sc0, true, kb::KB_M);
         r.keyboard(&mut pix4, &kg, &k);
         r.ime_strip(&mut pix4, &ime, &kg);
         let ime_path = format!("{}-ime", out);
@@ -2297,10 +2297,10 @@ fn host_ppm(out: &str) {
 /// get the big cores back — union of ui+big+cam, sorted+deduped).
 ///
 /// Called from main() on eye-FLAG transitions in ANY mode — the first cut
-/// hooked it inside poll_eye (Mode::Voice only), which leaked the park:
-/// VolUp is handled by the voice daemon regardless of the view on screen,
-/// so the stream can outlive the voice view, and a back-out mid-stream
-/// left this process parked forever.
+/// hooked it inside poll_eye (the retired voice face only), which leaked
+/// the park: VolUp is handled by the voice daemon regardless of the view
+/// on screen, so the stream can outlive the eye view, and a back-out
+/// mid-stream left this process parked forever.
 #[cfg(target_os = "linux")]
 fn set_eye_affinity(on: bool) {
     let a = &hwd::load_or_exit().affinity;
@@ -2540,7 +2540,7 @@ fn main() {
             Mode::Running(_) => {
                 fill_rect(buf, pitch, w, h, 0, 0, w as i32, h as i32, BG);
                 r.toolbar(buf, lg.m, lg.toolbar_h);
-                r.terminal(buf, &term, area_top, area_bottom(kb_visible) - area_top, scale, true, lg.m);
+                r.terminal(buf, &term, area_top, scale, true, lg.m);
             }
         }
         if kb_visible {
@@ -2634,7 +2634,7 @@ fn main() {
         // M47⑤f: the frame-arrival watch rides the poll set while the
         // eye view is on screen — every eye.raw / eye.jpg / face publish
         // then wakes the loop the instant it lands. 开机剧情 v4: same while
-        // the result face shows (face/result.jpg publishes wake the loop).
+        // the result face shows (face / result.html publishes wake the loop).
         if ino_wd >= 0
             && (matches!(mode, Mode::Eye)
                 || (matches!(mode, Mode::Idle) && voice.doc.result))
@@ -3273,7 +3273,7 @@ fn main() {
                 if bm.w as usize == w && bm.h as usize == h {
                     result_frame = Some(bm);
                 } else {
-                    // 诊断期：帧解出但尺寸不合门（不进 result_frame 但仍重绘）
+                    // 帧解出但尺寸不合门——不进 result_frame，仍触发重绘
                     eprintln!(
                         "aginx-term: frame size {}x{} != panel {}x{}",
                         bm.w, bm.h, w, h
@@ -3691,7 +3691,7 @@ fn main() {
                     r.install_list(buf, v, install_line.as_deref(), boot_state_has_internet(), &lg);
                 }
                 Mode::Running(_) => {
-                    r.terminal(buf, &term, area_top, area_bottom(kb_visible) - area_top, scale, blink_on, lg.m);
+                    r.terminal(buf, &term, area_top, scale, blink_on, lg.m);
                     if kb_dirty {
                         r.toolbar(buf, lg.m, lg.toolbar_h);
                         if kb_visible {
