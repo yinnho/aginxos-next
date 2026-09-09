@@ -83,6 +83,27 @@ for u in $(sed -n 's/^aginx-pkg: installed \([^ ]*\).*/\1/p' "$LOG" 2>/dev/null)
   aginx-svc restart "$u" 2>/dev/null
 done
 
+# ---- model links (2026-09-09 蛋案) ----------------------------------------
+# asr/tts/ocr 三包的模型树住 pkgfiles（大件可重下物，不进 state tar），
+# 而预编译 CLI 里的模型路径是编译期常量（/var/models/...）——每靴幂等
+# symlink ensure（python-finalize 同法：信工件不信标记）。安装器把
+# files/ 成员剥前缀落 pkgfiles/<pkg>/（lib.rs stream_member，设备实测
+# 2026-09-09），故 src 无 files/ 段。实目录让位：全量镜像烤的
+# /var/models/<sub> 是真身，包树不抢；src 未装（裸蛋）= 无操作。
+ensure_model_link() {
+  src="/var/lib/aginx/pkgfiles/$1/models/$2"
+  dst="/var/models/$2"
+  [ -d "$src" ] || return 0
+  [ -L "$dst" ] && [ "$(readlink "$dst")" = "$src" ] && return 0
+  [ -d "$dst" ] && return 0
+  mkdir -p "$(dirname "$dst")"
+  ln -sfn "$src" "$dst"
+}
+mkdir -p /var/models
+ensure_model_link aginx-asr asr
+ensure_model_link aginx-tts tts/vits-melo-tts-zh_en
+ensure_model_link aginx-ocr ocr
+
 # ---- finalize (one-shot steps, aginx-done-gated) -------------------------
 # System-level guarantee line (ARCH §13): the phone promises python3,
 # not node. Re-seeded every boot — idempotent overwrite, no marker.

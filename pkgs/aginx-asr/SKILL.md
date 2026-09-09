@@ -1,8 +1,9 @@
 # aginx-asr
 
 离线语音识别 CLI（sherpa-onnx zipformer int8，冻结 bionic-static 件）。
-stdin/argv WAV → stdout 文本；模型树随包走（files/models/asr），装机后
-provision 幂等 symlink /var/models/asr → pkgfiles 树（C9）。
+stdin/argv WAV → stdout 文本；模型树随包走（tar 成员 files/models/asr，
+安装器剥前缀落 pkgfiles/aginx-asr/models/），装机后 provision 幂等
+symlink /var/models/asr → pkgfiles 树（C9）。
 
 ## 验证
 

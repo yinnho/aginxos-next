@@ -153,7 +153,12 @@ const STATE_MAX: u64 = 512 << 20;
 /// [device]name，schema 加必填字段时直接开机 fail-fast，与 09-05 同类。
 /// busybox tar 的 --exclude 匹配存储名（无前导斜杠）、flag 须在成员表前
 /// ——设备实测 2026-09-05。
-const STATE_TAR_EXCLUDES: &str = "--exclude=etc/aginx/svc.d --exclude=etc/aginx/secret.policy --exclude=etc/aginx/gateway.toml --exclude=etc/aginx/groups.desc --exclude=etc/aginx/device.toml";
+///
+/// D15 边界律增补（2026-09-09 蛋案）：asr/tts/ocr 三包的模型树住
+/// /var/lib/aginx/pkgfiles/<pkg>/ 下，~450MB 会撞 STATE_MAX 顶——大件可
+/// 重下物不进 state tar（与 /var/bin 同律：换像后 resync 判 missing 自动
+/// 补拉）。/var/models 的 symlink 让位 ensure 归 provision（每靴）。
+const STATE_TAR_EXCLUDES: &str = "--exclude=etc/aginx/svc.d --exclude=etc/aginx/secret.policy --exclude=etc/aginx/gateway.toml --exclude=etc/aginx/groups.desc --exclude=etc/aginx/device.toml --exclude=var/lib/aginx/pkgfiles/aginx-asr --exclude=var/lib/aginx/pkgfiles/aginx-tts --exclude=var/lib/aginx/pkgfiles/aginx-ocr";
 
 fn swap_header(payload_len: u64, sha256_hex: &str, old_len: u64) -> Vec<u8> {
     let mut h = vec![0u8; SWAP_HDR as usize];
@@ -836,6 +841,28 @@ mod tests {
                 "missing --exclude for {image_owned}"
             );
         }
+    }
+
+    #[test]
+    fn state_tar_excludes_model_tree_pkgfiles() {
+        // 2026-09-09 蛋案：asr/tts/ocr 模型树住 pkgfiles，~450MB 会撞
+        // STATE_MAX 顶——大件可重下物不进 state tar（与 /var/bin 同律：
+        // 换像后 resync 判 missing 自动补拉）。/var/models 的 symlink
+        // 让位 ensure 归 provision 每靴。
+        for model_tree in ["aginx-asr", "aginx-tts", "aginx-ocr"] {
+            assert!(
+                STATE_TAR_EXCLUDES
+                    .contains(&format!("--exclude=var/lib/aginx/pkgfiles/{model_tree}")),
+                "missing --exclude for {model_tree} model tree"
+            );
+        }
+        // 排除只钉三树：整目录排除会让含 files/ 的第三方包换像丢真身
+        // （exec symlink face 指进 pkgfiles 树里，state-restore 本应带回）
+        assert_eq!(
+            STATE_TAR_EXCLUDES.matches("pkgfiles").count(),
+            3,
+            "pkgfiles excludes must stay exactly the three model trees"
+        );
     }
 
     #[test]
