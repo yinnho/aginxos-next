@@ -616,11 +616,13 @@ fn run_outs(
                     followups.push(Ev::OcrDone(r));
                 }
                 Act::Status => {
+                    // V5（09-10）：状态与其他 Say 同律——只上脸+日志，不出声；
+                    // 要听跟「你说给我听」。这里原是全程序唯一一个 Say 还走
+                    // TTS 的漏网口。
                     let o = vm.inject_say(&status_text());
                     if let Out::Say(s) = o {
                         eprintln!("aginx-voice: say {s}");
                         face::set_line(Some(&s));
-                        say(&s, brain);
                     }
                 }
                 Act::PowerExec { action } => {

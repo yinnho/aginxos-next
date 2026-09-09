@@ -76,7 +76,7 @@ pub enum Act {
     QrScan,
     /// 拍照念字（cam-shot 盲拍 + ag-ocr，M45 眼分支）
     Ocr,
-    /// 状态查询（时间/电池/IP）——daemon 读系统后经 inject_say 出声
+    /// 状态查询（时间/电池/网络）——daemon 读系统后经 inject_say 上脸
     Status,
     /// 口令验证通过，执行关机/重启（面法B）。协议只说结论话术，断电
     /// 由 daemon spawn aginx-reboot——不进 Act 的路径一条都没有（fail-closed）。
@@ -172,8 +172,8 @@ impl Vm {
         &self.lines
     }
 
-    /// 状态查询走 Act::Status：daemon 读系统（时间/电池/IP）后用 inject_say
-    /// 把拼好的话送回来出声（SM 纯逻辑，不碰钟）。
+    /// 状态查询走 Act::Status：daemon 读系统（时间/电池/网络）后用 inject_say
+    /// 把拼好的话送回上面（拉式语音：Say 不出声，SM 纯逻辑，不碰钟）。
     pub fn inject_say(&mut self, s: &str) -> Out {
         self.lines.push((false, s.to_string()));
         self.trim_lines();
