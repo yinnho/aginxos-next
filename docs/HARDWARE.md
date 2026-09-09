@@ -2033,3 +2033,33 @@ n4 **54/54**、n5 **45/45**（L 远端往返走显式 /me=母体直答路径，�
 **收尾态**：slot _b b399b7b + dev push（aginx-server 2508ab1；#282/#283
 三件 voice/term/bootcard）在役，六单元 ready。bake #21 折债清单 +1：
 派活 server 提交。已知语义（非债）：光标纯内存，重启回母体=登记语义。
+
+## 2026-09-09 C9 蛋案同镜像验证（policy/excludes/provision ensure）
+
+在役 slot _b b399b7b 之上：dev push 新 aginx-update（含三模型树排除）+
+`build-pkg.sh aginx-ocr --push` 装 ocr 包（tar 42,936,320B，安装后
+/var/lib/aginx/pkgfiles/aginx-ocr/models/ocr/{det,rec}.onnx+dict.txt 21MB；
+face=/var/bin/aginx-ocr symlink + .aginxmd + stamp）。
+
+**pkgfiles 布局实锤**：安装器把 tar 的 `files/` 成员剥前缀落
+pkgfiles/<name>/（lib.rs `strip_prefix("files/")`）——树在
+`pkgfiles/aginx-ocr/models/ocr/`，**无 files/ 段**。provision
+ensure_model_link 的 src 已按此定档（首版误写 files/models，设备
+`ls: No such file` 抓出，当场修正）。
+
+**ensure_model_link 三态设备收据**（逐字拷 provision 函数上机）：
+①让位——/var/models/ocr 真身（全量烤机）在位时调用后仍 real dir；
+②链接——真身 mv 让开后调用 → `lrwxrwxrwx /var/models/ocr ->
+/var/lib/aginx/pkgfiles/aginx-ocr/models/ocr`，det.onnx 经 link 可读；
+③幂等——link 在位时二次调用 readlink 不变；末步真身复位 + 再调用仍
+让位。收尾 /var/models/ocr 为真身。
+
+**state tar 排除收据**：`aginx-update capture` 出
+`AGXSTATE … (55564800 bytes)`（53MB，STATE_MAX 512MiB 内）；dd 出
+body（skip=BLK+1）`tar -t` 列名——pkgfiles 成员**只有 python3**，
+`pkgfiles/aginx-{asr,tts,ocr}` 计数 **0**。验毕手工清头（dd zero
+seek=16777216 count=1 conv=notrunc，mirror state-restore 自己的姿势），
+复读 header 全零（MARKER-CLEARED）——marker 未留武装态。
+
+**收尾态**：/usr/bin/aginx-update 为 C9 版（三树排除在役）；
+aginx-ocr 包在装（惰性，voice 仍用烤机真身模型）；其余未动。
