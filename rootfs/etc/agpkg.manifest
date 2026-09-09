@@ -30,10 +30,10 @@
 # N4 切净 (2026-09-05): the first-gen `aginx` (relay/gateway daemon) and
 # `aginx-carrier` entries are DELETED — the N4 image carries no carrier
 # daemon and no relay; the remote channel rebuilds as aginx-gateway in N5.
-# The tool packages below keep their package/bin names for now: the brain
-# reaches them through the /usr/bin bridge shells (aginx-web -> agb,
-# aginx-file -> agf, aginx-mem -> agmem); re-cutting the packages under
-# aginx- names is N5 packaging work.
+# The web tool package is re-cut as aginx-web (D13 rename 2026-09-09,
+# was first-gen `agb`); the brain still reaches agf/agmem through their
+# /usr/bin bridge shells (aginx-file -> agf, aginx-mem -> agmem) —
+# re-cutting those two under aginx- names is future packaging work.
 #
 # codex/grok have no usable upstream raw-musl asset (codex ships a tarball,
 # grok has no musl release at all) — mirrored as raw binaries under
@@ -54,7 +54,7 @@ codex          https://pkgs.aginx.net/codex/v0.151.0/codex-v0.151.0-aarch64-unkn
 # filesystem, memory and clone bridges spawn these CLIs — core tier, a
 # rootfs without them has an agent that cannot browse/read/remember.
 dup            https://pkgs.aginx.net/dup/v0.2.0/dup-v0.2.0-4pc.tar 652f9d583611826cdb3c5c02ee62a07b3e710df786c914f3a0e2629173c32a82
-agb            https://pkgs.aginx.net/agb/v0.2.0/agb-v0.2.0-4pc.tar c960cab30828caec70452526001c0e808c7df7fdaa2002b9c631b4ef90ad5b02
+aginx-web      https://pkgs.aginx.net/aginx-web/v0.3.0/aginx-web-v0.3.0-4pc.tar dd5f5e0857aea31cd78212e4596bdb59235a9a779757fe0bf9cd342bd31c36a3
 agf            https://pkgs.aginx.net/agf/v0.2.0/agf-v0.2.0-4pc.tar eed372acd77037b1755ad3ad0053c949e86fc7f0bb4be57b06314e604b4862a9
 agmem          https://pkgs.aginx.net/agmem/v0.2.0/agmem-v0.2.0-4pc.tar 4b9c469038cbf4e97e913d10fa55b1fe67e14c2220a2f4134d522aeec0bf5357
 # grok is optional since M23 (选装 tier): an agent CLI like codex, but

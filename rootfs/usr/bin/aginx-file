@@ -1,5 +1,5 @@
 #!/bin/sh
-# aginx:summary=file read/write/list/convert tool face (bridges /var/bin/agf)
+# aginx:summary=file tools: read/write/list/convert files
 # aginx:group=files
 # aginx:args=<subcommand> [args…]
 # aginx:examples=read /etc/hostname

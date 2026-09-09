@@ -1,5 +1,5 @@
 #!/bin/sh
-# aginx:summary=memory tool face: kv/tree/knowledge/flows (bridges /var/bin/agmem)
+# aginx:summary=memory tools: kv/tree/knowledge/flows
 # aginx:group=mem
 # aginx:args=<subcommand> [args…]
 # aginx:examples=kv get demo

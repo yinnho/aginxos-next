@@ -1,0 +1,10 @@
+# aginx:summary=browser, search and fetch tools: navigate/read/click pages, web search, fetch URLs
+# aginx:args=<subcommand> [args…]
+# aginx:examples=fetch https://example.com
+# aginx:examples=search oranges
+# aginx:group=web
+# The provisioned aginx-web package binary is compiled, so its face lives in
+# this sidecar (D12 convention for compiled commands; same law as the voice
+# internals alongside). /usr/bin/aginx-web is the pre-provision bridge —
+# same route, shadowed once provision sync lands the binary (resolve.rs:
+# /var/bin precedes /usr/bin). Keep the two summaries in lockstep.
