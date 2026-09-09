@@ -31,6 +31,10 @@ pub struct Entry {
     /// "PHOTOS" tile: opens the M39 photo viewer (Mode::Photos) instead
     /// of spawning. Same non-terminal pattern as the picker.
     pub photos: bool,
+    /// "INSTALL" tile (C7): opens the software-list face (Mode::Install)
+    /// — the egg's tap-to-install entry, also reachable from the pairing
+    /// bar's right cell.
+    pub install: bool,
 }
 
 /// Registry apps first (alphabetical by id), then the system actions.
@@ -52,6 +56,7 @@ fn app_entry(a: AppEntry) -> Entry {
         scale: a.scale,
         picker: false,
         photos: false,
+        install: false,
     }
 }
 
@@ -65,6 +70,7 @@ fn builtins() -> Vec<Entry> {
         scale: 5,
         picker: true,
         photos: false,
+        install: false,
     }];
     // 面法 09-07: no VOICE tile — the voice dialog face is retired; the
     // eye enters from ANY mode on the face flag, and the resting screen is
@@ -73,6 +79,7 @@ fn builtins() -> Vec<Entry> {
     v.extend(
         [
             ("PHOTOS", "", &[][..], 5),
+            ("INSTALL", "", &[][..], 5),
             ("SH", BIN_SH, &[][..], 5),
             ("WIFI SETUP", BIN_WIZARD, &[][..], 5),
             ("RESTART", BIN_AGINX_REBOOT, &["reboot"][..], 5),
@@ -83,16 +90,19 @@ fn builtins() -> Vec<Entry> {
             label: label.into(),
             bin: bin.into(),
             args: args.iter().map(|s| s.to_string()).collect(),
-            // the photo viewer is pure aginx-term state — always
-            // available; sh and aginx-reboot ship in the base image; the
-            // wizard is a rootfs binary that always exists post-M5
+            // the photo viewer and the install face are pure aginx-term
+            // state — always available; sh and aginx-reboot ship in the
+            // base image; the wizard is a rootfs binary that always
+            // exists post-M5
             avail: label == "PHOTOS"
+                || label == "INSTALL"
                 || bin == BIN_SH
                 || bin == BIN_AGINX_REBOOT
                 || std::path::Path::new(bin).is_file(),
             scale,
             picker: false,
             photos: label == "PHOTOS",
+            install: label == "INSTALL",
         })
         .collect::<Vec<_>>(),
     );
