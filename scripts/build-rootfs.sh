@@ -87,7 +87,7 @@ fi
 echo "==> zigbuild 新仓 musl 件（缓存则秒过）"
 (cd "${ROOT}" && cargo zigbuild --release --target aarch64-unknown-linux-musl \
   -p aginx-router -p aginx-server -p aginx-runtime -p aginx-voice \
-  -p aginx-net-wizard -p aginx-term -p aginx-pkg -p aginx-svc \
+  -p aginx-term -p aginx-pkg -p aginx-svc \
   -p aginx-download -p aginx-update -p aginx-done -p aginx-secret \
   -p aginx-gateway)
 
@@ -208,7 +208,7 @@ mkdir -p "${TREE}/bin" "${TREE}/usr/bin"
 # tables are decoded into the source; vendor module bins stay local and
 # gitignored. N4: the four brain-facing C tools take their D13 /usr/bin
 # names AT BUILD TIME (aginx-voice spawns /usr/bin/aginx-cam-shot; net-bringup
-# and net-rejoin call /usr/bin/aginx-net-join; wizard scans through
+# and net-rejoin call /usr/bin/aginx-net-join; net scans go through
 # /usr/bin/aginx-net-scan; reboot is /usr/bin/aginx-reboot). Default flags
 # for a rear shot: --stream --rear --slowrear --rawvendor [--gain N] [--png].
 # M47①: the camera trio (cam-shot.c + campix.h + campix_test.c) lives in
@@ -272,7 +272,7 @@ for b in dropbear dbclient dropbearkey; do
 done
 # aginx-net-scan (原 nlscan): nl80211 trigger-scan + dump client — busybox
 # has no wireless tools and we ship no libnl. Our WLAN operability check
-# (M3f); the wizard scans through it.
+# (M3f).
 "${ZIG}" cc -target aarch64-linux-musl -static -O2 \
   -o "${TREE}/usr/bin/aginx-net-scan" "${RECIPE}/src/nlscan.c"
 # aginx-net-join (原 wifi-join, M4): self-contained WPA2-PSK supplicant —
@@ -344,7 +344,7 @@ else
   echo "NOTE: ${RADIO} incomplete — radio-bringup will fail; see devices/${DEVICE}/boot/assets.md" >&2
 fi
 
-# Recipe: etc (init.d/aginx/svc.d units/aginx conf/apps.d/crontabs + manifest+sig),
+# Recipe: etc (init.d/aginx/svc.d units/aginx conf/crontabs + manifest+sig),
 # usr/bin (bridge sh faces + .aginxmd sidecars), libexec/aginx
 # (net-watch/net-rejoin), var/bin sidecars. All D13 knowledge lives here.
 mkdir -p "${TREE}/bin" "${TREE}/sbin" "${TREE}/aginxos" "${TREE}/usr/libexec/aginx" "${TREE}/var/bin"
@@ -453,10 +453,11 @@ install -m 755 "${TARGET}/aginx" "${TREE}/usr/bin/aginx"
 if [ "${EGG}" = "0" ]; then
   install -m 755 "${TARGET}/aginx-server" "${TARGET}/aginx-runtime" "${TREE}/usr/libexec/aginx/"
 fi
-# Platform CLIs (new-repo builds; N4③b 改姓四件 + voice + wizard).
+# Platform CLIs (new-repo builds; N4③b 改姓四件 + voice).
 # aginx-pair 两档都装（C4 起 voice 的配网五步委外 /usr/bin/aginx-pair
 # apply）。蛋档 voice 不烤（aginx-voice 包 face /var/bin/aginx-voice）。
-install -m 755 "${TARGET}/aginx-net-wizard" "${TARGET}/aginx-term" \
+# 批③ (09-10): wizard 出烤——装机流程是扫码/语音，wizard 无入口。
+install -m 755 "${TARGET}/aginx-term" \
   "${TARGET}/aginx-pkg" "${TARGET}/aginx-pair" "${TREE}/usr/bin/"
 if [ "${EGG}" = "0" ]; then
   install -m 755 "${TARGET}/aginx-voice" "${TREE}/usr/bin/"
@@ -530,7 +531,7 @@ chmod 755 "${TREE}"/usr/libexec/aginx/net-watch "${TREE}"/usr/libexec/aginx/net-
 # NB: wifi.conf.example rides along in ${RECIPE}/etc — the real
 # /etc/wifi.conf (with the passphrase) rides the aginx-update state tar
 # from the running device (N4 从零开始 keeps only /home/photos; the join
-# credential is re-provisioned through voice/QR or wizard), never committed.
+# credential is re-provisioned through voice/QR), never committed.
 
 # Curated applet symlinks — enough for init and debugging; rcS runs
 # `busybox --install -s /bin` to fill in the full set on first boot.
