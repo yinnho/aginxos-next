@@ -6,6 +6,11 @@
 //! alone select the OS slot — proven on device 2026-09-02 with
 //! attrs-only switches in both directions, no bootloader involvement.
 //!
+//! `capture` (standalone verb): arm the state marker from the RUNNING
+//! system. state-restore is a one-shot handshake, so a fastboot flash
+//! day (the devices/<codename>/boot/ flash script) must capture before
+//! leaving adb — bake #20 receipt 2026-09-09, see the verb below.
+//!
 //! Rollback (all observed on device 2026-09-02): the staged slot boots
 //! with succ=0/tries=7; ABL drains one try per boot that rcS does not
 //! mark successful; at tries=0 ABL marks the slot unbootable,
@@ -186,6 +191,20 @@ fn pwrite_file_at(fd: i32, staged: &str, off: u64) -> u64 {
     len
 }
 
+/// The state marker header: magic(8) + 16 zero-padded decimal digits of
+/// length + newline, zero-padded to SWAP_HDR — parsed by
+/// /etc/init.d/state-restore with nothing but dd/head/cut (`tr -d '\000'`
+/// then `cut -c9-24` takes exactly the 16 digits; the newline at byte 24
+/// falls outside the cut and leading zeros keep the shell's octal-parse
+/// guard quiet).
+fn state_header(len: u64) -> Vec<u8> {
+    let mut h = vec![0u8; SWAP_HDR as usize];
+    h[..8].copy_from_slice(STATE_MAGIC);
+    h[8..24].copy_from_slice(format!("{len:016}").as_bytes());
+    h[24] = b'\n';
+    h
+}
+
 /// Capture the irreplaceable set as a tar (busybox, absolute paths) and
 /// stage it at STATE_OFF with an ASCII header: magic(8) + 16 decimal
 /// digits of length + newline — parseable by /etc/init.d/state-restore
@@ -231,10 +250,7 @@ fn stage_state_tar() {
         die(&format!("state tar wrote {wrote} != {len}"));
     }
     unsafe { libc::fsync(fd) };
-    let mut h = vec![0u8; SWAP_HDR as usize];
-    h[..8].copy_from_slice(STATE_MAGIC);
-    h[8..24].copy_from_slice(format!("{len:016}").as_bytes());
-    h[24] = b'\n';
+    let h = state_header(len);
     let mut done = 0usize;
     while done < h.len() {
         let w = unsafe {
@@ -618,6 +634,19 @@ fn main() {
             println!("slot {} version {}", active_slot(), current_version());
             let _ = Command::new(BOOT_OK_BIN).arg("status").status();
         }
+        Some("capture") => {
+            // Standalone arm of the state marker, from the RUNNING system.
+            // bake #20 receipt (2026-09-09): state-restore is a ONE-SHOT
+            // handshake — the marker staged by the last apply is consumed
+            // by that image's own first boot (header cleared, body left).
+            // `fastboot flash userdata` rewrites the front 2 GiB only and
+            // re-arms nothing, so a fastboot flash day MUST run this
+            // first, while the old system is still up: after the manual
+            // Power+VolDown fastboot entry it is too late for this
+            // boot. Same stage_state_tar() the apply flow calls — one
+            // implementation, one wire format.
+            stage_state_tar();
+        }
         Some("apply") => {
             let src = args.get(1).unwrap_or_else(|| die("usage: aginx-update apply <manifest> [--no-reboot]"));
             cmd_apply(src, args.iter().any(|a| a == "--no-reboot"));
@@ -635,7 +664,7 @@ fn main() {
             println!("aginx-update: {n} bytes → {part}");
         }
         _ => {
-            eprintln!("usage: aginx-update <status|apply|write-part|sha256> …");
+            eprintln!("usage: aginx-update <status|apply|capture|write-part|sha256> …");
             std::process::exit(2);
         }
     }
@@ -807,6 +836,25 @@ mod tests {
                 "missing --exclude for {image_owned}"
             );
         }
+    }
+
+    #[test]
+    fn state_header_layout_matches_state_restore_parser() {
+        // bake #20 receipt: the header is parsed by /etc/init.d/state-restore
+        // as `tr -d '\000'` then `cut -c9-24` — bytes 8..24 must be exactly
+        // 16 zero-padded decimal digits (leading zeros keep the shell's
+        // octal guard quiet), and the newline at byte 24 must stay OUTSIDE
+        // the cut so it can never leak into the length field.
+        let h = state_header(55865344);
+        assert_eq!(h.len(), 4096);
+        assert_eq!(&h[..8], b"AGXSTATE");
+        assert_eq!(&h[8..24], b"0000000055865344");
+        assert_eq!(h[24], b'\n');
+        assert!(h[25..].iter().all(|&b| b == 0));
+        // round-trip through the parser's own arithmetic
+        let hdr: String = h.iter().map(|&b| b as char).filter(|&c| c != '\0').collect();
+        let len: u64 = hdr[8..24].trim().parse().expect("16 decimal digits parse");
+        assert_eq!(len, 55865344);
     }
 
     #[test]

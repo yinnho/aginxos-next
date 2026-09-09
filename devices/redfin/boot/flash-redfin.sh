@@ -8,6 +8,15 @@
 # bench (enchilada) is exactly why the gate exists.
 #
 # Sequence (crash-safe order, commit point last):
+#   0. state pre-arm: `aginx-update capture` over adb, while the OLD
+#      system is still running — bake #20 receipt (2026-09-09):
+#      state-restore is a one-shot handshake (marker consumed by the
+#      boot that restores it), and `fastboot flash userdata` rewrites
+#      the front 2 GiB only, so nothing re-arms state. Skip this and
+#      the flashed image boots factory-reset shaped (no wifi.conf /
+#      env / secret / stamps). Run `./flash-redfin.sh capture` first,
+#      THEN enter fastboot (manual Power+VolDown) — after the device
+#      leaves adb it is too late for this boot.
 #   1. rootfs.img must exist (DEVICE=redfin ./scripts/build-rootfs.sh)
 #   2. pack vendor_boot with HOLD=1 USBADB=1 ROOTFS=1 (the working set,
 #      observed 2026-09-02 — ROOTFS=1 without USBADB=1 boots unreachable)
@@ -42,13 +51,54 @@ test -f "${PROFILE}" || { echo "missing ${PROFILE}" >&2; exit 1; }
 # greedy .* swallows inline comments on BSD sed).
 FB_SERIAL="$(sed -n 's/^fastboot_serial *= *"\([^"]*\)".*/\1/p' "${PROFILE}")"
 test -n "${FB_SERIAL}" || { echo "no fastboot_serial in ${PROFILE}" >&2; exit 1; }
+ADB_SERIAL="$(sed -n 's/^serial *= *"\([^"]*\)".*/\1/p' "${PROFILE}")"
 
 say() { printf '%s\n' "$*"; }
 
+# ---- state pre-arm: bake #20 trap ------------------------------------------
+# Stage the state tar + one-shot AGXSTATE marker from the RUNNING system
+# (block 16777216 on userdata; fastboot flashes the front 2 GiB only, so
+# the marker+body survive the reflash and the new image's state-restore
+# consumes them). Returns 0 armed, 1 not (absent device / old binary /
+# readback mismatch) — callers decide whether that is fatal.
+capture_state() {
+  adb devices 2>/dev/null | grep -q "${ADB_SERIAL}" || { say "no adb device '${ADB_SERIAL}' — cannot capture now"; return 1; }
+  say "==> state pre-arm: aginx-update capture on ${ADB_SERIAL}"
+  # absolute path: the adb shell PATH does not include /usr/bin (rc=127
+  # observed 2026-09-09 with the bare name)
+  if ! adb -s "${ADB_SERIAL}" shell /usr/bin/aginx-update capture; then
+    say "WARNING: on-device aginx-update capture failed (binary predates the verb?)" >&2
+    say "  after flashing, re-arm manually — HARDWARE.md bake #20 receipt" >&2
+    return 1
+  fi
+  local magic
+  magic="$(adb -s "${ADB_SERIAL}" shell \
+    'dd if=/dev/block/by-name/userdata bs=4096 skip=16777216 count=1 2>/dev/null | head -c 8' \
+    | tr -d '\r')"
+  if [ "${magic}" != "AGXSTATE" ]; then
+    say "WARNING: state marker readback '${magic}' != AGXSTATE" >&2
+    return 1
+  fi
+  say "state marker armed (AGXSTATE at block 16777216, readback ok)"
+}
+
+if [ "${1:-}" = "capture" ]; then
+  test -n "${ADB_SERIAL}" || { echo "no adb serial in ${PROFILE}" >&2; exit 1; }
+  capture_state || { echo "state pre-arm FAILED — fix before flashing (or knowingly skip)" >&2; exit 1; }
+  say "next: enter fastboot (manual Power+VolDown through a reboot), then GO=1 this script"
+  exit 0
+fi
+
 # ---- gate: attached device must be THE machine -----------------------------
-ATTACHED="$(fastboot devices 2>/dev/null || true)"
+# State pre-arm first (opportunistic): if the device is still in adb,
+# capture now. If it already left (fastboot only), warn — the flashed
+# image restores state only from whatever marker is armed, and none may
+# be (the bake #20 shape). Deliberately not fatal: an operator may be
+# re-flashing with state capture handled separately, and state can be
+# reconstructed after the fact (HARDWARE.md bake #20 recipe).
 if [ -z "${GO:-}" ]; then
   say "dry-run (GO=1 to flash) — plan:"
+  say "  state arm   : adb ${ADB_SERIAL} → aginx-update capture (run './flash-redfin.sh capture' first)"
   say "  serial gate : fastboot devices must list exactly '${FB_SERIAL}'"
   say "  rootfs      : ${ROOTFS_IMG}"
   say "  vendor_boot : HOLD=1 USBADB=1 ROOTFS=1 pack-vendor-boot.sh (SKIP_PACK=1 to reuse)"
@@ -57,6 +107,10 @@ if [ -z "${GO:-}" ]; then
   exit 0
 fi
 
+capture_state \
+  || say "WARNING: flashing without a fresh state capture — first boot of the new image may come up stateless"
+
+ATTACHED="$(fastboot devices 2>/dev/null || true)"
 echo "${ATTACHED}" | grep -q "${FB_SERIAL}" \
   || { echo "refusing: fastboot does not see '${FB_SERIAL}' (profile serial). Attached:" >&2
       echo "${ATTACHED:-  (nothing)}" >&2; exit 1; }
