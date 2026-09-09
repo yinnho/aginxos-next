@@ -18,6 +18,7 @@ serde_json = { workspace = true }
 sha2 = "0.10"
 tar = "0.4"
 toml = "0.8"
+libc = "0.2"
 agio = { path = "../agio" }
 aginx-sign = { path = "../sign" }
 

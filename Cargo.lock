@@ -92,6 +92,7 @@ dependencies = [
  "agio",
  "base64 0.22.1",
  "ed25519-dalek",
+ "libc",
  "rand_core 0.6.4",
  "serde",
  "serde_json",
