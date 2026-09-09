@@ -2217,3 +2217,40 @@ boot done + voice up）。voice@/var/bin 在役 md5：
 `66e9da7b54d61bd450bde55ee3fb5a80`（旧 01c51c62 退役）。
 
 批② 余四项（V3/A2/C2/C1）详解已报，待逐项点头。
+
+## 2026-09-10 批② 四刀上机：V3+A2+C2+C1（8012e0e/52167c6/f3fba7f/16e4f8f）
+
+用户裁决「能删就删，要的就是精简」，四刀齐上：
+
+- **V3**（voice face state 退役）：FaceDoc 收敛 eye/result/line 三字
+  段。命令优先重写后 state 恒 "idle"（唯一例外 powerwait 也不上脸），
+  term 的 FaceDoc 全 `#[serde(default)]` 多余字段透明忽略。
+  state_name 挂 `#[cfg(test)]`（协议测试仍用）。
+- **A2**（bootcard 16 键表退役）：v4⑤ 已除检测行渲染，整张 key 表随
+  之下岗——read_state 只认 done 行，/run/boot.state 留作 rcS 自己的可
+  读台账。bootcard.c 515→~440 行。
+- **C2**（term WIFI SETUP 瓦片退役）：瓦片摘除；aginx-net-wizard 二进
+  制保留（AGINX_TERM_START 调试路径仍可达）。
+- **C1**（烤入 sidecar 四件退役）：aginx-asr/ocr/tts/web 的 .aginxmd
+  git rm——安装器从 pkg.toml 生成 sidecar 是唯一活路，烤入件全路径死。
+  已知降级：全量档烤入 asr/tts/ocr 二进制不在 manifest、无安装器接管，
+  删后 `aginx commands` 对它们无摘要（过渡档，蛋档不受影响）。
+
+**部署照三律**（voice /var/.stage-voice、term /usr/bin 直落——term 由
+rcS 的 handoff respawn 环托管，杀旧 pid ~2s 自动换新二进制；bootcard
+只在开机跑，直换安全）：
+
+| 件 | 落位 | md5 |
+|---|---|---|
+| aginx-voice | /var/bin/aginx-voice | d41a1940417cdd2ed7a080c3e4f76f09 |
+| aginx-term | /usr/bin/aginx-term | 8c2b6d7e4a88e23b06537a3bc0ca5045 |
+| bootcard | /bin/bootcard | 325a9337ded76a1a4a5f39f9ccb71c35 |
+
+term 换装实证：kill 旧 pid 460 → handoff 环重生 pid 2938，readlink
+真身非 deleted。voice restart 后 `--face` 出三字段
+`{"eye":false,"result":false}`。
+
+**m42c 23/23**（B 段新增 state 缺席断言过；C 段真重启冷启：新
+bootcard 过 done-only 梯 → term 接屏 → voice 起来，uptime 1min 复核
+三 md5 全对、term/voice 在跑）。check.sh 全绿。收尾态：设备健康靴稳
+态在役，无 fastboot 滞留。
