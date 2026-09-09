@@ -1,11 +1,11 @@
 // Launcher (M16, docs/SYSTEM.md §12.3): app buttons come from the
 // registry at /var/apps/<id>/app.toml — scanned at every launcher draw,
 // so a new app appears by dropping a file (aginx-pkg or the app-registry
-// seeder write them), no OS source change. Seven built-in tiles stay
-// (+ picker / photos / install / sh / wifi setup / restart / power off),
-// plus a thin toolbar strip above the content ([BACK] when a toolbar face
-// is up). Program exit -> back to launcher. Touch regions are computed
-// from the keyboard geometry so the layout scales with panel size.
+// seeder write them), no OS source change. Six built-in tiles stay
+// (+ picker / photos / install / sh / restart / power off), plus a thin
+// toolbar strip above the content ([BACK] when a toolbar face is up).
+// Program exit -> back to launcher. Touch regions are computed from the
+// keyboard geometry so the layout scales with panel size.
 
 use aginx_svc::{scan_apps, AppEntry, APPS_DIR};
 
@@ -81,7 +81,6 @@ fn builtins() -> Vec<Entry> {
             ("PHOTOS", "", &[][..], 5),
             ("INSTALL", "", &[][..], 5),
             ("SH", BIN_SH, &[][..], 5),
-            ("WIFI SETUP", BIN_WIZARD, &[][..], 5),
             ("RESTART", BIN_AGINX_REBOOT, &["reboot"][..], 5),
             ("POWER OFF", BIN_AGINX_REBOOT, &["poweroff"][..], 5),
         ]
@@ -92,8 +91,7 @@ fn builtins() -> Vec<Entry> {
             args: args.iter().map(|s| s.to_string()).collect(),
             // the photo viewer and the install face are pure aginx-term
             // state — always available; sh and aginx-reboot ship in the
-            // base image; the wizard is a rootfs binary that always
-            // exists post-M5
+            // base image
             avail: label == "PHOTOS"
                 || label == "INSTALL"
                 || bin == BIN_SH
@@ -109,8 +107,10 @@ fn builtins() -> Vec<Entry> {
     v
 }
 
-/// Scale for non-launcher spawns (AGINX_TERM_START debug path, the first-boot
-/// wizard): known phone-native binaries get 5, everything else 3.
+/// Scale for non-launcher spawns (AGINX_TERM_START debug path): known
+/// phone-native binaries get 5, everything else 3. BIN_WIZARD stays known
+/// here — 批② C2 (09-10) removed the launcher tile but kept the binary
+/// for the debug path, so it still renders with touch glyphs if started.
 pub fn scale_for(bin: &str) -> usize {
     if bin == BIN_SH || bin == BIN_WIZARD || bin == BIN_AGINX_REBOOT {
         5
