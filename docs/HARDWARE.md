@@ -2163,3 +2163,39 @@ unbound 雷（`$n（` 全量 `${n}` 化）+ send 弱断言（错误行也是中�
 **G 升级路径（capture→第二颗蛋→egg2）与 H 回滚路径待人工腿**（手动
 Power+VolDown 入 fastboot）。out/rootfs.img = 蛋像待复用；H 需全量档
 重烤（EGG=0）。
+
+## 2026-09-10 瘦身批次①③④上机（#300）——死码三件 + 套件自愈 22/22
+
+**改动**（五笔原子提交，host check.sh 全绿）：term 死码
+（drm.rs PAGE_FLIP 结构体/ioctl 等）6701af1；voice 死码+注释 e79f793；
+mojibake 修 11 处/8 文件（含 voice/main.rs 随 b 笔）6dec3d2；bootcard
+B1（GLYPHS 缩到字标 7 字）+B2（flip 机制退役，呈现=每帧 re-SETCRTC
+relatch）+rcS/handoff/net-bringup 注释刷 4dea02c；m42c 套件自修 35f864e。
+净 −115 行。
+
+**部署雷（实炸，配方入档）**：/tmp 是 tmpfs 且跨文件系统 staging 令
+busybox mv 落 copy 模式 → 对在跑可执行 open(O_TRUNC) → ETXTBSY → mv
+败而 `|| pkill` 重生进程装作成功（新 pid 旧 binary）。正解：**同文件
+系统 staging（/var/.stage-*）+ chmod 755 + 落位前后双 md5**——pid 变化
+永不作新 binary 证据。另证：`adb reboot` 在本机无效（uptime 不动），
+用 `/usr/bin/aginx-reboot reboot`（~18s 断开，~85s 整机回）。
+
+**收据（fresh boot ×2 + 套件内重启 ×2）**：kmsg 序列
+`panel up 1080x2340 conn=29 → local bring-up done (ok) — holding 3s →
+boot console done — exiting`，本靴无 `PAGE_FLIP refused` 行（前靴 ring
+残留 grep=1）；face
+`{"state":"idle","eye":false,"result":false,"line":"Operator. Go
+ahead."}` 无 hint 段（v4 线形在役）。在役 md5：term@/usr/bin
+673ee1273f39fe8ff531127a38a62f42、voice@/var/bin
+01c51c6281552a13f42dd7f4d1345dad、bootcard@/bin
+44880e266251506e4b86cff6a73eefc5。
+
+**m42c 首跑 12/9**：九败全是套件硬编 /usr/bin/aginx-voice 而蛋世界
+voice 在 /var/bin（非代码回归；A 段 qr 在 /usr/bin 照过）。套件自修
+两笔：VOICE 预检解析（两世界通用）+ `对码` 断言重锚——旧断言吃的是
+face JSON 的 hint 段（v4 退役），应答行自 M42c 起就是「说扫码、念一
+下」；改锚 `说扫码` 并加 `无 hint 段` 回归护栏。**复跑 22/22**，C 段
+两次真重启均健回（uptime 60s + boot done + voice up）。
+
+**收尾态**：蛋世界在役（六单元 ready），设备健康靴稳态，无 fastboot
+滞留。批②五项（V5/V3/A2/C2/C1）待用户裁决，未动。
