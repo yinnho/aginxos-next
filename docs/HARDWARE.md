@@ -1755,3 +1755,56 @@ aginx-server.toml 的 cmd 是 libexec 路径，/usr/bin 是旁路。挪到真身
 
 语音不能 steer 是 v0 已知边界（voice 主循环在自己轮里阻塞于
 chat_front）；现役入口 = CLI/远端网关。#246 全树零提交不变。
+
+## 2026-09-09 — 换线日：D14 新仓独立烤刷 + 三套件全绿 + AP 掐线三次收口（挪机根治）
+
+OnePlus 6 让位回插 redfin，D14 平台化（机型是数据，不是代码）首次整机
+验收：新仓封存老仓后独立完成烤机→刷机→验���全链，OLD= 断链成立。
+
+**烤机**（新仓独立，rootfs.img 663M）：版本戳首带机型 token——
+`aginxos redfin 16b331a 2026-09-09`（16b331a=烤时本地 HEAD，N5b 血统
+先例）。`devices/redfin/device.toml` 烤入 /etc/aginx/。
+
+**刷机**（devices/redfin/boot/flash-redfin.sh 一键）：serial 双闸 →
+pack vendor_boot（HOLD=1 USBADB=1 ROOTFS=1）→ flash userdata → flash
+vendor_boot（提交点）→ reboot。state tar 恢复：stamps/secret/varlib/
+wifi.conf/网关 id 全活（n5 H 段六项全过为证）。
+
+**首启卡死根因（httpget）**：DNS 轮转 AAAA 在前、AP 无 v6 默认路由，
+拨 v6 答案 sk_wait_data 无超时——internet 阶段挂 10+ 分钟。修法
+74e9541：addrinfo 全答案按序拨 + 15s SO_RCVTIMEO/SNDTIMEO 封顶。
+补推 /bin/httpget 后复启全绿。**烤盘里还是旧件**（下一 bake 折叠，
+此处如实记）。
+
+**OTA 跨机型拒刷实测**：manifest device='enchilada' 上 redfin →
+`manifest is for device 'enchilada' but this machine is 'redfin' —
+refusing (cross-machine update)`，拒绝方向符合 fail-closed 设计。
+
+**n4 假绿收口**：N4 切换日「脸上是母体真回复」是假绿——老 FaceDoc
+lines[] 把用户原文带进 face JSON，grep 命中 inject 自己；v4② lines
+退役后地板话术「没听懂」现形。daemon 前台合同实证（/proc/environ）：
+VOICED_FRONT=/usr/bin/aginx。套件修 225b2ee（D 段六单元产品态）+
+2d82b7a（F 段 inject 带 VOICED_FRONT 合同）。
+
+**n5 套件对齐** 542c578：status 新戳断言对 N5_STAMP 全等（老正则对
+不上三段式版本戳）；pkg ok 改 40×15s 有界等待（分钟级 provision
+重同步，一击 grep 扑空）。
+
+**AP 掐线三次（Legrand，当日）**，签名拼图：
+1. 小包稳：ping 7ms 零丢包、8443 长连 ESTABLISHED；
+2. MB 级持续传输即掐：压测拉 20MB 包 body 超时→NO-CARRIER（一发入魂）；
+3. 被掐后 AP 从扫描消失（beacon 停发，00:39/00:48 两见）或 EAPOL 全通
+   但 DHCP 拒答——病在 AP 本体；
+4. 设备侧无解：无 iw、/proc/net/wireless 全零（wcn 不报数）。
+早间用户断电重启 AP 后数小时正常（含大流量灌注）；深夜复发两次后
+**手机挪近 AP（长 USB 线）**：-86dBm → **-47dBm**，复压测 5×47MB=
+235MB 背靠背零失败（24Mbps 持续），之后 n5 一次过。教训：弱信号
+（-86dBm）+ 持续传输 = AP 弱客户端踢除；信号余量上去才是根治。
+
+**三套件终态**（换线日全绿）：n4 **54/0** · m42c **21/0** · n5
+**45/0**（L 段 agc 远端真往返为 D14 镜像首条；网关 id=cf49973e 跨启
+保持）。prepush 双线推送：origin/master=04df65a（收据照旧只本地）。
+
+**net-watch 真日志注记**：/var/log/net-watch.log（脚本 LOG 直写）才是
+真相源；/var/log/aginx-svc/net-watch.log 是 svcd stdout 捕获恒空——
+勿再误读。
