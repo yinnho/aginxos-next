@@ -66,19 +66,20 @@ done) &
 echo "aginxos: rcS done, rootfs up on userdata" > /dev/kmsg
 date > /etc/.rcs-ran
 
-# Boot card (M5 → 开机剧情 #246 rain-only film) — the panel UI: a fixed
-# ~10 s of Matrix rain from panel-light with the latest bring-up event in
-# a dim footer, then exit(0) — the story continues on the panel in
-# aginx-term/aginx-voice. Starts FIRST because it must own DRM master as
-# soon as the panel registers (it retries until then — msm_drm + panel
-# take ~60 s, loaded by touch-bringup below). Dropping master at exit
-# blanks the panel via dsi_backlight's dpms hooks — that beat of black is
-# the act cut; term relights it.
+# Boot card (M5 → 开机剧情 v4⑤ #246) — the panel UI: the AginxOS wordmark
+# where the Google splash sat. Exits on boot.state's `done` verdict (#282:
+# ok holds 3 s, fail 8 s grace, 150 s hard deadline) — the story continues
+# on the panel in aginx-term/aginx-voice. Starts FIRST because it must own
+# DRM master as soon as the panel registers (it retries until then —
+# msm_drm + panel take ~60 s, loaded by touch-bringup below). Dropping
+# master at exit blanks the panel via dsi_backlight's dpms hooks — that
+# beat of black is the handoff; term relights it.
 mkdir -p /run 2>/dev/null
 : > /run/boot.state
 ( exec /bin/bootcard /run/boot.state ) >/var/bootcard.log 2>&1 &
-# aginx-term-handoff (#246) waits for bootcard's self-exit (rain film
-# ends); this pidfile is its kill-timeout fallback.
+# aginx-term-handoff (#246 v2) does not wait for bootcard — it spawns
+# aginx-term right away and term's DRM wait covers the rest. The log/pid
+# files have no in-repo reader; they are flash-day forensics.
 echo $! > /run/bootcard.pid
 
 # Touch bring-up (M3) — backgrounded: it waits out the ~60s panel
@@ -169,6 +170,6 @@ fi
   done
   /usr/bin/aginx-boot-ok ) &
 
-# Panel handoff (M11) — when boot finishes, bootcard's panel goes to
-# aginx-term (launcher + shell). Backgrounded: waits on /run/boot.state.
+# Panel handoff (M11 → #246 v2) — spawns aginx-term (cursor face)
+# immediately; term's own DRM wait covers bootcard's time on stage.
 /etc/init.d/aginx-term-handoff &
