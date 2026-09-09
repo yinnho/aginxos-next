@@ -657,8 +657,11 @@ impl VoiceView {
     /// due; the pixel work itself happens at render time (M47⑤f: the raw
     /// path blits fused straight into the back buffer — a 45 fps publish
     /// must not pay Bitmap-build + canvas detour per present).
-    fn poll_eye(&mut self, max_w: u32, max_h: u32) -> bool {
-        if !self.doc.eye {
+    /// C6 `term_owns`: 蛋上 term 自持取景（voice 不在，doc.eye 恒 false）
+    /// ——term 持有会话时同样走帧路；eye_open 戳记的是「本次会话」（两种
+    /// 持有者共用，⑤t 旧帧护栏同律）。
+    fn poll_eye(&mut self, max_w: u32, max_h: u32, term_owns: bool) -> bool {
+        if !self.doc.eye && !term_owns {
             self.eye_mtime = None;
             self.raw_mtime = None;
             self.raw_dirty = false;
@@ -1178,6 +1181,32 @@ impl<'a> Render<'a> {
         }
     }
 
+    /// C6 底部双目标条（未配对蛋面的入口）：y∈[h-200,h-60] 高 140，左=
+    /// 扫码配网（GREEN，本面）、右=软件清单（UNAVAIL 占位——C7 接线）。
+    /// 命中几何 `pair_bar_hit` 用同一套数字（测试钉住）。
+    fn pair_bar(&self, pix: &mut [u32]) {
+        let (w, h) = (self.w, self.h);
+        let y0 = (h - 200) as i32;
+        let bh = 140i32;
+        let bs = 4usize;
+        let mut cell = |x0: i32, x1: i32, label: &str, c: u32| {
+            let cw = x1 - x0;
+            fill_rect(pix, self.pitch, w, h, x0, y0, cw, bh, KEYCAP);
+            fill_rect(pix, self.pitch, w, h, x0, y0, cw, 2, DIM);
+            fill_rect(pix, self.pitch, w, h, x0, y0 + bh - 2, cw, 2, DIM);
+            fill_rect(pix, self.pitch, w, h, x0, y0, 2, bh, DIM);
+            fill_rect(pix, self.pitch, w, h, x0 + cw - 2, y0, 2, bh, DIM);
+            // 盒内居中（CJK 宽字符 12*cs、窄字符 6*cs——prompt 同律）
+            let tw: usize =
+                label.chars().map(|ch| if cjk::char_width(ch) == 2 { 12 * bs } else { 6 * bs }).sum();
+            let tx = x0 + (cw - tw as i32) / 2;
+            let ty = y0 + (bh - 8 * bs as i32) / 2;
+            draw_text(pix, self.pitch, w, h, self.font, tx, ty, label, bs, c);
+        };
+        cell(60, (w / 2 - 30) as i32, "扫码配网", GREEN);
+        cell((w / 2 + 30) as i32, (w - 60) as i32, "软件清单", UNAVAIL);
+    }
+
     /// 眼视图 (面法 09-07, was the M42g eye branch of the voice face):
     /// fullscreen viewfinder — eye box = whole panel, JPEG frame by
     /// nearest-neighbor aspect-fill. The raw RGB565 fast path blits fused
@@ -1566,21 +1595,224 @@ impl SelfNet {
     }
 }
 
+// ---------------- C6: 自持扫码配网（voice 眼的蛋面镜像） ----------------
+
+/// 常量照搬 voice（同名同值，见 voice main.rs）：取景总窗 30s（人对准
+/// 之前机器不催，也不能永远开着镜头）、重生预算 3、卡帧 5s（首帧未落
+/// 放宽一倍——子进程冷启动）、QR 解码限频 2Hz。
+const TEYE_VIEW_SECS: u64 = 30;
+const TEYE_RETRIES: u8 = 3;
+const TEYE_STUCK_SECS: u64 = 5;
+const TEYE_QR_EVERY: Duration = Duration::from_millis(400);
+/// aginx-pair apply 侧预算 240s（join 90 + ntpd 20 + 两单元各 10，余量给
+/// 首启冷路）；term 侧再加挂死保险：超窗 kill + 失败行。
+const PAIR_JOB_BUDGET: Duration = Duration::from_secs(300);
+
+/// C6 底部双目标条（未配对蛋面的入口）：左=扫码配网（本条）、右=软件
+/// 清单（C7 接线——C6 只画占位，点按无动作）。几何与 `Render::pair_bar` /
+/// `pair_bar_hit` 同一套数字（测试钉住）。条画在键盘带——idle 面 kb 恒
+/// 隐藏，那里本是死区，不与任何既有触摸目标重叠。
+enum PairBar {
+    Scan,
+    Install,
+}
+
+/// 条的可见门（纯函数）：voice 不在（整机态配网面归 voice）且未配对
+/// （无 wifi.conf——配上即隐退，入口不恋战）。
+fn pair_bar_visible(voice_alive: bool, wifi_conf: bool) -> bool {
+    !voice_alive && !wifi_conf
+}
+
+/// 条的命中几何：y∈[h-200, h-60]（下含上不含），左半=扫码配网、右半=
+/// 软件清单。
+fn pair_bar_hit(x: usize, y: usize, w: usize, h: usize) -> Option<PairBar> {
+    if y >= h.saturating_sub(200) && y < h.saturating_sub(60) {
+        if x < w / 2 {
+            Some(PairBar::Scan)
+        } else {
+            Some(PairBar::Install)
+        }
+    } else {
+        None
+    }
+}
+
+/// 命中分诊（纯函数）：配对码（AGINXPAIR1 超集）或 WIFI: 连网码 →
+/// Some（原样喂 aginx-pair apply——同一入口吃两种）；其他（文本码）→
+/// None（C6 不消费，取景照常收）。
+fn pick_pair_payload(payloads: &[String]) -> Option<String> {
+    payloads.iter().find_map(|p| {
+        let t = p.trim();
+        (aginx_qr::parse_pair_payload(t).is_some() || aginx_qr::parse_wifi_payload(t).is_some())
+            .then(|| t.to_string())
+    })
+}
+
+/// term 自持取景会话（voice EyeView + 异步解码槽）。蛋上 voice 不存在，
+/// 相机没有持有者——term 自己开 cam-shot、自己解 QR。解码绝不
+/// `.output()`（100-300ms 纯计算也冻结主循环——冻屏红线）：spawn 进
+/// `dec` 槽每拍 try_wait，退出后才读行。输出落
+/// /run/aginx-voice/eye.{jpg,raw}——与 voice 同路径：voice 复活边沿由
+/// 主循环护栏即时让路（相机一持有者）。
+struct TermEye {
+    child: std::process::Child,
+    /// 取景总窗（TEYE_VIEW_SECS）基准
+    since: Instant,
+    /// 最近一次看到的 eye.jpg mtime（None=还没见过帧）。QR 只认 jpg——
+    /// raw 是显示快路，JPEG 500ms 慢车道正好对上 2Hz 解码限频。
+    mtime: Option<std::time::SystemTime>,
+    /// 上次 mtime 变化（或 spawn）时刻——卡帧自愈基准
+    mtime_seen: Instant,
+    last_qr: Instant,
+    retries: u8,
+    /// 异步 aginx-qr 解码槽（Some=在算）
+    dec: Option<std::process::Child>,
+}
+
+/// 取景一轮的退出决定（voice EyeExit 同形）。
+enum TermEyeExit {
+    Hit(Vec<String>),
+    GiveUp(&'static str),
+}
+
+/// voice eye_spawn 同款 argv（粘合层平台旗标 + [quirks] eye_stream_args +
+/// --aspect + 双产物落点 + cam.log 每开截断），唯一差别：先
+/// `mkdir -p /run/aginx-voice`——整机上该目录归 voice 建，蛋上没人建。
+fn term_cam_spawn() -> Result<std::process::Child, String> {
+    let _ = std::fs::create_dir_all("/run/aginx-voice");
+    let p = hwd::load_or_exit();
+    let aspect = format!("{}:{}", p.panel.width, p.panel.height);
+    let mut cmd = std::process::Command::new("/usr/bin/aginx-cam-shot");
+    cmd.args(["--stream", "--rear", "--forever", "--aec", "--jpeg"])
+        .arg("--jpeg-every-ms")
+        .arg("500")
+        .args(&p.quirks.eye_stream_args)
+        .arg("--aspect")
+        .arg(&aspect)
+        .arg("--jpeg-out")
+        .arg(VOICE_EYE)
+        .arg("--raw-out")
+        .arg(VOICE_EYE_RAW);
+    // ⑤u 同律：一个日志文件，开眼截断；开不了退回 null（观察不能弄死眼）
+    let log = std::fs::File::create("/run/aginx-voice/cam.log").ok();
+    cmd.stdout(log.as_ref().and_then(|f| f.try_clone().ok()).map_or_else(
+        std::process::Stdio::null,
+        std::process::Stdio::from,
+    ));
+    cmd.stderr(log.map_or_else(std::process::Stdio::null, std::process::Stdio::from));
+    cmd.spawn().map_err(|e| format!("cam-shot spawn: {e}"))
+}
+
+fn term_eye_spawn() -> Result<TermEye, String> {
+    Ok(TermEye {
+        child: term_cam_spawn()?,
+        since: Instant::now(),
+        mtime: None,
+        mtime_seen: Instant::now(),
+        last_qr: Instant::now(),
+        retries: 0,
+        dec: None,
+    })
+}
+
+/// voice eye_stop 同款：TERM（STREAMOFF teardown + aec.state 落盘）→2s→
+/// KILL（std 的 kill 只有 SIGKILL，先 libc::kill 发 TERM）。
+fn term_eye_halt(child: &mut std::process::Child) {
+    let pid = child.id() as i32;
+    if unsafe { libc::kill(pid, libc::SIGTERM) } == 0 {
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while Instant::now() < deadline {
+            match child.try_wait() {
+                Ok(Some(_)) => return,
+                Ok(None) => std::thread::sleep(Duration::from_millis(100)),
+                Err(_) => break,
+            }
+        }
+    }
+    let _ = child.kill();
+    let _ = child.wait();
+}
+
+/// 整会话收口：解码槽先杀（纯计算，KILL 即弃），相机 TERM→KILL，槽清空。
+fn term_eye_stop(te: &mut Option<TermEye>) {
+    if let Some(mut ev) = te.take() {
+        if let Some(mut d) = ev.dec.take() {
+            let _ = d.kill();
+            let _ = d.wait();
+        }
+        term_eye_halt(&mut ev.child);
+    }
+}
+
+/// 杀旧重生（voice eye_respawn 同序：retries+1、mtime 清零、节拍重置）。
+/// 返回 Err = spawn 失败——下一轮 try_wait 再走重生/放弃路径。
+fn term_eye_respawn(te: &mut TermEye) -> Result<(), String> {
+    term_eye_halt(&mut te.child);
+    te.retries += 1;
+    te.mtime = None;
+    te.mtime_seen = Instant::now();
+    te.last_qr = Instant::now();
+    te.child = term_cam_spawn()?;
+    Ok(())
+}
+
+/// 配网 job（C6）：`aginx-pair apply` 异步单飞。payload 走 stdin（argv 恒
+/// 两词——/proc/*/cmdline 永不出现 psk/三键，泄密是硬红线），stdout 汇总
+/// 行收割时读首行（无字段值，apply 侧合同）。
+struct PairJob {
+    child: std::process::Child,
+    since: Instant,
+}
+
+fn spawn_pair_apply(payload: &str) -> Option<PairJob> {
+    let mut child = match std::process::Command::new("/usr/bin/aginx-pair")
+        .arg("apply")
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+    {
+        Ok(c) => c,
+        Err(e) => {
+            eprintln!("aginx-term: aginx-pair spawn: {e}");
+            return None;
+        }
+    };
+    if let Some(mut si) = child.stdin.take() {
+        // 块结束 drop 写端——apply 读到 EOF 收行；payload 短，write 不阻塞
+        let _ = si.write_all(format!("{payload}\n").as_bytes());
+    }
+    Some(PairJob { child, since: Instant::now() })
+}
+
+/// idle 面状态行的所有权（纯函数）：voice 在 → 它的面（term 状态行让位，
+/// 同 selfnet 让位律）；否则 配网行（String）> selfnet 静态行 > None。
+fn idle_status(
+    voice_alive: bool,
+    pair_line: &Option<String>,
+    selfnet_line: Option<&'static str>,
+) -> Option<String> {
+    if voice_alive {
+        return None;
+    }
+    pair_line.clone().or_else(|| selfnet_line.map(|s| s.to_string()))
+}
+
 /// The prompt face's render (开机剧情 v4): the transcript typewriter face.
 /// `breath` = cursor level 0..=16. The live result page never comes through
 /// here — its frames blit straight into the back buffer (result_frame).
-/// C5 `selfnet`: term's own waiting/greet line draws INSTEAD of the voice
-/// transcript, fully revealed (it's a status, not a line of dialogue — no
-/// typewriter), cursor breathing at its end.
+/// C5 `selfnet` / C6 `pair_line`: term 自己的状态行（等待网/问候/配网进度）
+/// 画在 transcript 的位置，整行直显（状态不是台词，不打字机），光标在
+/// 行尾呼吸；voice 在时归让（idle_status 判所有权）。
 fn render_prompt(
     r: &Render,
     pix: &mut [u32],
     voice: &VoiceView,
     breath: u8,
     warns: &[String],
-    selfnet: Option<&'static str>,
+    status: Option<&str>,
 ) {
-    let (line, prog) = match selfnet {
+    let (line, prog) = match status {
         Some(s) => (s, usize::MAX),
         None => (voice.doc.line.as_deref().unwrap_or(""), voice.line_prog),
     };
@@ -1588,6 +1820,10 @@ fn render_prompt(
     // 警告注册表非空 → 中屏红警区叠加；顶部 transcript+呼吸光标不动
     if !warns.is_empty() {
         r.warn(pix, warns);
+    }
+    // C6 未配对蛋面：底部双目标条（扫码配网 / 软件清单）
+    if pair_bar_visible(voice.alive, std::path::Path::new(WIFI_CONF_PATH).exists()) {
+        r.pair_bar(pix);
     }
 }
 
@@ -1981,6 +2217,12 @@ fn main() {
     } else {
         SelfNet::idle()
     };
+    // C6 自持扫码配网三件套：未配对（无 wifi.conf）且 voice 不在 → Idle 面
+    // 底部双目标条（扫码配网 / 软件清单）。取景会话 term_eye、配网 job
+    // （单飞）、状态行 pair_line（idle 面显示层所有权见 idle_status）。
+    let mut term_eye: Option<TermEye> = None;
+    let mut pair_line: Option<String> = None;
+    let mut pair_job: Option<PairJob> = None;
     // 面法: mode boxed away while Mode::Eye has the screen — restored on
     // eye close; None (boot straight into the eye) → Idle.
     let mut mode_before_eye: Option<Box<Mode>> = None;
@@ -2034,7 +2276,14 @@ fn main() {
                     r.photos_list(buf, p, &lg);
                 }
             }
-            Mode::Idle => render_prompt(&r, buf, &voice, 16, &warns, selfnet.line),
+            Mode::Idle => render_prompt(
+                &r,
+                buf,
+                &voice,
+                16,
+                &warns,
+                idle_status(voice.alive, &pair_line, selfnet.line).as_deref(),
+            ),
             Mode::Eye => r.eye(buf, &voice, &lg),
             Mode::Running(_) => {
                 fill_rect(buf, pitch, w, h, 0, 0, w as i32, h as i32, BG);
@@ -2205,7 +2454,7 @@ fn main() {
                         // (eye open → 眼视图). Debug modes (Running/
                         // Launcher/Picker/Photos) restore in place.
                         if matches!(mode, Mode::Idle | Mode::Eye) {
-                            mode = if voice.alive && voice.doc.eye {
+                            mode = if (voice.alive && voice.doc.eye) || term_eye.is_some() {
                                 Mode::Eye
                             } else {
                                 Mode::Idle
@@ -2429,6 +2678,48 @@ fn main() {
                                 kb_dirty = true;
                                 redraw = true;
                             }
+                            // C6 未配对蛋面入口：双目标条画在键盘带（idle
+                            // 面 kb 恒隐藏，那里本是死区）。左格=扫码配网；
+                            // 右格=软件清单（C7 接线，先占位无动作）。
+                            if matches!(mode, Mode::Idle)
+                                && pair_bar_visible(
+                                    voice.alive,
+                                    std::path::Path::new(WIFI_CONF_PATH).exists(),
+                                )
+                            {
+                                if let Some(PairBar::Scan) = pair_bar_hit(x, y, w, h) {
+                                    // 配网 job 在跑 → 单飞让路（「配网中…」
+                                    // 行已在陈述状态）
+                                    if pair_job.is_none() {
+                                        // paint-first：第一帧 ~2s 在路上，
+                                        // 「取景中…」先上屏再开相机
+                                        {
+                                            let r = Render { font: &font, w, h, pitch };
+                                            r.eye(&mut canvas[..], &voice, &lg);
+                                            d.back_buf().copy_from_slice(&canvas);
+                                            d.present();
+                                        }
+                                        match term_eye_spawn() {
+                                            Ok(te) => {
+                                                term_eye = Some(te);
+                                                mode = Mode::Eye;
+                                                redraw = true;
+                                            }
+                                            Err(e) => {
+                                                eprintln!("aginx-term: eye spawn {e}");
+                                                pair_line = Some("相机没起来，再试一次。".into());
+                                                redraw = true;
+                                            }
+                                        }
+                                    }
+                                }
+                            } else if matches!(mode, Mode::Eye) && term_eye.is_some() {
+                                // C6 自持取景的点按退出（voice 的眼由音量键
+                                // 管，term 的眼触屏全权）
+                                term_eye_stop(&mut term_eye);
+                                mode = Mode::Idle;
+                                redraw = true;
+                            }
                         }
                         // Finger lifted: everything fired at Down already.
                         // A tap in the terminal area (no drag) summons or
@@ -2534,7 +2825,7 @@ fn main() {
                                     // the 待机面 (eye open → 眼视图); debug
                                     // modes restore in place
                                     if matches!(mode, Mode::Idle | Mode::Eye) {
-                                        mode = if voice.alive && voice.doc.eye {
+                                        mode = if (voice.alive && voice.doc.eye) || term_eye.is_some() {
                                             Mode::Eye
                                         } else {
                                             Mode::Idle
@@ -2599,6 +2890,18 @@ fn main() {
         // M42g: the viewfinder frame polls too — a frame landing ~1/s is
         // activity; decode box is the whole panel.
         let face = voice.poll();
+        // C6 相机互斥护栏：voice 复活边沿（face 文件首次可读）即让路——
+        // 整机态相机归 voice 独占，同路径输出只是兜底不是协议。让路同时
+        // 清 term 状态行（idle 面归还 voice，同 selfnet 让位律）。
+        if voice.alive && term_eye.is_some() {
+            eprintln!("aginx-term: voice revived — term eye yields");
+            term_eye_stop(&mut term_eye);
+            pair_line = None;
+            if matches!(mode, Mode::Eye) {
+                mode = Mode::Idle;
+            }
+            redraw = true;
+        }
         // 面法 09-07: the eye FLAG drives Mode::Eye from ANY mode — open
         // steals the screen (prior mode boxed away), close hands it back
         // (dead prior → Idle). A vanished face file (voice daemon death
@@ -2724,7 +3027,7 @@ fn main() {
         }
         if matches!(mode, Mode::Eye) {
             let (_, _, eye_w, eye_h) = lg.eye_box();
-            let eye = voice.poll_eye(eye_w as u32, eye_h as u32);
+            let eye = voice.poll_eye(eye_w as u32, eye_h as u32, term_eye.is_some());
             if face || eye {
                 last_input = Instant::now();
                 if blanked {
@@ -2734,11 +3037,170 @@ fn main() {
                 redraw = true;
             }
         }
+        // ---- C6 自持取景生命周期（voice eye 同律：总窗/重生/卡帧/异步解码） ----
+        let mut te_exit: Option<TermEyeExit> = None;
+        if let Some(te) = term_eye.as_mut() {
+            if te.since.elapsed() >= Duration::from_secs(TEYE_VIEW_SECS) {
+                te_exit = Some(TermEyeExit::GiveUp("没拍到码，再点扫码配网。"));
+            } else {
+                match te.child.try_wait() {
+                    Ok(Some(_)) => {
+                        eprintln!("aginx-term: eye cam-shot exit");
+                        if te.retries >= TEYE_RETRIES {
+                            te_exit = Some(TermEyeExit::GiveUp("相机反复掉线，取景关闭。"));
+                        } else if term_eye_respawn(te).is_err() {
+                            te_exit = Some(TermEyeExit::GiveUp("相机没起来，取景关闭。"));
+                        }
+                    }
+                    Err(e) => {
+                        eprintln!("aginx-term: eye wait {e}");
+                        te_exit = Some(TermEyeExit::GiveUp("相机掉线，取景关闭。"));
+                    }
+                    Ok(None) => {
+                        // 解码槽收割：退出才读行（绝不 .output()——冻屏红线）
+                        if let Some(mut dec) = te.dec.take() {
+                            match dec.try_wait() {
+                                Ok(Some(st)) => {
+                                    if st.success() {
+                                        let mut out = String::new();
+                                        if let Some(mut r) = dec.stdout.take() {
+                                            let _ = std::io::Read::read_to_string(&mut r, &mut out);
+                                        }
+                                        let payloads: Vec<String> = out
+                                            .lines()
+                                            .map(|l| l.trim().to_string())
+                                            .filter(|l| !l.is_empty())
+                                            .collect();
+                                        if !payloads.is_empty() {
+                                            te_exit = Some(TermEyeExit::Hit(payloads));
+                                        }
+                                    } // rc=1 没码——槽已清，下帧再试
+                                }
+                                Ok(None) => te.dec = Some(dec), // 还在算
+                                Err(_) => {} // 槽丢弃，下帧重起
+                            }
+                        }
+                        // 帧轮询：mtime 变 → 异步起解码；停滞 → 卡帧自愈重生
+                        let mtime = std::fs::metadata(VOICE_EYE).and_then(|m| m.modified()).ok();
+                        match mtime {
+                            Some(t) if Some(t) != te.mtime => {
+                                te.mtime = Some(t);
+                                te.mtime_seen = Instant::now();
+                                if te.last_qr.elapsed() >= TEYE_QR_EVERY && te.dec.is_none() {
+                                    te.last_qr = Instant::now();
+                                    match std::process::Command::new("/usr/bin/aginx-qr")
+                                        .arg(VOICE_EYE)
+                                        .stdout(std::process::Stdio::piped())
+                                        .stderr(std::process::Stdio::null())
+                                        .spawn()
+                                    {
+                                        Ok(c) => te.dec = Some(c),
+                                        Err(e) => eprintln!("aginx-term: qr spawn: {e}"),
+                                    }
+                                }
+                            }
+                            _ => {
+                                // mtime 没动（或首帧未落）超时 → 杀重生。首帧
+                                // 预算放宽一倍（子进程冷启动，voice 同律）
+                                let stuck =
+                                    if te.mtime.is_none() { 2 * TEYE_STUCK_SECS } else { TEYE_STUCK_SECS };
+                                if te.mtime_seen.elapsed() >= Duration::from_secs(stuck) {
+                                    if te.retries >= TEYE_RETRIES {
+                                        te_exit = Some(TermEyeExit::GiveUp("取景卡住了，取景关闭。"));
+                                    } else {
+                                        eprintln!("aginx-term: eye stuck frame, respawn");
+                                        let _ = term_eye_respawn(te);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        if let Some(exit) = te_exit {
+            // paint-first：收相机（TERM→2s→KILL）可能阻塞，先把将要显示的
+            // 那一帧放上面——命中即「配网中…」，放弃即失败行。
+            let hit_payload = match &exit {
+                TermEyeExit::Hit(payloads) => pick_pair_payload(payloads),
+                TermEyeExit::GiveUp(msg) => {
+                    pair_line = Some(msg.to_string());
+                    None
+                }
+            };
+            if hit_payload.is_some() {
+                pair_line = Some("配网中…".into());
+                {
+                    let r = Render { font: &font, w, h, pitch };
+                    render_prompt(&r, &mut canvas[..], &voice, 16, &warns, Some("配网中…"));
+                    d.back_buf().copy_from_slice(&canvas);
+                    d.present();
+                }
+            }
+            term_eye_stop(&mut term_eye);
+            if matches!(mode, Mode::Eye) {
+                mode = Mode::Idle;
+            }
+            if let Some(payload) = hit_payload {
+                match spawn_pair_apply(&payload) {
+                    Some(job) => pair_job = Some(job),
+                    None => pair_line = Some("配网没成，再试一次。".into()),
+                }
+            } else if let TermEyeExit::Hit(_) = &exit {
+                // 命中了但不是配对码/连网码——文本码 C6 不消费
+                pair_line = Some("不是配对码，取景已关。".into());
+            }
+            redraw = true;
+        }
+        // ---- C6 配网 job 收割：每拍 try_wait（绝不阻塞等）；预算尽才 kill。
+        // 汇总行 = stdout 首行（apply 只在成功时出一行，无字段值）----
+        if let Some(mut job) = pair_job.take() {
+            let mut done = false;
+            let mut ok = false;
+            match job.child.try_wait() {
+                Ok(Some(st)) => {
+                    done = true;
+                    ok = st.success();
+                    if ok {
+                        let mut out = String::new();
+                        if let Some(mut r) = job.child.stdout.take() {
+                            let _ = std::io::Read::read_to_string(&mut r, &mut out);
+                        }
+                        let line = out.lines().next().unwrap_or("").trim().to_string();
+                        pair_line =
+                            Some(if line.is_empty() { "配网完成。".into() } else { line });
+                    } else {
+                        eprintln!("aginx-term: pair apply exit {}", st.code().unwrap_or(-1));
+                    }
+                }
+                Ok(None) => {
+                    if job.since.elapsed() >= PAIR_JOB_BUDGET {
+                        eprintln!("aginx-term: pair apply budget over — kill");
+                        let _ = job.child.kill();
+                        let _ = job.child.wait();
+                        done = true;
+                    } else {
+                        pair_job = Some(job); // 还在跑
+                    }
+                }
+                Err(_) => {
+                    done = true;
+                }
+            }
+            if done {
+                if !ok {
+                    pair_line = Some("配网没成，再试一次。".into());
+                }
+                redraw = true;
+            }
+        }
         // M47⑤t: park on {0..5} while the eye streams, full mask when it
         // stops — keyed on the FLAG, any mode (the voice daemon opens and
         // closes the eye with VolUp no matter which view is showing).
-        if voice.doc.eye != eye_parked {
-            eye_parked = voice.doc.eye;
+        // C6: term 自持会话同为流态（同为取景的分核收益方）。
+        let eye_streaming = voice.doc.eye || term_eye.is_some();
+        if eye_streaming != eye_parked {
+            eye_parked = eye_streaming;
             set_eye_affinity(eye_parked);
         }
 
@@ -2818,7 +3280,14 @@ fn main() {
                         direct = true;
                     } else {
                         let level = if breath_tick <= 16 { breath_tick } else { 32 - breath_tick };
-                        render_prompt(&r, buf, &voice, level, &warns, selfnet.line);
+                        render_prompt(
+                            &r,
+                            buf,
+                            &voice,
+                            level,
+                            &warns,
+                            idle_status(voice.alive, &pair_line, selfnet.line).as_deref(),
+                        );
                     }
                 }
                 Mode::Eye => {
@@ -3251,5 +3720,79 @@ mod tests {
         assert!(!sn.tick(false));
         assert_eq!(sn.line, Some(SELFNET_WAITING));
         assert_eq!(SelfNet::idle().line, None);
+    }
+
+    // ---- C6 扫码配网 ----
+
+    /// C6 双目标条命中几何（fixture 面板钉住）：y∈[h-200, h-60)（下含上
+    /// 不含），左半 Scan / 右半 Install；界外 None。
+    #[test]
+    fn pair_bar_hit_geometry() {
+        let (w, h) = (1080usize, 2340usize); // D14-exempt: fixture panel geometry
+        let is_scan = |x: usize, y: usize| matches!(pair_bar_hit(x, y, w, h), Some(PairBar::Scan));
+        let is_install = |x: usize, y: usize| matches!(pair_bar_hit(x, y, w, h), Some(PairBar::Install));
+        // 边界：y=h-200 进、y=h-60 出、y=h-201 出
+        assert!(is_scan(100, h - 200), "top edge inclusive");
+        assert!(pair_bar_hit(100, h - 201, w, h).is_none(), "above the bar");
+        assert!(pair_bar_hit(100, h - 60, w, h).is_none(), "bottom edge exclusive");
+        assert!(pair_bar_hit(100, h - 1, w, h).is_none(), "below the bar");
+        // 左右对半：x<540 Scan，x≥540 Install（Render::pair_bar 各留 60/30 缩进，
+        // 命中几何按对半分——视觉上 30px 缝隙容差）
+        assert!(is_scan(0, 2200) && is_scan(539, 2200));
+        assert!(is_install(540, 2200) && is_install(w - 1, 2200));
+        assert!(is_scan(100, 2140) && is_install(1000, 2279));
+        // 小面板不炸：饱和减法把条带顶到 y∈[0,h-60)——真实面板远大
+        // （D14-exempt: fixture 下界语义）不会走到，这里只钉住它不 panic 不越界
+        assert!(matches!(pair_bar_hit(10, 10, 100, 100), Some(_)));
+    }
+
+    /// C6 条的可见门真值表：voice 不在且未配对才画（四行全枚举）。
+    #[test]
+    fn pair_bar_visible_truth_table() {
+        assert!(pair_bar_visible(false, false), "bare egg: the entry face");
+        assert!(!pair_bar_visible(false, true), "paired — entry retires");
+        assert!(!pair_bar_visible(true, false), "voice alive — its face");
+        assert!(!pair_bar_visible(true, true));
+    }
+
+    /// C6 命中分诊：AGINXPAIR1 超集 / WIFI: 连网码 → Some（原样，喂
+    /// aginx-pair apply 同一入口）；文本码 → None；首个可消费者胜。
+    #[test]
+    fn pick_pair_payload_tries_each_and_keeps_first() {
+        // 全身份码（pair apply 测试同款 fixture——无真值，纯形状）
+        let full = "AGINXPAIR1|Legrand AP|p4ss w0rd!|sk-1234567890abcdef1234567890abcdef|cf49973e|relay-secret-9f8e7d6c";
+        assert_eq!(pick_pair_payload(&[full.to_string()]).as_deref(), Some(full));
+        assert_eq!(
+            pick_pair_payload(&["WIFI:T:WPA;S:home;P:secret;;".to_string()]).as_deref(),
+            Some("WIFI:T:WPA;S:home;P:secret;;")
+        );
+        // 文本码不消费
+        assert_eq!(pick_pair_payload(&["hello world".to_string(), "https://aginx.net".into()]), None);
+        assert_eq!(pick_pair_payload(&[]), None);
+        // 半截身份码（空段）不是码——解析器拒它
+        assert_eq!(pick_pair_payload(&["AGINXPAIR1|ssid||key|gw|sec".to_string()]), None);
+        // 首个可消费者胜：文本在前不挡，码仍被挑出
+        let mixed = vec!["hello world".to_string(), full.to_string()];
+        assert_eq!(pick_pair_payload(&mixed).as_deref(), Some(full));
+        // 首个码胜：两个码都在，拿前一个
+        let two = vec![full.to_string(), "WIFI:T:WPA;S:b;P:c;;".to_string()];
+        assert_eq!(pick_pair_payload(&two).as_deref(), Some(full));
+    }
+
+    /// C6 idle 面状态行所有权：voice 在 → None（它的面）；否则 配网行 >
+    /// selfnet 静态行 > None（三层让位链）。
+    #[test]
+    fn idle_status_ownership_chain() {
+        let pair = Some("配网中…".to_string());
+        let net: Option<&'static str> = Some(SELFNET_WAITING);
+        // voice 活着：term 的一切状态行让位
+        assert_eq!(idle_status(true, &pair, net), None);
+        assert_eq!(idle_status(true, &None, net), None);
+        // 配网行压过 selfnet（配网是当下的事，等网是背景）
+        assert_eq!(idle_status(false, &pair, net).as_deref(), Some("配网中…"));
+        // 无配网行 → selfnet 行
+        assert_eq!(idle_status(false, &None, net), Some(SELFNET_WAITING.to_string()));
+        // 都没有 → 无人（transcript 打字机照旧）
+        assert_eq!(idle_status(false, &None, None), None);
     }
 }
