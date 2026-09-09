@@ -831,134 +831,47 @@ fn read_wifi_conf() -> Option<(String, String)> {
     Some((ssid?, psk))
 }
 
-/// Act::PairApply（M42c 一眼自举的机器侧全流程）：连网 → 身份三件进
-/// /etc/aginx/env → 快速校时 → 拉起母体两单元。结果全部进报告话。秘密
-/// 只进 env 文件（0600），永不出现在日志/脸/报告。svc 每次 spawn 重读
-/// env_file，restart 即生效；failed（熔断）单元 restart 同样能救（M42e
-/// 收据）。**不重启 aginx-voice**——重启=自杀，本地语音离线路径不依赖
-/// env，下次 boot 自然带上。
+/// Act::PairApply（M42c 一眼自举的机器侧全流程）委外 `/usr/bin/aginx-pair
+/// apply`（C3）：payload 一行进 stdin——argv 恒两词，psk/三键永不进
+/// /proc/*/cmdline。join+IP 轮询+落 wifi.conf、env 三键合并、快速校时、
+/// internet 探测、母体两单元 restart-ready、boot.state 网四行定点刷新全
+/// 在那一侧；汇总行（stdout 首行）回来作报告话。秘���只进 env 文件
+/// （0600），两侧日志都永不记值。预算 240s（join 90s + ntpd 20s + 两单元
+/// 各 10s ready，余量给首启冷路）。**不重启 aginx-voice**——重启=自杀，
+/// 本地语音离线路径不依赖 env，下次 boot 自然带上。
+const PAIR_APPLY_BUDGET_SECS: u32 = 240;
+
 fn pair_apply(bundle: &aginx_qr::PairBundle) -> Result<String, String> {
-    join_wifi(&bundle.ssid, &bundle.psk)?;
-    write_env_keys(&[
-        ("AGINXBRAIN_API_KEY", &bundle.brain_key),
-        ("AGINX_GATEWAY_ID", &bundle.gateway_id),
-        ("AGINX_RELAY_SECRET", &bundle.relay_secret),
-    ])?;
-    let clock_ok = quick_clock();
-    let up = svc_ready_after_restart("aginx-gateway") && svc_ready_after_restart("aginx-server");
-    let mut msg = String::from("网已连");
-    if !clock_ok {
-        msg.push_str("，时钟没同步");
-    }
-    msg.push_str(if up { "，母体在线" } else { "，母体没起来" });
-    Ok(msg)
-}
-
-/// 身份键并入 /etc/aginx/env（KEY=VALUE、# 注释——svc spawn 重读的同一
-/// 形状）。保留既有行（HOME 等），同名键原地替换，缺的尾部追加。0600
-/// tmp+rename（persist_wifi 同法）。
-fn write_env_keys(kvs: &[(&str, &str)]) -> Result<(), String> {
-    use std::io::Write;
-    use std::os::unix::fs::OpenOptionsExt;
-    let existing = std::fs::read_to_string("/etc/aginx/env").unwrap_or_default();
-    let has_key = |k: &str| {
-        existing
-            .lines()
-            .any(|l| l.split_once('=').map(|(ek, _)| ek == k).unwrap_or(false))
-    };
-    let mut out = String::new();
-    for line in existing.lines() {
-        let t = line.trim();
-        if t.is_empty() || t.starts_with('#') {
-            out.push_str(line);
-            out.push('\n');
-            continue;
-        }
-        match line.split_once('=') {
-            Some((k, _)) if kvs.iter().any(|(nk, _)| *nk == k) => {
-                let v = &kvs.iter().find(|(nk, _)| *nk == k).unwrap().1;
-                out.push_str(&format!("{k}={v}\n"));
-            }
-            _ => {
-                out.push_str(line);
-                out.push('\n');
-            }
-        }
-    }
-    for (k, v) in kvs {
-        if !has_key(k) {
-            out.push_str(&format!("{k}={v}\n"));
-        }
-    }
-    let tmp = "/etc/aginx/env.tmp";
-    std::fs::OpenOptions::new()
-        .write(true)
-        .create(true)
-        .truncate(true)
-        .mode(0o600)
-        .open(tmp)
-        .and_then(|mut f| f.write_all(out.as_bytes()))
-        .map_err(|e| format!("env write: {e}"))?;
-    std::fs::rename(tmp, "/etc/aginx/env").map_err(|e| format!("env rename: {e}"))
-}
-
-/// 快速校时（net-bringup:111-136 律的短版）：TLS 验证书要近似正确的钟，
-/// 不然 gateway 连 relay 全被拒。两次×10s 交替双 NTP，`date +%Y≥2026`
-/// 判定；失败不致命——进报告话，net-watch/下次 bringup 会补。
-fn quick_clock() -> bool {
-    for server in ["ntp.aliyun.com", "cn.pool.ntp.org"] {
-        if let Ok(mut child) = Command::new("ntpd")
-            .args(["-q", "-n", "-p", server])
-            .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::null())
-            .spawn()
-        {
-            let _ = audio::wait_limited(&mut child, 10);
-            let _ = child.wait();
-        }
-        let ok = Command::new("date")
-            .arg("+%Y")
-            .output()
-            .ok()
-            .and_then(|o| String::from_utf8(o.stdout).ok())
-            .and_then(|s| s.trim().parse::<i32>().ok())
-            .map(|y| y >= 2026)
-            .unwrap_or(false);
-        if ok {
-            return true;
-        }
-    }
-    false
-}
-
-/// restart 一个 unit 并回查到 ready（simple 型 spawn 即 ready；熔断
-/// failed 单元 restart 照样救活）。restart 失败或 10s 内仍 failed = false。
-fn svc_ready_after_restart(unit: &str) -> bool {
-    let st = Command::new("/usr/bin/aginx-svc")
-        .args(["restart", unit])
-        .stdout(std::process::Stdio::null())
+    use std::io::Write as _;
+    let mut child = Command::new("/usr/bin/aginx-pair")
+        .arg("apply")
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::null())
-        .status();
-    if !st.map(|s| s.success()).unwrap_or(false) {
-        eprintln!("aginx-voice: svc restart {unit} failed");
-        return false;
+        .spawn()
+        .map_err(|e| format!("aginx-pair spawn: {e}"))?;
+    {
+        let mut si = child.stdin.take().ok_or("aginx-pair stdin")?;
+        si.write_all(format!("{}\n", bundle.payload()).as_bytes())
+            .map_err(|e| format!("aginx-pair stdin: {e}"))?;
+        // 块结束 drop 写端 —— apply 读到 EOF 收行
     }
-    for _ in 0..20 {
-        std::thread::sleep(Duration::from_millis(500));
-        if let Ok(o) = Command::new("/usr/bin/aginx-svc")
-            .args(["status", unit])
-            .output()
-        {
-            let txt = String::from_utf8_lossy(&o.stdout);
-            if txt.lines().any(|l| l.trim() == "state   ready") {
-                return true;
-            }
-            if txt.lines().any(|l| l.trim() == "state   failed") {
-                return false;
-            }
-        }
+    audio::wait_limited(&mut child, PAIR_APPLY_BUDGET_SECS)
+        .map_err(|e| format!("aginx-pair {e}"))?;
+    // 汇总行短（≤一屏行），pipe 缓冲装得下；子已退，读到 EOF 即回
+    let out = child
+        .wait_with_output()
+        .map_err(|e| format!("aginx-pair read: {e}"))?;
+    let line = String::from_utf8_lossy(&out.stdout)
+        .lines()
+        .next()
+        .unwrap_or("")
+        .trim()
+        .to_string();
+    if line.is_empty() {
+        return Err("aginx-pair 没给汇总行".into());
     }
-    false
+    Ok(line)
 }
 
 /// 拍照解 QR（M42b 眼分支）。尝试阶梯：默认曝光 ×3 → 慢模式+增益兜底。
