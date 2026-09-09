@@ -1,16 +1,13 @@
 #!/bin/sh
 # Panel handoff (M11 → 开机剧情 #246 v2): bootcard -> aginx-term.
 #
-# bootcard is a fixed ~10 s rain film: it self-exits (RAIN_SECS after
-# panel-light) and dropping DRM master lets dsi_backlight's dpms hooks
-# blank the panel. v2 (「雨不能停」): the handoff no longer waits for that
-# exit — it spawns aginx-term immediately and term's wait_up itself waits
-# for the master (bootcard on stage => SET_MASTER EBUSY => 250 ms fast
-# poll; the moment bootcard exits, term relights within one tick). The
-# old wait-here-then-cold-start put ~3 s of silent black between the two
-# rains; now the only dark beat is the kernel's own dpms-off instant.
-# bootcard always has an exit path (film done, or DRM retries exhausted),
-# so the timeout kill retired with the wait.
+# No waiting here: spawn aginx-term immediately — its DRM wait_up polls
+# while bootcard holds master (SET_MASTER fails => 250 ms fast poll;
+# msm_drm 4.19 answers EINVAL, not EBUSY, when a master exists), and the
+# moment bootcard exits and drops master, term relights within one tick.
+# The old wait-here-then-cold-start put ~3 s of silent black between the
+# two stages. bootcard always self-exits (`done` verdict hold or the
+# 150 s deadline), so the timeout kill retired with the wait.
 export PATH=/sbin:/bin:/usr/sbin:/usr/bin
 # M17 voice hook: watch /run/aginx-term.inject (ASR text lands there; aginx-term
 # types it into the pty). Was hand-exported since M18 — baked here in

@@ -76,8 +76,9 @@ echo "=== local verdict: done ok (net chain continues) $(date) ==="
 
 # ---- phase 2: net chain (never done fail) -------------------------------
 # Credentials. Missing config is a clean fail, not a guess — and not a
-# broken boot: it is the Act 3b story (对准配对码), provision retries next
-# boot (M27 discipline), net-watch may still heal once a conf appears.
+# broken boot: no conf means unpaired, and pairing (voice 对准配对码 /
+# term 扫码配网) is the intended way in; provision retries next boot
+# (M27 discipline), net-watch may still heal once a conf appears.
 if [ ! -f /etc/wifi.conf ]; then
   say wifi fail "no /etc/wifi.conf"
   exit 0

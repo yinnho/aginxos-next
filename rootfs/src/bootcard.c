@@ -27,7 +27,6 @@
 #define _GNU_SOURCE
 #include <errno.h>
 #include <fcntl.h>
-#include <poll.h>
 #include <stdarg.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -112,11 +111,6 @@ struct drm_mode_fb_cmd2 {
 #define DRM_IOCTL_MODE_CREATE_DUMB DRM_IOWR(0xB2, struct drm_mode_create_dumb)
 #define DRM_IOCTL_MODE_MAP_DUMB DRM_IOWR(0xB3, struct drm_mode_map_dumb)
 #define DRM_IOCTL_MODE_ADDFB2 DRM_IOWR(0xB8, struct drm_mode_fb_cmd2)
-struct drm_mode_crtc_page_flip {
-  uint32_t fb_id, crtc_id, flags, reserved;
-  uint64_t user_data;
-};
-#define DRM_IOCTL_MODE_PAGE_FLIP DRM_IOWR(0xB0, struct drm_mode_crtc_page_flip)
 #define DRM_IOCTL_SET_MASTER DRM_IO(0x1e)
 #define DRM_FORMAT_XRGB8888 0x34325258u
 
@@ -131,89 +125,17 @@ static uint32_t fb_w, fb_h;
 /* ---------------- 5x8 string-art font ----------------
  * Each glyph is 8 rows of 5 chars ('#'=on, anything else=off), parsed once
  * at startup. Caps sit rows 1-7, lowercase body rows 3-7, descenders row 8.
- * String art in the source keeps the shapes reviewable in place.
+ * String art in the source keeps the shapes reviewable in place. The
+ * table carries only the wordmark's letters — "AginxOS" is all it draws.
  */
 static const struct { char c; const char *s; } GLYPHS[] = {
 {'A', ".###.\n#...#\n#...#\n#####\n#...#\n#...#\n#...#\n....."},
-{'B', "####.\n#...#\n#...#\n####.\n#...#\n#...#\n####.\n....."},
-{'C', ".###.\n#...#\n#....\n#....\n#....\n#...#\n.###.\n....."},
-{'D', "####.\n#...#\n#...#\n#...#\n#...#\n#...#\n####.\n....."},
-{'E', "#####\n#....\n#....\n####.\n#....\n#....\n#####\n....."},
-{'F', "#####\n#....\n#....\n####.\n#....\n#....\n#....\n....."},
-{'G', ".###.\n#...#\n#....\n#.###\n#...#\n#...#\n.###.\n....."},
-{'H', "#...#\n#...#\n#...#\n#####\n#...#\n#...#\n#...#\n....."},
-{'I', ".###.\n..#..\n..#..\n..#..\n..#..\n..#..\n.###.\n....."},
-{'J', "..###\n...#.\n...#.\n...#.\n...#.\n#..#.\n.##..\n....."},
-{'K', "#...#\n#..#.\n#.#..\n##...\n#.#..\n#..#.\n#...#\n....."},
-{'L', "#....\n#....\n#....\n#....\n#....\n#....\n#####\n....."},
-{'M', "#...#\n##.##\n#.#.#\n#.#.#\n#...#\n#...#\n#...#\n....."},
-{'N', "#...#\n##..#\n##..#\n#.#.#\n#..##\n#..##\n#...#\n....."},
 {'O', ".###.\n#...#\n#...#\n#...#\n#...#\n#...#\n.###.\n....."},
-{'P', "####.\n#...#\n#...#\n####.\n#....\n#....\n#....\n....."},
-{'Q', ".###.\n#...#\n#...#\n#...#\n#.#.#\n#..#.\n.##.#\n....."},
-{'R', "####.\n#...#\n#...#\n####.\n#.#..\n#..#.\n#...#\n....."},
 {'S', ".####\n#....\n#....\n.###.\n....#\n....#\n####.\n....."},
-{'T', "#####\n..#..\n..#..\n..#..\n..#..\n..#..\n..#..\n....."},
-{'U', "#...#\n#...#\n#...#\n#...#\n#...#\n#...#\n.###.\n....."},
-{'V', "#...#\n#...#\n#...#\n#...#\n#...#\n.#.#.\n..#..\n....."},
-{'W', "#...#\n#...#\n#...#\n#.#.#\n#.#.#\n##.##\n#...#\n....."},
-{'X', "#...#\n#...#\n.#.#.\n..#..\n.#.#.\n#...#\n#...#\n....."},
-{'Y', "#...#\n#...#\n.#.#.\n..#..\n..#..\n..#..\n..#..\n....."},
-{'Z', "#####\n....#\n...#.\n..#..\n.#...\n#....\n#####\n....."},
-{'a', ".....\n.....\n.###.\n....#\n.####\n#...#\n.####\n....."},
-{'b', "#....\n#....\n####.\n#...#\n#...#\n#...#\n####.\n....."},
-{'c', ".....\n.....\n.###.\n#....\n#....\n#....\n.###.\n....."},
-{'d', "....#\n....#\n.####\n#...#\n#...#\n#...#\n.####\n....."},
-{'e', ".....\n.....\n.###.\n#...#\n#####\n#....\n.###.\n....."},
-{'f', "..##.\n.#..#\n.#...\n###..\n.#...\n.#...\n.#...\n....."},
 {'g', ".....\n.....\n.####\n#...#\n#...#\n.####\n....#\n.###."},
-{'h', "#....\n#....\n####.\n#...#\n#...#\n#...#\n#...#\n....."},
 {'i', "..#..\n.....\n..#..\n..#..\n..#..\n..#..\n..#..\n....."},
-{'j', "...#.\n.....\n...#.\n...#.\n...#.\n...#.\n#..#.\n.##.."},
-{'k', "#....\n#....\n#..#.\n#.#..\n##...\n#.#..\n#..#.\n....."},
-{'l', ".##..\n..#..\n..#..\n..#..\n..#..\n..#..\n.###.\n....."},
-{'m', ".....\n.....\n##.#.\n#.#.#\n#.#.#\n#.#.#\n#.#.#\n....."},
 {'n', ".....\n.....\n####.\n#...#\n#...#\n#...#\n#...#\n....."},
-{'o', ".....\n.....\n.###.\n#...#\n#...#\n#...#\n.###.\n....."},
-{'p', ".....\n.....\n####.\n#...#\n#...#\n####.\n#....\n#...."},
-{'q', ".....\n.....\n.####\n#...#\n#...#\n.####\n....#\n....#"},
-{'r', ".....\n.....\n.####\n#...#\n#....\n#....\n#....\n....."},
-{'s', ".....\n.....\n.####\n#....\n.###.\n....#\n####.\n....."},
-{'t', ".#...\n.#...\n###..\n.#...\n.#...\n.#..#\n..##.\n....."},
-{'u', ".....\n.....\n#...#\n#...#\n#...#\n#...#\n.####\n....."},
-{'v', ".....\n.....\n#...#\n#...#\n#...#\n.#.#.\n..#..\n....."},
-{'w', ".....\n.....\n#...#\n#...#\n#.#.#\n#.#.#\n.#.#.\n....."},
-{'x', ".....\n.....\n#...#\n.#.#.\n..#..\n.#.#.\n#...#\n....."},
-{'y', ".....\n.....\n#...#\n#...#\n#...#\n.####\n....#\n.###."},
-{'z', ".....\n.....\n#####\n...#.\n..#..\n.#...\n#####\n....."},
-{'0', ".###.\n#...#\n#..##\n#.#.#\n##..#\n#...#\n.###.\n....."},
-{'1', "..#..\n.##..\n..#..\n..#..\n..#..\n..#..\n.###.\n....."},
-{'2', ".###.\n#...#\n....#\n...#.\n..#..\n.#...\n#####\n....."},
-{'3', "####.\n....#\n....#\n.###.\n....#\n....#\n####.\n....."},
-{'4', "...#.\n..##.\n.#.#.\n#..#.\n#####\n...#.\n...#.\n....."},
-{'5', "#####\n#....\n####.\n....#\n....#\n#...#\n.###.\n....."},
-{'6', "..##.\n.#...\n#....\n####.\n#...#\n#...#\n.###.\n....."},
-{'7', "#####\n....#\n...#.\n..#..\n..#..\n..#..\n..#..\n....."},
-{'8', ".###.\n#...#\n#...#\n.###.\n#...#\n#...#\n.###.\n....."},
-{'9', ".###.\n#...#\n#...#\n.####\n....#\n...#.\n.##..\n....."},
-{' ', ".....\n.....\n.....\n.....\n.....\n.....\n.....\n....."},
-{'.', ".....\n.....\n.....\n.....\n.....\n.##..\n.##..\n....."},
-{',', ".....\n.....\n.....\n.....\n.....\n.##..\n.##..\n.#..."},
-{':', ".....\n.....\n.##..\n.##..\n.....\n.##..\n.##..\n....."},
-{';', ".....\n.....\n.##..\n.##..\n.....\n.##..\n.##..\n.#..."},
-{'/', "....#\n....#\n...#.\n...#.\n..#..\n.#...\n.#...\n#...."},
-{'-', ".....\n.....\n.....\n.....\n.###.\n.....\n.....\n....."},
-{'_', ".....\n.....\n.....\n.....\n.....\n.....\n.....\n#####"},
-{'(', "..#..\n.#...\n.#...\n#....\n#....\n.#...\n.#...\n..#.."},
-{')', "..#..\n...#.\n...#.\n....#\n....#\n...#.\n...#.\n..#.."},
-{'+', ".....\n.....\n..#..\n..#..\n#####\n..#..\n..#..\n....."},
-{'=', ".....\n.....\n.....\n#####\n.....\n#####\n.....\n....."},
-{'!', "..#..\n..#..\n..#..\n..#..\n..#..\n.....\n..#..\n....."},
-{'?', ".###.\n#..#.\n...#.\n..#..\n..#..\n.....\n..#..\n....."},
-{'\'', "..#..\n..#..\n.....\n.....\n.....\n.....\n.....\n....."},
-{'%', "#...#\n#..#.\n...#.\n..#..\n.#...\n#..#.\n#...#\n....."},
-{'<', "....#\n...#.\n..#..\n.#...\n..#..\n...#.\n....#\n....."},
-{'>', "#....\n.#...\n..#..\n...#.\n..#..\n.#...\n#....\n....."},
+{'x', ".....\n.....\n#...#\n.#.#.\n..#..\n.#.#.\n#...#\n....."}
 };
 
 static unsigned char fontbits[128][8];  /* [row] bit4..bit0 = col left->right */
@@ -333,8 +255,10 @@ static void render(void) {
 /* ---------------- device DRM setup (splash2 skeleton) ---------------- */
 static uint32_t g_crtc_id, g_conn_id, g_pitch_px;
 static struct drm_mode_modeinfo g_mode;
-/* double-buffered dumb fbs: render into the back one, PAGE_FLIP to show.
- * If flips are refused, we fall back to re-SETCRTC latching. */
+/* double-buffered dumb fbs: render into the back one, then re-SETCRTC to
+ * latch it. msm_drm 4.19 is atomic-only and refuses legacy PAGE_FLIP
+ * (errno 2, observed 2026-09-07) — relatch is the only present path here,
+ * same as aginx-term's drm.rs. */
 static uint32_t g_fb[2];
 static uint32_t *g_map[2];
 static int g_cur;                 /* currently displayed buffer */
@@ -551,10 +475,9 @@ int main(int argc, char **argv) {
   long resolve_at = -1;         /* CLOCK_MONOTONIC sec when verdict landed */
   int hold = 3;
 
-  /* Present path: try PAGE_FLIP once; this msm_drm 4.19 refuses it
-   * (atomic-only driver, errno 2 — same as aginx-term's drm.rs), so the
-   * working path is drm.rs's: re-SETCRTC relatch on EVERY frame. */
-  int flip_ok = 1;
+  /* Present path: re-SETCRTC relatch on EVERY frame — msm_drm 4.19 is
+   * atomic-only and refuses legacy flips (errno 2, 2026-09-07); drm.rs
+   * runs the same relatch at 14 fps. */
   for (;;) {
     struct timespec now;
     clock_gettime(CLOCK_MONOTONIC, &now);
@@ -585,36 +508,8 @@ int main(int argc, char **argv) {
     int next = 1 - g_cur;
     pix = g_map[next];
     render();
-    if (flip_ok) {
-      struct drm_mode_crtc_page_flip pf;
-      memset(&pf, 0, sizeof pf);
-      pf.fb_id = g_fb[next];
-      pf.crtc_id = g_crtc_id;
-      pf.flags = 1;   /* DRM_MODE_PAGE_FLIP_EVENT */
-      if (ioctl(fd, DRM_IOCTL_MODE_PAGE_FLIP, &pf) == 0) {
-        g_cur = next;
-        /* consume the flip-complete event (latch confirmed at vblank);
-         * bounded wait — a driver that never delivers events must not
-         * hang the bootcard */
-        struct pollfd p = { fd, POLLIN, 0 };
-        if (poll(&p, 1, 200) > 0) {
-          char evbuf[64];
-          ssize_t r;
-          do { r = read(fd, evbuf, sizeof evbuf); } while (r > 0);
-        }
-      } else {
-        flip_ok = 0;
-        kmsgf("bootcard: PAGE_FLIP refused (%d) — relatch per frame\n", errno);
-      }
-    }
-    if (!flip_ok) {
-      /* msm_drm 4.19 is atomic-only and refuses legacy flips (errno 2,
-       * 2026-09-07); drm.rs's proven path is re-SETCRTC relatch on EVERY
-       * present (aginx-term runs 14 fps that way). Relatching every Nth
-       * frame is the stutter the boot rain showed. */
-      drm_modeset(fd, g_fb[next]);
-      g_cur = next;
-    }
+    drm_modeset(fd, g_fb[next]);
+    g_cur = next;
     usleep(40000);
   }
 }
