@@ -7,13 +7,13 @@
 
 ## 目录内容
 
-- `etc/` — 静态系统配置。init.d 通用七件（rcS/net-bringup/provision/
-  aginx-term-handoff/app-registry/state-restore/varlib-migrate）；六个
+- `etc/` — 静态系统配置。init.d 通用六件（rcS/net-bringup/provision/
+  aginx-term-handoff/state-restore/varlib-migrate）；六个
   bringup 不在配方里——由 `devices/<codename>/bringup/` 烤机时注入
   （D14 机型是数据）、aginx/svc.d 六单元、
   aginx/（env 明文环境、gateway.toml 形状参数、groups.desc 命令分组、
   secret.policy sidecar 放行表）、
-  apps.d 两 tile、crontabs（N5④：备份 now 定时行）、agpkg.manifest
+  crontabs（N5④：备份 now 定时行）、agpkg.manifest
   （N4 切净：8 条，删 aginx/aginx-carrier 两行，sig 由烤机脚本重签）。
 - `libexec/aginx/` — 守护的家（D13：libexec 不进路由器命令扫描）。net-watch/
   net-rejoin 两个 sh 在此；aginx-svcd/aginx-server/aginx-runtime/aginx-secretd/
@@ -33,7 +33,7 @@
 |---|---|---|
 | 本仓 target/musl | aginx | /usr/bin（裸名，路由器） |
 | 本仓 target/musl | aginx-server, aginx-runtime | /usr/libexec/aginx/ |
-| 本仓 target/musl | aginx-voice, aginx-net-wizard, aginx-term, aginx-pkg, aginx-svc, aginx-boot-ok | /usr/bin |
+| 本仓 target/musl | aginx-voice, aginx-term, aginx-pkg, aginx-svc, aginx-boot-ok | /usr/bin |
 | 本仓 target/musl | aginx-svcd | /usr/libexec/aginx/ |
 | 老仓 target/musl | aginxos-init, aginxos-agent | /aginxos/（trampoline） |
 | 本仓 target/musl | aginx-download, aginx-update | /usr/bin（N5① 吸收重编，修三死路径） |

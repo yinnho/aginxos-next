@@ -129,11 +129,6 @@ echo $! > /run/bootcard.pid
 # without a reboot. Control: aginx-svc list|status|start|stop|restart|
 # reload over /run/aginx-svc/ctl.sock.
 
-# Launcher app registry (M16) — seed /var/apps from /etc/apps.d so new
-# binaries appear on the launcher. Cheap and idempotent; provision re-runs
-# it after aginx-pkg installs.
-/etc/init.d/app-registry
-
 # crond — busybox crond reads /etc/crontabs/root. N5④: the #86 daily
 # backup line is BACK on the new local line (aginx-backup v2 — state
 # world snapshot, no carrier.db in this world).

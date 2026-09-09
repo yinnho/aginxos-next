@@ -12,9 +12,7 @@
 #               one path: an entry whose installed sha256 differs gets
 #               re-downloaded atomically). Output goes to a log, not
 #               boot.state — the boot line only records ok/fail.
-#               app-registry always runs after it (launcher entries for
-#               whatever is installed, even if sync failed on one
-#               package), and any unit whose binary THIS boot installed
+#               Any unit whose binary THIS boot installed
 #               gets `aginx-svc restart` — the supervisor restart-
 #               exhausted it during the empty-/var/bin window of earlier
 #               boots (observed 2026-09-03 on the old line: 5 restarts
@@ -75,8 +73,6 @@ if aginx-pkg sync >"$LOG" 2>&1; then
 else
   say pkg fail "see $LOG"
 fi
-# launcher entries for whatever is installed — even a partial sync
-/etc/init.d/app-registry
 # a binary installed this boot may belong to a unit that already gave up
 # restarting during the empty-/var/bin window; revive what we refreshed
 for u in $(sed -n 's/^aginx-pkg: installed \([^ ]*\).*/\1/p' "$LOG" 2>/dev/null); do
