@@ -167,6 +167,33 @@ moondream（视觉）三家同时「从零重造、为 agent 不为人」= 2026 
 开遥测）；glibc 链接无 musl 版，musl 镜像要自编且 V8 依赖重；重
 canvas 应用/Cloudflare 指纹/验证码页会挂（WPT 通过率页公开）。
 
+## Scrapling——agent 阅读面的自适应爬虫框架（同赛道工具箱）
+
+[D4Vinci/Scrapling](https://github.com/D4Vinci/Scrapling)（79.5k★，
+2026 活跃，BSD-3-Clause 无传染雷区——但同为只借思路）：Python 爬虫
+框架三层——fetchers（TLS 指纹伪装 + Camoufox 隐身浏览器，破
+Cloudflare Turnstile 级反爬）/ parser（自适应自愈选择器：auto_save
+存页快照、DOM 变更后按相似度重定位元素）/ spiders（AutoThrottle
+自适应限速、断点续爬 checkpoint、多会话路由）。
+
+**记它**：①**喂模型前剥 prompt injection**——MCP server 把页面交给
+模型前先剥注入内容，配 CSS 选择器收窄视野；与 aginxbrowser MCP/
+skills 路线同构，注入剥离正是我们要补的件；②**自愈选择器**——爬虫
+最脆的是网站改版选择器全挂，auto_save+相似度重定位让长任务不脆断；
+③**capture_xhr 后台 API 截获**——页面背后的 XHR 才是干净结构化
+数据面，比啃渲染后 DOM 便宜一个量级（aginxbrowser session_network
+同方向，可对齐打磨）；④**AutoThrottle + 断点续爬 + dev 缓存回放**——
+长爬任务的限速礼仪与可恢复性；⑤**第四家收敛**——MCP server +
+Agent Skill + page.markdown() 三面俱全，继 anydoc（文档）/
+lightpanda（浏览器）/moondream（视觉）之后再证「为 agent 不为人」
+的阅读面生态方向；79.5k★ + 代理商赞助墙验证赛道付费能力。
+
+**再评估触发**：aginxbrowser 选择器自愈 / prompt-injection 剥离 /
+长爬任务恢复立项时。届时注意：不抄 Python 库形态与 Spider 框架——
+它站真浏览器引擎，我们站自研 diting 引擎（10× 资源效率是分身卡
+立身之本），定位=同赛道工具箱非竞品；隐身军备（TLS 伪装/Camoufox）
+不进——对抗性泥潭，轻量伪装够用。
+
 ## 附：已完成研究（不在 watchlist，已转行动）
 
 - Termux → [TERMUX-STUDY.md](TERMUX-STUDY.md)（recipes 仓/fallback
