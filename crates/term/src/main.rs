@@ -1,26 +1,28 @@
 // aginx-term — AginxOS on-device terminal (M11 aterm; N4③b 改姓).
 //
 // bootcard's DRM path + 5x8 font, a vte-parsed cell grid (black bg, green /
-// white text — the fixed phosphor palette), an openpty child (sh / registry
-// apps like codex / grok), an evdev on-screen keyboard (tap = key, drag =
-// scrollback), and a debug launcher (sh / wifi setup / photos / install /
-// restart / power off). Started by rcS's aginx-term-handoff
-// once boot finishes; bootcard is wordmark-only now and self-exits (#246), so the
-// handoff's kill is belt-and-braces.
+// white text — the fixed phosphor palette), an openpty child (sh; debug
+// sessions via AGINX_TERM_START), an evdev on-screen keyboard (tap = key,
+// drag = scrollback), and the 面法 faces: Idle 待命面 (breathing cursor /
+// transcript / result page), Eye 取景, Install 软件清单 (C7). Started by
+// rcS's aginx-term-handoff once boot finishes; bootcard is wordmark-only
+// now and self-exits (#246), so the handoff's kill is belt-and-braces.
+// 批③ (09-10): launcher/picker/photos faces demolished — the install list
+// face (pair bar → 软件清单) is the egg's install entry; the M39 photo
+// viewer retired with them (photos stay files in /home/photos).
 //
 // M15 power management: the power key (node from [input.term]) blanks the
 // panel (connector DPMS off — the same path that darkened the screen when a
 // DRM master dropped), a second short press or any touch wakes it, 60 s idle
-// blanks too, holding the key ~1.2 s (or the launcher's POWER OFF / RESTART
-// buttons) runs `aginx-reboot poweroff|reboot`.
+// blanks too, holding the key ~1.2 s runs `aginx-reboot poweroff`.
 //
 // M17 input split: the keyboard hit tests return typed InputEvents
 // (KeyEvent vs TextInputEvent, input.rs) and EVERY write to the pty goes
 // through inject() — the same entry point voice input uses with
 // recognized text.
 //
-// Host verification: `aginx-term --ppm out.ppm` renders the launcher into a P6
-// PPM without touching DRM (same pattern as bootcard --ppm).
+// Host verification: `aginx-term --ppm out.ppm` renders the console faces
+// into P6 PPMs without touching DRM (same pattern as bootcard --ppm).
 
 mod browser; // v4⑥ 活体结果面 CDP 面板客户端（接线于 main loop）
 mod cjk;
@@ -29,7 +31,6 @@ mod font;
 mod input;
 mod kb;
 mod launch;
-mod photos;
 mod pinyin;
 mod term;
 
@@ -385,23 +386,6 @@ struct Child {
     pid: libc::pid_t,
 }
 
-/// `aginx-pkg available` — optional packages not yet installed, capped at 12
-/// (picker row geometry is unsigned arithmetic; scrolling is later).
-fn read_available() -> Vec<String> {
-    std::process::Command::new(launch::BIN_AGINX_PKG)
-        .arg("available")
-        .output()
-        .ok()
-        .map(|o| {
-            String::from_utf8_lossy(&o.stdout)
-                .lines()
-                .take(12)
-                .map(str::to_string)
-                .collect()
-        })
-        .unwrap_or_default()
-}
-
 fn spawn_shell(cols: u16, rows: u16, argv: &[&str]) -> Result<Child, String> {
     let mut master: libc::c_int = -1;
     let mut slave: libc::c_int = -1;
@@ -530,17 +514,7 @@ fn inject(mode: &mut Mode, term: &mut Term, parser: &mut vte::Parser, ev: &Input
 // ---------------- modes ----------------
 
 enum Mode {
-    Launcher,
     Running(Child),
-    /// Optional-package picker (launcher "+" tile): rows come from
-    /// `aginx-pkg available`; a tap runs `aginx-pkg opt-in <name>` synchronously
-    /// (INSTALLING frame drawn first) and refreshes both lists.
-    Picker,
-    /// Photo viewer (launcher PHOTOS tile, M39): list screen of
-    /// /home/photos, then a full-frame view with tap-sides paging.
-    /// Decode is libjpeg-turbo (first target's SoC has no JPEG decode
-    /// hardware — platform-wide policy, not per-device data).
-    Photos(photos::Photos),
     /// 待命面 (开机剧情 v4, 面法 09-07 终稿): the resting screen — pure
     /// Matrix-cast near-black + the blinking block cursor at the prompt
     /// origin. No wordmark, no targets, no theater: the console only says
@@ -589,8 +563,8 @@ struct VoiceView {
     mtime: Option<std::time::SystemTime>,
     alive: bool,
     /// M42g viewfinder frame cache. `poll_eye` gates on eye.jpg mtime; the
-    /// decode itself blocks the event loop for a frame the same way the
-    /// photo viewer does (DCT-scaled to the box, ~tens of ms; M47⑤ cam-shot
+    /// decode itself blocks the event loop for a frame (DCT-scaled to the
+    /// box, ~tens of ms; M47⑤ cam-shot
     /// runs resident at ~10fps, so the loop picks up every other frame).
     eye_mtime: Option<std::time::SystemTime>,
     /// M47⑤c: raw-frame mtime gate (the preferred source; eye_mtime/JPEG is
@@ -957,141 +931,6 @@ struct Render<'a> {
 }
 
 impl<'a> Render<'a> {
-    fn launcher(&self, pix: &mut [u32], entries: &[launch::Entry], g: &launch::Geom) {
-        fill_rect(pix, self.pitch, self.w, self.h, 0, 0, self.w as i32, self.h as i32, BG);
-        self.toolbar(pix, g.m, g.toolbar_h);
-        draw_centered(pix, self.pitch, self.w, self.h, self.font, g.toolbar_h as i32 + 14, "AGINXOS", 5, GREEN);
-        for (i, e) in entries.iter().enumerate() {
-            let y0 = (g.by0 + i * (g.bh + g.gap)) as i32;
-            let c = if e.avail { DIM } else { 0x000F1A14 };
-            // button outline
-            fill_rect(pix, self.pitch, self.w, self.h, g.bx as i32, y0, g.bw as i32, 3, c);
-            fill_rect(pix, self.pitch, self.w, self.h, g.bx as i32, y0 + g.bh as i32 - 3, g.bw as i32, 3, c);
-            fill_rect(pix, self.pitch, self.w, self.h, g.bx as i32, y0, 3, g.bh as i32, c);
-            fill_rect(pix, self.pitch, self.w, self.h, (g.bx + g.bw - 3) as i32, y0, 3, g.bh as i32, c);
-            let scale = 5;
-            let tw = text_w(e.label.as_str(), scale) as i32;
-            let ty = y0 + (g.bh as i32 - 8 * scale as i32) / 2;
-            let tc = if e.avail { GREEN } else { UNAVAIL };
-            draw_text(pix, self.pitch, self.w, self.h, self.font, g.bx as i32 + (g.bw as i32 - tw) / 2, ty, e.label.as_str(), scale, tc);
-            if !e.avail {
-                draw_centered(pix, self.pitch, self.w, self.h, self.font, y0 + g.bh as i32 - 30, "(NOT INSTALLED)", 2, UNAVAIL);
-            }
-        }
-        // hint line
-        draw_centered(pix, self.pitch, self.w, self.h, self.font, g.kb_panel_y as i32 - 40, "TAP TO START", 3, UNAVAIL);
-    }
-
-    /// Optional-package picker ("+" tile): same row geometry as the
-    /// launcher. status_line is the last install result ("" = hint).
-    /// The caller caps the list at 12 rows — Geom arithmetic is unsigned
-    /// and a long list would underflow; scrolling is a later milestone.
-    fn picker(&self, pix: &mut [u32], names: &[String], status_line: &str, g: &launch::Geom) {
-        fill_rect(pix, self.pitch, self.w, self.h, 0, 0, self.w as i32, self.h as i32, BG);
-        self.toolbar(pix, g.m, g.toolbar_h);
-        draw_centered(pix, self.pitch, self.w, self.h, self.font, g.toolbar_h as i32 + 14, "SELECT PKGS", 5, GREEN);
-        if names.is_empty() {
-            draw_centered(pix, self.pitch, self.w, self.h, self.font, (self.h as i32 - 24) / 2, "(NONE AVAILABLE)", 3, UNAVAIL);
-        }
-        for (i, n) in names.iter().enumerate() {
-            let y0 = (g.by0 + i * (g.bh + g.gap)) as i32;
-            let c = DIM;
-            fill_rect(pix, self.pitch, self.w, self.h, g.bx as i32, y0, g.bw as i32, 3, c);
-            fill_rect(pix, self.pitch, self.w, self.h, g.bx as i32, y0 + g.bh as i32 - 3, g.bw as i32, 3, c);
-            fill_rect(pix, self.pitch, self.w, self.h, g.bx as i32, y0, 3, g.bh as i32, c);
-            fill_rect(pix, self.pitch, self.w, self.h, (g.bx + g.bw - 3) as i32, y0, 3, g.bh as i32, c);
-            let tw = text_w(n.as_str(), 5) as i32;
-            let ty = y0 + (g.bh as i32 - 8 * 5) / 2;
-            draw_text(pix, self.pitch, self.w, self.h, self.font, g.bx as i32 + (g.bw as i32 - tw) / 2, ty, n.as_str(), 5, GREEN);
-        }
-        let line = if status_line.is_empty() { "TAP TO INSTALL" } else { status_line };
-        let lc = if status_line.is_empty() { UNAVAIL } else { GREEN };
-        draw_centered(pix, self.pitch, self.w, self.h, self.font, g.kb_panel_y as i32 - 40, line, 3, lc);
-    }
-
-    /// Full-cover frame shown while `aginx-pkg opt-in` runs (synchronous —
-    /// the event loop is blocked, so this must be painted + presented
-    /// before the Command).
-    fn installing(&self, pix: &mut [u32], name: &str) {
-        fill_rect(pix, self.pitch, self.w, self.h, 0, 0, self.w as i32, self.h as i32, BG);
-        draw_centered(pix, self.pitch, self.w, self.h, self.font, (self.h as i32 - 8 * 5) / 2 - 60, "INSTALLING", 5, GREEN);
-        draw_centered(pix, self.pitch, self.w, self.h, self.font, (self.h as i32 - 8 * 5) / 2 + 60, name, 5, WHITE);
-    }
-
-    /// LOADING frame while a JPEG decodes (same synchronous-block pattern
-    /// as `installing` — paint, present, then block in libjpeg).
-    fn loading(&self, pix: &mut [u32]) {
-        fill_rect(pix, self.pitch, self.w, self.h, 0, 0, self.w as i32, self.h as i32, BG);
-        draw_centered(pix, self.pitch, self.w, self.h, self.font, (self.h as i32 - 8 * 5) / 2, "LOADING", 5, GREEN);
-    }
-
-    /// Photo list screen (M39): picker-style rows of /home/photos
-    /// basenames, newest first, capped at 12 rows like the picker (Geom
-    /// arithmetic is unsigned; scrolling is a later milestone).
-    fn photos_list(&self, pix: &mut [u32], p: &photos::Photos, g: &launch::Geom) {
-        fill_rect(pix, self.pitch, self.w, self.h, 0, 0, self.w as i32, self.h as i32, BG);
-        self.toolbar(pix, g.m, g.toolbar_h);
-        draw_centered(pix, self.pitch, self.w, self.h, self.font, g.toolbar_h as i32 + 14, "PHOTOS", 5, GREEN);
-        let names = p.names();
-        if names.is_empty() {
-            draw_centered(pix, self.pitch, self.w, self.h, self.font, (self.h as i32 - 24) / 2, "(NO PHOTOS)", 3, UNAVAIL);
-            draw_centered(pix, self.pitch, self.w, self.h, self.font, (self.h as i32 - 24) / 2 + 60, "AG CAM-SHOT --JPEG-OUT /HOME/PHOTOS/...", 2, UNAVAIL);
-        } else {
-            for (i, n) in names.iter().take(12).enumerate() {
-                let y0 = (g.by0 + i * (g.bh + g.gap)) as i32;
-                fill_rect(pix, self.pitch, self.w, self.h, g.bx as i32, y0, g.bw as i32, 3, DIM);
-                fill_rect(pix, self.pitch, self.w, self.h, g.bx as i32, y0 + g.bh as i32 - 3, g.bw as i32, 3, DIM);
-                fill_rect(pix, self.pitch, self.w, self.h, g.bx as i32, y0, 3, g.bh as i32, DIM);
-                fill_rect(pix, self.pitch, self.w, self.h, (g.bx + g.bw - 3) as i32, y0, 3, g.bh as i32, DIM);
-                let n: String = n.chars().take(24).collect();
-                let tw = text_w(&n, 5) as i32;
-                let ty = y0 + (g.bh as i32 - 8 * 5) / 2;
-                draw_text(pix, self.pitch, self.w, self.h, self.font, g.bx as i32 + (g.bw as i32 - tw) / 2, ty, &n, 5, GREEN);
-            }
-        }
-        let total = names.len();
-        let footer = if !p.err.is_empty() {
-            p.err.clone()
-        } else if total == 0 {
-            "TAP BACK TO EXIT".to_string()
-        } else if total > 12 {
-            format!("{total} PHOTOS - NEWEST 12")
-        } else {
-            format!("{total} PHOTO{} - TAP TO VIEW", if total == 1 { "" } else { "S" })
-        };
-        let fc = if !p.err.is_empty() { GREEN } else { UNAVAIL };
-        draw_centered(pix, self.pitch, self.w, self.h, self.font, g.kb_panel_y as i32 - 40, &footer, 3, fc);
-    }
-
-    /// Full-screen photo view: decoded bitmap blitted 1:1, centered under
-    /// the toolbar (decode already DCT-scaled to fit the box), filename in
-    /// the footer. Tap the right half for next, left for previous.
-    fn photo_view(&self, pix: &mut [u32], p: &photos::Photos, g: &launch::Geom) {
-        fill_rect(pix, self.pitch, self.w, self.h, 0, 0, self.w as i32, self.h as i32, BG);
-        self.toolbar(pix, g.m, g.toolbar_h);
-        if let Some(b) = &p.img {
-            let dx = ((self.w - b.w as usize) / 2) as i32;
-            let avail_h = self.h - g.toolbar_h as usize;
-            let dy = (g.toolbar_h as i32 + ((avail_h - b.h as usize) / 2) as i32).max(g.toolbar_h as i32);
-            for j in 0..b.h as usize {
-                let py = dy + j as i32;
-                if py < 0 || py >= self.h as i32 {
-                    continue;
-                }
-                for i in 0..b.w as usize {
-                    let px = dx + i as i32;
-                    if px < 0 || px >= self.w as i32 {
-                        continue;
-                    }
-                    pix[py as usize * self.pitch + px as usize] = b.pix[j * b.w as usize + i];
-                }
-            }
-        }
-        let name = p.names().get(p.sel).cloned().unwrap_or_default();
-        draw_centered(pix, self.pitch, self.w, self.h, self.font, g.kb_panel_y as i32 - 36, &name, 3, WHITE);
-        draw_centered(pix, self.pitch, self.w, self.h, self.font, self.h as i32 - 30, "< TAP TO PAGE >", 2, DIM);
-    }
-
     /// 待命面 (v4⑤): pure near-black + a breathing block cursor. `line`
     /// (the transcript / text fallback) types left-aligned from the top
     /// anchor (below the front camera), wrapped at the panel width (~16
@@ -2145,8 +1984,9 @@ fn host_ppm(out: &str) {
     let pitch = w;
     let mut pix = vec![0u32; pitch * h];
     let kg = Kb::geom(w, h);
-    let entries = launch::entries();
-    let lg = launch::Geom::new(w, h, kg.extra_y, entries.len());
+    // 批③: the launcher fed entries.len() here; the install face owns the
+    // row geometry now — one page of rows.
+    let lg = launch::Geom::new(w, h, kg.extra_y, INSTALL_ROWS_PAGE);
     let r = Render { font: &font, w, h, pitch };
     // 开机剧情 v4⑤: the prompt-face beats — top-anchor breathing cursor (full
     // + dim ends of the breath range), mid-typing CJK transcript (wrap
@@ -2194,8 +2034,19 @@ fn host_ppm(out: &str) {
         }
         println!("wrote {path}");
     }
-    r.launcher(&mut pix, &entries, &lg);
-    r.keyboard(&mut pix, &kg, &kb0());
+    // first frame (批③): the install face — the launcher's successor. Rows
+    // from the pure install_rows() on a two-tier fixture (missing core /
+    // opt-ready) so the row render path stays host-verifiable.
+    let iv = InstallView {
+        rows: install_rows(
+            "aginx-server https://example.invalid/a aaaa core 0.9.0\naginx-ocr https://example.invalid/b bbbb opt\n",
+            std::path::Path::new("/nonexistent-aginx-stamps"),
+            std::path::Path::new("/nonexistent-aginx-bin"),
+        ),
+        page: 0,
+        last_refresh: Instant::now(),
+    };
+    r.install_list(&mut pix, &iv, None, false, &lg);
 
     // second frame: terminal view with a fake session (M38a: includes a
     // UTF-8 Chinese line so the wide-cell put + ab_glyph render path is
@@ -2225,36 +2076,7 @@ fn host_ppm(out: &str) {
         eprintln!("ppm: {e}");
     }
 
-    // third frame (M39): photo view — AGINX_TERM_PHOTOS_DEMO=<file.jpg> decodes
-    // through aginx-img (DCT-scaled to the panel box) and renders the real
-    // viewer screen, so the decode+blit path is host-verifiable.
-    if let Ok(demo) = std::env::var("AGINX_TERM_PHOTOS_DEMO") {
-        let bytes = std::fs::read(&demo).unwrap_or_default();
-        let mut p = photos::Photos {
-            files: vec![demo.clone()],
-            sel: 0,
-            img: aginx_img::decode_scaled(&bytes, w as u32, (h - lg.toolbar_h) as u32),
-            view: true,
-            err: String::new(),
-        };
-        if p.img.is_none() {
-            p.err = "DECODE FAILED".into();
-            p.view = false;
-        }
-        let mut pix3 = vec![0u32; pitch * h];
-        if p.view {
-            r.photo_view(&mut pix3, &p, &lg);
-        } else {
-            r.photos_list(&mut pix3, &p, &lg);
-        }
-        let photo_path = format!("{}-photo", out);
-        if let Err(e) = ppm_dump(&photo_path, &pix3, w, h, pitch) {
-            eprintln!("ppm: {e}");
-        }
-        println!("wrote {photo_path}");
-    }
-
-    // fourth frame (M40): pinyin IME — AGINX_TERM_IME_DEMO=<syllable> latches
+    // third frame (M40): pinyin IME — AGINX_TERM_IME_DEMO=<syllable> latches
     // 拼 on, types the syllable into the buffer and renders the strip over
     // the demo session, so the candidate row is host-verifiable.
     if let Ok(syl) = std::env::var("AGINX_TERM_IME_DEMO") {
@@ -2293,8 +2115,8 @@ fn host_ppm(out: &str) {
 /// probe) and aginx-qr's decode bursts (2 Hz, 100-300 ms) landed unpinned
 /// on the pair — together they erased the 70 ms fast-frame mode in service
 /// (in-service min 83 ms vs isolated 70 ms, 2026-09-06). The upscale fits
-/// in one little core; at eye close the full mask returns (terminal/photos
-/// get the big cores back — union of ui+big+cam, sorted+deduped).
+/// in one little core; at eye close the full mask returns (terminal
+/// gets the big cores back — union of ui+big+cam, sorted+deduped).
 ///
 /// Called from main() on eye-FLAG transitions in ANY mode — the first cut
 /// hooked it inside poll_eye (the retired voice face only), which leaked
@@ -2408,12 +2230,9 @@ fn main() {
     let mut kb = Kb::new();
     let mut ime = pinyin::Ime::new(); // M40: 拼 buffer + candidate page
     let kg = Kb::geom(w, h);
-    let mut entries = launch::entries();
-    // Picker state ("+" tile): optional packages from `aginx-pkg available`
-    // and the last install result line.
-    let mut pkgs: Vec<String> = Vec::new();
-    let mut pk_status = String::new();
-    let lg = launch::Geom::new(w, h, kg.extra_y, entries.len());
+    // 批③: the install face owns the row geometry now (the launcher fed
+    // entries.len() here) — one 12-row page, install_list 分页翻行.
+    let lg = launch::Geom::new(w, h, kg.extra_y, INSTALL_ROWS_PAGE);
 
     // Terminal geometry: glyph scale is per-app — sh keeps 5 (30x40 px
     // cells, 34 cols inside the 28 px side margins), the PC-designed TUIs
@@ -2478,8 +2297,9 @@ fn main() {
     // M47⑤t: last affinity decision from the eye flag (see the main-loop
     // watcher) — keeps sched_setaffinity off the no-change path.
     let mut eye_parked = false;
-    // Debug/headless path: AGINX_TERM_START=<bin> skips the launcher and spawns
-    // the program immediately (e.g. AGINX_TERM_START=/bin/sh).
+    // Debug/headless path: AGINX_TERM_START=<bin> spawns the program
+    // immediately (e.g. AGINX_TERM_START=/bin/sh) — the only way a pty
+    // session starts since the launcher came down (批③).
     if let Ok(prog) = std::env::var("AGINX_TERM_START") {
         // leak: aginx-term is a forever-process
         let prog: &'static str = Box::leak(prog.into_boxed_str());
@@ -2492,8 +2312,8 @@ fn main() {
         }
     }
     // 未连网的开机不再自动拉 wizard：纯光标面 + PTT 语音流程就是装机流程
-    // （对准配对码，M42c 链）。批② C2（09-10）：瓦片也摘了，wizard 仅
-    // AGINX_TERM_START 调试路径可达。
+    // （对准配对码，M42c 链）。批② C2（09-10）摘瓦片；批③（09-10）wizard
+    // 出蛋——AGINX_TERM_START 只起绝对路径，不再有 wizard 可达。
     // Input nodes are panel data ([input.term], D14) — touch + the pon
     // keys (power + volume-down) ride whatever the profile declares.
     let ipt = hwd::load_or_exit().input.term.clone();
@@ -2517,15 +2337,6 @@ fn main() {
         let r = Render { font: &font, w, h, pitch };
         let buf = &mut canvas[..];
         match &mode {
-            Mode::Launcher => r.launcher(buf, &entries, &lg),
-            Mode::Picker => r.picker(buf, &pkgs, &pk_status, &lg),
-            Mode::Photos(p) => {
-                if p.view {
-                    r.photo_view(buf, p, &lg);
-                } else {
-                    r.photos_list(buf, p, &lg);
-                }
-            }
             Mode::Idle => render_prompt(
                 &r,
                 buf,
@@ -2603,8 +2414,9 @@ fn main() {
                 }
             }
             if child_exited(child.pid) {
-                mode = Mode::Launcher;
-                entries = launch::entries();
+                // 批③: the launcher is gone — a finished session returns to
+                // the 待命面 (the resting face).
+                mode = Mode::Idle;
                 kb_visible = false;
                 scale = 5;
                 term_cols = cols_for(scale);
@@ -2704,8 +2516,8 @@ fn main() {
                         blanked = false;
                         d.dpms(true);
                         // 面法 09-07: waking from blank lands on the 待机面
-                        // (eye open → 眼视图). Debug modes (Running/
-                        // Launcher/Picker/Photos) restore in place.
+                        // (eye open → 眼视图). A Running session restores
+                        // in place.
                         if matches!(mode, Mode::Idle | Mode::Eye) {
                             mode = if (voice.alive && voice.doc.eye) || term_eye.is_some() {
                                 Mode::Eye
@@ -2726,27 +2538,13 @@ fn main() {
                             }
                             if y < lg.toolbar_h {
                                 // BACK fires on press, same as keys
-                                if lg.toolbar_hit(x, y, matches!(mode, Mode::Running(_) | Mode::Picker | Mode::Photos(_) | Mode::Install(_) | Mode::Launcher))
+                                if lg.toolbar_hit(x, y, matches!(mode, Mode::Running(_) | Mode::Install(_)))
                                     == Some(launch::Toolbar::Back)
                                 {
                                     if let Mode::Running(c) = &mode {
                                         unsafe { libc::kill(c.pid, libc::SIGHUP) };
-                                    } else if matches!(mode, Mode::Picker) {
-                                        mode = Mode::Launcher;
-                                    } else if let Mode::Photos(p) = &mut mode {
-                                        // view -> list -> launcher, one BACK each
-                                        if p.view {
-                                            p.view = false;
-                                            p.img = None; // free the ~3 MB
-                                        } else {
-                                            mode = Mode::Launcher;
-                                        }
                                     } else if matches!(mode, Mode::Install(_)) {
                                         // C7 清单面：BACK 回待机面
-                                        mode = Mode::Idle;
-                                    } else if matches!(mode, Mode::Launcher) {
-                                        // 面法: launcher is a debug face —
-                                        // BACK is the exit back to 待机面
                                         mode = Mode::Idle;
                                     }
                                     redraw = true;
@@ -2776,95 +2574,6 @@ fn main() {
                                         }
                                     }
                                     redraw = true;
-                                } else if let Mode::Launcher = &mut mode {
-                                    if let Some(i2) = lg.button_at(x, y, entries.len()) {
-                                        if entries[i2].picker {
-                                            pkgs = read_available();
-                                            pk_status.clear();
-                                            mode = Mode::Picker;
-                                            redraw = true;
-                                        } else if entries[i2].photos {
-                                            mode = Mode::Photos(photos::Photos::scan());
-                                            redraw = true;
-                                        } else if entries[i2].install {
-                                            // C7 调试入口：INSTALL 瓦片开清单面
-                                            mode = Mode::Install(InstallView::new());
-                                            redraw = true;
-                                        } else if entries[i2].avail {
-                                            let prog = entries[i2].bin.as_str();
-                                            if prog == launch::BIN_AGINX_REBOOT {
-                                                // these draw their own frame
-                                                // and never come back — no
-                                                // pty round-trip
-                                                if entries[i2].args.first().map(String::as_str) == Some("poweroff") {
-                                                    power_off(&mut d, &font, &mut canvas, blanked);
-                                                }
-                                                fill_rect(&mut canvas, pitch, w, h, 0, 0, w as i32, h as i32, BG);
-                                                draw_centered(&mut canvas, pitch, w, h, &font, (h as i32 - 8 * 5) / 2, "RESTARTING", 5, GREEN);
-                                                d.back_buf().copy_from_slice(&canvas);
-                                                d.dpms(true); // relatch the frame (crtc may be off)
-                                                let _ = std::process::Command::new(launch::BIN_AGINX_REBOOT)
-                                                    .arg("reboot")
-                                                    .spawn();
-                                                std::process::exit(0);
-                                            }
-                                            // Registry entries carry their
-                                            // own scale; PC-designed TUIs
-                                            // need ~56 cols to breathe, the
-                                            // phone-native UIs keep the big
-                                            // touch glyphs.
-                                            scale = entries[i2].scale;
-                                            term_cols = cols_for(scale);
-                                            let argv: Vec<&str> = std::iter::once(prog)
-                                                .chain(entries[i2].args.iter().map(String::as_str))
-                                                .collect();
-                                            match spawn_shell(term_cols as u16, rows_for(false, scale) as u16, &argv) {
-                                                Ok(c) => {
-                                                    mode = Mode::Running(c);
-                                                    kb_visible = false;
-                                                    term = Term::new(term_cols, rows_for(false, scale));
-                                                    parser = vte::Parser::new();
-                                                    kb_dirty = true;
-                                                    // wipe launcher pixels below the header —
-                                                    // row-damage rendering only repaints
-                                                    // terminal rows, so launcher art (the
-                                                    // AGINXOS title top sliver) would linger
-                                                    fill_rect(&mut canvas, pitch, w, h, 0, lg.toolbar_h as i32, w as i32, (h - lg.toolbar_h) as i32, BG);
-                                                }
-                                                Err(e) => eprintln!("aginx-term: spawn: {e}"),
-                                            }
-                                            redraw = true;
-                                        }
-                                    }
-                                } else if let Mode::Picker = &mut mode {
-                                    if let Some(i2) = lg.button_at(x, y, pkgs.len()) {
-                                        if let Some(name) = pkgs.get(i2).cloned() {
-                                            // synchronous install: paint the
-                                            // frame first, the event loop is
-                                            // about to block on aginx-download
-                                            {
-                                                let r = Render { font: &font, w, h, pitch };
-                                                r.installing(&mut canvas[..], &name);
-                                                d.back_buf().copy_from_slice(&canvas);
-                                                d.present();
-                                            }
-                                            let out = std::process::Command::new(launch::BIN_AGINX_PKG)
-                                                .arg("opt-in")
-                                                .arg(&name)
-                                                .output();
-                                            pk_status = match out {
-                                                Ok(o) if o.status.success() => format!("INSTALLED {name}"),
-                                                Ok(_) => format!("FAILED {name}"),
-                                                Err(e) => format!("FAILED {name}: {e}"),
-                                            };
-                                            // opt-in seeds /var/apps — the
-                                            // registry may have grown; the
-                                            // installed name leaves the list
-                                            entries = launch::entries();
-                                            pkgs = read_available();
-                                            redraw = true;
-                                        }
-                                    }
                                 } else if let Mode::Install(v) = &mut mode {
                                     // C7 清单面：翻页条优先（条在 kb_panel_y-150，
                                     // 与行区不重叠）；行点按按态分诊催装（单飞槽，
@@ -2900,31 +2609,6 @@ fn main() {
                                                 RowState::Ready => {}
                                             }
                                         }
-                                    }
-                                } else if let Mode::Photos(p) = &mut mode {
-                                    // decode box: full width, below the BACK strip
-                                    let (mw, mh) = (w as u32, (h - lg.toolbar_h) as u32);
-                                    let n = p.names().len();
-                                    if p.view {
-                                        // paint-first, then block in libjpeg
-                                        // (the INSTALLING pattern)
-                                        {
-                                            let r = Render { font: &font, w, h, pitch };
-                                            r.loading(&mut canvas[..]);
-                                            d.back_buf().copy_from_slice(&canvas);
-                                            d.present();
-                                        }
-                                        p.step(if x >= w / 2 { 1 } else { -1 }, mw, mh);
-                                        redraw = true;
-                                    } else if let Some(i2) = lg.button_at(x, y, n.min(12)) {
-                                        {
-                                            let r = Render { font: &font, w, h, pitch };
-                                            r.loading(&mut canvas[..]);
-                                            d.back_buf().copy_from_slice(&canvas);
-                                            d.present();
-                                        }
-                                        p.open(i2, mw, mh);
-                                        redraw = true;
                                     }
                                 }
                             }
@@ -3637,22 +3321,6 @@ fn main() {
             // buffer — the canvas copy below is then skipped
             let mut direct = false;
             match &mode {
-                Mode::Launcher => {
-                    // launcher() full-covers the canvas
-                    r.launcher(buf, &entries, &lg);
-                }
-                Mode::Picker => {
-                    // picker() full-covers the canvas
-                    r.picker(buf, &pkgs, &pk_status, &lg);
-                }
-                Mode::Photos(p) => {
-                    // both photo screens full-cover the canvas
-                    if p.view {
-                        r.photo_view(buf, p, &lg);
-                    } else {
-                        r.photos_list(buf, p, &lg);
-                    }
-                }
                 Mode::Idle => {
                     // 开机剧情 v4 dispatch — prompt/result full-covers canvas.
                     // v4⑥: a cached live-panel frame goes straight into the
