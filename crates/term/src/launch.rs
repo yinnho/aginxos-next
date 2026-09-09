@@ -1,118 +1,19 @@
-// Launcher (M16, docs/SYSTEM.md §12.3): app buttons come from the
-// registry at /var/apps/<id>/app.toml — scanned at every launcher draw,
-// so a new app appears by dropping a file (aginx-pkg or the app-registry
-// seeder write them), no OS source change. Six built-in tiles stay
-// (+ picker / photos / install / sh / restart / power off), plus a thin
-// toolbar strip above the content ([BACK] when a toolbar face is up).
-// Program exit -> back to launcher. Touch regions are computed from the
-// keyboard geometry so the layout scales with panel size.
-
-use aginx_svc::{scan_apps, AppEntry, APPS_DIR};
+// Face geometry + spawn-path constants. 批③ (09-10): the M16 launcher
+// (registry tiles from /var/apps) is demolished — no Entry list, no
+// builtins, no app registry read. What survives here: `Geom` (the row
+// layout the C7 install face and the fullscreen eye box hang off —
+// test-pinned to the committed [panel] profile) and the binary constants
+// the debug/aging paths spawn. AGINX_TERM_START is the only way a pty
+// session starts now.
 
 pub const BIN_SH: &str = "/bin/sh";
-pub const BIN_WIZARD: &str = "/usr/bin/aginx-net-wizard";
 pub const BIN_AGINX_REBOOT: &str = "/usr/bin/aginx-reboot";
 pub const BIN_AGINX_PKG: &str = "/usr/bin/aginx-pkg";
 
-pub struct Entry {
-    pub label: String,
-    pub bin: String,
-    /// argv[1..] for the binary (empty = bare exec). aginx-reboot's actions
-    /// ("reboot" / "poweroff") are intercepted before any pty spawn.
-    pub args: Vec<String>,
-    pub avail: bool,
-    /// Terminal glyph scale while this entry runs: phone-native UIs keep
-    /// the big 5x touch glyphs, the PC-designed TUIs (codex/grok) need
-    /// ~56 cols so they get 3.
-    pub scale: usize,
-    /// "+" tile: instead of spawning, opens the optional-package picker
-    /// (M23 tiering — `aginx-pkg available` / `opt-in`). No pty involved.
-    pub picker: bool,
-    /// "PHOTOS" tile: opens the M39 photo viewer (Mode::Photos) instead
-    /// of spawning. Same non-terminal pattern as the picker.
-    pub photos: bool,
-    /// "INSTALL" tile (C7): opens the software-list face (Mode::Install)
-    /// — the egg's tap-to-install entry, also reachable from the pairing
-    /// bar's right cell.
-    pub install: bool,
-}
-
-/// Registry apps first (alphabetical by id), then the system actions.
-pub fn entries() -> Vec<Entry> {
-    let mut v: Vec<Entry> = scan_apps(APPS_DIR)
-        .into_iter()
-        .map(app_entry)
-        .collect();
-    v.extend(builtins());
-    v
-}
-
-fn app_entry(a: AppEntry) -> Entry {
-    Entry {
-        label: a.name,
-        bin: a.binary.clone(),
-        args: a.args,
-        avail: std::path::Path::new(&a.binary).is_file(),
-        scale: a.scale,
-        picker: false,
-        photos: false,
-        install: false,
-    }
-}
-
-fn builtins() -> Vec<Entry> {
-    let mut v = vec![Entry {
-        label: "+".into(),
-        bin: BIN_AGINX_PKG.into(),
-        args: vec![],
-        // dimmed if the installer itself is missing
-        avail: std::path::Path::new(BIN_AGINX_PKG).is_file(),
-        scale: 5,
-        picker: true,
-        photos: false,
-        install: false,
-    }];
-    // 面法 09-07: no VOICE tile — the voice dialog face is retired; the
-    // eye enters from ANY mode on the face flag, and the resting screen is
-    // Mode::Idle. This list is the debug launcher (reachable only via pty
-    // exit / debug paths), not the product face.
-    v.extend(
-        [
-            ("PHOTOS", "", &[][..], 5),
-            ("INSTALL", "", &[][..], 5),
-            ("SH", BIN_SH, &[][..], 5),
-            ("RESTART", BIN_AGINX_REBOOT, &["reboot"][..], 5),
-            ("POWER OFF", BIN_AGINX_REBOOT, &["poweroff"][..], 5),
-        ]
-        .into_iter()
-        .map(|(label, bin, args, scale)| Entry {
-            label: label.into(),
-            bin: bin.into(),
-            args: args.iter().map(|s| s.to_string()).collect(),
-            // the photo viewer and the install face are pure aginx-term
-            // state — always available; sh and aginx-reboot ship in the
-            // base image
-            avail: label == "PHOTOS"
-                || label == "INSTALL"
-                || bin == BIN_SH
-                || bin == BIN_AGINX_REBOOT
-                || std::path::Path::new(bin).is_file(),
-            scale,
-            picker: false,
-            photos: label == "PHOTOS",
-            install: label == "INSTALL",
-        })
-        .collect::<Vec<_>>(),
-    );
-    v
-}
-
-/// Scale for non-launcher spawns (AGINX_TERM_START debug path): known
-/// phone-native binaries get 5, everything else 3. BIN_WIZARD stays known
-/// here — 批② C2 (09-10) removed the launcher tile but kept the binary
-/// for the debug path, so it still renders with touch glyphs if started.
+/// Scale for AGINX_TERM_START debug spawns: the known phone-native
+/// binaries keep the big 5x touch glyphs, everything else gets 3.
 pub fn scale_for(bin: &str) -> usize {
-    if bin == BIN_SH || bin == BIN_WIZARD || bin == BIN_AGINX_REBOOT {
+    if bin == BIN_SH || bin == BIN_AGINX_REBOOT {
         5
     } else {
         3
@@ -134,12 +35,13 @@ pub struct Geom {
 }
 
 impl Geom {
+    /// `n` = rows on one page (the install face passes
+    /// INSTALL_ROWS_PAGE — the launcher used to feed its entry count).
     pub fn new(w: usize, h: usize, kb_panel_y: usize, n: usize) -> Geom {
         let m = 90;
         let toolbar_h = 72;
         let avail_h = kb_panel_y - toolbar_h;
         let gap = 40;
-        // n buttons (launcher entries), evenly filling the space
         let bh = ((avail_h - 120 - gap * (n - 1)) / n).min(180);
         Geom {
             bx: m,
@@ -180,10 +82,10 @@ impl Geom {
         None
     }
 
-    /// Toolbar regions while a toolbar face is up (running app or a list
-    /// face — picker/photos/install/launcher): BACK at the right. In a
-    /// running app it kills the child; the list faces use it as their
-    /// exit. Nothing else — the header stays clean.
+    /// Toolbar regions while a toolbar face is up (running session or the
+    /// install list face): BACK at the right. In a running session it
+    /// kills the child; the install face uses it as its exit. Nothing
+    /// else — the header stays clean.
     pub fn toolbar_hit(&self, x: usize, y: usize, running: bool) -> Option<Toolbar> {
         if y >= self.toolbar_h {
             return None;
