@@ -207,8 +207,16 @@ phase_steady() {
     sleep 5
   done
   [ "$UP_OK" = 1 ] || { echo "FAIL - 未见 boot done + voice up"; FAIL=$((FAIL+1)); return 0; }
-  drv "grep -q '^wifi ok' /run/boot.state && grep -q '^internet ok' /run/boot.state"
-  expect_rc  "wifi 自动连 + internet ok（wifi.conf 持久实证）"
+  # wifi/internet 行由 net-bringup phase 2 在 done 之后落（首跑实雷：UP_OK
+  # 的 done+voice 门早于 phase 2 收笔）——有界等，5min。
+  local WIFIOK=0 i
+  for i in $(seq 1 60); do
+    drv "grep -q '^wifi ok' /run/boot.state && grep -q '^internet ok' /run/boot.state"
+    [ "${DRV_RC:-}" = "0" ] && { WIFIOK=1; break; }
+    sleep 5
+  done
+  [ "$WIFIOK" = 1 ] && { echo "ok   - wifi 自动连 + internet ok（wifi.conf 持久实证）"; PASS=$((PASS+1)); } \
+                    || { echo "FAIL - wifi/internet ok 未落（5min）"; FAIL=$((FAIL+1)); }
   # provision 本靴全程跑（wifi ok 不早退）——pkg ok 分钟级，有界等
   local PKG_OK=0
   for i in $(seq 1 40); do
@@ -226,7 +234,8 @@ phase_steady() {
   drv "aginx-pkg sync"
   expect_rc  "sync rc=0"
   expect_no  "稳态零 downloading" 'downloading'
-  drv "/usr/bin/aginx-voice --inject 你好; sleep 1; /usr/bin/aginx-voice --face"
+  # 蛋上 voice face 在 /var/bin（整机档才是 /usr/bin）——裸名走 PATH
+  drv "aginx-voice --inject 你好; sleep 1; aginx-voice --face"
   expect_out "语音地板仍在（我在）" '我在'
 }
 
