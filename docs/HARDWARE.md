@@ -1976,3 +1976,29 @@ update capture 同乘下一 bake #21），功能段（D/E/F/G、L 远端往返�
 
 **收尾态**：slot _b b399b7b + 三件 dev push 在役，六单元 ready。全树
 （#246 系+#282/#283）零提交待用户发话。
+
+## 2026-09-09 — #284 agb→aginx-web 设备换装（same-image，注册表面）
+
+用户判词：「agb 要改一下名字啊，你这样谁也看不懂啊」。根因不是 junk
+route（老 /var/bin/agb 不带 aginx- 前缀，scan 本来就看不见）——是 brain
+可见的**摘要文本**里写着内部名（web 行旧文案带 agb、file/mem 行带
+agf/agmem 括号注）。两段收据：
+
+**换装**（`aginx-pkg install aginx-web <tar> dd5f5e08…`，本地 tar 走
+无签通道）：/var/bin、/var/apps、stamps 三处 aginx-web 落地，
+/var/bin/agb + /var/apps/agb + stamps/agb 删净；/usr/bin/aginx-web 桥壳
+exec 改指新名；/etc/aginx/groups.desc + /etc/agpkg.manifest（.sig 重签
+后整对推送，device manifest 先 diff 过 == repo HEAD）。
+
+**注册表**（换名暴露的次生发现）：新包二进制带 aginx- 前缀 → 进了
+scan，/var/bin 遮 /usr/bin，把带头的桥壳整个遮掉，`web` 路由掉成
+summary=null——比改名前更糟。修法＝编译件惯例：新配方
+rootfs/var/bin/aginx-web.aginxmd（face 住 sidecar；烤机树里孤 sidecar
+不被 --check 扫到，bake 不炸）。落侧车后 envelope 实测：`web` 行
+summary 全文、path=/var/bin/aginx-web；`agb` 全 envelope 0 处；
+`aginx web fetch https://example.com` HTTP 200；`commands --check`
+rc=0。file/mem 桥壳 summary 同步去行话（agf/agmem re-cut 仍立案）。
+
+n5 runtime 对 `agb` 零依赖（工具发现走 `aginx commands --json`），
+换装不动在跑单元。pkgs.aginx.net 镜像回填待 bake #21 前（manifest
+URL 已指向 aginx-web/v0.3.0/）。
