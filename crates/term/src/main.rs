@@ -1474,12 +1474,117 @@ fn read_warnings_dir(dir: &str) -> Vec<String> {
         .collect()
 }
 
+// ---------------- C5: 自持等网行（voice #282 的蛋面镜像） ----------------
+
+/// 裸蛋上 voice 不存在，没人画「正在联网…」。term 自己持有同一套 #282
+/// 语义（常量照搬 voice）：开机窗内已配对未通网 → 等待行；internet ok →
+/// 问候行；300s 窗尽 → 停止轮询（等待行不撤——红警面接着讲无网的故事）；
+/// voice 复活 → 整行让位（它的 BootNet 会写自己的等待行，两侧不叠）。
+const SELFNET_UPTIME_GATE_SECS: f64 = 180.0;
+const SELFNET_WATCH: Duration = Duration::from_secs(300);
+const SELFNET_POLL: Duration = Duration::from_secs(5);
+const SELFNET_WAITING: &str = "正在联网…";
+const SELFNET_GREET: &str = "Operator. Go ahead.";
+const WIFI_CONF_PATH: &str = "/etc/wifi.conf";
+const BOOT_STATE_PATH: &str = "/run/boot.state";
+
+/// 布防四门（纯函数，真值表可测）：开机窗（uptime ≤180s——问候是开机的
+/// 事）、已配对（wifi.conf 在——未配对机的路是配对面 C6，不是等网）、
+/// 网未通（已通就直接问候，不占台）、voice 不在（face 文件从未出现——
+/// voice 在则它自己等网，term 让位）。
+fn selfnet_should_arm(uptime: f64, wifi_conf: bool, internet_ok: bool, voice_alive: bool) -> bool {
+    uptime <= SELFNET_UPTIME_GATE_SECS && wifi_conf && !internet_ok && !voice_alive
+}
+
+fn boot_state_has_internet() -> bool {
+    // 行形如 `internet ok www.baidu.com`（C3 后 aginx-pair apply 也会定点
+    // 刷这四行）；run/fail/缺行都算未通。
+    std::fs::read_to_string(BOOT_STATE_PATH)
+        .map(|s| s.lines().any(|l| l.trim_start().starts_with("internet ok")))
+        .unwrap_or(false)
+}
+
+fn uptime_secs() -> f64 {
+    // 读不到（非 Linux host 测试）按超窗处理——不布防。
+    std::fs::read_to_string("/proc/uptime")
+        .ok()
+        .and_then(|s| s.split_whitespace().next().and_then(|t| t.parse().ok()))
+        .unwrap_or(f64::MAX)
+}
+
+struct SelfNet {
+    /// 我们持有的行：Some(等待/问候) = 这张脸是 term 的；None = 让位/无台
+    /// （voice 接管）。窗尽只停轮询，行不撤——镜像 voice 的文件残留语义。
+    line: Option<&'static str>,
+    watching: bool,
+    armed_at: Instant,
+    last_poll: Instant,
+}
+
+impl SelfNet {
+    fn idle() -> SelfNet {
+        SelfNet { line: None, watching: false, armed_at: Instant::now(), last_poll: Instant::now() }
+    }
+
+    fn arm() -> SelfNet {
+        SelfNet { line: Some(SELFNET_WAITING), watching: true, ..SelfNet::idle() }
+    }
+
+    /// 主循环每拍。voice 复活即让位（任何态）；Watching 每 5s 读一次
+    /// boot.state，internet ok → 问候；300s 窗尽 → 停轮询不撤行。
+    /// 返回 true = 行变了，需要重画。
+    fn tick(&mut self, voice_alive: bool) -> bool {
+        if self.line.is_none() {
+            return false;
+        }
+        if voice_alive {
+            self.line = None;
+            self.watching = false;
+            eprintln!("aginx-term: selfnet yields to voice");
+            return true;
+        }
+        if !self.watching {
+            return false;
+        }
+        if self.armed_at.elapsed() >= SELFNET_WATCH {
+            self.watching = false;
+            eprintln!("aginx-term: selfnet window over — no greet");
+            return false;
+        }
+        if self.last_poll.elapsed() < SELFNET_POLL {
+            return false;
+        }
+        self.last_poll = Instant::now();
+        if boot_state_has_internet() {
+            self.line = Some(SELFNET_GREET);
+            self.watching = false;
+            eprintln!("aginx-term: selfnet up — greeted");
+            true
+        } else {
+            false
+        }
+    }
+}
+
 /// The prompt face's render (开机剧情 v4): the transcript typewriter face.
 /// `breath` = cursor level 0..=16. The live result page never comes through
 /// here — its frames blit straight into the back buffer (result_frame).
-fn render_prompt(r: &Render, pix: &mut [u32], voice: &VoiceView, breath: u8, warns: &[String]) {
-    let line = voice.doc.line.as_deref().unwrap_or("");
-    r.prompt(pix, line, voice.line_prog, Some(breath));
+/// C5 `selfnet`: term's own waiting/greet line draws INSTEAD of the voice
+/// transcript, fully revealed (it's a status, not a line of dialogue — no
+/// typewriter), cursor breathing at its end.
+fn render_prompt(
+    r: &Render,
+    pix: &mut [u32],
+    voice: &VoiceView,
+    breath: u8,
+    warns: &[String],
+    selfnet: Option<&'static str>,
+) {
+    let (line, prog) = match selfnet {
+        Some(s) => (s, usize::MAX),
+        None => (voice.doc.line.as_deref().unwrap_or(""), voice.line_prog),
+    };
+    r.prompt(pix, line, prog, Some(breath));
     // 警告注册表非空 → 中屏红警区叠加；顶部 transcript+呼吸光标不动
     if !warns.is_empty() {
         r.warn(pix, warns);
@@ -1862,6 +1967,20 @@ fn main() {
     // 面法: the eye flag drives Mode::Eye transitions in the loop — this
     // mirrors the loop's edge detector (voice.poll() already ran above).
     let mut eye_on_prev = voice.alive && voice.doc.eye;
+    // C5 自持等网行：四门全过才布防（见 selfnet_should_arm）。蛋上 voice
+    // 永不出现，这张脸由 term 持有；整机上 voice 起慢了也只是短暂接管、
+    // 复活即让位。首帧（下方首画块）就带着等待行——不等技术循环。
+    let mut selfnet = if selfnet_should_arm(
+        uptime_secs(),
+        std::path::Path::new(WIFI_CONF_PATH).exists(),
+        boot_state_has_internet(),
+        voice.alive,
+    ) {
+        eprintln!("aginx-term: selfnet watching");
+        SelfNet::arm()
+    } else {
+        SelfNet::idle()
+    };
     // 面法: mode boxed away while Mode::Eye has the screen — restored on
     // eye close; None (boot straight into the eye) → Idle.
     let mut mode_before_eye: Option<Box<Mode>> = None;
@@ -1915,7 +2034,7 @@ fn main() {
                     r.photos_list(buf, p, &lg);
                 }
             }
-            Mode::Idle => render_prompt(&r, buf, &voice, 16, &warns),
+            Mode::Idle => render_prompt(&r, buf, &voice, 16, &warns, selfnet.line),
             Mode::Eye => r.eye(buf, &voice, &lg),
             Mode::Running(_) => {
                 fill_rect(buf, pitch, w, h, 0, 0, w as i32, h as i32, BG);
@@ -2655,6 +2774,11 @@ fn main() {
                 redraw = true;
             }
         }
+        // C5 自持等网行 tick：任何 mode 都跑（轮询自带 5s 门；voice 复活
+        // 边沿在任何面都要让位），行变了才重画。
+        if selfnet.tick(voice.alive) {
+            redraw = true;
+        }
 
         // while blanked the framebuffer is not scanned out — skip render
         // and present entirely (pty keeps draining above, output renders
@@ -2694,7 +2818,7 @@ fn main() {
                         direct = true;
                     } else {
                         let level = if breath_tick <= 16 { breath_tick } else { 32 - breath_tick };
-                        render_prompt(&r, buf, &voice, level, &warns);
+                        render_prompt(&r, buf, &voice, level, &warns, selfnet.line);
                     }
                 }
                 Mode::Eye => {
@@ -3087,5 +3211,45 @@ mod tests {
         assert!(h.contains("17 点 24 分"));
         // 问句含换行的罕见形状（三段）→ 尾段对不上整行 → 放弃（安全向）
         assert!(recover(&root, Some("多行\n问句\n17 点 24 分")).is_none());
+    }
+
+    /// C5 自持等网行：四门真值表（16 行全枚举——门多一个都不许漏）。
+    /// 语义镜像 voice #282 的 boot_net_arm + 第四门 !voice.alive。
+    #[test]
+    fn selfnet_should_arm_four_gate_truth_table() {
+        let cases: &[(f64, bool, bool, bool, bool)] = &[
+            // (uptime, wifi_conf, internet_ok, voice_alive, want)
+            (30.0, true, false, false, true),  // 蛋的常态：开机窗+已配对+没网+没 voice
+            (179.9, true, false, false, true), // 窗边界内
+            (180.0, true, false, false, true), // 边界含端（≤180）
+            (180.1, true, false, false, false), // 窗外——问候是开机的事
+            (30.0, false, false, false, false), // 未配对——路在配对面（C6），不在等网
+            (30.0, true, true, false, false),  // 已通网——直接问候不布防（不占台）
+            (30.0, true, false, true, false),  // voice 在——它自己等网，term 让位
+            (30.0, true, true, true, false),
+            (30.0, false, true, false, false),
+            (30.0, false, false, true, false),
+            (30.0, false, true, true, false),
+            (180.1, false, false, false, false),
+            (180.1, true, true, false, false),
+            (180.1, true, false, true, false),
+            (180.1, false, true, true, false),
+            (f64::MAX, true, false, false, false), // host 测试读不到 /proc/uptime 的形状
+        ];
+        for &(up, wc, net, va, want) in cases {
+            assert_eq!(
+                selfnet_should_arm(up, wc, net, va),
+                want,
+                "uptime={up} wifi_conf={wc} net={net} voice={va}"
+            );
+        }
+        // 行内容两态：等待行静态满显（状态不是台词，无打字机）
+        let sn = SelfNet::arm();
+        assert_eq!(sn.line, Some(SELFNET_WAITING));
+        // 刚布防 5s 轮询门未到 + voice 不在 → 行不变
+        let mut sn = SelfNet::arm();
+        assert!(!sn.tick(false));
+        assert_eq!(sn.line, Some(SELFNET_WAITING));
+        assert_eq!(SelfNet::idle().line, None);
     }
 }
