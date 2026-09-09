@@ -4,7 +4,7 @@
 //!
 //! 无钥匙不是致命错：main 的等待循环每 5s 重解析——sidecar 可能
 //! 晚于网关起来（requires_weak 只在依赖 starting 时等待，不阻塞），
-//! 或运维正在 `aginx-secret set relay.primary`。传输层失败���作
+//! 或运维正在 `aginx-secret set relay.primary`。传输层失败当作
 //! "sidecar 暂缺"，与 "scope 无值" 同为 None。
 
 use std::io::{BufRead, BufReader, Write};

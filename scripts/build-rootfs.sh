@@ -439,7 +439,7 @@ if [ "${EGG}" = "1" ]; then
 fi
 # version stamp (M14): what the running image is, for aginx-update
 # status/compare. N4: stamped from THIS repo's git; D14: the device rides
-# the stamp — 版本串自证出自哪台机的烤���线。EGG 档行尾加 ` egg`（n6
+# the stamp — 版本串自证出自哪台机的烤机线。EGG 档行尾加 ` egg`（n6
 # 预检的蛋形戳）。
 STAMP="$(git -C "${ROOT}" log -1 --format="aginxos ${DEVICE} %h %cd" --date=short 2>/dev/null || echo "aginxos ${DEVICE} unknown")"
 if [ "${EGG}" = "1" ]; then

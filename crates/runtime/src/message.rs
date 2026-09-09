@@ -6,7 +6,7 @@
 //
 // 与 D8 的关系：这个模型是「发给 brain 的形状」；会话日志（sessions/
 // {id}.jsonl）的真源形状是 agi::Frame，avatar::replay_session 负责把
-// 帧账重放成这里的 Message 列表（冷启动���恢复）。
+// 帧账重放成这里的 Message 列表（冷启动后恢复）。
 
 use serde_json::Value;
 
