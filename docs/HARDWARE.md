@@ -1808,3 +1808,39 @@ VOICED_FRONT=/usr/bin/aginx。套件修 225b2ee（D 段六单元产品态）+
 **net-watch 真日志注记**：/var/log/net-watch.log（脚本 LOG 直写）才是
 真相源；/var/log/aginx-svc/net-watch.log 是 svcd stdout 捕获恒空——
 勿再误读。
+
+## 2026-09-09 警告注册表 + 待机面红警（无网络 v0）设备收据
+
+**背景**（用户 09-08 提议）：AP 断网时屏幕看着一切正常。规格 = 待机面
+顶部 transcript+呼吸光标不动，**中屏（开机字标位）红 AginxOS 字标+警告
+文案**，通道可扩展（不止无网络）。
+
+**实现**（commit 37f9034 + 3619828，dev push 不等 bake）：
+- `/run/aginx-warn/` 一警一文件（文件名=来源标签，内容=单行中文），
+  D12 注册表形状；v0 唯一写者 net-watch。
+- net-watch 探针环兼任：链路死（gw ping 不通 ×2 探）→「无网络 · 自动
+  重连中」；上游死（gw 通+223.5.5.5 ×8 探≈2min）→「无网络 · 上游断
+  连」；**链路+外网双通才撤**。无 /etc/wifi.conf（未配对）不报。
+- term 待机面 2s 轮询注册表，非空 → 中屏红区（字标锚 y=h*45/100
+  scale 13 + 警告行 scale 5=transcript 同阶），顶部不动、结果页持帧
+  不抢、变化才重画。金测 37/37 + check.sh 全绿（host PPM 带宽核对：
+  字标带 1053-1156、行带 1217-1257/1281-1321）。
+
+**设备收据**（USB 侧观察全程；wlan0 掐线 01:39:16 UTC）：
+
+| 时刻 | 事件 |
+|---|---|
+| 01:39:25 | probe fail 1/3（gw=none） |
+| 01:39:40 | probe fail 2/3 → `/run/aginx-warn/net` 落「无网络 · 自动重连中」（=掐线后 ~24s，WARN_TRIP=2 设计时延） |
+| 01:39:55 | fail 3/3 → rejoin（net-rejoin flush+join Legrand AP） |
+| 01:40:09 | rejoin ok（lease 192.168.0.166 回） |
+| ~01:40:25 | 下一探链路+外网双通 → 警告文件自清 |
+
+term 换装（pkill -x → handoff while-环 2s 重生，readlink 对真身
+/usr/bin/aginx-term 1563944B→新 1576456B）+ net-watch 单元 restart
+（aginx-svc restart，新脚本自建 /run/aginx-warn）均在役。演示文件
+`/run/aginx-warn/demo` 留在机上供真人眼验红警面（rm 即消）。
+
+**待办**：红面真眼验（用户）；上游断连档未实测（AP 侧断外网才能触发，
+逻辑与链路档同一 warn_net 通路）；bake #20 折叠（net-watch + term +
+/bin 旧 httpget 三件）。
