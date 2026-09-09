@@ -148,7 +148,11 @@ drv "/usr/bin/aginx-voice --inject 你好; sleep 1"
 expect_rc  "封闭词表：inject 你好 rc=0"
 drv "/usr/bin/aginx-voice --face"
 expect_out "封闭词表仍本地直答（我在）" "我在"
-drv "/usr/bin/aginx-voice --inject 用一句话介绍AginxOS; sleep 3"
+# 自由文本→母体是前台合同：daemon 由 unit 注入 VOICED_FRONT=/usr/bin/aginx
+# （/proc/<pid>/environ 实证）。裸 inject 必须带同一合同——不带则协议按
+# 没听懂地板答（N4 切换日此断言是假绿：老 face schema 的 lines 连用户
+# 原文一起进 JSON，grep 命中的是 inject 自己，v4② lines 退役后才暴露）。
+drv "VOICED_FRONT=/usr/bin/aginx /usr/bin/aginx-voice --inject 用一句话介绍AginxOS; sleep 3"
 expect_rc  "自由文本 inject rc=0"
 drv "/usr/bin/aginx-voice --face"
 expect_no  "不是兜底话"    "连不上母体"
