@@ -82,6 +82,7 @@ dependencies = [
  "aginx-qr",
  "jpeg-encoder",
  "qrcodegen",
+ "testkit",
 ]
 
 [[package]]
