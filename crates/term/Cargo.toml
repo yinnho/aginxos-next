@@ -31,3 +31,6 @@ base64 = "0.22"
 # D14: 机型事实（面板尺寸/输入节点/分核）唯一合法来源 devices/<codename>/
 # device.toml——voice 同款读法层（../hwd，纯 lib，host 测试可 from_path）。
 hwd = { path = "../hwd" }
+# C6: 扫码配网——QR payload 分诊（parse_pair_payload/parse_wifi_payload 纯
+# 解析）。feature 纪律同 voice：绝不选 jpeg（quircs/aginx-img 不进 term）。
+aginx-qr = { path = "../qr", default-features = false }

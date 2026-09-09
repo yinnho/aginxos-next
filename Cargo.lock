@@ -184,6 +184,7 @@ dependencies = [
  "ab_glyph",
  "agi",
  "aginx-img",
+ "aginx-qr",
  "aginx-svc",
  "base64 0.22.1",
  "hwd",
