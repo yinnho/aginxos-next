@@ -3,10 +3,12 @@
 //! v0 semantics preserved (docs/SYSTEM.md §6.1): a package is a static
 //! musl binary at /var/bin/<name> with /var/bin/.<name>.prev for
 //! rollback and /var/apps/<name>/ as its data dir; manifest lines are
-//! `<name> <url> <sha256> [core|opt]` with absent 4th field = core;
-//! `sync` self-heals core entries only; `opt-in` installs an opt entry
-//! and seeds its launcher registry entry; installs are atomic
-//! (.new → rename) and keep the previous binary on any failure.
+//! `<name> <url> <sha256> [core|opt] [version]` with absent 4th field =
+//! core and an absent 5th field = no version (display-only — sha256
+//! equality stays the only truth); `sync` self-heals core entries only;
+//! `opt-in` installs an opt entry and seeds its launcher registry entry;
+//! installs are atomic (.new → rename) and keep the previous binary on
+//! any failure.
 //!
 //! M26 adds the signed chain and the 四件套:
 //!
@@ -130,10 +132,13 @@ pub struct Entry {
     pub url: String,
     pub sha256: String,
     pub tier: Tier,
+    /// 5th manifest column, display-only (sha256 equality stays the
+    /// only truth — version never gates an install decision).
+    pub version: Option<String>,
 }
 
-/// Parse manifest text: `<name> <url> <sha256> [core|opt]`, '#'
-/// comments and blank lines skipped. A line with a name but no
+/// Parse manifest text: `<name> <url> <sha256> [core|opt] [version]`,
+/// '#' comments and blank lines skipped. A line with a name but no
 /// url/sha256 is a hard parse error (v0 warned per-line at sync; the
 /// Rust gate refuses the whole file so a typo can never silently
 /// drop a package from self-heal).
@@ -146,14 +151,16 @@ pub fn parse_manifest(src: &str) -> Result<Vec<Entry>, String> {
         }
         let f: Vec<&str> = l.split_whitespace().collect();
         if f.len() < 3 {
-            return Err(format!("line {}: want '<name> <url> <sha256> [core|opt]'", i + 1));
+            return Err(format!("line {}: want '<name> <url> <sha256> [core|opt] [version]'", i + 1));
         }
         let tier = if f.get(3) == Some(&"opt") { Tier::Opt } else { Tier::Core };
+        let version = f.get(4).filter(|v| !v.is_empty()).map(|v| v.to_string());
         out.push(Entry {
             name: f[0].to_string(),
             url: f[1].to_string(),
             sha256: f[2].to_string(),
             tier,
+            version,
         });
     }
     Ok(out)
@@ -317,6 +324,63 @@ fn read_member<R: Read>(e: &mut tar::Entry<R>) -> Result<Vec<u8>, Fail> {
     Ok(buf)
 }
 
+/// Display metadata from pkg.toml — all optional, display-only. Feeds
+/// the face's .aginxmd sidecar (summary/args/examples/group) and the
+/// version stamp. Values must be strings (examples: string or string
+/// array) with no newlines: the sidecar is a line protocol.
+#[derive(Debug, Default, PartialEq)]
+pub struct PkgMeta {
+    pub version: Option<String>,
+    pub summary: Option<String>,
+    pub args: Option<String>,
+    pub examples: Vec<String>,
+    pub group: Option<String>,
+}
+
+/// One non-empty, single-line string or None.
+fn one_line(v: &toml::Value) -> Option<&str> {
+    let s = v.as_str()?;
+    (!s.is_empty() && !s.contains('\n') && !s.contains('\r')).then_some(s)
+}
+
+fn parse_pkg_meta(tbl: &toml::map::Map<String, toml::Value>) -> Result<PkgMeta, Fail> {
+    let bad = |k: &str, want: &str| io_fail("pkg_manifest_parse", format!("pkg.toml {k}: {want}"));
+    let mut m = PkgMeta::default();
+    if let Some(v) = tbl.get("version") {
+        let s = one_line(v).ok_or_else(|| bad("version", "want a non-empty single-line string"))?;
+        if s.len() > 32 {
+            return Err(bad("version", "longer than 32 chars — trim it"));
+        }
+        m.version = Some(s.to_string());
+    }
+    for k in ["summary", "args", "group"] {
+        if let Some(v) = tbl.get(k) {
+            let s = one_line(v).ok_or_else(|| bad(k, "want a non-empty single-line string"))?.to_string();
+            match k {
+                "summary" => m.summary = Some(s),
+                "args" => m.args = Some(s),
+                _ => m.group = Some(s),
+            }
+        }
+    }
+    if let Some(v) = tbl.get("examples") {
+        match v {
+            toml::Value::String(_) => {
+                let s = one_line(v).ok_or_else(|| bad("examples", "want single-line strings"))?;
+                m.examples.push(s.to_string());
+            }
+            toml::Value::Array(items) => {
+                for item in items {
+                    let s = one_line(item).ok_or_else(|| bad("examples", "want single-line strings"))?;
+                    m.examples.push(s.to_string());
+                }
+            }
+            _ => return Err(bad("examples", "want a string or a string array")),
+        }
+    }
+    Ok(m)
+}
+
 fn install_bundle(p: &Paths, name: &str, src: &Path) -> Result<Kind, Fail> {
     let f = std::fs::File::open(src).map_err(|e| io_fail("open", format!("{}: {e}", src.display())))?;
     let mut ar = tar::Archive::new(f);
@@ -415,6 +479,14 @@ fn install_bundle(p: &Paths, name: &str, src: &Path) -> Result<Kind, Fail> {
     }
     let exec = tbl.get("exec").and_then(|v| v.as_str());
 
+    // Display metadata (#284 lockstep fix): summary/args/examples/group
+    // feed the face's .aginxmd sidecar (the router meta protocol reads
+    // exactly those keys); version feeds the version stamp. All optional
+    // and display-only. NOTE: version itself does NOT go into the
+    // sidecar — the router's parser rejects unknown keys, and sha256
+    // stays the only truth anyway.
+    let meta = parse_pkg_meta(tbl)?;
+
     // The face: either a flat binary member (bin/<name>) or a symlink
     // into the files/ tree (pkg.toml exec). Exactly one.
     match (exec, bin.is_some()) {
@@ -510,6 +582,10 @@ fn install_bundle(p: &Paths, name: &str, src: &Path) -> Result<Kind, Fail> {
     for (rel, bytes) in &members {
         let dst = skill_dir.join(rel);
         write_644(&dst, bytes).map_err(|e| io_fail("skill_write", format!("{}: {e}", dst.display())))?;
+    }
+    write_face_sidecar(p, name, &meta)?;
+    if let Some(v) = &meta.version {
+        write_stamp_version(p, name, v)?;
     }
     if has_unit {
         reload_units(p);
@@ -652,6 +728,47 @@ fn read_stamp(p: &Paths, name: &str) -> Option<String> {
     std::fs::read_to_string(p.stamps.join(name)).ok().map(|s| s.trim().to_string())
 }
 
+/// Write the face's .aginxmd sidecar — the router meta protocol reads
+/// this for compiled binaries (router meta::read_for → sidecar_for).
+/// ONLY router-known keys (summary/args/examples/group): `version`
+/// must not ride here (the router's parser rejects unknown keys), it
+/// goes to the version stamp; sha256 stays the only truth either way.
+fn write_face_sidecar(p: &Paths, name: &str, meta: &PkgMeta) -> Result<(), Fail> {
+    let mut body = String::new();
+    if let Some(s) = &meta.summary {
+        body.push_str(&format!("# aginx:summary={s}\n"));
+    }
+    if let Some(a) = &meta.args {
+        body.push_str(&format!("# aginx:args={a}\n"));
+    }
+    for e in &meta.examples {
+        body.push_str(&format!("# aginx:examples={e}\n"));
+    }
+    if let Some(g) = &meta.group {
+        body.push_str(&format!("# aginx:group={g}\n"));
+    }
+    if body.is_empty() {
+        return Ok(());
+    }
+    let dst = p.bindir.join(format!("{name}.aginxmd"));
+    write_644(&dst, body.as_bytes())
+        .map_err(|e| io_fail("sidecar_write", format!("{}: {e}", dst.display())))
+}
+
+/// Version stamp, next to the sha stamp (the body format of the sha
+/// stamp itself is untouched — sync's read_stamp == sha equality rides
+/// on bare sha text).
+fn write_stamp_version(p: &Paths, name: &str, version: &str) -> Result<(), Fail> {
+    mkdir_all(&p.stamps)?;
+    let dst = p.stamps.join(format!("{name}.version"));
+    write_644(&dst, format!("{version}\n").as_bytes())
+        .map_err(|e| io_fail("stamp", format!("{}: {e}", dst.display())))
+}
+
+fn read_version(p: &Paths, name: &str) -> Option<String> {
+    std::fs::read_to_string(p.stamps.join(format!("{name}.version"))).ok().map(|s| s.trim().to_string())
+}
+
 // ------------------------------------------------------------- fetch
 
 /// Download via aginx-download (the phone's only TLS fetcher) with the gh-proxy
@@ -783,7 +900,12 @@ pub fn cmd_available(p: &Paths, manifest: Option<&Path>, pubkey_b64: &str) -> Re
             continue;
         }
         out.lines.push(e.name.clone());
-        out.data.push(serde_json::json!({"name": e.name, "url": e.url, "sha256": e.sha256}));
+        out.data.push(serde_json::json!({
+            "name": e.name,
+            "url": e.url,
+            "sha256": e.sha256,
+            "version": e.version,
+        }));
     }
     Ok(out.count())
 }
@@ -836,7 +958,9 @@ pub fn cmd_list(p: &Paths) -> Result<CmdOut, Fail> {
         .filter_map(|e| e.ok())
         .filter(|e| e.path().is_file())
         .map(|e| e.file_name().to_string_lossy().into_owned())
-        .filter(|n| !n.starts_with('.'))
+        // hidden .prev/.new staging files AND our own .aginxmd sidecars
+        // (they live in bindir but are router metadata, not packages)
+        .filter(|n| !n.starts_with('.') && !n.ends_with(".aginxmd"))
         .collect();
     names.sort();
     for n in &names {
@@ -858,6 +982,7 @@ pub fn cmd_list(p: &Paths) -> Result<CmdOut, Fail> {
             "name": n,
             "sha256": sha,
             "stamp": read_stamp(p, n),
+            "version": read_version(p, n),
             "skill": skill,
             "unit": unit,
         }));
@@ -963,6 +1088,11 @@ mod tests {
         assert_eq!(es[1].tier, Tier::Opt);
         // absent 4th field = core
         assert_eq!(es[2].tier, Tier::Core);
+        // 5th column version: present / absent / empty-all-whitespace
+        let src = "a u c1 core 0.9.1\nb u c2 core\n";
+        let es = parse_manifest(src).unwrap();
+        assert_eq!(es[0].version.as_deref(), Some("0.9.1"));
+        assert_eq!(es[1].version, None);
         assert!(parse_manifest("broken\n").is_err());
     }
 
@@ -1090,6 +1220,67 @@ mod tests {
         assert!(unit.contains("name = \"dup\""));
         assert!(unit.contains("cmd = \"/var/bin/dup\""));
         assert_eq!(fs::read_to_string(p.stamps.join("dup")).unwrap().trim(), sha);
+    }
+
+    #[test]
+    fn bundle_meta_sidecar_and_version_stamp() {
+        let root = tmp("meta");
+        let p = paths(&root);
+        let toml_full = "name = \"dup\"\nversion = \"1.2.3\"\nsummary = \"pair with me\"\nargs = \"<jpg>\"\nexamples = [\"dup a\", \"dup b\"]\ngroup = \"agent\"\n";
+        let t = root.join("m.tar");
+        build_tar(&t, &[("bin/dup", b"B"), ("pkg.toml", toml_full.as_bytes()), ("SKILL.md", b"s")]);
+        install_file(&p, "dup", &t, &sha256_file(&t).unwrap()).unwrap();
+        // sidecar: only router-known keys, no version
+        let side = fs::read_to_string(p.bindir.join("dup.aginxmd")).unwrap();
+        assert_eq!(
+            side,
+            "# aginx:summary=pair with me\n# aginx:args=<jpg>\n# aginx:examples=dup a\n# aginx:examples=dup b\n# aginx:group=agent\n"
+        );
+        assert_eq!(fs::read_to_string(p.stamps.join("dup.version")).unwrap().trim(), "1.2.3");
+        // list --json carries the version
+        let out = cmd_list(&p).unwrap();
+        assert_eq!(out.data[0]["version"], "1.2.3");
+
+        // no summary/examples/group -> NO sidecar, but version stamp still lands
+        let p2 = paths(&root.join("second"));
+        let toml_ver_only = "name = \"dup\"\nversion = \"9.0\"\n";
+        let t2 = root.join("v.tar");
+        build_tar(&t2, &[("bin/dup", b"B"), ("pkg.toml", toml_ver_only.as_bytes()), ("SKILL.md", b"s")]);
+        install_file(&p2, "dup", &t2, &sha256_file(&t2).unwrap()).unwrap();
+        assert!(!p2.bindir.join("dup.aginxmd").exists());
+        assert_eq!(fs::read_to_string(p2.stamps.join("dup.version")).unwrap().trim(), "9.0");
+
+        // no version at all -> no stamp, no sidecar
+        let p3 = paths(&root.join("third"));
+        let t3 = root.join("n.tar");
+        build_tar(&t3, &[("bin/dup", b"B"), ("pkg.toml", "name = \"dup\"\n".as_bytes()), ("SKILL.md", b"s")]);
+        install_file(&p3, "dup", &t3, &sha256_file(&t3).unwrap()).unwrap();
+        assert!(!p3.bindir.join("dup.aginxmd").exists());
+        assert!(!p3.stamps.join("dup.version").exists());
+
+        // bad metadata refused: version too long / newline in summary / non-string examples
+        for (tag, bad) in [
+            ("long", "name = \"dup\"\nversion = \"0123456789012345678901234567890123\"\n"),
+            ("newline", "name = \"dup\"\nsummary = \"two\\nlines\"\n"),
+            ("array", "name = \"dup\"\nexamples = [1, 2]\n"),
+        ] {
+            let tb = root.join(format!("{tag}.tar"));
+            build_tar(&tb, &[("bin/dup", b"B"), ("pkg.toml", bad.as_bytes()), ("SKILL.md", b"s")]);
+            let f = install_file(&p3, "dup", &tb, &sha256_file(&tb).unwrap()).unwrap_err();
+            assert_eq!(f.code, "pkg_manifest_parse", "{tag}: {}", f.message);
+        }
+
+        // available --json carries the manifest 5th column version
+        let (sk, pub_b64) = keypair();
+        let mut p4 = paths(&root.join("fourth"));
+        p4.manifest = write_signed(
+            &root,
+            "mm",
+            "optpkg http://x c0ffee opt 2.1.0\n",
+            &sk,
+        );
+        let out = cmd_available(&p4, None, &pub_b64).unwrap();
+        assert_eq!(out.data[0]["version"], "2.1.0");
     }
 
     #[test]

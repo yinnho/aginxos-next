@@ -8,3 +8,6 @@
 # internals alongside). /usr/bin/aginx-web is the pre-provision bridge —
 # same route, shadowed once provision sync lands the binary (resolve.rs:
 # /var/bin precedes /usr/bin). Keep the two summaries in lockstep.
+# 2026-09-09: the installer now generates this sidecar from the package's
+# own pkg.toml (#284 lockstep fix) — this hand-curated copy retires at the
+# first full-image reinstall of aginx-web from the package line.
