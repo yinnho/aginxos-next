@@ -3,11 +3,22 @@ name = "aginx-pair"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
-description = "AGINXPAIR1 pair-code minting tool (M42f⑤) — host-only, never shipped to the device"
+description = "AGINXPAIR1 pair-code minting (host, feature mint) + device-side apply (payload on stdin)"
+
+[features]
+# 铸码档（host-only）：QR 编码 + JPEG 输出 + 设备同款 decode_jpeg 全链测试。
+# 设备档关掉它：apply 只需要 aginx-qr 的纯解析（parse_pair_payload /
+# parse_wifi_payload），qrcodegen/jpeg-encoder/aginx-qr jpeg 特性一个不进
+# 设备二进制——feature 统一是调用级的，设备面必须独立 `--no-default-features`
+# 构建（第三次 zigbuild，C10 接线）。
+default = ["mint"]
+mint = ["dep:qrcodegen", "dep:jpeg-encoder", "aginx-qr/jpeg"]
 
 [dependencies]
-# jpeg 档：铸码测试要过设备同款 decode_jpeg 全链（host-only，无设备体积约束；
-# 设备纪律线在 aginx-voice 的 default-features=false，与本 crate 无关）
-aginx-qr = { path = "../qr", default-features = false, features = ["jpeg"] }
-qrcodegen = "1"
-jpeg-encoder = "0.6"
+aginx-qr = { path = "../qr", default-features = false, features = [] }
+qrcodegen = { version = "1", optional = true }
+jpeg-encoder = { version = "0.6", optional = true }
+
+[dev-dependencies]
+# apply 测试构造 stub 树（tmp）；mint 测试无需它但同 crate 共享 dev 树。
+testkit = { path = "../testkit" }
