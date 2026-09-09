@@ -6,7 +6,6 @@
 //! term 主区从对话行切为渲染这张帧（成果区第一实例）——取景画面本身就是
 //! 「眼睛睁开了」，人看着画面瞄准，识别成功自动进对话。
 
-use crate::protocol::Vm;
 use serde::Serialize;
 use std::fs;
 use std::path::Path;
@@ -39,9 +38,7 @@ pub fn current_line() -> Option<String> {
 }
 
 #[derive(Serialize)]
-pub struct FaceDoc<'a> {
-    /// 协议状态名（无驻留态状态机恒 "idle"；m42c 钉 "state":"idle"）
-    pub state: &'a str,
+pub struct FaceDoc {
     /// 眼取景中：Mode::Eye 整屏取景
     pub eye: bool,
     /// 开机剧情 v4 结果面（#246）：result.html 已发布，term 挂活体面板上屏
@@ -51,11 +48,13 @@ pub struct FaceDoc<'a> {
     pub line: Option<String>,
 }
 
-fn write_doc(state: &str, eye: bool, result: bool) {
+/// V3（09-10）：`state` 字段退役——命令优先重写后它恒 "idle"（唯一例外
+/// powerwait 也不上脸），term 的 FaceDoc 从来只读 eye/result/line（serde
+/// default，多余字段透明忽略）。
+fn write_doc(eye: bool, result: bool) {
     *RESULT_STANDING.lock().unwrap() = result;
     let _ = fs::create_dir_all(FACE_DIR);
     let doc = FaceDoc {
-        state,
         eye,
         result,
         line: BOOT_LINE.lock().unwrap().clone(),
@@ -68,15 +67,14 @@ fn write_doc(state: &str, eye: bool, result: bool) {
     }
 }
 
-pub fn write(vm: &Vm, eye: bool) {
-    write_doc(vm.state_name(), eye, false);
+pub fn write(eye: bool) {
+    write_doc(eye, false);
 }
 
 /// 结果面（v4⑥）：Chat 臂 stage_reply 已写 result.html，run_outs 尾部
-/// flush_pending 调到这里——state 沿用分支时捕获的名字，result=true 让
-/// term 挂活体面板。
-pub fn write_result(state: &str) {
-    write_doc(state, false, true);
+/// flush_pending 调到这里——result=true 让 term 挂活体面板。
+pub fn write_result() {
+    write_doc(false, true);
 }
 
 /// 结果页站立中（v4⑥）：run_outs 尾部例行刷脸的门。

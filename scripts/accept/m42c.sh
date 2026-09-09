@@ -10,7 +10,8 @@
 #          → AGINXPAIR1 五段 payload round-trip（JPEG 进——设备只解 JPEG）
 #   B 协议  --inject 你好（地板词表）/ --inject 状态 / --inject 连网（已
 #          连网 → 「网已连」，不碰 wifi.conf）/ face 新 schema（无
-#          list/psk/hint 段——hint v4 退役，自举入口改走应答行、state=idle）
+#          list/psk/hint/state 段——hint v4 退役、state 批② V3 09-10 退役，
+#          自举入口改走应答行）
 #   B2 面法 关机/重启口令闸（09-07）：未设口令=fail-closed 拒绝话术；
 #          fixture 口令 + 错口令×3 → 三错作废。口令值是套件字面量（同
 #          host 测试的 p4ss w0rd!），真口令永不进脚本；口令尝试不上脸
@@ -101,10 +102,11 @@ expect_rc "face 快照（EXIT 归还原位）"
 
 drv "$VOICE --inject 你好; sleep 1; $VOICE --face"
 expect_out "地板词表应答（我在）"            '我在'
-expect_out "state=idle（无驻留态状态机）"    '"state":"idle"'
+expect_out "face 三字段 schema（eye/result/line）"   '"eye":false,"result":false'
 expect_no  "face 无 list 段（新 schema）"    '"list"'
 expect_no  "face 无 psk 段（新 schema）"     '"psk"'
-expect_no  "face 无 hint 段（v4 退役）"    '"hint"'
+expect_no  "face 无 hint 段（v4 退役）"      '"hint"'
+expect_no  "face 无 state 段（批② V3 退役）" '"state"'
 expect_out "应答带自举入口（说扫码）"      '说扫码'
 
 drv "$VOICE --inject 状态; sleep 1; $VOICE --face"

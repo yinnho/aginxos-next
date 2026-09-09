@@ -16,18 +16,19 @@ use crate::face;
 /// mtime 先例）。
 pub const RESULT_HTML: &str = "/run/aginx-voice/result.html";
 
-/// 本回合已暂存结果页，等 run_outs 尾部统一翻旗。值=翻旗时用的 state 名。
-static PENDING: Mutex<Option<String>> = Mutex::new(None);
+/// 本回合已暂存结果页，等 run_outs 尾部统一翻旗（V3：state 名随 face
+/// 字段一并退役，只剩布防位）。
+static PENDING: Mutex<bool> = Mutex::new(false);
 
-/// Chat 臂：同步写 result.html（毫秒级，无线程无引擎往返），暂存 state
-/// 待尾部翻旗。文本先行不变——调用方必须已 set_line(Q\nA)。问句块
-/// #283 常驻：面板上问句在答句上方，与光标面同形状。
-pub fn stage_reply(state: &str, question: &str, markdown: &str) {
+/// Chat 臂：同步写 result.html（毫秒级，无线程无引擎往返），暂存待尾部
+/// 翻旗。文本先行不变——调用方必须已 set_line(Q\nA)。问句块 #283 常驻：
+/// 面板上问句在答句上方，与光标面同形状。
+pub fn stage_reply(question: &str, markdown: &str) {
     let p = hwd::load_or_exit();
     let html = page_html(question, markdown, p.panel.width, p.panel.height);
     let tmp = format!("{RESULT_HTML}.tmp");
     if std::fs::write(&tmp, html).is_ok() && std::fs::rename(&tmp, RESULT_HTML).is_ok() {
-        *PENDING.lock().unwrap() = Some(state.to_string());
+        *PENDING.lock().unwrap() = true;
     } else {
         eprintln!("aginx-voice: result.html write failed");
     }
@@ -35,8 +36,10 @@ pub fn stage_reply(state: &str, question: &str, markdown: &str) {
 
 /// run_outs 尾部（followups 循环后）调用：全程序唯一翻旗点。无暂存=空转。
 pub fn flush_pending() {
-    if let Some(state) = PENDING.lock().unwrap().take() {
-        face::write_result(&state);
+    let mut p = PENDING.lock().unwrap();
+    if *p {
+        *p = false;
+        face::write_result();
     }
 }
 
