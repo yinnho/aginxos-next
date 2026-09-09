@@ -2102,3 +2102,64 @@ capture。bash -n 两脚本过。
 **收尾态**：out/rootfs.img = 蛋像（152M du）待 C11 刷机；
 out/rootfs-full-check.img = 全量对照烤（验 EGG=0 无回归，可删）。
 设备未动（在役 b399b7b slot _b + C9 updater）。
+
+## 2026-09-09 C11 蛋案设备日——扫码配网全链 + 自动装 + 等价 + 稳态（paired 38/0 · steady 9/0）
+
+**刷机**：`SKIP_STATE=1 GO=1 ./devices/redfin/boot/flash-redfin.sh`（手动
+Power+VolDown 入 fastboot，serial 闸过）。出厂形状实证：首启无
+state-restore、/etc/wifi.conf 不存在、stamps 0、version 戳尾 ` egg`。
+`n6-egg.sh pre` **15/15**（出厂形状 + A 哑终端：`aginx commands` 活、
+`agent send` rc≠0、aginx-server 单元 absent）。
+
+**扫码配网（WIFI: 简码档，用户指令「先配网」）**：
+- 举屏→取景→命中两发。第二发曾报「还没来得及对焦就没有了」——**根因
+  不是相机**：cam.log `vf: stop requested after 17 frames`（≈1.2s）=
+  term QR 命中即杀取景（设计行为）；拉回帧 host 解码干净 → 解码没败，
+  是 apply 败了。
+- **apply 真雷**：`aginx-net-join` 只装钥匙（wifi-join.c:1023 "keys
+  installed — run udhcpc"），租约归 udhcpc——pair apply（及 voice 同源
+  join）此前裸奔：关联成（wlan0 UP+LOWER_UP）而 IP 永不来。voice 旧路
+  一向是被 net-watch→net-rejoin 兜住的。修法（commit aadf30f）：join 成
+  而 iface 无地址时 spawn `udhcpc -n -q -t 10 -T 3`（net-bringup 同款），
+  40s 预算 + 10×500ms 轮询；成功才落 wifi.conf。设备面 /usr/bin/aginx-pair
+  已换新 musl 件（433784B）；**注意 aginx-voice 包在 pkgs.aginx.net 仍是
+  旧件，下次 bump 折叠 aadf30f**。
+- 配网成：wifi.conf（0600，ssid=Legrand AP）+ boot.state
+  `wifi ok / dhcp ok 192.168.0.166 / internet ok paired`。
+
+**钟腿（adb 代行注记）**：WIFI: 简码不含 quick_clock 腿，而 net-bringup
+在蛋首启已因无 conf 早退——钟停 1970，TLS 拉 pkg 必死。按 net-bringup
+自家配方 adb 循环 ntpd 双 NTP 至 `date +%Y ≥ 2026`，boot.state 加注
+`time ok paired-clock`。全码（AGINXPAIR1）路径自带此腿，无此依赖。
+
+**三键灌注（dev 腿注记）**：本地拼 0600 合并件→push→设备端 sed 合并→
+即删（值零回显；host /tmp/pairday.lZaKTy 备份源）。首灌三键，后补
+AG_TTS_KIND（老 env 共 4 键）。**时序雷（人造，非产品雷）**：包落地
+（13:36）早于 env 落地（13:38）两分钟——svcd 30s 复查即起 gateway（无
+ID 五连败进熔断）与 server（无 brain key，send 401）。手动 restart 双双
+救活。真用户流三键在配网时就灌好（apply 第②步），包落地时 env 已在，
+不踩此雷。**首拉注记**：term 自动 sync 单飞门可能在 1970 纪元已花掉且
+无痕迹（term 子进程 stderr 无落点——**立案**：term 应给 job 子进程
+stderr 找个 /run 落点）；本次 sync 由 adb 代行（同引擎，C2 锁兜并发）。
+~700MB 过 Legrand AP 全程未断（net-watch 在位）。
+
+**paired 38/0**：B 配网证 4 + C 自动装（8 stamps/version/face+sidecar、
+模型树 dangling→真身、六单元 ready、voice face 非空）+ D 等价（send 真
+往返、8443 ESTABLISHED、voice local=true、secretd policy 拒读生证）+
+E grok opt-in（**CLI 代行，tap 是真人腿**——待真人收据）。**steady 9/0**：
+同像真重启→wifi 自动连（wifi.conf 持久）→pkg ok→六单元→send 仍真答→
+sync 零 downloading→语音地板「我在」。
+
+**套件自修三笔**（实雷全在首跑暴露）：5d21be2 变量后紧跟多字节的
+unbound 雷（`$n（` 全量 `${n}` 化）+ send 弱断言（错误行也是中文，
+补 `expect_no '^aginx agent:'`×3）；c913689 steady 两修（wifi 行有界等
+——UP_OK 门早于 net-bringup phase 2 落行；voice 裸名——蛋上 face 在
+/var/bin）。
+
+**已知缺口（R13 接受）**：首启无语音问候（装完 uptime 已超 #282 闸），
+问候归 steady 后真人眼验（#198 同类）。
+
+**收尾态**：蛋在役（slot 同像二启稳态），六单元 ready + grok 已装。
+**G 升级路径（capture→第二颗蛋→egg2）与 H 回滚路径待人工腿**（手动
+Power+VolDown 入 fastboot）。out/rootfs.img = 蛋像待复用；H 需全量档
+重烤（EGG=0）。
