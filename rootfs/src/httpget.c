@@ -5,18 +5,28 @@
  * written resolv.conf), so the check gets its own ~100-line fetcher:
  * getaddrinfo -> TCP connect -> GET -> read.
  *
+ * Address iteration + socket timeouts (2026-09-09, bake-#1 flash day):
+ * DNS here rotates AAAA/A order while the AP carries no IPv6 default
+ * route — dialing the v6 answer hung the whole boot internet stage
+ * (sk_wait_data, no timeout; observed stuck 10+ min). Now every
+ * addrinfo answer is tried in order (v6 connect fails in ms with
+ * ENETUNREACH, the A record answers), and a wedged peer can't hold the
+ * boot chain hostage: 15 s send/receive timeouts cap any single dial.
+ *
  * usage: httpget http://host[:port]/path [outfile]
  * Prints one line "HTTP <code> <n> bytes" and exits 0 on a 2xx/3xx response
  * with a non-empty body — the check proves DNS + TCP + HTTP round-trip,
  * which is what the boot card's INTERNET row claims, no more.
  */
 #define _GNU_SOURCE
+#include <errno.h>
 #include <netdb.h>
 #include <netinet/in.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/socket.h>
+#include <sys/time.h>
 #include <unistd.h>
 
 int main(int argc, char **argv) {
@@ -58,13 +68,25 @@ int main(int argc, char **argv) {
     fprintf(stderr, "resolve %s: %s\n", host, gai_strerror(rc));
     return 1;
   }
-  int s = socket(res->ai_family, res->ai_socktype, res->ai_protocol);
-  if (s < 0 || connect(s, res->ai_addr, res->ai_addrlen) < 0) {
-    perror("connect");
-    if (s >= 0) close(s);
-    return 1;
+  int s = -1;
+  for (struct addrinfo *ai = res; ai; ai = ai->ai_next) {
+    s = socket(ai->ai_family, ai->ai_socktype, ai->ai_protocol);
+    if (s < 0) continue;
+    /* 15 s send/receive cap: a wedged peer or a black-holed v6 dial
+     * must not hang the boot internet stage (observed 10+ min). */
+    struct timeval tv = {.tv_sec = 15};
+    setsockopt(s, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof tv);
+    setsockopt(s, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof tv);
+    if (connect(s, ai->ai_addr, ai->ai_addrlen) == 0) break;
+    fprintf(stderr, "connect %s: %s\n", host, strerror(errno));
+    close(s);
+    s = -1;
   }
   freeaddrinfo(res);
+  if (s < 0) {
+    fprintf(stderr, "connect %s: no reachable address\n", host);
+    return 1;
+  }
 
   char req[640];
   int rl = snprintf(req, sizeof req,
