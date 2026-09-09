@@ -427,15 +427,13 @@ if [ "${EGG}" = "1" ]; then
 fi
 cp -R "${RECIPE}/usr/bin/." "${TREE}/usr/bin/"
 cp -R "${RECIPE}/libexec/aginx/." "${TREE}/usr/libexec/aginx/"
-cp "${RECIPE}"/var/bin/*.aginxmd "${TREE}/var/bin/"
-# 剥件的配方 sidecar 出蛋（须在配方拷贝之后——上面三行会把它们灌回来）：
-# voice 的 usr/bin 件 + asr/tts/ocr 的 var/bin 件。蛋上这些面的元数据归
-# 安装器从 pkg.toml 生成（C1），孤儿 sidecar 是出厂面的过期文档；装包时
-# 安装器覆写同名件。
+# 批② C1（09-10）：rootfs/var/bin/*.aginxmd 四件已删——包管件的 sidecar
+# 一律由安装器从 pkg.toml 生成（安装即覆写，烤入件全路径死）。全量档
+# 烤入的 asr/tts/ocr 二进制不在 manifest 里、无安装器接管，删 sidecar
+# 后 `aginx commands` 对它们无摘要（过渡档已知降级，蛋档不受影响）。
+# 蛋档剥 usr/bin 的 voice sidecar（蛋不烤 voice 二进制，孤儿不给）。
 if [ "${EGG}" = "1" ]; then
-  rm -f "${TREE}/usr/bin/aginx-voice.aginxmd" \
-        "${TREE}/var/bin/aginx-asr.aginxmd" "${TREE}/var/bin/aginx-tts.aginxmd" \
-        "${TREE}/var/bin/aginx-ocr.aginxmd"
+  rm -f "${TREE}/usr/bin/aginx-voice.aginxmd"
 fi
 # version stamp (M14): what the running image is, for aginx-update
 # status/compare. N4: stamped from THIS repo's git; D14: the device rides
