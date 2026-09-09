@@ -1103,6 +1103,9 @@ fn read_text() -> Result<Vec<String>, String> {
 }
 
 /// wifi-join wlan0 ssid psk，然后读 wlan0 的 IPv4。
+/// net-join 只装钥匙；租约靠 udhcpc（net-bringup/net-rejoin 同款分法，
+/// 2026-09-09 蛋首配收据：关联成而 IP 永不来——voice 旧路是被 net-watch
+/// 的 net-rejoin 兜住的）。地址已在（开机路径跑过 udhcpc）就跳过。
 fn join_wifi(ssid: &str, psk: &str) -> Result<String, String> {
     let mut child = Command::new("/usr/bin/aginx-net-join")
         .args(["wlan0", ssid, psk])
@@ -1111,6 +1114,16 @@ fn join_wifi(ssid: &str, psk: &str) -> Result<String, String> {
         .spawn()
         .map_err(|e| format!("spawn: {e}"))?;
     audio::wait_limited(&mut child, JOIN_BUDGET_SECS).map_err(|e| format!("wifi-join {e}"))?;
+    // 租约腿（net-bringup 同款参数）；地址已在就跳过，幂等不重试。
+    if wlan0_ip().is_none() {
+        let mut dhcp = Command::new("/bin/udhcpc")
+            .args(["-i", "wlan0", "-n", "-q", "-t", "10", "-T", "3"])
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .map_err(|e| format!("udhcpc spawn: {e}"))?;
+        audio::wait_limited(&mut dhcp, 40).map_err(|e| format!("udhcpc {e}"))?;
+    }
     // dhcp 在 wifi-join 里；地址落不落直接看
     for _ in 0..10 {
         if let Some(ip) = wlan0_ip() {

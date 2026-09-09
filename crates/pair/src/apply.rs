@@ -27,11 +27,14 @@ use std::time::Duration;
 use aginx_qr::{parse_pair_payload, parse_wifi_payload, PairBundle};
 
 const JOIN_BUDGET_SECS: u32 = 90;
+/// udhcpc -n -q -t 10 -T 3 = 30s 最坏重试 + 余量（net-bringup 同款参数）。
+const DHCP_BUDGET_SECS: u32 = 40;
 
 /// 外部触点集。from_env 在设备上给出常量真值；测试直接构造。
 #[derive(Debug, Clone)]
 pub struct PairPaths {
     pub net_join: PathBuf,
+    pub udhcpc: PathBuf,
     pub svc: PathBuf,
     pub httpget: PathBuf,
     pub ntpd: PathBuf,
@@ -50,6 +53,7 @@ impl PairPaths {
     pub fn from_env() -> PairPaths {
         PairPaths {
             net_join: envp("AGINX_PAIR_NET_JOIN", "/usr/bin/aginx-net-join"),
+            udhcpc: envp("AGINX_PAIR_UDHCPC", "/bin/udhcpc"),
             svc: envp("AGINX_PAIR_SVC", "/usr/bin/aginx-svc"),
             httpget: envp("AGINX_PAIR_HTTPGET", "/bin/httpget"),
             ntpd: envp("AGINX_PAIR_NTPD", "ntpd"),
@@ -140,8 +144,10 @@ fn apply_wifi(p: &PairPaths, ssid: &str, psk: &str) -> Result<String, ApplyErr> 
     Ok(format!("网已连 {ssid}"))
 }
 
-/// net-join（join+dhcp 一体，voice 同款）→ 读 iface 的 IPv4。成功才落
-/// wifi.conf；坏密钥不落盘（wizard 撤回语义）。
+/// net-join 只装钥匙（wifi-join.c：keys installed — run udhcpc）；租约是
+/// udhcpc 的活——net-bringup/net-rejoin 一直这么分。配网路径此前裸奔：
+/// 关联成而 IP 永不来（2026-09-09 蛋首配收据，assoc UP 而 inet 空）。
+/// 成功才落 wifi.conf；坏密钥不落盘（wizard 撤回语义）。
 fn join_wifi(p: &PairPaths, ssid: &str, psk: &str) -> Result<String, String> {
     let mut child = Command::new(&p.net_join)
         .args([&p.iface, ssid, psk])
@@ -150,6 +156,17 @@ fn join_wifi(p: &PairPaths, ssid: &str, psk: &str) -> Result<String, String> {
         .spawn()
         .map_err(|e| format!("net-join spawn: {e}"))?;
     wait_limited(&mut child, JOIN_BUDGET_SECS).map_err(|e| format!("net-join {e}"))?;
+    // 租约腿（net-bringup 同款参数：-n 租到即退，10×3s 重试）。地址已在
+    // （开机路径的 udhcpc 先跑过）就跳过，幂等不重试。
+    if iface_ip(p).is_none() {
+        let mut dhcp = Command::new(&p.udhcpc)
+            .args(["-i", &p.iface, "-n", "-q", "-t", "10", "-T", "3"])
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .map_err(|e| format!("udhcpc spawn: {e}"))?;
+        wait_limited(&mut dhcp, DHCP_BUDGET_SECS).map_err(|e| format!("udhcpc {e}"))?;
+    }
     for _ in 0..10 {
         if let Some(ip) = iface_ip(p) {
             persist_wifi(p, ssid, psk);
@@ -390,12 +407,14 @@ mod tests {
             p
         };
         mk("net-join", "exit 0");
+        mk("udhcpc", "exit 0");
         mk("ip", "echo '    inet 192.168.1.42/24 brd 192.168.1.255 scope global'");
         mk("ntpd", "exit 0"); // date +%Y on the host is the real verdict
         mk("httpget", "exit 0");
         mk("svc", r#"case "$1" in restart) exit 0;; status) echo "state   ready";; esac"#);
         PairPaths {
             net_join: bin.join("net-join"),
+            udhcpc: bin.join("udhcpc"),
             svc: bin.join("svc"),
             httpget: bin.join("httpget"),
             ntpd: bin.join("ntpd"),
@@ -483,6 +502,24 @@ mod tests {
         assert!(!p.wifi_conf.exists());
         assert!(!p.env_file.exists());
         assert_eq!(fs::read_to_string(&p.state).unwrap(), "wifi fail no /etc/wifi.conf\n");
+    }
+
+    #[test]
+    fn no_lease_runs_udhcpc_then_still_fails_closed() {
+        // 2026-09-09 蛋首配回归：net-join 装完钥匙但 iface 无地址时，必须
+        // 走 udhcpc 租约腿；租约不来仍不落 wifi.conf。
+        let root = tmp("aginx-pair-apply-dhcp");
+        let mut p = paths(&root);
+        // ip 永不报地址 → 租约腿必走；udhcpc 打标证自己被叫过
+        fs::write(&p.ip, "#!/bin/sh\nexit 0\n").unwrap();
+        fs::write(&p.udhcpc, format!("#!/bin/sh\ntouch {}\nexit 0\n", root.join("udhcpc.ran").display())).unwrap();
+        fs::write(&p.state, "wifi fail no /etc/wifi.conf\n").unwrap();
+        match run_with(&p, "WIFI:T:WPA;S:home;P:secret;;") {
+            Err(ApplyErr::Step(e)) => assert!(e.contains("没拿到地址"), "{e}"),
+            other => panic!("expected Step(没拿到地址), got {other:?}"),
+        }
+        assert!(root.join("udhcpc.ran").exists(), "udhcpc leg never ran");
+        assert!(!p.wifi_conf.exists(), "no lease must not persist");
     }
 
     #[test]
