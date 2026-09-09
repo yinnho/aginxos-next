@@ -4,7 +4,7 @@
 // 的冷恢复重放这份账（avatar::replay_session），重放已含本轮 request，
 // runtime 侧有 trailing_request_logged 防叠份。
 //
-// 每一轮必须以 done 收口：runtime 崩在半路（EOF 无 done���时 server 补一
+// 每一轮必须以 done 收口：runtime 崩在半路（EOF 无 done帧时 server 补一
 // 帧 synthetic done(err)，让重放永远落在合法形状上；更深的崩溃残骸
 // （悬空 tool_call）由 runtime 的 repair 自愈。
 

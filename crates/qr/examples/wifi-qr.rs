@@ -3,7 +3,7 @@
 //!   cargo run -p aginx-qr --example wifi-qr -- 'WIFI:T:WPA;S:Legrand AP;P:1234567890;;'
 //!
 //! 终端块打印（Mac 满屏窗 + 后摄 ~20cm，M42b 已证配方）。payload 从 argv
-//! 传入原样渲染——WIFI:/AGINXPAIR1/任意文本都行，本工具���解释内容；
+//! 传入原样渲染——WIFI:/AGINXPAIR1/任意文本都行，本工具不解释内容；
 //! 载荷合法性用 aginx-qr 本体解一遍自校验。
 use std::env;
 
