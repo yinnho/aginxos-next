@@ -2254,3 +2254,62 @@ term 换装实证：kill 旧 pid 460 → handoff 环重生 pid 2938，readlink
 bootcard 过 done-only 梯 → term 接屏 → voice 起来，uptime 1min 复核
 三 md5 全对、term/voice 在跑）。check.sh 全绿。收尾态：设备健康靴稳
 态在役，无 fastboot 滞留。
+
+## 2026-09-10 批③收据 — 照片删净 + 启动器整拆 + wizard 出烤
+
+用户拍板「照片删干净，启动器整拆，wizard 也不烤了」。三笔原子提交
+（40b6f49 / cb333c2 / c639bc3）：
+
+- **照片查看器退役**：photos.rs 整删；照片文件留 /home/photos 不动
+  （n4.sh 文件保全断言仍有效）。
+- **启动器整拆**：Mode::Launcher + Picker + 入口/registry 管线全拆。
+  Mode 拓扑 = `Running|Idle|Eye|Install`；AGINX_TERM_START 成为 pty
+  会话唯一入口；行几何归 install 面（launch::Geom 12 行/页，测试钉
+  eye_box=整面板）。
+- **app-registry 退役**：svc lib 删 AppEntry/parse_app/scan_apps/
+  APPS_DIR（唯一消费者是启动器）；rcS/provision 撤调用；apps.d 两
+  tile 与 /etc/init.d/app-registry 出配方（seeder 本职=把 /etc/apps.d
+  播进 /var/apps 供启动器扫——启动器亡则全链亡）。
+- **wizard 出烤**：zigbuild 清单、安装行、sidecar 出配方；
+  crates/wizard 源码保留。AGINX_TERM_START 只起绝对路径——蛋上
+  wizard 不再可达。
+
+**host 门**：check.sh 全绿（aginx-term 45 测；svc 走 `--lib` 拆分——
+svcd bin 的 macOS 不兼容是既有态）；`--ppm` 六面渲染（prompt-idle/
+-dim/-typing/-warn、install-face、term）。
+
+**部署照三律**：/usr/bin/aginx-term 同 fs staging → mv 原子换 → md5。
+
+| 件 | 落位 | md5 |
+|---|---|---|
+| aginx-term | /usr/bin/aginx-term | 6d9a26fef6c66b94cd61202d8ec3d0f9 |
+
+换装实证：deploy 时 kill 旧 pid 459 → handoff 环重生 3231；其后 m42c
+C 段真重启冷启，复核 pid 454、readlink 真身 /usr/bin/aginx-term、md5
+一致——新二进制过了换装+重启两道。
+
+**m42c 21/23 两跑，失败全数环境性**（Legrand AP 当夜持续甩站），非
+批③回归——批③ 面（term 拆面/svc registry/rootfs 配方）与网路/
+voice/AP 零交叠：
+
+- run1 19/4：DHCP 卡 `dhcp run`，bringup 自愈 ~65s 复 `dhcp ok
+  192.168.0.166` + `internet ok`。
+- run2 21/2：预检「设备在网」rc=1 + 「状态报网已连」fail。
+- 环境证据（同靴 net-watch.log）：bringup 一次全绿（wifi ok Legrand
+  AP / dhcp ok / internet ok / time ok）→ 23:31:55 rejoin ok →
+  23:32:13 probe fail 1/3 → join ok but no lease → gave up after 2
+  attempts → 23:33:52 rejoin failed → 23:34:07 probe fail (gw=none)
+  ——AP 以 ~1-2min 周期甩站，两项失败恰采样在无 IP 窗。
+- 诊断注脚：voice `wlan0_ip()` 走 daemon PATH（/sbin:/bin:/usr/sbin:
+  /usr/bin:/var/bin）解析 busybox `/bin/ip`；host 侧 adb shell 的
+  `ip` 是 toybox（/system/bin）——先前对账用了不同二进制。busybox
+  ip 在接口翻转窗输出空 → voice 报「没联网」是采样窗问题。
+- 待收：AP 稳定窗补跑 m42c 全绿；#198 真人收据悬置。
+
+**配方生效时点**：wizard/app-registry 删除在配方侧——当前蛋（批③
+前烤）仍带 /usr/bin/aginx-net-wizard(.aginxmd)、/etc/init.d/
+app-registry、/etc/apps.d/{codex,grok}.toml；seeder 对不存在的
+binary 只 prune 不 seed，三跑无害。下次 bake 起净。
+
+**收尾态**：蛋世界健康靴在役，aginx-term 6d9a26fe… 在跑，无
+fastboot 滞留；AP 抖动自愈机制本身正常工作（rejoin 循环在转）。
