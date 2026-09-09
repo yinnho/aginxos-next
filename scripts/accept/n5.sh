@@ -119,7 +119,10 @@ echo "==> I 吸收件（六冻结件的活证：updater/qr/secret/pkg 四面）"
 drv "/usr/bin/aginx-update status"
 expect_rc  "aginx-update status rc=0"
 expect_out "status 出 slot（A/B 在役）"       'slot _[ab]'
-expect_out "status 出新戳（吸收版在役）"       'aginxos [0-9a-f]{7}'
+# D14 起版本戳带机型名（aginxos redfin <hash> <date>），老正则
+# 'aginxos [0-9a-f]{7}' 对不上。直接对 STAMP 全等——兼收「活跃槽跑的
+# 就是烤进去的吸收版」。
+expect_out "status 出新戳（吸收版=烤机戳在役）" "$STAMP"
 drv "/usr/bin/aginx-boot-ok status"
 expect_rc  "aginx-boot-ok status rc=0（updater 不再死路径）"
 drv "/usr/bin/aginx-qr /usr/share/aginx/n5-qr.jpg"
@@ -133,8 +136,13 @@ drv "printf x | /usr/bin/aginx-secret get $N5_SCOPE"
 expect_out "get 对未放行 exe 拒读（policy 生证；回读经网关腿由 K 段证）" '"code":"denied"'
 drv "printf x | /usr/bin/aginx-secret rm $N5_SCOPE"
 expect_rc  "secret rm rc=0"
+# pkg ok：provision 重同步是分钟级（stamps 活则免重下，但 manifest 对账
+# 本身仍要走网络）。套件跑在几分钟新机上会一击扑空——有界等待，与 n4 同律。
+for i in $(seq 1 40); do
+  drv "grep -q '^pkg ok' /run/boot.state"; [ "${DRV_RC:-}" = "0" ] && break; sleep 15
+done
 drv "grep -q '^pkg ok' /run/boot.state"
-expect_rc  "pkg ok（迁移后的 stamps 让 sync 免重下 = aginx-download 活证）"
+expect_rc  "pkg ok（provision 重同步完成 = 吸收的 download 线活证）"
 
 echo "==> J 备份（aginx-backup v2 本地线）"
 drv "/usr/bin/aginx-backup now"
