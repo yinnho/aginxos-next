@@ -20,10 +20,12 @@
   aginx-gateway 由脚本落位。
 - `usr/bin/` — **命令宇宙的元数据层**：15 个 `.aginxmd` sidecar（编译命令的
   门面说明，二进制由脚本落位改名后与 sidecar 同名相邻）+ 4 个 sh 面
-  （aginx-web/file/mem = 桥到 provision 后的包二进制 agb/agf/agmem，
+  （aginx-web/file/mem = 桥到 provision 后的包二进制 aginx-web/agf/agmem，
   aginx-sys-status）。桥壳**不声明 aginx:exec**——目标 sync 后才存在是合法暂缺。
 - `var/bin/` — 3 个 voice 内部件 sidecar（aginx-asr/tts/ocr，hidden，被
-  aginx-voice 直接 spawn，不是 brain 面）。
+  aginx-voice 直接 spawn，不是 brain 面）+ aginx-web.aginxmd（provision 后
+  /var/bin/aginx-web 是编译件，face 住 sidecar——post-provision 它遮住
+  /usr/bin 桥壳，路由与摘要两处保持 lockstep）。
 
 ## 放置矩阵（谁烤进去、落哪）
 
