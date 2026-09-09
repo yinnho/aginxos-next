@@ -18,7 +18,7 @@ pub const FACE_FILE: &str = "/run/aginx-voice/face";
 pub const EYE_JPG: &str = "/run/aginx-voice/eye.jpg";
 
 // 开机剧情 v4：line = 打字文本（ASR transcript v4③ / 文本降级回复，term
-// 本地 ~90ms/char 打字机，换串即换行）。剧场字段 call/lines 已随 v4 退役。
+// 本地 ~90ms/char 打字机，换串即换行）。
 static BOOT_LINE: Mutex<Option<String>> = Mutex::new(None);
 
 /// 结果页站立中（v4⑥：真人不看日志——结果页不超时是产品线）。唯一置位
@@ -44,15 +44,12 @@ pub struct FaceDoc<'a> {
     pub state: &'a str,
     /// 眼取景中：Mode::Eye 整屏取景
     pub eye: bool,
-    /// 开机剧情 v4 结果面（#246④）：result.img 已就位，term 整屏上帧
+    /// 开机剧情 v4 结果面（#246）：result.html 已发布，term 挂活体面板上屏
     pub result: bool,
     /// 打字文本（transcript/文本回复，'\n' 强制换行）
     #[serde(skip_serializing_if = "Option::is_none")]
     pub line: Option<String>,
-    pub hint: &'a str,
 }
-
-const HINT: &str = "按住音量下说话 · 音量+对码";
 
 fn write_doc(state: &str, eye: bool, result: bool) {
     *RESULT_STANDING.lock().unwrap() = result;
@@ -62,7 +59,6 @@ fn write_doc(state: &str, eye: bool, result: bool) {
         eye,
         result,
         line: BOOT_LINE.lock().unwrap().clone(),
-        hint: HINT,
     };
     let tmp = format!("{FACE_FILE}.tmp");
     if let Ok(json) = serde_json::to_vec(&doc) {
@@ -76,8 +72,9 @@ pub fn write(vm: &Vm, eye: bool) {
     write_doc(vm.state_name(), eye, false);
 }
 
-/// 结果面（v4④）：render 线程发布 result.img 后调用——state 沿用分���时
-/// 捕获的名字，其余全静，result=true 让 term 从光标面切整屏帧。
+/// 结果面（v4⑥）：Chat 臂 stage_reply 已写 result.html，run_outs 尾部
+/// flush_pending 调到这里——state 沿用分支时捕获的名字，result=true 让
+/// term 挂活体面板。
 pub fn write_result(state: &str) {
     write_doc(state, false, true);
 }

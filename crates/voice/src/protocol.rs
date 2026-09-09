@@ -66,7 +66,7 @@ pub enum Act {
     /// 加入网络（WIFI: 码到手，直接连——拉式）
     Join { ssid: String, psk: String },
     /// 配对落盘（AGINXPAIR1 码到手：连网 + 身份三件进 env + 服务重启，
-    /// 拉式到手即用，不回读不确认���
+    /// 拉式到手即用，不回读不确认。
     PairApply { bundle: aginx_qr::PairBundle },
     /// 打开眼取景（与音量+同一条路；已开则空转）
     Eye,
@@ -165,8 +165,8 @@ impl Vm {
         }
     }
 
-    /// 屏显对话行：(is_user, text)
-    /// 面已不序列化 lines（v4 退役）；保留给协议测试与文本降级（v4④）。
+    /// 屏显对话行：(is_user, text)——面已不序列化 lines（v4 退役），
+    /// 只给协议测试断言用（生产路径走 face::set_line）。
     #[cfg(test)]
     pub fn lines(&self) -> &[(bool, String)] {
         &self.lines
@@ -267,10 +267,10 @@ impl Vm {
             },
             Ev::PairDone(r) => match r {
                 Ok(msg) => {
-                    // 脸上留技术细节；收尾句出声（开机体验定档：hardline
-                    // 接回 = 母体重新接通，Matrix 法理即技术真相）。配对成功
-                    // 收镜头——码到手取景的活就干完了（开机剧情 Act 4 由
-                    // daemon 在 PairApply 臂先收；这里是语义与兜底）。
+                    // 脸上留技术细节；收尾句出声（hardline 接回 = 母体
+                    // 重新接通，Matrix 法理即技术真相）。配对成功收镜头
+                    // ——码到手取景的活就干完了（daemon 在 PairApply 臂
+                    // 先收；这里是语义与兜底）。
                     self.say(&mut outs, &format!("配对完成，{msg}。"));
                     self.say_loud(&mut outs, "Connection restored. Welcome to the real world.");
                     outs.push(Out::Act(Act::EyeClose));
@@ -756,7 +756,7 @@ mod tests {
             speaks(&o),
             vec!["Connection restored. Welcome to the real world."]
         );
-        // 配对成功收镜头（开机剧情 Act 4/#246：码到手取景的活就干完了）
+        // 配对成功收镜头（#246：码到手取景的活就干完了）
         assert!(acts(&o).contains(&Act::EyeClose));
         let o = vm.step(Ev::PairDone(Err("时钟没同步".into())));
         assert_eq!(says(&o), vec!["配对没成，时钟没同步。再说连网重试。"]);
