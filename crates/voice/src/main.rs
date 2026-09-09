@@ -295,7 +295,7 @@ fn daemon() {
             .map(|p| p.devs())
             .unwrap_or_else(|| "none".into())
     );
-    // M42e: 预载常驻嘴耳模型（spawn 即返回，���载在子进程里）——第一次
+    // M42e: 预载常驻嘴耳模型（spawn 即返回，加载在子进程里）——第一次
     // 说话不再等 ~4s/侧 的装载。
     if audio::local_voice_ready() {
         audio::warm_local_voice();
@@ -445,7 +445,7 @@ fn daemon() {
                                 ev.mtime = Some(t);
                                 ev.mtime_seen = Instant::now();
                                 // 解码限频：帧 ~8fps 全要解的话 aginx-qr
-                                // （100-300ms/次）吃满整个 loop 还���编码
+                                // （100-300ms/次）吃满整个 loop 还耗编码
                                 // CPU——2Hz 足够对准
                                 if ev.last_qr.elapsed() >= Duration::from_millis(400) {
                                     ev.last_qr = Instant::now();
@@ -557,7 +557,7 @@ fn run_outs(
     for o in outs {
         match o {
             Out::Say(s) => {
-                // v4：话术=光标面打字文本（屏幕���话）+ stderr 日志（真源）。
+                // v4：话术=光标面打字文本（屏幕对话）+ stderr 日志（真源）。
                 // 脸不再序列化 lines 历史，终值即当前一行。
                 eprintln!("aginx-voice: say {s}");
                 face::set_line(Some(&s));
@@ -835,7 +835,7 @@ fn read_wifi_conf() -> Option<(String, String)> {
 /// apply`（C3）：payload 一行进 stdin——argv 恒两词，psk/三键永不进
 /// /proc/*/cmdline。join+IP 轮询+落 wifi.conf、env 三键合并、快速校时、
 /// internet 探测、母体两单元 restart-ready、boot.state 网四行定点刷新全
-/// 在那一侧；汇总行（stdout 首行）回来作报告话。秘���只进 env 文件
+/// 在那一侧；汇总行（stdout 首行）回来作报告话。秘密只进 env 文件
 /// （0600），两侧日志都永不记值。预算 240s（join 90s + ntpd 20s + 两单元
 /// 各 10s ready，余量给首启冷路）。**不重启 aginx-voice**——重启=自杀，
 /// 本地语音离线路径不依赖 env，下次 boot 自然带上。

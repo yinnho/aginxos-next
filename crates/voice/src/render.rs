@@ -13,7 +13,7 @@ use std::sync::Mutex;
 use crate::face;
 
 /// 结果页 HTML（v4⑥）。voice 原子换名写；term face 假→真沿读（同 face
-/// mtime 先例）。旧 result.img PNG 链在 S5 前保留为部署序垫。
+/// mtime 先例）。
 pub const RESULT_HTML: &str = "/run/aginx-voice/result.html";
 
 /// 本回合已暂存结果页，等 run_outs 尾部统一翻旗。值=翻旗时用的 state 名。
