@@ -1896,3 +1896,43 @@ ready、网关在 relay（n5 L/M 为证）、pkg ok——已知态。
 捕获/重武 state marker。updater 无独立 capture 动词（capture 内嵌
 apply 流程），候选=① `aginx-update` 加 capture 动词；② 脚本从残体重建
 marker（本日手工配方：解析体区定长→printf 头→conv=notrunc，可直接搬）。
+
+## 2026-09-09 — 类修① 落地：`aginx-update capture` 动词 + flash 脚本预武接线（一次性握手全收据）
+
+用户拍板方案①。改动两件：
+
+**crates/update**：`state_header(len)` 从 stage_state_tar 抽出（头布局
+magic+16 位零填十进制+换行，与 state-restore 的 tr/cut 解析器对表钉死——
+host 金测按解析器自己的算术回读）；新动词 `capture` = 同一
+stage_state_tar()（一个实现一个线格式），usage 行更新。host 10/10、
+check.sh 绿（D14 门：注释里不得写机型段，脚本名已改称）。
+
+**flash-redfin.sh**：`capture_state()`——adb 在线即跑 capture + 读回
+块 16777216 头 8 字节必须 AGXSTATE；独立模式 `./flash-redfin.sh capture`
+（先武后进 fastboot 的 runbook 出口）；GO=1 流程在 serial 闸前机会式预武，
+失败 fail-open（警告不挡——事后可按 bake #20 配方从残体重建）。
+
+**PATH 陷阱（新收据）**：`adb shell aginx-update capture` → rc=127
+`aginx-update: inaccessible or not found`——adb shell 环境（toybox
+/system/bin/sh）PATH 不含 /usr/bin，与 M42e agctl 陷阱同族。**一律绝对
+路径 `/usr/bin/aginx-update`**（脚本已带注释钉死）。busybox 真身
+`/bin/busybox`（timeout 包裹可用；perl 不在 PATH）。
+
+**设备收据（same-image 重启，b399b7b）**：
+- 部署：musl 重编（sha `6590bfec…` 双端合，.new→mv→chmod 755；CLI 无
+  unit 持有，换装即生效）。**dev push 领先镜像，随下一 bake 折叠。**
+- 基线：块 16777216 头全零（bake #20 首启已消费）。
+- 裸动词：`/usr/bin/aginx-update capture` → `state tar staged at
+  68719476736 (55429120 bytes)` rc=0（55.4MB＝当前态新鲜捕获；烤 #19
+  为 55865344——差值即两日 state 演化）。
+- 脚本路径：`./flash-redfin.sh capture` → 三行全绿（staged → armed →
+  next 提示），readback AGXSTATE 过闸。
+- 消费：`/bin/busybox timeout 45 /usr/bin/aginx-reboot reboot` 重启 →
+  **头读回全零**（一次性握手走完，体按设计幸存）→ boot.state 17 行全绿
+  （wifi ok Legrand AP / dhcp 192.168.0.166 / internet ok www.baidu.com
+  472750B / time ok / pkg ok）→ 六单元 ready 各 spawns=1、小喜
+  workspace 活、wifi.conf 活——state 完整，与上一启同形。
+
+刷机日新律（flash-day-laws 同步）：**fastboot 前先
+`./flash-redfin.sh capture`**（adb 还在时；手动 Power+VolDown 之后这靴
+就晚了）。
