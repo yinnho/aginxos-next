@@ -32,6 +32,12 @@ pub fn set_line(line: Option<&str>) {
     *BOOT_LINE.lock().unwrap() = line.map(str::to_string);
 }
 
+/// 打字文本当前值（#282 开机等网行所有权判据）：写入方读回自己是否还
+/// 在台上——用户一说话 transcript 就顶掉等待行，watch 即知让位。
+pub fn current_line() -> Option<String> {
+    BOOT_LINE.lock().unwrap().clone()
+}
+
 #[derive(Serialize)]
 pub struct FaceDoc<'a> {
     /// 协议状态名（无驻留态状态机恒 "idle"；m42c 钉 "state":"idle"）

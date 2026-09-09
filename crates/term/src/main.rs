@@ -182,6 +182,10 @@ fn recover_result_html(
     if want.is_empty() {
         return None;
     }
+    // #283 问句常驻：face.line = 「问句\n回复」——账上的 done 文本只是
+    // 换行后的回复段。两种形状都认（问句自身含换行的罕见三段形状会取到
+    // 半截、等值失配→放弃恢复，安全向——文本面兜底照旧一等）。
+    let want_reply = want.split_once('\n').map(|(_, r)| r.trim());
     let mut cands: Vec<(std::time::SystemTime, std::path::PathBuf)> = std::fs::read_dir(root)
         .ok()?
         .filter_map(|e| e.ok())
@@ -196,7 +200,8 @@ fn recover_result_html(
     cands.reverse();
     for (_, log) in cands {
         if let Some(text) = fold_last_done_ok(&log) {
-            if text.trim() == want {
+            let t = text.trim();
+            if t == want || want_reply.is_some_and(|w| t == w) {
                 return Some(degraded_shell(&text, pw, ph));
             }
         }
@@ -1716,7 +1721,7 @@ fn host_ppm(out: &str) {
 #[cfg(target_os = "linux")]
 fn set_eye_affinity(on: bool) {
     let a = &hwd::load_or_exit().affinity;
-    let mut cores: Vec<u32> = if on {
+    let cores: Vec<u32> = if on {
         a.ui_cores.clone()
     } else {
         let mut all = a.ui_cores.clone();
@@ -3068,5 +3073,19 @@ mod tests {
         assert!(recover(&root, Some("新答")).is_some());
         assert!(recover(&root, Some("旧答")).is_some());
         assert!(recover(&root, Some("谁的都不是")).is_none());
+    }
+
+    #[test]
+    fn recover_accepts_question_prefix_line() {
+        // #283 问句常驻：face.line = 「问句\n回复」——账上 done 文本只对
+        // 回复段；旧形状（纯回复行）也照常认。
+        let root = std::env::temp_dir().join("aginx-term-test-recover-q");
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        write_ledger(&root, "小喜", &[("现在几点", "17 点 24 分")]);
+        let h = recover(&root, Some("现在几点\n17 点 24 分")).unwrap();
+        assert!(h.contains("17 点 24 分"));
+        // 问句含换行的罕见形状（三段）→ 尾段对不上整行 → 放弃（安全向）
+        assert!(recover(&root, Some("多行\n问句\n17 点 24 分")).is_none());
     }
 }

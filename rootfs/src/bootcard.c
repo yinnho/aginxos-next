@@ -8,9 +8,13 @@
  * the bottom, transcript typing at the top). The story after the exit
  * belongs to term/voice, not here.
  *
- * Exit ladder: internet ok|fail / wifi fail / dhcp fail → hold 3 s, exit;
- * `done fail` (net phase-1 gave up) → 8 s grace so the offline floor still
- * boots to the prompt; 150 s hard deadline from panel-light.
+ * Exit ladder (#282, 09-09 — 网络是最后一步): key on `done` ALONE.
+ * Two-phase net-bringup (#246) lands phase 1's `done ok|fail` BEFORE
+ * phase 2 joins wifi, so done is the earliest truthful exit and the
+ * cursor never waits for the net — the boot/net story continues on the
+ * cursor face (voice daemon's boot net watch). ok → hold 3 s; fail → 8 s
+ * grace so the offline floor still boots to the prompt; 150 s hard
+ * deadline from panel-light covers bringups that never write done.
  *
  * DRM path is the splash2 skeleton (probe connector -> mode[0] -> encoder ->
  * possible_crtcs -> dumb fb -> SETCRTC) with its msm_drm 4.19 quirks intact:
@@ -252,18 +256,15 @@ static int draw_text(int x, int y, const char *s, int scale, uint32_t c) {
 
 /* ---------------- boot state ----------------
  * The real boot.state key set (what the bring-up scripts append). v4⑤:
- * the checklist render is retired — the table now feeds only the exit
- * ladder (K_WIFI/K_DHCP/K_INTERNET + done) and the stderr diagnostics. */
+ * the checklist render is retired; #282 re-keyed the exit ladder onto
+ * `done` alone, so the table now feeds only that key and the stderr
+ * diagnostics. */
 #define NKEYS 16
 static const char *KEYS[NKEYS] = {
   "kernel", "rootfs", "display", "touch", "battery",
   "modem", "wlan", "wifi", "dhcp", "internet",
   "cell", "audio", "camera", "time", "pkg", "py",
 };
-/* exit-ladder keys (indexes into KEYS; keep in sync) */
-#define K_WIFI 7
-#define K_DHCP 8
-#define K_INTERNET 9
 enum { ST_PEND = 0, ST_RUN, ST_OK, ST_FAIL };
 static int st_status[NKEYS];
 static char st_detail[NKEYS][80];
@@ -533,13 +534,14 @@ int main(int argc, char **argv) {
     }
   }
   kmsgf("bootcard: panel up %ux%u conn=%u\n", fb_w, fb_h, g_conn_id);
-  /* 开机剧情 v4: exit ladder — the screen only tells the truth, so the
-   * console leaves when the net chain actually resolves, not on a timer.
-   * internet ok|fail, wifi fail or dhcp fail => net verdict is in: hold
-   * 3 s so the last state is readable, then hand the panel to term.
-   * done fail (net phase-1 gave up) => 8 s grace so the offline floor
-   * still boots to the prompt. 150 s hard deadline from panel-light
-   * covers bringups that never write a verdict. Dropping master blanks
+  /* #282 exit ladder — 网络是最后一步: two-phase net-bringup (#246)
+   * lands phase-1 `done` BEFORE phase 2 joins wifi, so done is the
+   * earliest truthful exit and the cursor never waits for the net —
+   * the boot/net story continues on the cursor face (voice daemon's
+   * boot net watch). done ok => hold 3 s so the last state is readable;
+   * done fail => 8 s grace so the offline floor still boots to the
+   * prompt. 150 s hard deadline from panel-light covers bringups that
+   * never write done. Dropping master blanks
    * the panel via the dsi_backlight dpms hooks — that beat of black is
    * the handoff (term fast-polls on any SET_MASTER failure at 250 ms —
    * msm_drm 4.19 answers EINVAL, not EBUSY, when a master exists). */
@@ -562,15 +564,11 @@ int main(int argc, char **argv) {
       exit(0);
     }
     if (resolve_at < 0) {
-      int resolved = st_status[K_INTERNET] == ST_OK ||
-                     st_status[K_INTERNET] == ST_FAIL ||
-                     st_status[K_WIFI] == ST_FAIL ||
-                     st_status[K_DHCP] == ST_FAIL;
-      int failed = done_seen && !done_ok;
-      if (resolved || failed) {
-        hold = (failed && !resolved) ? 8 : 3;
+      if (done_seen) {
+        hold = done_ok ? 3 : 8;
         resolve_at = t;
-        kmsgf("bootcard: net verdict seen — holding %ds\n", hold);
+        kmsgf("bootcard: local bring-up done (%s) — holding %ds\n",
+              done_ok ? "ok" : "fail", hold);
       }
     } else if (t - resolve_at >= hold) {
       kmsg("bootcard: boot console done — exiting (term takes the panel)\n");
