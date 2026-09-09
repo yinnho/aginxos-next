@@ -1844,3 +1844,55 @@ term 换装（pkill -x → handoff while-环 2s 重生，readlink 对真身
 **待办**：红面真眼验（用户）；上游断连档未实测（AP 侧断外网才能触发，
 逻辑与链路档同一 warn_net 通路）；bake #20 折叠（net-watch + term +
 /bin 旧 httpget 三件）。
+
+## 2026-09-09 — Bake #20 刷机日：红警三件折叠入役 + fastboot 入口终审 + state marker 一次性陷阱收据
+
+**折叠**：74e9541 httpget（DNS AAAA 轮转挂死修复——#278 换线日首启
+10+min 挂根因）、37f9034 net-watch warn 写入、3619828 term 红警面。
+版本戳 `aginxos redfin b399b7b 2026-09-09`（烤时本地 HEAD，N5b 血统
+先例；N4/N5_STAMP 显式传参防后日 HEAD 伪装）。
+
+**fastboot 入口终审**：软件三路全灭——`adb reboot bootloader`（adbd 老
+属性协议，退化为普通重启）、on-device reboot（老仓已判）、**misc BCB
+正确关键字 `bootonce-bootloader`**（写+读回逐字验证，ABL 无视，正常重启
+回 adb——把老仓「手动 bootloader 字串无效」的「关键字拼错」假设也排除
+了）。唯一在案入口=手动 Power+VolDown（用户执行，USB 保持连接）。宿主
+2s 监视器探到序列号即自动 `GO=1 SKIP_PACK=1`：userdata 3 段 sparse
+60.3s → vendor_boot_b 2.2s（提交点）→ 重启。fastboot 驻留最短化=
+先预打包再用 SKIP_PACK。
+
+**state marker 一次性陷阱（本日主收据）**：刷后首启 `wifi fail no
+/etc/wifi.conf`、/var/lib/aginx 全是烤盘空骨架——state 没回来。根因：
+state-restore 是**一次性握手**（块 16777216 = `AGXSTATE`+16 位零填十进
+制长度，tar 体在 16777217；rcS 恢复后 conv=notrunc 清头**留体**）。烤 #19
+的 marker 已被它自己 09-08 首启消费；flash-redfin.sh 换写整颗 rootfs 却
+既不捕获也不重武 state。换线日收据「state tar 恢复全活」当有一个未记的
+apply-流程捕获在先——本次如实补记此缺口。**体还活着**：宿主侧解析体区
+（1839 成员、精确尾 **55865344 B——与烤 #19 收据 state tar 尺寸逐字节
+同**；wifi.conf 首 member/env 141B/spk-cal/photos/skills/workspaces 全
+在）→ 按脚本同律重写头（`printf 'AGXSTATE%016d' 55865344`）→ 一启消费
+（头读回已清零=设计握手走完）→ wifi.conf/env 网关 id/secret store/
+stamps/小喜 workspace 全数复活。
+
+**httpget 活收据**：恢复后首启 boot.state 17 行全绿——wifi ok Legrand
+AP / dhcp 192.168.0.166 / **internet ok www.baidu.com 474676B（uptime
+114s）**/ time ok / pkg ok / py ok 3.12.14。对照换线日旧件同阶段 10+
+分钟挂死。provision ~2.5min 收口（stamps 复活=验证而非重下）。
+
+**折叠在机对账**：net-watch sha256 与仓逐字节等（`d36cb9f7…`）；term
+strings 含 `aginx-warn`（红警面构建在役）；httpget sha == 烤盘件
+（`92af5a7b…`，树源编译）。
+
+**三套件**：n4 **54/54 首跑零修**（G 段真二启全绿）；n5 首跑 43/1——唯一
+失败=宿主侧 relay token 失落（非设备缺陷；root 管道取回法重取，
+64 字符零回显，`AGC_SECRET_FILE` 走 0600 文件）→ 复跑 **45/45**（L 段
+远端真往返+化身负例、M 段网关重注册+8443 重连）；m42c **21/21**（C 段
+口令真重启回稳）。
+
+**收尾态**：slot _b `aginxos redfin b399b7b 2026-09-09` 在役、六单元
+ready、网关在 relay（n5 L/M 为证）、pkg ok——已知态。
+
+**类修提案（未动手，待裁决）**：flash-redfin.sh 在 flash userdata 前应
+捕获/重武 state marker。updater 无独立 capture 动词（capture 内嵌
+apply 流程），候选=① `aginx-update` 加 capture 动词；② 脚本从残体重建
+marker（本日手工配方：解析体区定长→printf 头→conv=notrunc，可直接搬）。
