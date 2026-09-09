@@ -118,7 +118,7 @@ fn main() {
             // 随 run_outs 的 Say/Speak 换行。旧结果面随 face::write 的
             // result=false 下降沿由 term 自拆（v4⑥ 同步失效线）。
             face::set_line(Some(&text));
-            face::write(&vm, false);
+            face::write(false);
             let outs = vm.step(Ev::Heard(text));
             run_outs(&mut vm, outs, None, &mut None);
         }
@@ -128,7 +128,7 @@ fn main() {
             // ——相机/TTS 落完才读下一行，喂两行也能按序走完。
             let brain = audio::Brain::from_env();
             let mut vm = make_vm();
-            face::write(&vm, false);
+            face::write(false);
             let mut line = String::new();
             let mut step = 0usize;
             loop {
@@ -218,7 +218,7 @@ fn uptime_secs() -> f64 {
 /// 在）、网未通（已通就直接问候，不占台）。voice 由 svc 拉起 ~35s uptime，
 /// 正常开机两道门都过；face::write 在此窗内安全——站立结果页与等待行
 /// 互斥（任何 Chat 回合先 set_line(transcript) 破所有权）。
-fn boot_net_arm(vm: &Vm) -> BootNet {
+fn boot_net_arm() -> BootNet {
     let idle = || BootNet {
         mine: None,
         armed_at: Instant::now(),
@@ -229,12 +229,12 @@ fn boot_net_arm(vm: &Vm) -> BootNet {
     }
     if boot_state_has_internet() {
         face::set_line(Some(BOOT_NET_GREET));
-        face::write(vm, false);
+        face::write(false);
         eprintln!("aginx-voice: boot net up before voice — greeted");
         return idle();
     }
     face::set_line(Some(BOOT_NET_WAITING));
-    face::write(vm, false);
+    face::write(false);
     eprintln!("aginx-voice: boot net watching");
     BootNet {
         mine: Some(BOOT_NET_WAITING),
@@ -245,7 +245,7 @@ fn boot_net_arm(vm: &Vm) -> BootNet {
 
 /// 主循环每拍调用。三路静默退出：行易主（用户说话/一次性进程改了面）→
 /// 退役；窗口尽（300s）→ 退役；internet ok → 问候上脸后退役。
-fn boot_net_tick(bn: &mut BootNet, vm: &Vm) {
+fn boot_net_tick(bn: &mut BootNet) {
     let Some(mine) = bn.mine else { return };
     if face::current_line().as_deref() != Some(mine) {
         bn.mine = None;
@@ -270,7 +270,7 @@ fn boot_net_tick(bn: &mut BootNet, vm: &Vm) {
             return;
         }
         face::set_line(Some(BOOT_NET_GREET));
-        face::write(vm, false);
+        face::write(false);
         bn.mine = None;
         eprintln!("aginx-voice: boot net up — greeted");
     }
@@ -286,7 +286,7 @@ fn daemon() {
             hwd::load_or_exit().input.ptt.device
         );
     }
-    face::write(&vm, false);
+    face::write(false);
     eprintln!(
         "aginx-voice: up (local={}, brain={}, ptt={})",
         audio::local_voice_ready(),
@@ -302,7 +302,7 @@ fn daemon() {
     }
 
     // #282 开机等网：光标面上「正在联网…」→ internet ok → 问候。
-    let mut boot_net = boot_net_arm(&vm);
+    let mut boot_net = boot_net_arm();
 
     let mut capturing: Option<std::process::Child> = None;
     // 音量下键按下时刻：短按(<300ms)=音量−10、长按=PTT（M42e 产品面）
@@ -327,7 +327,7 @@ fn daemon() {
                         let had_eye = eye.is_some();
                         eye_shut(&mut vm, &mut eye);
                         if had_eye {
-                            face::write(&vm, false);
+                            face::write(false);
                             continue;
                         }
                         ptt_down = Some(Instant::now());
@@ -335,7 +335,7 @@ fn daemon() {
                             match audio::capture_start() {
                                 Ok(c) => {
                                     capturing = Some(c);
-                                    face::write(&vm, false);
+                                    face::write(false);
                                 }
                                 Err(e) => eprintln!("aginx-voice: cap start {e}"),
                             }
@@ -351,7 +351,7 @@ fn daemon() {
                                 let _ = c.kill();
                                 let _ = c.wait();
                             }
-                            face::write(&vm, false);
+                            face::write(false);
                             let v = audio::adjust_vol(-10);
                             eprintln!("aginx-voice: vol {v}");
                             say(&format!("音量{v}"), brain.as_ref());
@@ -365,7 +365,7 @@ fn daemon() {
                             let _ = c.kill();
                             let _ = c.wait();
                             if let Some(wav) = audio::capture_take() {
-                                face::write(&vm, false);
+                                face::write(false);
                                 match hear(&wav, brain.as_ref()) {
                                     Ok(text) => {
                                         eprintln!("aginx-voice: heard {text:?}");
@@ -374,7 +374,7 @@ fn daemon() {
                                         // 写把它拉回 prompt 面开打；应答由
                                         // run_outs 的 Say/Speak 换行。
                                         face::set_line(Some(&text));
-                                        face::write(&vm, false);
+                                        face::write(false);
                                         let outs = vm.step(Ev::Heard(text));
                                         run_outs(&mut vm, outs, brain.as_ref(), &mut eye);
                                     }
@@ -383,12 +383,12 @@ fn daemon() {
                                         // asr 失败提示本身也要能说——但 asr
                                         // 挂了多半网络不通，TTS 也挂；只刷屏
                                         let _ = vm.step(Ev::Heard("没听懂".into()));
-                                        face::write(&vm, false);
+                                        face::write(false);
                                     }
                                 }
                             } else {
                                 // 误触（<0.1s）
-                                face::write(&vm, false);
+                                face::write(false);
                             }
                             // 尾部不得再写 face：run_outs 尾部 flush_pending
                             // 刚翻 result:true，此处写会亚 60ms 清旗，term
@@ -405,7 +405,7 @@ fn daemon() {
                         } else {
                             eye_start(&mut vm, &mut eye);
                         }
-                        face::write(&vm, eye.is_some());
+                        face::write(eye.is_some());
                     }
                 }
             }
@@ -480,7 +480,7 @@ fn daemon() {
             if let Some(mut ev) = eye.take() {
                 eye_stop(&mut ev.child);
             }
-            face::write(&vm, false);
+            face::write(false);
             match exit {
                 EyeExit::Hit(payloads) => {
                     // 命中即自动走：配对码（超集，PairApply）/ WIFI: 码直连 /
@@ -495,7 +495,7 @@ fn daemon() {
         }
 
         // ---- #282 开机等网（5s 节拍非阻塞；行易主/窗口尽即静默退役） ----
-        boot_net_tick(&mut boot_net, &vm);
+        boot_net_tick(&mut boot_net);
 
         // ---- 口令等待心跳（面法B）：真实流逝喂进状态机 ----
         // run_outs 可能阻塞数秒（TTS/brain 往返）——喂真实 dt，等待按
@@ -565,21 +565,21 @@ fn run_outs(
             Out::Speak(s) => {
                 eprintln!("aginx-voice: speak {s}");
                 face::set_line(Some(&s));
-                face::write(vm, eye.is_some());
+                face::write(eye.is_some());
                 say(&s, brain);
             }
             Out::Act(a) => match a {
                 Act::NetConnect => {
                     // 机器干活：先看现状，再试记忆里的网，都不行才睁眼要码
-                    face::write(vm, eye.is_some());
+                    face::write(eye.is_some());
                     followups.push(Ev::NetState(net_check()));
                 }
                 Act::Join { ssid, psk } => {
-                    face::write(vm, eye.is_some());
+                    face::write(eye.is_some());
                     followups.push(Ev::JoinDone(join_wifi(&ssid, &psk)));
                 }
                 Act::PairApply { bundle } => {
-                    face::write(vm, eye.is_some());
+                    face::write(eye.is_some());
                     let r = pair_apply(&bundle);
                     if r.is_ok() {
                         // v4: 剧场已退役——镜头先收（眼视图还占着面板），
@@ -600,7 +600,7 @@ fn run_outs(
                         let _ = vm.inject_say("取景开着，对准码就行。");
                         continue;
                     }
-                    face::write(vm, false);
+                    face::write(false);
                     let r = scan_qr();
                     if let Err(e) = &r {
                         eprintln!("aginx-voice: qr {e}");
@@ -608,7 +608,7 @@ fn run_outs(
                     followups.push(Ev::QrDone(r));
                 }
                 Act::Ocr => {
-                    face::write(vm, eye.is_some());
+                    face::write(eye.is_some());
                     let r = read_text();
                     if let Err(e) = &r {
                         eprintln!("aginx-voice: ocr {e}");
@@ -639,7 +639,7 @@ fn run_outs(
                     let _ = Command::new("/usr/bin/aginx-reboot").arg(arg).spawn();
                 }
                 Act::Chat(text) => {
-                    face::write(vm, eye.is_some());
+                    face::write(eye.is_some());
                     let hit = roster_hit(&text);
                     if let Some(n) = &hit {
                         eprintln!("aginx-voice: roster {n}");
@@ -662,7 +662,7 @@ fn run_outs(
                     // 翻旗归 run_outs 尾部 flush_pending——这里早翻会被本回合
                     // 后续 face::write 清掉。写失败则文本就是结果（降级一等）。
                     // 结果页同律带问句块（#283：问句在答句上方）。
-                    render::stage_reply(vm.state_name(), &text, &reply);
+                    render::stage_reply(&text, &reply);
                 }
             },
         }
@@ -671,7 +671,7 @@ fn run_outs(
     // 站立页（结果页不超时=产品线；v4⑥ 真人第二雷：live 几秒后必 teardown
     // 即此尾写所为）。失效只归新用户动作（PTT down/闭眼等显式 face::write）。
     if !face::result_standing() {
-        face::write(vm, eye.is_some());
+        face::write(eye.is_some());
     }
     for ev in followups {
         let outs = vm.step(ev);

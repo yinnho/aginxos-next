@@ -118,7 +118,7 @@ struct PowerWait {
 
 /// 对话机（M42a 命令优先版）。除口令等待外无驻留态：每个指令一步走完，
 /// 等码的长等待由眼取景自己的生命周期管（30s 上限 + 帧自愈），协议
-/// 不再记「现在在第几步」。state_name 留作屏显。
+/// 不再记「现在在第几步」。
 pub struct Vm {
     /// 对话行（(谁, 文本)），屏显用；cap 8 行滚动
     lines: Vec<(bool, String)>,
@@ -157,6 +157,9 @@ impl Vm {
         self
     }
 
+    /// V3（09-10）：state 字段随 face 退役——生产无消费者；测试断言
+    /// 驻留态（powerwait 三部曲）仍要读它。
+    #[cfg(test)]
     pub fn state_name(&self) -> &'static str {
         if self.power_wait.is_some() {
             "powerwait"
