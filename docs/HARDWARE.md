@@ -2304,7 +2304,8 @@ voice/AP 零交叠：
   /usr/bin:/var/bin）解析 busybox `/bin/ip`；host 侧 adb shell 的
   `ip` 是 toybox（/system/bin）——先前对账用了不同二进制。busybox
   ip 在接口翻转窗输出空 → voice 报「没联网」是采样窗问题。
-- 待收：AP 稳定窗补跑 m42c 全绿；#198 真人收据悬置。
+- 补收（2026-09-10）：AP 稳定窗复跑 m42c **23/23 零修全绿**（wlan0
+  192.168.0.166 在位、gw ping 0% 丢包 18ms 时跑）；#198 真人收据悬置。
 
 **配方生效时点**：wizard/app-registry 删除在配方侧——当前蛋（批③
 前烤）仍带 /usr/bin/aginx-net-wizard(.aginxmd)、/etc/init.d/
@@ -2313,3 +2314,37 @@ binary 只 prune 不 seed，三跑无害。下次 bake 起净。
 
 **收尾态**：蛋世界健康靴在役，aginx-term 6d9a26fe… 在跑，无
 fastboot 滞留；AP 抖动自愈机制本身正常工作（rejoin 循环在转）。
+
+## 2026-09-10 — 「还在显示 go ahead」裁决：谱系=开机问候常驻行；量具事故=tick 记账冻结
+
+用户问「现在还在显示 go head，你看看是哪个流程里的」。裁决与量具
+收据（全程只观察，零代码改动）：
+
+**谱系（良性层定谳）**：`Operator. Go ahead.` = voice 守护的 #282
+开机等网问候（boot.state `internet ok` 后写脸），term 光标面打字上
+屏后按 #283 问句常驻设计**留在光标面上，直到下一次语音回合才整行
+替换**。每次真重启（含套件 C 段）问候重新写脸——「还在显示」=
+设计内驻留，不是死屏。
+
+**量具事故（本日主收据）**：诊断初期据 /proc/454/stat 判「渲染管线
+死了」——utime+stime 钉死 9089 纹丝不动，含亮屏窗。schedstat 推翻：
+灭屏 3s sum_exec_runtime 仅 +3.9ms（≈0.16ms/pass 纯轮询）；亮屏
+2.15s **+226ms ≈ 105ms/s**——正是 v4⑤ 呼吸渲染基线（41 ticks/4s）
+的纳秒级同值。**本机 term 进程的 tick 记账不可信；idle/渲染活性
+判定一律走 /proc/PID/schedstat（sum_exec_runtime/ns、nr_switches）**，
+/proc/PID/stat 的 utime/stime 只能当垃圾读。
+
+**present 链健康证**：本靴 kmsg `[59.89] aginx-term: PAGE_FLIP
+refused — relatch fallback`——bootcard 退场（done ok ~57s+3s hold）
+后首次 present 即挂 relatch 主路（v4⑤ 人类眼验过面板的同一机制）；
+当前会话 /var/aginx-term.log slow present=0（v4⑤ 同基线）；6701af1
+diff 复核只删了 BLINK 静态量+SET_MASTER 死码，flip/relatch 机器未动。
+**批①收据勘误**：当日「本靴无 PAGE_FLIP refused 行」为 grep 漏读
+（该行本靴在案），非行为变化。
+
+**立案（不阻塞）**：状态话术小时位缺失——`--inject 状态` 出
+「点45分，电池100%，网已连。」，应为「22点45分…」（voice 状态
+格式串小 bug，当日三见）。
+
+**待收**：用户眼验——面板显示当前时刻行（本日已两次推时间戳状态
+行上脸）= 渲染链实证收口；若仍停留 go ahead 则立案再挖。
