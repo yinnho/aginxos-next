@@ -628,12 +628,13 @@ int main(int argc, char **argv) {
     sess_open(&det, env, det_p);
     sess_open(&rec, env, rec_p);
 
-    // 朝向循环：auto 先 0，kept>=2 行即收；否则 90/270/180 全试取最优。
+    // 朝向循环：auto 先 90（竖握是产品常态——传感器横装，竖页文字在图里
+    // 转 90°，M45 收据），kept>=2 行即收；否则 0/270/180 全试取最优。
     // 指定角度只跑该角度。计时累计各轮。
     static Pipes best, cur;
-    int best_rot = rot >= 0 ? rot : 0, have = 0;
+    int best_rot = rot >= 0 ? rot : 90, have = 0;
     double sum_det = 0, sum_rec = 0;
-    const int order[4] = {0, 90, 270, 180};
+    const int order[4] = {90, 0, 270, 180};
     for (int oi = 0; oi < 4; oi++) {
         int r = order[oi];
         if (rot >= 0 && r != rot) continue;
