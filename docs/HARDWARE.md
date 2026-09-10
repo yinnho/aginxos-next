@@ -2472,7 +2472,7 @@ EyeExit::OcrHit 把任何文本当活干完了——开眼 3-6s 就闭眼，扫�
 **已知残留**：过渡帧/暗帧偶发 ocr hung（8s 看门狗杀，按设计）；背景
 文字（MacBook Air）混入念读——取景器视野宽，要不要收窄到纸面是后续
 产品问题；扫描中途换景会把混合场景当评分（人持稳 ~13s 是使用纪律）；
-QR-in-grace 回归检查欠着（低险：QR 路径不门控）。
+QR-in-grace 回归检查（09-10 已收，绿）：铸文本码（aginx.net/qr-grace-regression-0910，零副作用不走 wifi.conf）满屏白底黑码怼镜头，注入音量+开眼——t≈1s 即命中（face「扫到，https://…」），此刻 af.state=scan、cam.log 显示 AEC settle 才走 37 帧（~2.2s）就被 SIGTERM 打断，粗/细扫描根本没启动。QR 在静息焦上即解， AF 扫描不挡配对收据；预扫期被打断后 af.state 残留 scan（下会话 eye_start 先删， 无害）。
 
 **设备终态**：在役 slot + dev-push 领先（cam-shot md5 07d8666f +
 voice md5 c64450cf + device.toml AF 旗标三件），下次 bake 折叠（bake
