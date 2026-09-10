@@ -1521,8 +1521,12 @@ impl SelfNet {
 /// 网恒已连）。蛋上 voice 不在，term 自己报告真状态——开机第一句话就是
 /// 机器的真实状态。
 fn selfnet_greet() -> String {
+    let p = hwd::load_or_exit();
     let time = std::process::Command::new("date")
         .arg("+%H %M")
+        // 时区走设备档案（与 voice status_text 同律）：钟面=UTC（ntpd），
+        // 显示时区经 TZ env 注入（bionic busybox 只认 POSIX TZ 串）。
+        .env("TZ", &p.tz)
         .output()
         .ok()
         .and_then(|o| String::from_utf8(o.stdout).ok())
@@ -1535,13 +1539,10 @@ fn selfnet_greet() -> String {
             Some(format!("{h}点{m}分"))
         })
         .unwrap_or_default();
-    let bat = std::fs::read_to_string(format!(
-        "{}/capacity",
-        hwd::load_or_exit().paths.power_supply
-    ))
-    .ok()
-    .and_then(|s| s.trim().parse::<u8>().ok())
-    .unwrap_or(0);
+    let bat = std::fs::read_to_string(format!("{}/capacity", p.paths.power_supply))
+        .ok()
+        .and_then(|s| s.trim().parse::<u8>().ok())
+        .unwrap_or(0);
     format!("{time}，电池{bat}%，网已连。")
 }
 
