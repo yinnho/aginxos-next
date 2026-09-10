@@ -27,6 +27,16 @@ drv() {
 
 expect_rc()  { [ "${DRV_RC:-}" = "$1" ] && { echo "ok   - $2"; PASS=$((PASS+1)); } || { echo "FAIL - $2 (rc=${DRV_RC:-?}, want $1)"; FAIL=$((FAIL+1)); } }
 expect_out() { printf '%s' "${DRV_OUT:-}" | grep -Eq -- "$2" && { echo "ok   - $1"; PASS=$((PASS+1)); } || { echo "FAIL - $1"; echo "       out=$(printf '%s' "${DRV_OUT:-}" | head -2)"; FAIL=$((FAIL+1)); } }
+# 行序断言：各 regex 在 DRV_OUT 中的首次命中行号严格递增（stdout 即读序）
+expect_order() {
+  local desc="$1" re ln prev=0 ok=1; shift
+  for re in "$@"; do
+    ln="$(printf '%s\n' "${DRV_OUT:-}" | grep -En -- "$re" | head -1 | cut -d: -f1)"
+    if [ -z "$ln" ] || [ "$ln" -le "$prev" ]; then ok=0; break; fi
+    prev="$ln"
+  done
+  if [ "$ok" = 1 ]; then echo "ok   - $desc"; PASS=$((PASS+1)); else echo "FAIL - $desc"; echo "       out=$(printf '%s' "${DRV_OUT:-}" | head -3)"; FAIL=$((FAIL+1)); fi
+}
 
 # 前置：构建与模型（fetch-ocr-models.sh 产物）。验收不替人跑构建。
 for f in "$ROOT/out/ocr/bin/ag-ocr" "$MODELS/det.onnx" "$MODELS/rec.onnx" \
@@ -45,7 +55,7 @@ adbx shell "chmod +x $SCRATCH/ag-ocr"
 for f in det.onnx rec.onnx dict.txt; do
   adbx push "$MODELS/$f" "$SCRATCH/models/$f" >/dev/null
 done
-for f in page-synthetic.jpg cam-screen-dark.jpg line-zh.jpg plain-gray.jpg; do
+for f in page-synthetic.jpg cam-screen-dark.jpg page-skew4.jpg page-twocol.jpg line-zh.jpg plain-gray.jpg; do
   adbx push "$FIXDIR/$f" "$SCRATCH/$f" >/dev/null
 done
 
@@ -55,9 +65,9 @@ OCR="AG_OCR_DIR=$SCRATCH/models $SCRATCH/ag-ocr"
 
 drv "$OCR $SCRATCH/page-synthetic.jpg"
 expect_rc 0 '合成页识别出文字（rc）'
-expect_out '第一行机器视觉' '中文行'
-expect_out 'Second line OCR test' '英文行'
-expect_out '第三行 ?A123 ?B456' '中英混排行（CJK/拉丁界空格容差——quad 裁剪后 CTC 偶发插入）'
+expect_out '中文行' '第一行机器视觉'
+expect_out '英文行' 'Second line OCR test'
+expect_out '中英混排行（CJK/拉丁界空格容差——quad 裁剪后 CTC 偶发插入）' '第三行 ?A123 ?B456'
 
 # --- 2. 真盲拍暗房屏照：auto 旋转 + 光学链 ------------------------------------
 # 2016×1136 竖握实拍（gain16+dgain2 档，2026-09-04 收据）；文字在原图里
@@ -65,8 +75,22 @@ expect_out '第三行 ?A123 ?B456' '中英混排行（CJK/拉丁界空格容差�
 
 drv "$OCR $SCRATCH/cam-screen-dark.jpg"
 expect_rc 0 '盲拍屏照识别出（rc）'
-expect_out '器视觉测试' '中文屏行（auto rot）'
-expect_out '0013' '电话号码行'
+expect_out '中文屏行（auto rot）' '器视觉测试'
+expect_out '电话号码行' '0013'
+
+# --- 2b. 斜拍 fixture：quad 几何（凸包→minAreaRect→透视裁剪，v0.2.0） ------
+
+drv "$OCR $SCRATCH/page-skew4.jpg"
+expect_rc 0 '斜拍 4° 识别出文字（rc）'
+expect_out '斜拍中文行' '第一行机器视觉'
+expect_out '斜拍英文行' 'Second line OCR test'
+
+# --- 2c. 双栏 fixture：栏序（单沟 XY-cut，v0.2.0） ------------------------------
+
+drv "$OCR $SCRATCH/page-twocol.jpg"
+expect_rc 0 '双栏页识别出文字（rc）'
+expect_order '栏序 = 标题→甲栏→乙栏（先左后右）' \
+  '双栏标题页' '甲栏第三行' '乙栏第一行' '乙栏第三行'
 
 # --- 3. 手工行条 --rec-only：跳 det 整行过 rec --------------------------------
 
