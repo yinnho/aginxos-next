@@ -50,7 +50,11 @@ playback_dup_mono = true # QUIN_TDM dual-channel L=R copy law; enchilada likely 
 # --aec --jpeg --jpeg-every-ms 500 --jpeg-out/--raw-out — and builds
 # --aspect from [panel]; everything below is this panel/sensor's tuning.
 eye_stream_args = ["--rot","90","--preview","720","--vf-window","4",
-                   "--nr","0:0:0:0"]
+                   "--nr","0:0:0:0",
+                   # AF 接线（#227 产品接线）：settle-wait 扫描骑帧循环，
+                   # 扫描期间冻结曝光梯；40 帧（~2.8s）head start 保 QR
+                   # 原位快扫（配对流既有收据全在此节奏）
+                   "--af-scan","--af-grace","40"]
 qr_scan_args = ["--slowrear","--gain","8"]
 
 [affinity]
