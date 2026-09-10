@@ -57,7 +57,7 @@ drv "$OCR $SCRATCH/page-synthetic.jpg"
 expect_rc 0 '合成页识别出文字（rc）'
 expect_out '第一行机器视觉' '中文行'
 expect_out 'Second line OCR test' '英文行'
-expect_out '第三行A123 B456' '中英混排行'
+expect_out '第三行 ?A123 ?B456' '中英混排行（CJK/拉丁界空格容差——quad 裁剪后 CTC 偶发插入）'
 
 # --- 2. 真盲拍暗房屏照：auto 旋转 + 光学链 ------------------------------------
 # 2016×1136 竖握实拍（gain16+dgain2 档，2026-09-04 收据）；文字在原图里

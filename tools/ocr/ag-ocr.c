@@ -8,9 +8,10 @@
 // 模型: AG_OCR_DIR（缺省 /var/models/ocr）下 det.onnx rec.onnx dict.txt。
 //
 // 旋转：cam-shot 传感器横向安装，手机竖握拍出的图里文字转了 90°（M45 实拍
-// 收据：det 照样出框、rec 全灭）。--rot auto 先按 0 试，kept>=2 行即收；
-// 否则 90/270/180 逐个试，取 (kept 行数, conf 和) 最大者。竖握是产品常态，
-// auto 多付一次 det（~1.4s）是默认代价；box 坐标是旋转后图的坐标系。
+// 收据：det 照样出框、rec 全灭）。--rot auto 先按 90 试（竖握是产品常态），
+// 横排 kept>=2 行即收；否则 0/270/180 逐个试，择优主键 = 横排行数 hkept
+//（quad 裁剪会把竖排文字转正读出，但那是页面被转 90° 的假成功——行序是
+// 列序）。box 坐标是旋转后图的坐标系。
 //
 // 管线常数逐条对齐 RapidOCR v3.9.2（ch_ppocr_det / ch_ppocr_rec 源码核对，
 // 2026-09-04 提取；模型 PP-OCRv5 mobile，ModelScope RapidAI/RapidOCR）：
@@ -24,8 +25,11 @@
 //   - rec：h=48，动态宽 imgw=int(48*max(320/48, w/h))，右零填；
 //     CTC：id0=blank、1..N=dict 行、N+1=space（先 append space 再插 blank）
 //   - 行置信度 < 0.5 丢（Global.text_score）
-// v0 轴对齐框：连通域 bbox 代替 minAreaRect 四边形、unclip 用矩形外扩代替
-// pyclipper JT_ROUND——斜拍场景降级可忍（M45 计划注记，收据后再升级）。
+// 框几何（S2，上游 DBPostProcess 对齐）：连通域���界点 → Andrew 凸包 →
+// minAreaRect（枚举 hull 边方向）→ unclip 于矩形（pyclipper JT_ROUND 于
+// 矩形 ≡ 同中心同角度 (w+2d,h+2d) 外扩，上游 unclip 输入本就是 minAreaRect
+// 四点矩形，等价裁决 2026-09-10）→ 四角映射回工作图 → rec 透视裁剪
+// （Heckbert 方→四边形有理映射 + 钳位双线性；平行四边形自然退化为仿射）。
 #include <math.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -239,7 +243,8 @@ static Img det_resize(const Img *src) {
 }
 
 typedef struct {
-    int x0, y0, x1, y1; // 含端点
+    int x0, y0, x1, y1; // AABB（含端点）：排序/行分组/JSON 出口
+    float qx[4], qy[4]; // 四角 quad（工作图坐标 tl,tr,br,bl）：rec 裁剪入口
     int idx;            // 稳定排序用
     int line;           // 行分组结果
 } Box;
@@ -261,6 +266,144 @@ static int cmp_box_line(const void *a, const void *b) {
     if (p->line != q->line) return p->line - q->line;
     if (p->x0 != q->x0) return p->x0 < q->x0 ? -1 : 1;
     return p->idx - q->idx;
+}
+
+// ---- quad 几何（S2，上游 DBPostProcess 对齐） ----
+
+typedef struct { float x, y; } P2;
+
+static int cmp_p2(const void *a, const void *b) {
+    const P2 *p = (const P2 *)a, *q = (const P2 *)b;
+    if (p->x != q->x) return p->x < q->x ? -1 : 1;
+    if (p->y != q->y) return p->y < q->y ? -1 : 1;
+    return 0;
+}
+
+// Andrew 单调链凸包（去共线）。返回 hull 点数。
+static int convex_hull(P2 *p, int n, P2 *h) {
+    qsort(p, (size_t)n, sizeof(P2), cmp_p2);
+    int k = 0;
+    for (int i = 0; i < n; i++) { // 下链：cross<=0 弹栈
+        while (k >= 2 &&
+               (h[k-1].x - h[k-2].x) * (p[i].y - h[k-2].y) -
+               (h[k-1].y - h[k-2].y) * (p[i].x - h[k-2].x) <= 0) k--;
+        h[k++] = p[i];
+    }
+    for (int i = n - 2, t = k + 1; i >= 0; i--) { // 上链
+        while (k >= t &&
+               (h[k-1].x - h[k-2].x) * (p[i].y - h[k-2].y) -
+               (h[k-1].y - h[k-2].y) * (p[i].x - h[k-2].x) <= 0) k--;
+        h[k++] = p[i];
+    }
+    k--; // 首点在尾重复
+    return k;
+}
+
+// minAreaRect：枚举 hull 每条边方向为候选轴（O(h²)），投影取面积最小。
+// 长边归一为 u 轴（文本行方向）；u 规约到 +x 半平面（垂直文本取 +y）——
+// 裁剪读向稳定不镜像。
+static void min_area_rect(const P2 *h, int n, float *cx, float *cy,
+                          float *ux, float *uy, float *rw, float *rh) {
+    float besta = 1e30f;
+    for (int i = 0; i < n; i++) {
+        float dx = h[(i + 1) % n].x - h[i].x, dy = h[(i + 1) % n].y - h[i].y;
+        float len = hypotf(dx, dy);
+        if (len < 1e-6f) continue;
+        float ax = dx / len, ay = dy / len;
+        float umin = 1e30f, umax = -1e30f, vmin = 1e30f, vmax = -1e30f;
+        for (int j = 0; j < n; j++) {
+            float pu = h[j].x * ax + h[j].y * ay;
+            float pv = -h[j].x * ay + h[j].y * ax;
+            if (pu < umin) umin = pu;
+            if (pu > umax) umax = pu;
+            if (pv < vmin) vmin = pv;
+            if (pv > vmax) vmax = pv;
+        }
+        float w = umax - umin, v = vmax - vmin;
+        float area = w * v;
+        if (area < besta) {
+            besta = area;
+            float cu = (umin + umax) / 2, cv = (vmin + vmax) / 2;
+            *cx = cu * ax - cv * ay; // 中心在原 (ax,ay) 基下换算，物理点不变
+            *cy = cu * ay + cv * ax;
+            if (v > w) { *ux = -ay; *uy = ax; *rw = v; *rh = w; } // 长边为 u
+            else       { *ux = ax;  *uy = ay; *rw = w; *rh = v; }
+        }
+    }
+    if (*ux < 0 || (*ux == 0 && *uy < 0)) { *ux = -*ux; *uy = -*uy; }
+}
+
+// Heckbert 方→四边形裁剪：unit square (s,t)→quad 四角(tl,tr,br,bl) 的
+// 有理映射（分母系数 G,H 由 (1,1) 角点两方程直接解出，免矩阵求逆）。
+// dst 网格逐点正向映射回源坐标 + 钳位双线性（同 img_resize 内核纪律）。
+// 平行四边形（正拍、pred→work 各向异性映射后的矩形）分母项为零，自然
+// 退化为仿射——单一入口两种形状；角点被图界裁过的才是真透视四边形。
+static Img crop_quad(const Img *src, const float *qx, const float *qy, int dw,
+                     int dh) {
+    Img d;
+    d.w = dw;
+    d.h = dh;
+    d.px = (uint8_t *)xmalloc((size_t)dw * dh * 3);
+    float skx = qx[0] - qx[1] + qx[2] - qx[3];
+    float sky = qy[0] - qy[1] + qy[2] - qy[3];
+    float A, B, C, D, E, F, G, H;
+    C = qx[0];
+    F = qy[0];
+    if (fabsf(skx) < 1e-6f && fabsf(sky) < 1e-6f) {
+        G = H = 0;
+        A = qx[1] - qx[0];
+        B = qx[3] - qx[0];
+        D = qy[1] - qy[0];
+        E = qy[3] - qy[0];
+    } else {
+        float dx1 = qx[1] - qx[2], dx2 = qx[3] - qx[2];
+        float dy1 = qy[1] - qy[2], dy2 = qy[3] - qy[2];
+        float det = dx1 * dy2 - dx2 * dy1;
+        if (fabsf(det) < 1e-9f) { // 近退化四边形：仿射兜底
+            G = H = 0;
+            A = qx[1] - qx[0];
+            B = qx[3] - qx[0];
+            D = qy[1] - qy[0];
+            E = qy[3] - qy[0];
+        } else {
+            G = (skx * dy2 - dx2 * sky) / det;
+            H = (dx1 * sky - skx * dy1) / det;
+            A = qx[1] * (1 + G) - qx[0];
+            B = qx[3] * (1 + H) - qx[0];
+            D = qy[1] * (1 + G) - qy[0];
+            E = qy[3] * (1 + H) - qy[0];
+        }
+    }
+    for (int j = 0; j < dh; j++) {
+        float t = (j + 0.5f) / dh;
+        for (int i = 0; i < dw; i++) {
+            float s = (i + 0.5f) / dw;
+            float den = G * s + H * t + 1;
+            float x = (A * s + B * t + C) / den;
+            float y = (D * s + E * t + F) / den;
+            int x0 = (int)floorf(x), x1 = x0 + 1;
+            int y0 = (int)floorf(y), y1 = y0 + 1;
+            float wx = x - x0, wy = y - y0;
+            if (x0 < 0) x0 = 0;
+            if (x1 >= src->w) x1 = src->w - 1;
+            if (x0 > x1) x0 = x1;
+            if (y0 < 0) y0 = 0;
+            if (y1 >= src->h) y1 = src->h - 1;
+            if (y0 > y1) y0 = y1;
+            const uint8_t *a = src->px + ((size_t)y0 * src->w + x0) * 3;
+            const uint8_t *b = src->px + ((size_t)y0 * src->w + x1) * 3;
+            const uint8_t *c = src->px + ((size_t)y1 * src->w + x0) * 3;
+            const uint8_t *e = src->px + ((size_t)y1 * src->w + x1) * 3;
+            uint8_t *o = d.px + ((size_t)j * dw + i) * 3;
+            for (int ch = 0; ch < 3; ch++) {
+                float vv = (1 - wx) * (1 - wy) * a[ch] + wx * (1 - wy) * b[ch] +
+                           (1 - wx) * wy * c[ch] + wx * wy * e[ch];
+                int iv = (int)(vv + 0.5f);
+                o[ch] = (uint8_t)(iv < 0 ? 0 : (iv > 255 ? 255 : iv));
+            }
+        }
+    }
+    return d;
 }
 
 // DB 后处理：二值→膨胀→连通域→过滤→unclip→映射回原图→排序。
@@ -286,6 +429,11 @@ static int det_post(const float *pred, int pw, int ph, int W, int H,
     int32_t *lab = (int32_t *)xmalloc(np * sizeof(int32_t));
     memset(lab, 0, np * sizeof(int32_t));
     int32_t *stack = (int32_t *)xmalloc(np * sizeof(int32_t));
+    // 边界点缓冲（凸包输入，O 周长）与凸包工作区：按需翻倍
+    int bcap = 4096;
+    P2 *pts = (P2 *)xmalloc((size_t)bcap * sizeof(P2));
+    P2 *hull = (P2 *)xmalloc((size_t)bcap * sizeof(P2));
+    int nbp = 0;
     int nbox = 0;
     for (int sy = 0; sy < ph; sy++) {
         for (int sx = 0; sx < pw; sx++) {
@@ -298,6 +446,7 @@ static int det_post(const float *pred, int pw, int ph, int W, int H,
             memset(&c, 0, sizeof c);
             c.x0 = c.x1 = sx;
             c.y0 = c.y1 = sy;
+            nbp = 0;
             while (sp > 0) {
                 int32_t p = stack[--sp];
                 int px = p % pw, py = p / pw;
@@ -307,6 +456,23 @@ static int det_post(const float *pred, int pw, int ph, int W, int H,
                 if (px > c.x1) c.x1 = px;
                 if (py < c.y0) c.y0 = py;
                 if (py > c.y1) c.y1 = py;
+                // 边界点：4 邻任一在 mask 外/图外 → 凸包候选（短路保证
+                // 不越界：前四条任一真即跳过 dil 寻址，全假则坐标全在界内）
+                if (px == 0 || py == 0 || px + 1 == pw || py + 1 == ph ||
+                    !dil[(size_t)py * pw + px - 1] ||
+                    !dil[(size_t)(py + 1) * pw + px] ||
+                    !dil[(size_t)py * pw + px + 1] ||
+                    !dil[(size_t)(py - 1) * pw + px]) {
+                    if (nbp >= bcap) {
+                        bcap *= 2;
+                        pts = (P2 *)realloc(pts, (size_t)bcap * sizeof(P2));
+                        hull = (P2 *)realloc(hull, (size_t)bcap * sizeof(P2));
+                        if (!pts || !hull) die("out of memory");
+                    }
+                    pts[nbp].x = (float)px;
+                    pts[nbp].y = (float)py;
+                    nbp++;
+                }
                 for (int dy = -1; dy <= 1; dy++) {
                     for (int dx = -1; dx <= 1; dx++) {
                         int nx = px + dx, ny = py + dy;
@@ -322,28 +488,46 @@ static int det_post(const float *pred, int pw, int ph, int W, int H,
             }
 
             int bw = c.x1 - c.x0 + 1, bh = c.y1 - c.y0 + 1;
-            if (bw < 3 || bh < 3) continue; // min_size
+            if (bw < 3 || bh < 3) continue; // min_size（廉价前置：CC bbox）
             double score = c.sum / (double)c.cnt;
             if (score < DET_BOX_THRESH) continue;
 
-            // unclip：矩形外扩 dist = area*1.6/perimeter
-            float fw = (float)bw, fh = (float)bh;
-            float dist = fw * fh * DET_UNCLIP / (2.0f * (fw + fh));
-            float ux0 = c.x0 - dist, uy0 = c.y0 - dist;
-            float ux1 = c.x1 + dist, uy1 = c.y1 + dist;
-            if (ux1 - ux0 + 1 < 5 || uy1 - uy0 + 1 < 5) continue; // min_size+2
+            // 凸包 → minAreaRect（上游 get_mini_boxes）
+            int nh = convex_hull(pts, nbp, hull);
+            float ccx, ccy, ux, uy, rw, rh;
+            min_area_rect(hull, nh, &ccx, &ccy, &ux, &uy, &rw, &rh);
+            if (rw < 3 || rh < 3) continue; // min_size（矩形短边）
 
-            // 映射回工作图并裁边
+            // unclip：dist = w*h*1.6/(2*(w+h)) 于 minAreaRect——上游 unclip
+            // 作用的正是该矩形，JT_ROUND ≡ 同中心同角度 (w+2d, h+2d) 外扩
+            float dist = rw * rh * DET_UNCLIP / (2.0f * (rw + rh));
+            float w2 = rw + 2 * dist, h2 = rh + 2 * dist;
+            if (w2 + 1 < 5 || h2 + 1 < 5) continue; // min_size+2
+
+            // 四角（tl,tr,br,bl）映射回工作图，逐点裁到界内（上游同律）
+            float vx = -uy, vy = ux; // v = perp(u)：u=(1,0) 时 +y 向下
+            float hw = w2 / 2, hh = h2 / 2;
+            static const float cu[4] = {-1, 1, 1, -1};
+            static const float cv[4] = {-1, -1, 1, 1};
             float kx = (float)W / pw, ky = (float)H / ph;
-            int bx0 = (int)lroundf(ux0 * kx), by0 = (int)lroundf(uy0 * ky);
-            int bx1 = (int)lroundf(ux1 * kx), by1 = (int)lroundf(uy1 * ky);
-            if (bx0 < 0) bx0 = 0;
-            if (by0 < 0) by0 = 0;
-            if (bx1 > W - 1) bx1 = W - 1;
-            if (by1 > H - 1) by1 = H - 1;
-            if (bx1 - bx0 + 1 <= 3 || by1 - by0 + 1 <= 3) continue;
-
             if (nbox >= cap) break;
+            int bx0 = 1 << 30, by0 = 1 << 30, bx1 = -(1 << 30), by1 = -(1 << 30);
+            for (int k = 0; k < 4; k++) {
+                float X = (ccx + cu[k] * hw * ux + cv[k] * hh * vx) * kx;
+                float Y = (ccy + cu[k] * hw * uy + cv[k] * hh * vy) * ky;
+                if (X < 0) X = 0;
+                if (X > W - 1) X = (float)(W - 1);
+                if (Y < 0) Y = 0;
+                if (Y > H - 1) Y = (float)(H - 1);
+                boxes[nbox].qx[k] = X;
+                boxes[nbox].qy[k] = Y;
+                int xi = (int)lroundf(X), yi = (int)lroundf(Y);
+                if (xi < bx0) bx0 = xi;
+                if (xi > bx1) bx1 = xi;
+                if (yi < by0) by0 = yi;
+                if (yi > by1) by1 = yi;
+            }
+            if (bx1 - bx0 + 1 <= 3 || by1 - by0 + 1 <= 3) continue;
             boxes[nbox].x0 = bx0;
             boxes[nbox].y0 = by0;
             boxes[nbox].x1 = bx1;
@@ -370,6 +554,8 @@ static int det_post(const float *pred, int pw, int ph, int W, int H,
     free(dil);
     free(lab);
     free(stack);
+    free(pts);
+    free(hull);
     return nbox;
 }
 
@@ -415,15 +601,16 @@ typedef struct {
 static Line rec_line(Sess *rec, const Img *work, const Box *b, char **dict,
                      int ndict, int expected_c) {
     Line ln = {NULL, 0.0f};
-    int cw = b->x1 - b->x0 + 1, chh = b->y1 - b->y0 + 1;
-    Img crop;
-    crop.w = cw;
-    crop.h = chh;
-    crop.px = (uint8_t *)xmalloc((size_t)cw * chh * 3);
-    for (int y = 0; y < chh; y++)
-        memcpy(crop.px + (size_t)y * cw * 3,
-               work->px + ((size_t)(b->y0 + y) * work->w + b->x0) * 3,
-               (size_t)cw * 3);
+    // 透视裁剪：dst 尺寸取 quad 对边长度均值（get_rotate_crop_image 同形
+    // ——连续矩形尺寸，非含端点计数）。轴对齐 quad 时有理式退化为仿射。
+    float wtop = hypotf(b->qx[1] - b->qx[0], b->qy[1] - b->qy[0]);
+    float wbot = hypotf(b->qx[2] - b->qx[3], b->qy[2] - b->qy[3]);
+    float hlef = hypotf(b->qx[3] - b->qx[0], b->qy[3] - b->qy[0]);
+    float hrig = hypotf(b->qx[2] - b->qx[1], b->qy[2] - b->qy[1]);
+    int cw = (int)lroundf((wtop + wbot) / 2), chh = (int)lroundf((hlef + hrig) / 2);
+    if (cw < 1) cw = 1;
+    if (chh < 1) chh = 1;
+    Img crop = crop_quad(work, b->qx, b->qy, cw, chh);
 
     // 上游 resize_norm_img（单图批）：imgw=int(48*max(320/48,w/h))，
     // resized_w = ceil(48*ratio) 超 imgw 则取 imgw。
@@ -515,6 +702,7 @@ typedef struct {
     Box boxes[1024];
     Line lines[1024];
     int nbox, nlines, kept;
+    int hkept; // kept 里 quad 长边为横向的行数（择优主键，见旋转轮注释）
     int vw_w, vw_h; // 本轮朝向的图尺寸
     double det_ms, rec_ms, conf_sum;
 } Pipes;
@@ -526,12 +714,17 @@ static void run_pipes(Sess *det, Sess *rec, const Img *work, char **dict,
     r->vw_h = work->h;
     double t0 = now_ms();
     if (rec_only) {
-        r->boxes[0].x0 = 0;
-        r->boxes[0].y0 = 0;
-        r->boxes[0].x1 = work->w - 1;
-        r->boxes[0].y1 = work->h - 1;
-        r->boxes[0].idx = 0;
-        r->boxes[0].line = 0;
+        Box *b0 = &r->boxes[0];
+        b0->x0 = 0;
+        b0->y0 = 0;
+        b0->x1 = work->w - 1;
+        b0->y1 = work->h - 1;
+        b0->idx = 0;
+        b0->line = 0;
+        b0->qx[0] = 0;                    b0->qy[0] = 0;
+        b0->qx[1] = (float)(work->w - 1); b0->qy[1] = 0;
+        b0->qx[2] = (float)(work->w - 1); b0->qy[2] = (float)(work->h - 1);
+        b0->qx[3] = 0;                    b0->qy[3] = (float)(work->h - 1);
         r->nbox = 1;
     } else {
         Img di = det_resize(work);
@@ -557,6 +750,14 @@ static void run_pipes(Sess *det, Sess *rec, const Img *work, char **dict,
         if (r->lines[i].text) {
             r->kept++;
             r->conf_sum += r->lines[i].conf;
+            // 长边方向（tr+br−tl−bl）：|ux|>=|uy| 判横排。quad 裁剪会把
+            // 竖排文字转正读出——旋转轮原本靠 rec 全灭当失败信号，几何
+            // 升级后没了；竖排胜出 = 页面被转了 90°，行序实为列序。
+            float dux = r->boxes[i].qx[1] + r->boxes[i].qx[2] -
+                        r->boxes[i].qx[0] - r->boxes[i].qx[3];
+            float duy = r->boxes[i].qy[1] + r->boxes[i].qy[2] -
+                        r->boxes[i].qy[0] - r->boxes[i].qy[3];
+            if (fabsf(dux) >= fabsf(duy)) r->hkept++;
         }
     }
 }
@@ -629,8 +830,9 @@ int main(int argc, char **argv) {
     sess_open(&rec, env, rec_p);
 
     // 朝向循环：auto 先 90（竖握是产品常态——传感器横装，竖页文字在图里
-    // 转 90°，M45 收据），kept>=2 行即收；否则 0/270/180 全试取最优。
-    // 指定角度只跑该角度。计时累计各轮。
+    // 转 90°，M45 收据），横排 kept>=2 行即收；否则 0/270/180 全试，择优
+    // 主键是横排行数（竖排 quad 也能转正读出，但行序是列序——只当并列
+    // 时的次级信号）。指定角度只跑该角度。计时累计各轮。
     static Pipes best, cur;
     int best_rot = rot >= 0 ? rot : 90, have = 0;
     double sum_det = 0, sum_rec = 0;
@@ -646,13 +848,15 @@ int main(int argc, char **argv) {
         if (vw.px != work.px) free(vw.px);
         sum_det += cur.det_ms;
         sum_rec += cur.rec_ms;
-        if (!have || cur.kept > best.kept ||
-            (cur.kept == best.kept && cur.conf_sum > best.conf_sum)) {
+        if (!have || cur.hkept > best.hkept ||
+            (cur.hkept == best.hkept && cur.kept > best.kept) ||
+            (cur.hkept == best.hkept && cur.kept == best.kept &&
+             cur.conf_sum > best.conf_sum)) {
             best = cur;
             best_rot = r;
             have = 1;
         }
-        if (rot >= 0 || cur.kept >= 2) break;
+        if (rot >= 0 || cur.hkept >= 2) break;
     }
 
     if (json) {
@@ -675,8 +879,8 @@ int main(int argc, char **argv) {
                 printf("%s\t%.4f\n", best.lines[i].text, best.lines[i].conf);
     }
     fprintf(stderr, "ag-ocr: rot %d, det %.0fms, rec %d box %.0fms, "
-                    "kept %d/%d, img %dx%d, dict %d\n",
+                    "kept %d/%d horiz %d, img %dx%d, dict %d\n",
             best_rot, sum_det, best.nbox, sum_rec, best.kept, best.nlines,
-            best.vw_w, best.vw_h, ndict);
+            best.hkept, best.vw_w, best.vw_h, ndict);
     return best.kept > 0 ? 0 : 1;
 }
