@@ -15,6 +15,9 @@ pub const FACE_DIR: &str = "/run/aginx-voice";
 pub const FACE_FILE: &str = "/run/aginx-voice/face";
 /// 眼取景当前帧（M42g）。voice 原子换名写，term 轮询 mtime 重渲染。
 pub const EYE_JPG: &str = "/run/aginx-voice/eye.jpg";
+/// AF 握手（cam-shot --af-state 落笔）：scan=扫描中 / focus=终码落 /
+/// fail=扫描中止 / none=未武装。voice 据此门控取景 OCR。
+pub const AF_STATE: &str = "/run/aginx-voice/af.state";
 
 // 开机剧情 v4：line = 打字文本（ASR transcript v4③ / 文本降级回复，term
 // 本地 ~90ms/char 打字机，换串即换行）。
