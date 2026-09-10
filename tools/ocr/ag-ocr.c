@@ -406,7 +406,100 @@ static Img crop_quad(const Img *src, const float *qx, const float *qy, int dw,
     return d;
 }
 
-// DB 后处理：二值→膨胀→连通域→过滤→unclip→映射回原图→排序。
+// ---- 栏序（S3，单沟 XY-cut 深度 1） ----
+// 双栏页（论文/摘要常态）：行分组只认 y，左右栏同 y 段交错成伪行。
+// 占位计数找沟：每 x 列数被几个 box 的 AABB 盖住，沟 = 内部「覆盖 ≤1」
+// （至多被通栏元素盖住）的最宽 run，且左右邻列覆盖 ≥2——页边距只有单
+// 侧内容，天然出局。纯区间合并法的死穴：居中窄标题把真沟和右栏焊成
+// 一块，最宽内沟退化成左栏~标题间的细缝；计数法下标题盖住的沟段覆盖
+// 仍为 1，真沟现形。门全过才切：沟宽 ≥ max(1.5×中位行高, 2%页宽) 且
+// 两侧各 ≥2 个 box。
+// 分类按 box（不按行组：左右行 y 对齐时同组，组级门必死）；输出序 =
+// 跨沟 box（标题，按 y）→ 左栏 → 右栏，各段内重跑 dy>=10 分行。
+// 无沟/门不过 = 原序不动。深度 1 已知降级：页中通栏块（图注/表格）被
+// 当标题提前；沟被 ≥2 个通栏元素盖住、或斜拍 AABB 挤占沟 → 不切（原
+// 序）。3 栏页降级一次二分。stdout 行序即读序。
+
+static int cmp_int(const void *a, const void *b) {
+    return *(const int *)a - *(const int *)b;
+}
+
+// 段内重分行（同 det_post 主律：y 稳定排 + dy>=10 分行 + 行内 x 排）
+static void regroup(Box *b, int n) {
+    qsort(b, (size_t)n, sizeof(Box), cmp_box_y);
+    float prev_y = -1e9f;
+    int line = 0;
+    for (int i = 0; i < n; i++) {
+        if (prev_y > -1e8f && (float)b[i].y0 - prev_y >= SORT_Y_LINE) line++;
+        b[i].line = line;
+        prev_y = (float)b[i].y0;
+    }
+    qsort(b, (size_t)n, sizeof(Box), cmp_box_line);
+}
+
+static void order_columns(Box *boxes, int n, int W) {
+    if (n < 4) return; // 两侧各 ≥2 box 是硬门，n<4 必不过
+    enum { MAXN = 1024 };
+
+    // 中位行高（box 高中位数）
+    int hs[MAXN];
+    for (int i = 0; i < n; i++) hs[i] = boxes[i].y1 - boxes[i].y0 + 1;
+    qsort(hs, (size_t)n, sizeof(int), cmp_int);
+    int medh = hs[n / 2];
+
+    // x 列占位计数（AABB 覆盖；x1 由 quad 钳位 ≤ W-1）
+    int *cov = (int *)calloc((size_t)W, sizeof(int));
+    if (!cov) die("out of memory");
+    for (int i = 0; i < n; i++)
+        for (int x = boxes[i].x0; x <= boxes[i].x1; x++) cov[x]++;
+
+    // 内部低覆盖 run（cov<=1；两端邻列 cov>=2 才算沟——页边距出局）
+    int best_gw = 0, g0 = 0, g1 = -1, x = 0;
+    while (x < W) {
+        if (cov[x] > 1) { x++; continue; }
+        int s = x;
+        while (x < W && cov[x] <= 1) x++;
+        if (s > 0 && x < W && cov[s - 1] >= 2 && cov[x] >= 2) {
+            int gw = x - s; // run [s, x)
+            if (gw > best_gw) { best_gw = gw; g0 = s; g1 = x - 1; }
+        }
+    }
+    free(cov);
+    if (best_gw <= 0) return;
+    if (best_gw < medh * 3 / 2 || best_gw < W / 50) return; // 沟宽门：max(1.5×行高, 2%页宽)
+
+    // 按 box 分类：全左 / 全右 / 跨沟
+    Box span[MAXN], left[MAXN], right[MAXN], out[MAXN];
+    int ns = 0, nl = 0, nr = 0;
+    for (int i = 0; i < n; i++) {
+        if (boxes[i].x1 < g0) left[nl++] = boxes[i];
+        else if (boxes[i].x0 > g1) right[nr++] = boxes[i];
+        else span[ns++] = boxes[i];
+    }
+    if (nl < 2 || nr < 2) return; // 两侧行门
+
+    // 段内各自行序，拼回：跨沟 → 左 → 右。line 以段基址平移重编
+    //（regroup 后各段 line 从 0 起），idx 按最终序重排。
+    regroup(span, ns);
+    regroup(left, nl);
+    regroup(right, nr);
+    Box *segs[3] = {span, left, right};
+    int cnts[3] = {ns, nl, nr};
+    int m = 0, base = 0;
+    for (int s = 0; s < 3; s++) {
+        int last = -1;
+        for (int i = 0; i < cnts[s]; i++) {
+            segs[s][i].line = base + segs[s][i].line;
+            last = segs[s][i].line;
+            out[m++] = segs[s][i];
+        }
+        base = last + 1;
+    }
+    for (int i = 0; i < m; i++) out[i].idx = i;
+    memcpy(boxes, out, (size_t)m * sizeof(Box));
+}
+
+// DB 后处理：二值→膨胀→连通域→过滤→unclip→映射回原图→排序+栏序。
 // 返回 box 数（写入 boxes[]，容量 cap）；pred 为 det 输出图（pw×ph）。
 static int det_post(const float *pred, int pw, int ph, int W, int H,
                     Box *boxes, int cap) {
@@ -549,6 +642,7 @@ static int det_post(const float *pred, int pw, int ph, int W, int H,
         prev_y = (float)boxes[i].y0;
     }
     qsort(boxes, (size_t)nbox, sizeof(Box), cmp_box_line);
+    order_columns(boxes, nbox, W);
 
     free(bin);
     free(dil);
