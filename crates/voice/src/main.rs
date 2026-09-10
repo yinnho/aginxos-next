@@ -178,7 +178,9 @@ fn eye_respawn(ev: &mut EyeView) -> Result<(), String> {
 // ---- #282 开机等网（网络是最后一步）--------------------------------------
 // bootcard 已改盯 phase-1 `done` 退场（光标不等网），等网的故事搬到这里：
 // 光标面上「正在联网…」打字行 → boot.state `internet ok` → 问候上脸。
-// 只显示、不出声、不自己连网（net-bringup phase 2 / net-watch 是写者）。
+// 问候 = status_text() 状态行（09-10 定稿，剧场话术退役）：开机第一句话
+// 就是机器的真实状态，与查询「状态」同一句话。
+// 只显示、不出声���不自己连网（net-bringup phase 2 / net-watch 是写者）。
 // 跑在主循环 200ms 节拍里（内部 5s 轮询门），无线程无阻塞。
 const BOOT_STATE: &str = "/run/boot.state";
 /// 轮询间隔：boot.state phase 2 每步落行，5s 粒度足够。
@@ -190,7 +192,6 @@ const BOOT_NET_UPTIME_GATE_SECS: f64 = 180.0;
 /// 未配对机不布防（无 wifi.conf）：它的路是配对面，不是等网。
 const WIFI_CONF: &str = "/etc/wifi.conf";
 const BOOT_NET_WAITING: &str = "正在联网…";
-const BOOT_NET_GREET: &str = "Operator. Go ahead.";
 
 struct BootNet {
     /// 我们放上的等待行（所有权判据：还等于它才是我们的台）。
@@ -228,7 +229,8 @@ fn boot_net_arm() -> BootNet {
         return idle();
     }
     if boot_state_has_internet() {
-        face::set_line(Some(BOOT_NET_GREET));
+        let greet = status_text();
+        face::set_line(Some(&greet));
         face::write(false);
         eprintln!("aginx-voice: boot net up before voice — greeted");
         return idle();
@@ -269,7 +271,8 @@ fn boot_net_tick(bn: &mut BootNet) {
             eprintln!("aginx-voice: boot net line taken — retire");
             return;
         }
-        face::set_line(Some(BOOT_NET_GREET));
+        let greet = status_text();
+        face::set_line(Some(&greet));
         face::write(false);
         bn.mine = None;
         eprintln!("aginx-voice: boot net up — greeted");
@@ -1164,13 +1167,17 @@ fn persist_wifi(ssid: &str, psk: &str) {
 /// 状态一句话：时间 + 电池 + 网络。
 fn status_text() -> String {
     let time = Command::new("date")
-        .arg("+%H点%M分")
+        .arg("+%H %M")
         .output()
         .ok()
         .and_then(|o| String::from_utf8(o.stdout).ok())
-        .map(|s| {
-            // 去前导零（"06点05分"→"6点5分"）——TTS 会把 0 也念出来
-            s.trim().trim_start_matches('0').replace("点0", "点")
+        .and_then(|s| {
+            // 按整数解析自然去前导零（TTS 会把 0 也念出来）。字符串修剪法
+            // 在 00 点会连吞两位（"00点45分"→"点45分"，09-10 立案次日修）。
+            let mut it = s.split_whitespace();
+            let h: u32 = it.next()?.parse().ok()?;
+            let m: u32 = it.next()?.parse().ok()?;
+            Some(format!("{h}点{m}分"))
         })
         .unwrap_or_default();
     let bat = std::fs::read_to_string(format!(
