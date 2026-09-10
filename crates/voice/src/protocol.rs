@@ -74,7 +74,7 @@ pub enum Act {
     EyeClose,
     /// 拍照解 QR（cam-shot 盲拍 + aginx-qr，M42b 眼分支）
     QrScan,
-    /// 拍照念字（cam-shot 盲拍 + ag-ocr，M45 眼分支）
+    /// 取景念字（取景帧 + ag-ocr——音量+才是镜头识别，盲拍 09-10 退役）
     Ocr,
     /// 状态查询（时间/电池/网络）——daemon 读系统后经 inject_say 上脸
     Status,
@@ -401,7 +401,7 @@ impl Vm {
             outs.push(Out::Act(Act::QrScan));
         } else if is_ocr(text) {
             // 念读也判在 is_wifi 前（「念一下」类词不含网络词，纯判序保守）
-            self.say(outs, "拍照念字，对准文字别动。");
+            self.say(outs, "取景念字，对准文字别动。");
             outs.push(Out::Act(Act::Ocr));
         } else if is_wifi(text) {
             self.say(outs, "看一下网络。");

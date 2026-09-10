@@ -42,13 +42,19 @@ const JOIN_BUDGET_SECS: u32 = 90;
 /// 母体一轮（真 brain，含工具往返）的等待预算——超了杀掉落地板话。
 const FRONT_BUDGET_SECS: u32 = 90;
 /// 眼取景总时长上限：超时闭眼（人对准之前机器不催，但也不能永远开着镜头）。
-const EYE_VIEW_SECS: u64 = 30;
+/// 45s（09-10 +15s）：AF 扫描（grace+settle+粗+细）吃掉前 ~13s，剩 ~30s
+/// 才是合焦取景——30s 时代用户「很快就断了」的体感就是扫描没完窗口先尽。
+const EYE_VIEW_SECS: u64 = 45;
 /// M47⑤ 取景子进程重生预算：rc≠0（含 rc=3 连续 fence 超时）/ 卡帧 / 崩溃
 /// 都杀掉重生，连败这么多次就闭眼报失败。
 const EYE_RETRIES: u8 = 3;
 /// 取景帧卡死判据：mtime 这么久不更新（首帧未落 = 子进程启动后这久还没
 /// 文件）就杀掉重生。
 const EYE_STUCK_SECS: u64 = 5;
+/// 取景帧 OCR 节拍：ag-ocr 一发没字帧只付 det ~0.9s / 整页 ~1.7s，比
+/// QR 重一个量级——3s 一拍把大核均摊压住，对准节奏也够快。窗口同
+/// EYE_VIEW_SECS。
+const OCR_EYE_SPACING_SECS: u64 = 3;
 
 /// M47⑤ 眼取景常驻：一个 --forever cam-shot 子进程 + mtime 轮询。子进程
 /// 自己原子发布 eye.jpg（tmp+rename），voice 不再逐帧起停相机——双会话
@@ -63,6 +69,8 @@ struct EyeView {
     /// 上次发起 aginx-qr 解码时刻——解码限频（一次 100-300ms，逐帧跑把
     /// loop 吃满还抢 cam-shot 编码 CPU；2Hz 对人对准足够）
     last_qr: Instant,
+    /// 上次发起 ag-ocr 识读时刻——节拍限频（None=本会话还没试过）
+    ocr_last: Option<Instant>,
     retries: u8,
 }
 
@@ -160,6 +168,7 @@ fn main() {
 /// 眼取景一轮的退出决定（M47⑤）：命中 or 闭眼（带给人一句话）。
 enum EyeExit {
     Hit(Vec<String>),
+    OcrHit(Vec<String>),
     GiveUp(&'static str),
 }
 
@@ -422,7 +431,7 @@ fn daemon() {
             if capturing.is_some() {
                 // 罕见赛跑：PTT 采集优先，帧轮询这轮让路（子进程继续跑）
             } else if ev.since.elapsed() >= Duration::from_secs(EYE_VIEW_SECS) {
-                eye_exit = Some(EyeExit::GiveUp("没拍到码，再按音量上重试。"));
+                eye_exit = Some(EyeExit::GiveUp("没拍到码或文字，再按音量上重试。"));
             } else {
                 // 子进程死掉（rc=3 连续 fence 超时 / 崩溃）→ 重生 ≤EYE_RETRIES
                 match ev.child.try_wait() {
@@ -454,6 +463,25 @@ fn daemon() {
                                     ev.last_qr = Instant::now();
                                     if let Some(payloads) = eye_decode_qr() {
                                         eye_exit = Some(EyeExit::Hit(payloads));
+                                    }
+                                }
+                                // OCR 同帧另一拍（09-10：音量+才是镜头识别
+                                // ——取景器开着就是机器在看，对准文字照样
+                                // 念）。节拍 3s：一发 ~0.9-1.7s，逐帧跑会
+                                // 吃满大核抢取景编码。文字到手同码到手。
+                                // AF 门控：扫描中（af.state=scan）歇拍——
+                                // 散焦帧读字是乱字假命中，一命中就闭眼，
+                                // 扫描被掐死（09-10 用户收据「很快就断了」）。
+                                if eye_exit.is_none()
+                                    && eye_af_ready()
+                                    && ev.ocr_last.map_or(true, |t| {
+                                        t.elapsed()
+                                            >= Duration::from_secs(OCR_EYE_SPACING_SECS)
+                                    })
+                                {
+                                    ev.ocr_last = Some(Instant::now());
+                                    if let Some(lines) = eye_read_text() {
+                                        eye_exit = Some(EyeExit::OcrHit(lines));
                                     }
                                 }
                             }
@@ -489,6 +517,11 @@ fn daemon() {
                     // 命中即自动走：配对码（超集，PairApply）/ WIFI: 码直连 /
                     // 文本码念前 40 字——拉式，码到手就用
                     let outs = vm.step(Ev::QrDone(Ok(payloads)));
+                    run_outs(&mut vm, outs, brain.as_ref(), &mut eye);
+                }
+                EyeExit::OcrHit(lines) => {
+                    // 文字到手取景的活就干完了（#246 同律）：闭眼、上屏、念。
+                    let outs = vm.step(Ev::OcrDone(Ok(lines)));
                     run_outs(&mut vm, outs, brain.as_ref(), &mut eye);
                 }
                 EyeExit::GiveUp(msg) => {
@@ -611,12 +644,26 @@ fn run_outs(
                     followups.push(Ev::QrDone(r));
                 }
                 Act::Ocr => {
-                    face::write(eye.is_some());
-                    let r = read_text();
-                    if let Err(e) = &r {
-                        eprintln!("aginx-voice: ocr {e}");
+                    // 09-10 盲拍退役：对准看不见是双栏收据失败根因（40-50cm
+                    // 外整页文字 10px 级，det 不可读）。念读也走取景器——
+                    // 眼开着就是机器在看：立即试一发不等 3s 节拍，没中交给
+                    // 轮询续命；眼没开就开眼（连网同款拉式）。扫描中不试
+                    // 立即一发（散焦帧=乱字假命中）——轮询等 focus 自己续。
+                    if let Some(ev) = eye.as_mut() {
+                        let _ = vm.inject_say("取景开着，对准文字就行。");
+                        if eye_af_ready() {
+                            ev.ocr_last = Some(Instant::now());
+                            if let Some(lines) = eye_read_text() {
+                                if let Some(mut ev) = eye.take() {
+                                    eye_stop(&mut ev.child);
+                                }
+                                face::write(false);
+                                followups.push(Ev::OcrDone(Ok(lines)));
+                            }
+                        }
+                    } else {
+                        eye_start(vm, eye);
                     }
-                    followups.push(Ev::OcrDone(r));
                 }
                 Act::Status => {
                     // V5（09-10）：状态与其他 Say 同律——只上脸+日志，不出声；
@@ -689,9 +736,12 @@ fn run_outs(
 /// 撞 sensor 必翻车，相机就这一个持有者。
 fn eye_start(vm: &mut Vm, eye: &mut Option<EyeView>) {
     if eye.is_some() {
-        let _ = vm.inject_say("取景开着，对准码。");
+        let _ = vm.inject_say("取景开着，对准码或文字。");
         return;
     }
+    // 上一会话的 AF 状态是残影（focus 撑着 OCR 闸）——新会话从 cam-shot
+    // 落笔重读。子进程起播前必写（scan/none），帧到了闸必已就位。
+    let _ = std::fs::remove_file(face::AF_STATE);
     match eye_spawn() {
         Ok(child) => {
             *eye = Some(EyeView {
@@ -700,9 +750,10 @@ fn eye_start(vm: &mut Vm, eye: &mut Option<EyeView>) {
                 mtime: None,
                 mtime_seen: Instant::now(),
                 last_qr: Instant::now(),
+                ocr_last: None,
                 retries: 0,
             });
-            let _ = vm.inject_say("取景中，对准码。");
+            let _ = vm.inject_say("取景中，对准码或文字。");
         }
         Err(e) => {
             eprintln!("aginx-voice: eye spawn {e}");
@@ -977,6 +1028,8 @@ fn eye_spawn() -> Result<std::process::Child, String> {
         .arg(&aspect)
         .arg("--jpeg-out")
         .arg(face::EYE_JPG)
+        .arg("--af-state")
+        .arg(face::AF_STATE)
         .arg("--raw-out")
         .arg("/run/aginx-voice/eye.raw");
     // ⑤u: 一个日志文件，开眼截断（tmpfs 限一次会话）；stderr 挂 stdout 的
@@ -1029,82 +1082,57 @@ fn eye_decode_qr() -> Option<Vec<String>> {
     (!payloads.is_empty()).then_some(payloads)
 }
 
-/// 拍照念字（M45 眼分支）。同 QR 的冷启动废片收据：默认曝光两轮，末轮
-/// gain 提亮（暗房实测定形：默认曝光 det 颗粒无收，gain16+dgain2 出 4 框）。
-/// ag-ocr 自带 auto 旋转——竖握手机拍横排文字是产品常态（传感器横向安装）。
-/// 识别 ~3-6s（auto 两轮 det + rec），预算在拍照和识别两侧都给足。
-const OCR_BUDGET_SECS: u32 = 20;
+/// AF 握手（cam-shot --af-state 落笔）：focus=终码已落 / fail=扫描中止 /
+/// none=未武装 AF——三种都可读；scan 或文件缺位 = 镜头在扫（或子进程
+/// 还没落笔），OCR 歇拍等焦。QR 不门控：配对收据全在 grace 窗的静息
+/// 焦上，开眼即解是老节奏。
+fn eye_af_ready() -> bool {
+    std::fs::read_to_string(face::AF_STATE)
+        .map(|s| {
+            let t = s.trim_start();
+            t.starts_with("focus") || t.starts_with("fail") || t.starts_with("none")
+        })
+        .unwrap_or(false)
+}
 
-fn read_text() -> Result<Vec<String>, String> {
+/// 取景帧念字（ag-ocr 独立进程读 eye.jpg）。取景帧是 cam-shot 转正过的
+/// 竖图（sensor 裁切 + rot90 出片），文字正立——`--rot 0` 钉死，auto 的
+/// 90 首试在这白付一发 det。预算 8s：没字帧 det ~0.9s / 整页 ~1.7s，挂死
+/// 才轮到 kill。None = 没字/引擎不在——取景继续等下一拍。
+const OCR_EYE_BUDGET_SECS: u32 = 8;
+
+fn eye_read_text() -> Option<Vec<String>> {
     use std::io::Read;
-    let mut last_err = String::new();
-    for round in 1..=3u32 {
-        let jpg = format!("/tmp/aginx-voice-ocr{round}.jpg");
-        let mut cmd = Command::new("/usr/bin/aginx-cam-shot");
-        cmd.args(["--stream", "--rear", "--frames", "3", "--jpeg"])
-            .arg("--jpeg-out")
-            .arg(&jpg)
-            .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::null());
-        if round == 3 {
-            // 末位兜底：满增益提亮（[camera] dark_*——M45 暗房收据，
-            // det 0 框→4 框的档位）
-            let cam = &hwd::load_or_exit().camera;
-            cmd.args([
-                "--gain",
-                &cam.dark_gain.to_string(),
-                "--dgain",
-                &cam.dark_dgain.to_string(),
-            ]);
+    let mut child = Command::new("/var/bin/aginx-ocr")
+        .args(["--rot", "0"])
+        .arg(face::EYE_JPG)
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .ok()?;
+    let mut buf = String::new();
+    if let Some(mut so) = child.stdout.take() {
+        let _ = so.read_to_string(&mut buf); // 输出 <64KB 管道缓冲，不会死锁
+    }
+    if audio::wait_limited(&mut child, OCR_EYE_BUDGET_SECS).is_err() {
+        eprintln!("aginx-voice: ocr hung, killed");
+        return None;
+    }
+    match child.wait().map(|st| st.code()).unwrap_or(None) {
+        Some(0) => {
+            let lines: Vec<String> = buf
+                .lines()
+                .map(|l| l.split('\t').next().unwrap_or("").to_string())
+                .filter(|l| !l.is_empty())
+                .collect();
+            (!lines.is_empty()).then_some(lines)
         }
-        let mut child = cmd
-            .spawn()
-            .map_err(|e| format!("cam-shot spawn: {e}"))?;
-        if let Err(e) = audio::wait_limited(&mut child, OCR_BUDGET_SECS) {
-            last_err = format!("cam-shot {e}");
-            continue; // 挂死被 kill——按失败重试
-        }
-        if !child.wait().map(|s| s.success()).unwrap_or(false) {
-            last_err = "cam-shot rc!=0".into();
-            continue;
-        }
-        // ag-ocr：stdout 每行 "text\tconf"，exit 0=有字 / 1=没字 / 2=错误。
-        // 识别要秒级（aginx-qr 的 <300ms 先例不适用），piped + wait_limited 给预算。
-        let mut child = match Command::new("/var/bin/aginx-ocr")
-            .arg(&jpg)
-            .stdout(std::process::Stdio::piped())
-            .stderr(std::process::Stdio::null())
-            .spawn()
-        {
-            Ok(c) => c,
-            Err(e) => return Err(format!("ag-ocr spawn: {e}")), // 装机缺失不重试
-        };
-        let mut buf = String::new();
-        if let Some(mut so) = child.stdout.take() {
-            let _ = so.read_to_string(&mut buf); // 输出 <64KB 管道缓冲，不会死锁
-        }
-        if let Err(e) = audio::wait_limited(&mut child, OCR_BUDGET_SECS) {
-            last_err = format!("ag-ocr {e}");
-            continue;
-        }
-        match child.wait().map(|s| s.code()).unwrap_or(None) {
-            Some(0) => {
-                let lines: Vec<String> = buf
-                    .lines()
-                    .map(|l| l.split('\t').next().unwrap_or("").to_string())
-                    .filter(|l| !l.is_empty())
-                    .collect();
-                if !lines.is_empty() {
-                    eprintln!("aginx-voice: ocr round {round}, {} 行", lines.len());
-                    return Ok(lines);
-                }
-                last_err = "没识别到文字".into();
-            }
-            Some(1) => last_err = "没识别到文字".into(),
-            _ => last_err = "ag-ocr rc=2".into(),
+        Some(1) => None, // 没字：取景继续
+        _ => {
+            eprintln!("aginx-voice: ag-ocr rc=2");
+            None
         }
     }
-    Err(last_err)
 }
 
 /// wifi-join wlan0 ssid psk，然后读 wlan0 的 IPv4。
