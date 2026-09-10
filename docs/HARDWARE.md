@@ -2379,3 +2379,57 @@ md5 链三验）后 23/23 复绿。**铁律：hwd schema 变更 = 重推全部�
 **套件终态**：m42c 23 passed 0 failed（含真重启 C 段）。设备终态：
 在役 slot + dev-push 领先（voice/term/qr/update/device.toml 五件），
 下次 bake 折叠。
+
+## 2026-09-10 — aginx-ocr v0.2.0：三缺口补齐（旋序 90 优先 + 斜拍 quad 几何 + 栏序）+ voice 段落合并
+
+**动机与范围**：对照 Umi-OCR（引擎同源 RapidOCR 系）——差距在外围三
+件：斜拍框几何（连通域 AABB + 轴对齐裁剪，ag-ocr.c 自立的债）、栏序
+（双栏页左右交错读）、旋序（auto 先试 0，竖页多付一次 det）；另有 voice
+念读的段落合并（`lines.join("。")` 在排版换行处硬插句号——「把客厅的
+摄像。头调出来」）。文档级天花板（DeepSeek-OCR-2 服务化）不在本轮。
+tools/ocr 自封存老仓整体迁入（7c2c967；老仓收尾删净 9d88cfe），后续四
+笔：9f85641 / e00ee58 / 314f3f1 / b818a86。
+
+**S2 斜拍框几何（e00ee58）**：det 后处理对齐上游 DBPostProcess——连通
+域只收边界点 → Andrew 凸包 → minAreaRect（枚举 hull 边方向，O(h²)）→
+unclip 于矩形（同中心同角度 (w+2d,h+2d) 外扩 ≡ pyclipper JT_ROUND，等
+价裁决）→ 四角映射回工作图 → rec 透视裁剪（Heckbert 方→quad 有理映
+射 + 钳位双线性；平行四边形自然退化仿射）。host 收据：`sips --rotate
+4°/8°` 斜拍 fixture 文本全中，conf 与直拍同值到小数点后 4 位、行序不
+变；直拍四 fixture（page-synthetic / cam-screen-dark / line-zh /
+plain-gray）stdout 逐字节回归不变。
+
+**S3 栏序（314f3f1）**：单沟 XY-cut 深度 1。x 列占位计数找沟——每列被
+几个 box 的 AABB 盖住，沟 = 覆盖 ≤1 的最宽内部 run（至多被通栏标题盖
+住）且两侧邻列覆盖 ≥2（页边距天然出局）；纯区间合并法的死穴是居中窄
+标题把真沟和右栏焊成一块，计数法下真沟现形。门：沟宽 ≥ max(1.5×中位
+行高, 2%页宽) 且两侧各 ≥2 box。host 收据：page-twocol（PIL 合成，通栏
+标题 + 左「甲」右「乙」各三行）7/7 全中，读序 = 标题→甲一二三→乙一
+二三；单栏 fixture 序不变（无沟即原序）。已知降级：页中通栏块被当标
+题提前、沟被 ≥2 通栏元素盖住不切、3 栏页降一次二分。
+
+**S1 旋序（9f85641）**：order[4] {0,90,270,180}→{90,0,270,180}。竖页
+（产品常态）首试即中一次 det；横页最坏多一轮空转（page-synthetic 90
+空转后 0 命中，输出不变）。
+
+**S4 join_reading（b818a86）**：voice 念读合并重写——排版断行接回不
+插句号（两侧皆 ASCII 字母数字才补单空格，CJK 无缝）；行尾终止符/上行
+尾 ：/行首列表符/空行 = 段界；裸尾段之间补一个句号（真段界全停顿）。
+长文头档 join_reading(lines[..2]) 同律。voice 54 测试绿。
+
+**S5 上机收据**：aginx-ocr v0.2.0 dev 通道装（adb push + aginx-pkg
+install）。md5 三验 b2329362d35c75ab0203eb889d7e4890（host 构建 =
+.local 冻结 = 设备 pkgfiles = /var/bin/aginx-ocr symlink 真身）。m45
+15/15 全绿，新增 2b 斜拍 4°（中英双行）与 2c 双栏栏序断言
+（expect_order 首现行号严格递增）。**装机本体直跑**：/var/bin/aginx-ocr
+（缺省 /var/models/ocr）打 page-twocol——7/7 全中 conf≥0.999，读序
+标题→甲一二三→乙一二三，det 908ms + rec 7box 781ms。
+
+**套件事故（迁移教训）**：m45 设备首跑 8 pass / 7 fail——输出本身全
+对，全败在 expect_out 参数序：S0 迁入时写反成 (text, desc)，断言 grep
+的是描述标签而非输出文本（新仓约定 (desc, pattern)，m42c 为准）。修正
+后 15/15。**迁套件先核对 helper 参数约定，再信红绿。**
+
+**待收**：真人念读斜拍收据——斜拍一页中文连续文本，音量下念读（句中
+不停顿）；双栏页先左后右。设备终态：在役 slot + aginx-ocr v0.2.0
+dev-push 领先（voice S4 改动同步在列），下次 bake 折叠。
