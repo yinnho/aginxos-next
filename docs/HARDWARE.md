@@ -2348,3 +2348,34 @@ diff 复核只删了 BLINK 静态量+SET_MASTER 死码，flip/relatch 机器未�
 
 **待收**：用户眼验——面板显示当前时刻行（本日已两次推时间戳状态
 行上脸）= 渲染链实证收口；若仍停留 go ahead 则立案再挖。
+
+## 2026-09-10 — #303 收官：状态行即问候 + 显示时区修复 + hwd 一代差事故
+
+**状态行即问候（0a526ad）**：`Operator. Go ahead.` 全线退役——voice
+#282 等网问候与 BOOT_NET_GREET 常量删除，开机第一句话 = `status_text()`
+（「N点M分，电池X%，网已连。」），与查询「状态」同一函数同一句话；term
+selfnet_greet 同形（09-10 前日立案的小时位缺失随构造关闭——改整数
+解析，午夜 "00点45分" 双吞前导零不再可能）。收据：fresh boot 日志
+`boot net up — greeted` + face line；`--inject 状态` 同句。
+
+**显示时区（925b25c）**：用户报「时间不对，相差8个小时」——钟面是
+ntpd 校的 UTC（真源不动），显示层无任何 TZ。活体三探定谳：
+`TZ=CST-8`（POSIX 串）✓ 出 09:12 CST；`TZ=Asia/Shanghai` ✗（无
+tzdata）；/etc/localtime 真 TZif ✗（bionic 不读，探针残留已清）。
+唯一合法通道 = POSIX TZ env。修法走 D14：device.toml 顶层
+`tz = "CST-8"` + hwd `tz` 字段（schema-truth 测试同锁）+ 两个 date
+spawn `.env("TZ", &p.tz)`。收据：状态 inject 「9点17分」@device UTC
+01:17；fresh boot 问候 「9点18分，电池100%，网已连。」@UTC 01:19。
+
+**hwd 一代差事故（本日主教训）**：tz 上机只推了 voice/term/toml——
+设备上其余 hwd 消费者（aginx-qr、aginx-update）是旧代二进制，
+`deny_unknown_fields` 撞上新 toml 的 `tz` 键即硬退（`hwd: bad device
+profile`，rc=1）。m42c A 段两红逮住（QR 铸解 round-trip 断）；重建
+二进制同 fs staging 换装（qr `2e672e33…`、update `7281c261…`，
+md5 链三验）后 23/23 复绿。**铁律：hwd schema 变更 = 重推全部四个
+消费者（voice/term/qr/update），只推特性相关二进制必留暗雷；OnceLock
+只保住在跑进程，救不了重启后的旧代消费者。**
+
+**套件终态**：m42c 23 passed 0 failed（含真重启 C 段）。设备终态：
+在役 slot + dev-push 领先（voice/term/qr/update/device.toml 五件），
+下次 bake 折叠。
