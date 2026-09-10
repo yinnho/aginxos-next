@@ -353,12 +353,15 @@ impl Vm {
                         }
                         self.trim_lines();
                         // 念一下本身就是要听（拉式语音的点名面）：Speak 只
-                        // 出声不再推行。
-                        let joined = lines.join("。");
+                        // 出声不再推行。段落合并走 join_reading——排版断行
+                        // 不插句号（旧 join("。") 的韵律错）。
+                        let joined = join_reading(&lines);
                         if joined.chars().count() > 120 {
-                            let head =
-                                lines.iter().take(2).cloned().collect::<Vec<_>>().join("。");
-                            outs.push(Out::Speak(format!("{head}。全文在屏幕上。")));
+                            let mut head = join_reading(&lines[..2]);
+                            if !ends_with_stop(&head) {
+                                head.push('。');
+                            }
+                            outs.push(Out::Speak(format!("{head}全文在屏幕上。")));
                         } else {
                             outs.push(Out::Speak(joined));
                         }
@@ -611,6 +614,82 @@ fn is_reboot(t: &str) -> bool {
     contains_any(t, &["重启", "重新启动", "重启手机"])
 }
 
+/// 行尾终止符：句/问/叹/分/省略——段落自然边界，保留原文不加工。
+fn ends_with_stop(s: &str) -> bool {
+    s.chars()
+        .next_back()
+        .map_or(false, |c| "。！？；…!?;".contains(c))
+}
+
+/// 行首列表符：•·-— 项目符，或 1. / 2) / 3） / (4) 编号起。裸数字
+/// （电话号 138…）不算——后面必须紧跟 . ) ） 收头。
+fn starts_list_item(s: &str) -> bool {
+    let t = s.trim_start();
+    let digits: String = t.chars().take_while(|c| c.is_ascii_digit()).collect();
+    if !digits.is_empty() {
+        let after = &t[digits.len()..];
+        return after.starts_with('.') || after.starts_with(')') || after.starts_with('、');
+    }
+    if let Some(rest) = t.strip_prefix('(') {
+        let d: String = rest.chars().take_while(|c| c.is_ascii_digit()).collect();
+        return !d.is_empty() && rest[d.len()..].starts_with(')');
+    }
+    t.starts_with('•') || t.starts_with('·') || t.starts_with('-') || t.starts_with('—')
+}
+
+/// S4 念读段落合并：OCR 行序列 → 可念的连续文本。旧的 `lines.join("。")`
+/// 在排版换行处硬插句号，TTS 韵律错（「把客厅的摄像。头调出来」）。
+/// 规则：
+/// - 行尾已是终止符（`。！？；…!?;`）或上行尾 `：` 或本行首是列表符或
+///   空行 → 段界，开新段；段内合并不插句号
+/// - 合并分隔：两侧皆 ASCII 字母数字 → 单空格（Latin 词界），任一侧
+///   CJK → 无空格（排版断行原样接回）
+/// - 段与段之间：前段自带标点（含 ：、，）直接拼；完全裸尾补一个句号
+///   （真段落边界，全停顿是对的——被修的是排版断行处的假句号）
+///   空行 = 硬段界。
+fn join_reading(lines: &[String]) -> String {
+    let mut segs: Vec<String> = Vec::new();
+    let mut hard_break = false; // 见过空行：下一非空行必开新段
+    for raw in lines {
+        let l = raw.trim();
+        if l.is_empty() {
+            hard_break = true;
+            continue;
+        }
+        let boundary = hard_break
+            || match segs.last() {
+                None => true,
+                Some(prev) => {
+                    ends_with_stop(prev) || prev.ends_with('：') || starts_list_item(l)
+                }
+            };
+        hard_break = false;
+        match segs.last_mut() {
+            Some(prev) if !boundary => {
+                let sep = if prev.chars().next_back().map_or(false, |c| c.is_ascii_alphanumeric())
+                    && l.chars().next().map_or(false, |c| c.is_ascii_alphanumeric())
+                {
+                    " "
+                } else {
+                    ""
+                };
+                prev.push_str(sep);
+                prev.push_str(l);
+            }
+            _ => segs.push(l.to_string()),
+        }
+    }
+    let mut out = String::new();
+    for s in &segs {
+        // 补号看前段尾（out）：已带标点直接拼，裸尾补一个句号
+        if !out.is_empty() && !out.ends_with(|c: char| "。！？；…!?;：，、,".contains(c)) {
+            out.push('。'); // 裸尾段：补一个句号（真段界）
+        }
+        out.push_str(s);
+    }
+    out
+}
+
 // ---------------- tests ----------------
 
 #[cfg(test)]
@@ -860,24 +939,62 @@ mod tests {
             "机器视觉测试".into(),
             "TEL 138-0013-8000".into(),
         ])));
-        // 短文：行拼成一句整念（daemon split_clauses 分句）——拉式语音下
-        // 念一下仍是点名面：Speak
-        assert_eq!(speaks(&o), vec!["机器视觉测试。TEL 138-0013-8000"]);
+        // 短文：段落合并成整篇念（daemon split_clauses 分句）——拉式语音
+        // 下念一下仍是点名面：Speak。行间不插句号（join_reading；旧
+        // join("。") 的句号就是被修的错）
+        assert_eq!(speaks(&o), vec!["机器视觉测试TEL 138-0013-8000"]);
         // 全文上屏：每行一条对话行（Speak 不再重复推行）
         let shown: Vec<&str> = vm.lines().iter().map(|(_, s)| s.as_str()).collect();
         assert!(shown.contains(&"机器视觉测试"));
         assert!(shown.contains(&"TEL 138-0013-8000"));
         assert_eq!(vm.lines().len(), 2);
 
-        // 长文（>120 字）：只念前两行 + 指屏
+        // 长文（>120 字）：只念前两行（合并后补终止符）+ 指屏
         let mut vm = Vm::new();
         let lines: Vec<String> = (0..5).map(|i| format!("第{i}行{}", "字".repeat(30))).collect();
         let o = vm.step(Ev::OcrDone(Ok(lines.clone())));
         assert_eq!(
             speaks(&o),
-            vec![format!("{}。{}。全文在屏幕上。", lines[0], lines[1])]
+            vec![format!("{}{}。全文在屏幕上。", lines[0], lines[1])]
         );
         assert_eq!(vm.lines().len(), 5);
+    }
+
+    // ---------------- S4 join_reading：段落合并 ----------------
+
+    fn jr(lines: &[&str]) -> String {
+        join_reading(&lines.iter().map(|s| s.to_string()).collect::<Vec<_>>())
+    }
+
+    #[test]
+    fn join_reading_layout_break_glues_without_stop() {
+        // 排版断行：接回不插句号（原 bug：「把客厅的摄像。头调出来」）
+        assert_eq!(jr(&["把客厅的摄像", "头调出来"]), "把客厅的摄像头调出来");
+        // Latin 词界：两侧皆 ASCII 字母数字 → 单空格
+        assert_eq!(jr(&["Second line", "OCR test"]), "Second line OCR test");
+        // CJK↔Latin 混排断行：无空格
+        assert_eq!(jr(&["型号是", "A123 型"]), "型号是A123 型");
+    }
+
+    #[test]
+    fn join_reading_keeps_existing_stops() {
+        // 行尾终止符 = 段界，保留原文；段内续行接回
+        assert_eq!(jr(&["第一句。", "第二句"]), "第一句。第二句");
+        assert_eq!(jr(&["几岁了？", "三岁", "你呢"]), "几岁了？三岁你呢");
+        // 空行 = 硬段界：裸尾段之间补一个句号（真段界的全停顿是对的）
+        assert_eq!(jr(&["第一段", "", "第二段"]), "第一段。第二段");
+    }
+
+    #[test]
+    fn join_reading_list_and_colon_start_new_segment() {
+        // 上行尾 ：→ 开新段；列表符/编号起 → 开新段
+        assert_eq!(
+            jr(&["三件事：", "1. 买菜", "2. 打电话"]),
+            "三件事：1. 买菜。2. 打电话"
+        );
+        assert_eq!(jr(&["• 甲项", "• 乙项"]), "• 甲项。• 乙项");
+        // 裸数字不是列表（电话号行）
+        assert_eq!(jr(&["电话", "13800138000"]), "电话13800138000");
     }
 
     #[test]
