@@ -1428,13 +1428,14 @@ fn read_warnings_dir(dir: &str) -> Vec<String> {
 
 /// 裸蛋上 voice 不存在，没人画「正在联网…」。term 自己持有同一套 #282
 /// 语义（常量照搬 voice）：开机窗内已配对未通网 → 等待行；internet ok →
-/// 问候行；300s 窗尽 → 停止轮询（等待行不撤——红警面接着讲无网的故事）；
-/// voice 复活 → 整行让位（它的 BootNet 会写自己的等待行，两侧不叠）。
+/// 问候行（=状态一句话，selfnet_greet——与 voice status_text 同形状，09-10
+/// 定稿剧场话术退役）；300s 窗尽 → 停止轮询（等待行不撤——红警面接着讲
+/// 无网的故事）；voice 复活 → 整行让位（它的 BootNet 会写自己的等待行，
+/// 两侧不叠）。
 const SELFNET_UPTIME_GATE_SECS: f64 = 180.0;
 const SELFNET_WATCH: Duration = Duration::from_secs(300);
 const SELFNET_POLL: Duration = Duration::from_secs(5);
 const SELFNET_WAITING: &str = "正在联网…";
-const SELFNET_GREET: &str = "Operator. Go ahead.";
 const WIFI_CONF_PATH: &str = "/etc/wifi.conf";
 const BOOT_STATE_PATH: &str = "/run/boot.state";
 
@@ -1465,7 +1466,7 @@ fn uptime_secs() -> f64 {
 struct SelfNet {
     /// 我们持有的行：Some(等待/问候) = 这张脸是 term 的；None = 让位/无台
     /// （voice 接管）。窗尽只停轮询，行不撤——镜像 voice 的文件残留语义。
-    line: Option<&'static str>,
+    line: Option<String>,
     watching: bool,
     armed_at: Instant,
     last_poll: Instant,
@@ -1477,7 +1478,7 @@ impl SelfNet {
     }
 
     fn arm() -> SelfNet {
-        SelfNet { line: Some(SELFNET_WAITING), watching: true, ..SelfNet::idle() }
+        SelfNet { line: Some(SELFNET_WAITING.to_string()), watching: true, ..SelfNet::idle() }
     }
 
     /// 主循环每拍。voice 复活即让位（任何态）；Watching 每 5s 读一次
@@ -1506,7 +1507,7 @@ impl SelfNet {
         }
         self.last_poll = Instant::now();
         if boot_state_has_internet() {
-            self.line = Some(SELFNET_GREET);
+            self.line = Some(selfnet_greet());
             self.watching = false;
             eprintln!("aginx-term: selfnet up — greeted");
             true
@@ -1514,6 +1515,34 @@ impl SelfNet {
             false
         }
     }
+}
+
+/// 问候 = 状态一句话（voice status_text 同形状；问候时 internet 刚 ok，
+/// 网恒已连）。蛋上 voice 不在，term 自己报告真状态——开机第一句话就是
+/// 机器的真实状态。
+fn selfnet_greet() -> String {
+    let time = std::process::Command::new("date")
+        .arg("+%H %M")
+        .output()
+        .ok()
+        .and_then(|o| String::from_utf8(o.stdout).ok())
+        .and_then(|s| {
+            // 按整数解析自然去前导零——字符串修剪法在 00 点会连吞两位
+            // （"00点45分"→"点45分"，09-10 立案次日修，与 voice 同法）。
+            let mut it = s.split_whitespace();
+            let h: u32 = it.next()?.parse().ok()?;
+            let m: u32 = it.next()?.parse().ok()?;
+            Some(format!("{h}点{m}分"))
+        })
+        .unwrap_or_default();
+    let bat = std::fs::read_to_string(format!(
+        "{}/capacity",
+        hwd::load_or_exit().paths.power_supply
+    ))
+    .ok()
+    .and_then(|s| s.trim().parse::<u8>().ok())
+    .unwrap_or(0);
+    format!("{time}，电池{bat}%，网已连。")
 }
 
 // ---------------- C6: 自持扫码配网（voice 眼的蛋面镜像） ----------------
@@ -1707,13 +1736,13 @@ fn spawn_pair_apply(payload: &str) -> Option<PairJob> {
 }
 
 /// idle 面状态行的所有权（纯函数）：voice 在 → 它的面（term 状态行让位，
-/// 同 selfnet 让位律）；否则 配网行（String）> 装软件行 > selfnet 静态行
+/// 同 selfnet 让位律）；否则 配网行（String）> 装软件行 > selfnet 行
 /// > None。装软件行压过 selfnet：配网刚成的靴上 sync 是当下的事。
 fn idle_status(
     voice_alive: bool,
     pair_line: &Option<String>,
     install_line: &Option<String>,
-    selfnet_line: Option<&'static str>,
+    selfnet_line: Option<&str>,
 ) -> Option<String> {
     if voice_alive {
         return None;
@@ -2343,7 +2372,7 @@ fn main() {
                 &voice,
                 16,
                 &warns,
-                idle_status(voice.alive, &pair_line, &install_line, selfnet.line).as_deref(),
+                idle_status(voice.alive, &pair_line, &install_line, selfnet.line.as_deref()).as_deref(),
             ),
             Mode::Eye => r.eye(buf, &voice, &lg),
             Mode::Install(v) => {
@@ -3338,7 +3367,7 @@ fn main() {
                             &voice,
                             level,
                             &warns,
-                            idle_status(voice.alive, &pair_line, &install_line, selfnet.line)
+                            idle_status(voice.alive, &pair_line, &install_line, selfnet.line.as_deref())
                                 .as_deref(),
                         );
                     }
@@ -3771,11 +3800,11 @@ mod tests {
         }
         // 行内容两态：等待行静态满显（状态不是台词，无打字机）
         let sn = SelfNet::arm();
-        assert_eq!(sn.line, Some(SELFNET_WAITING));
+        assert_eq!(sn.line.as_deref(), Some(SELFNET_WAITING));
         // 刚布防 5s 轮询门未到 + voice 不在 → 行不变
         let mut sn = SelfNet::arm();
         assert!(!sn.tick(false));
-        assert_eq!(sn.line, Some(SELFNET_WAITING));
+        assert_eq!(sn.line.as_deref(), Some(SELFNET_WAITING));
         assert_eq!(SelfNet::idle().line, None);
     }
 
