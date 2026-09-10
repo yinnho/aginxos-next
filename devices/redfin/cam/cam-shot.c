@@ -3748,24 +3748,47 @@ static int g_ois_fd = -1;      /* teardown closes it (state + cam_vaf ref) */
  * MEAS frames average into the step's sharpness (center-crop gradient on
  * the RAW8 frame). Coarse 16 steps x 68 codes, then a 9-point fine pass
  * at +-32 around the peak, best code written back before the tail frames.
- * Fixed exposure only (--aec's ladder would walk brightness under the
- * sharpness metric). */
+ * With --aec the sweep first waits for the ladder to settle (phase 3,
+ * --af-grace adds a grace window) and freezes it while measuring — the
+ * contrast metric would otherwise read an exposure walk as a focus move. */
 #define AF_SCAN_SKIP 2
 #define AF_SCAN_MEAS 2
 #define AF_SCAN_NCOARSE 16
 #define AF_SCAN_NFINE 9
+/* phase 3 stability gate: rung unchanged this many frames. A ladder step
+ * lands `window` frames after its write, so > window catches in-flight
+ * steps; 8 frames (~0.5 s at viewfinder pace) also rides out the trim
+ * dither around the target. */
+#define AF_AEC_STABLE 8
 struct af_scan_st {
-    int phase;      /* 1=coarse 2=fine 0=done/idle */
+    int phase;      /* 3=aec-wait 1=coarse 2=fine 0=done/idle */
     int step;       /* index within the phase */
-    int fr;         /* frames since this step's write */
+    int fr;         /* frames since this step's write (phase 3: since start) */
     double acc;     /* accumulated sharpness of measured frames */
     int nacc;
     double best;    /* best step mean seen */
     int best_code;  /* its 0xF01A code */
     double base;    /* coarse step-0 mean (drift sanity line) */
+    int last_rung;  /* aec rung one frame back (phase 3 stability watch) */
+    int stable;     /* consecutive frames holding that rung */
 };
 static int g_af_scan;
+static int g_af_hold;         /* --af-grace: grace frames before the sweep */
 static struct af_scan_st g_afs;
+/* --af-state <path>: scan lifecycle out one file (best-effort; voice gates
+ * viewfinder OCR on it — OCR on a defocused frame is a garbage-text false
+ * hit that closes the eye mid-sweep). scan = sweep running; focus = final
+ * code landed; fail = sweep aborted (caller falls back to ungated reads);
+ * written "none" at startup when --af-state is given without --af-scan. */
+static const char *g_af_state;
+static void af_state_write(const char *s)
+{
+    if (!g_af_state) return;
+    FILE *f = fopen(g_af_state, "w");
+    if (!f) return;
+    fputs(s, f);
+    fclose(f);
+}
 static uint32_t g_af_act_session, g_af_act_hdl;  /* run_af_probe publishes */
 static int af_scan_move(uint32_t session, uint32_t act_hdl, int video_fd,
                         uint16_t code);
@@ -4868,12 +4891,33 @@ static int run_stream(int slot, const char *out_path, int wait_ms,
             fps_t0 = mono();
         }
 
-        /* #227 --af-scan: frame-paced contrast AF. fr counts frames since
-         * the step's write; SKIP are settle, MEAS accumulate the step's
+        /* #227 --af-scan: frame-paced contrast AF. Phase 3 first (only
+         * with --aec): hold at the INIT code while the ladder settles —
+         * start when the rung has held AF_AEC_STABLE frames AND the
+         * --af-grace grace window is past; step 0 IS the INIT code, so the
+         * sweep just starts measuring. Then: fr counts frames since the
+         * step's write; SKIP are settle, MEAS accumulate the step's
          * sharpness. On the last measured frame the verdict prints and the
          * NEXT code goes out — it takes effect under the following SKIP
          * frames, so every MEAS window sees a settled lens. */
-        if (g_af_scan && g_afs.phase) {
+        if (g_af_scan && g_afs.phase == 3) {
+            if (aec.rung != g_afs.last_rung) {
+                g_afs.last_rung = aec.rung;
+                g_afs.stable = 0;
+            } else {
+                g_afs.stable++;
+            }
+            g_afs.fr++;
+            if (g_afs.fr > g_af_hold && g_afs.stable >= AF_AEC_STABLE) {
+                printf("af: scan start (aec rung %d, held %d frames)\n",
+                       aec.rung, g_afs.fr);
+                g_afs.phase = 1;
+                g_afs.step = 0;
+                g_afs.fr = 0;
+                g_afs.acc = 0.0;
+                g_afs.nacc = 0;
+            }
+        } else if (g_af_scan && g_afs.phase) {
             double s = frame_sharp(pix_map[slot], width, height, stride);
             g_afs.fr++;
             if (g_afs.fr > AF_SCAN_SKIP && g_afs.fr <= AF_SCAN_SKIP + AF_SCAN_MEAS) {
@@ -4912,20 +4956,27 @@ static int run_stream(int slot, const char *out_path, int wait_ms,
                                                             g_afs.step,
                                                             g_afs.best_code)) != 0) {
                         fprintf(stderr, "af: scan move failed — scan aborted\n");
+                        af_state_write("fail\n");
                         g_afs.phase = 0;
                     }
                 } else if (g_afs.phase == 2 && g_afs.step >= AF_SCAN_NFINE) {
                     if (af_scan_move(g_af_act_session, g_af_act_hdl,
-                                     video_fd, (uint16_t)g_afs.best_code) == 0)
+                                     video_fd, (uint16_t)g_afs.best_code) == 0) {
+                        char st[24];
+                        snprintf(st, sizeof st, "focus 0x%03x\n",
+                                 g_afs.best_code);
+                        af_state_write(st);
                         printf("af: FOCUS code=0x%03x sharp=%.2f "
                                "(step-0 %.2f, %+.0f%%)\n",
                                g_afs.best_code, g_afs.best, g_afs.base,
                                g_afs.base > 0.01
                                    ? 100.0 * (g_afs.best / g_afs.base - 1.0)
                                    : 0.0);
-                    else
+                    } else {
+                        af_state_write("fail\n");
                         fprintf(stderr, "af: final move to 0x%03x failed\n",
                                 g_afs.best_code);
+                    }
                     g_afs.phase = 0;   /* tail frames ride the best code */
                 } else if (af_scan_move(g_af_act_session, g_af_act_hdl,
                                         video_fd,
@@ -4933,6 +4984,7 @@ static int run_stream(int slot, const char *out_path, int wait_ms,
                                                               g_afs.step,
                                                               g_afs.best_code)) != 0) {
                     fprintf(stderr, "af: scan move failed — scan aborted\n");
+                    af_state_write("fail\n");
                     g_afs.phase = 0;
                 }
             }
@@ -4943,7 +4995,12 @@ static int run_stream(int slot, const char *out_path, int wait_ms,
          * recycled below, landing `window` frames later) or run the
          * probe's forced schedule. Non-ring has no future request to
          * carry an update: bracket pre-set its rungs at queue time. */
-        if (g_probe_op7 || g_aec) {
+        /* af freeze: while the sweep measures (phases 1/2) the ladder must
+         * hold — a brightness walk under the contrast metric grades
+         * exposure as focus. Phase 3 (the settle wait) keeps stepping;
+         * that is its whole job. */
+        if ((g_probe_op7 || g_aec) &&
+            !(g_af_scan && (g_afs.phase == 1 || g_afs.phase == 2))) {
             double y = frame_yavg(pix_map[slot], width, height, stride);
             if (y >= 0) {
                 if (aec_yv)
@@ -5807,8 +5864,16 @@ static int af_scan_move(uint32_t session, uint32_t act_hdl, int video_fd,
 
 static int af_scan_code(int phase, int step, int peak)
 {
-    int c = phase == 1 ? step * 68 : peak - 32 + step * 8;
-    if (c < 0) c = 0;
+    if (phase == 1)
+        return step * 68;
+    /* fine: 9 samples across a 64-code span centred on the coarse peak —
+     * but never let the span clamp at a rail: peak=0 spent 5 of 9 steps
+     * re-measuring code 0 (2026-09-10 far-scene trace). Slide the whole
+     * window inside [0, 0x3ff] so every step grades a distinct code. */
+    int lo = peak - 32;
+    if (lo < 0) lo = 0;
+    if (lo > 0x3ff - 64) lo = 0x3ff - 64;
+    int c = lo + step * 8;
     if (c > 0x3ff) c = 0x3ff;
     return c;
 }
@@ -6009,6 +6074,7 @@ int main(int argc, char **argv)
     uint32_t af_addr = 0;        /* 0 = unprogrammed; --af-sweep pins it */
     int af_addr_given = 0;
     int af_hold = 2;
+    int af_grace = 0;            /* #227 --af-grace: scan head start (frames) */
     struct wreg af_regs[4];      /* fixed-DAC probe writes (--af-write) */
     int n_af_regs = 0;
     uint32_t af_rd[4];           /* register addrs to read (--af-read) */
@@ -6111,6 +6177,8 @@ int main(int argc, char **argv)
         }
         else if (strcmp(argv[i], "--jpeg-out") == 0 && i + 1 < argc)
             g_jpeg_out = argv[++i];
+        else if (strcmp(argv[i], "--af-state") == 0 && i + 1 < argc)
+            g_af_state = argv[++i];
         else if (strcmp(argv[i], "--wb") == 0 && i + 1 < argc) {
             const char *s = argv[++i];
             if (!strcmp(s, "auto")) {
@@ -6317,6 +6385,17 @@ int main(int argc, char **argv)
         }
         else if (strcmp(argv[i], "--af-delay") == 0 && i + 1 < argc)
             af_rd_delay = atoi(argv[++i]);
+        else if (strcmp(argv[i], "--af-grace") == 0 && i + 1 < argc) {
+            /* grace frames at the INIT code (0) before the sweep — the QR
+             * path decodes at rest focus in 1-2 s; don't move the lens
+             * under a pairing scan that is about to hit anyway (--af-hold
+             * is taken: standalone --af rail-hold seconds) */
+            af_grace = atoi(argv[++i]);
+            if (af_grace < 0 || af_grace > 600) {
+                fprintf(stderr, "--af-grace: 0..600 frames\n");
+                return 1;
+            }
+        }
         else if (strcmp(argv[i], "--af-scan") == 0)
             af_scan = 1;   /* #227: contrast AF sweep (in-stream, ring) */
         else if (strcmp(argv[i], "--sweep") == 0)
@@ -6390,23 +6469,22 @@ int main(int argc, char **argv)
         return 1;
     }
     if (af_scan) {
-        /* #227: contrast AF sweep — rides the ring capture loop with the
-         * exposure pinned. Synthesizes the in-stream INIT write (code 0 =
-         * coarse step 0, pre-STREAMON) so the scan measures from frame 1;
-         * the state machine lives in run_stream's fence loop. */
+        /* #227: contrast AF sweep — rides the ring capture loop. Synthesizes
+         * the in-stream INIT write (code 0 = coarse step 0, pre-STREAMON) so
+         * the lens starts the sweep at step 0; the state machine lives in
+         * run_stream's fence loop. With --aec the sweep waits (phase 3) for
+         * the ladder to settle — and the ladder freezes while the sweep
+         * measures — instead of the old hard reject. */
         if (!stream) {
             fprintf(stderr, "--af-scan: in-stream only "
                             "(the AF chip core rides the sensor rails)\n");
             return 1;
         }
-        if (g_aec) {
-            fprintf(stderr, "--af-scan: fixed exposure only — the --aec "
-                            "ladder walks brightness under the metric\n");
-            return 1;
-        }
         g_af_scan = 1;
+        g_af_hold = af_grace;
         memset(&g_afs, 0, sizeof(g_afs));
-        g_afs.phase = 1;
+        g_afs.phase = g_aec ? 3 : 1;
+        g_afs.last_rung = -1;
         g_af_regs[0].addr = 0xF01A;
         g_af_regs[0].val = 0;
         g_af_regs[0].width = 32;
@@ -6415,16 +6493,22 @@ int main(int argc, char **argv)
             g_af_addr = af_addr_given ? af_addr : 0x76;
         int need = (AF_SCAN_NCOARSE + AF_SCAN_NFINE) *
                        (AF_SCAN_SKIP + AF_SCAN_MEAS) + 3;
+        if (g_aec)
+            need += af_grace + AF_AEC_STABLE * 4; /* phase 3 lives in the budget */
         if (g_frames < need) {
             printf("af: scan needs %d frames — --frames %d -> %d\n",
                    need, g_frames, need);
             g_frames = need;
         }
         printf("af: scan armed (%d coarse x68 + %d fine, "
-               "skip %d meas %d, addr 0x%02x)\n",
+               "skip %d meas %d, addr 0x%02x, grace %d, %s)\n",
                AF_SCAN_NCOARSE, AF_SCAN_NFINE, AF_SCAN_SKIP, AF_SCAN_MEAS,
-               g_af_addr);
+               g_af_addr, af_grace,
+               g_aec ? "aec settle+freeze" : "fixed exposure");
+        af_state_write("scan\n");
     }
+    if (!af_scan && g_af_state)
+        af_state_write("none\n"); /* no sweep: reader's gate opens at once */
     if (stream) { /* the M47⑤k look line — one receipt line per run */
         printf("look: nr %s%.0f:%.0f:%.0f:%.0f tone %.2f sat %.2f "
                "sharp %.2f:%d:%d fold %d\n",
