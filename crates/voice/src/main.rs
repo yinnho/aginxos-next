@@ -1166,8 +1166,13 @@ fn persist_wifi(ssid: &str, psk: &str) {
 
 /// 状态一句话：时间 + 电池 + 网络。
 fn status_text() -> String {
+    let p = hwd::load_or_exit();
     let time = Command::new("date")
         .arg("+%H %M")
+        // 钟面真源是 ntpd 校的 UTC；显示时区从设备档案带进 date 的 env
+        // （bionic busybox 只认 POSIX TZ 串——无 tzdata，/etc/localtime
+        // 也不读，09-10 设备活体收据）。
+        .env("TZ", &p.tz)
         .output()
         .ok()
         .and_then(|o| String::from_utf8(o.stdout).ok())
@@ -1180,13 +1185,10 @@ fn status_text() -> String {
             Some(format!("{h}点{m}分"))
         })
         .unwrap_or_default();
-    let bat = std::fs::read_to_string(format!(
-        "{}/capacity",
-        hwd::load_or_exit().paths.power_supply
-    ))
-    .ok()
-    .and_then(|s| s.trim().parse::<u8>().ok())
-    .unwrap_or(0);
+    let bat = std::fs::read_to_string(format!("{}/capacity", p.paths.power_supply))
+        .ok()
+        .and_then(|s| s.trim().parse::<u8>().ok())
+        .unwrap_or(0);
     // 只报连没连——IP 逐位念出来又长又难听（数字展开还多 10s 合成+播放）
     let net = if wlan0_ip().is_some() { "网已连" } else { "没联网" };
     format!("{time}，电池{bat}%，{net}。")

@@ -37,6 +37,13 @@ pub struct Device {
     pub camera: Camera,
     pub paths: Paths,
     pub adb: Adb,
+    /// Wall-clock display timezone, a POSIX TZ string (e.g. "CST-8"). The
+    /// kernel clock is UTC (ntpd truth); the two `date` spawns that format
+    /// time for humans (voice `status_text`, term `selfnet_greet`) pass
+    /// this through TZ. POSIX form only — the bionic-static busybox parses
+    /// these without tzdata, but named zones ("Asia/Shanghai") and
+    /// /etc/localtime are NOT honored (09-10 device probe).
+    pub tz: String,
     /// [v1] registered only — dual-frozen with the first-gen trampoline.
     pub update: Option<UpdateSection>,
     /// [v1] registered only — the slot method name, not the mechanism.
@@ -267,6 +274,7 @@ mod tests {
             "/sys/class/power_supply/battery"
         ); // D14-exempt
         assert_eq!(d.adb.serial, "aginxosredfin"); // D14-exempt
+        assert_eq!(d.tz, "CST-8"); // D14-exempt: display TZ (kernel clock stays UTC)
     }
 
     /// [v1] registered sections parse and carry their data.

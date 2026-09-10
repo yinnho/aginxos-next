@@ -4,6 +4,12 @@
 # Sections marked [v1] are registered but not yet wired — the data has a
 # home before the code catches up (ARCH.md D14 exemption notes).
 
+# Wall-clock display timezone (POSIX TZ string — the bionic-static busybox
+# date parses these without tzdata; named zones and /etc/localtime are NOT
+# honored, 09-10 device probe). The kernel clock itself stays UTC (ntpd);
+# voice status_text / term selfnet_greet pass this to date via env.
+tz = "CST-8"
+
 [device]
 name = "redfin"          # must equal the directory name (bake + update gate check it)
 model = "Pixel 5"
