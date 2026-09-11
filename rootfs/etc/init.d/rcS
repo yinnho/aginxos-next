@@ -18,6 +18,16 @@ mdev -s 2>/dev/null
 # Union + park, never deletes; no-op once the world is folded.
 /etc/init.d/varlib-migrate
 
+# First-boot root-fs grow (#318, L0 缺口刀1) — SYNCHRONOUS, deliberately
+# before everything that writes big: the image bakes a 2G ext4 onto the
+# 109G userdata partition and every re-flash reverts to 2G. resize2fs
+# reads the partition geometry itself and no-ops when already grown, so
+# this runs every boot (the artifact is the truth: df — no markers, per
+# M27 discipline). Synchronous because provision's sync pulls ~239MB of
+# packages into / and racing that against a 2G fs is the M12 curse; the
+# live grow itself took 0.45 s. Always exits 0 — never blocks a boot.
+/etc/init.d/disk-grow
+
 # Host mke2fs -d stored the macOS build user (uid 501) as owner - the
 # filesystem is rw, so the first boot normalizes it for good.
 chown -R 0:0 /bin /sbin /etc /aginxos /system /home /root /var /opt /srv /media 2>/dev/null
