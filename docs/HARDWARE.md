@@ -2566,3 +2566,81 @@ host 干跑收据（设备刷机=bake #22 刀6 日；此处只记烤线观察）
   face——`aginx` 命令装母体包后出生）。
 
 刀4 状态：host 侧完结（commit 513e136）；设备收据并入刀6 bake #22。
+
+## 2026-09-12 — 刀6 bake #22 刷机日（#317/#316 收官）：L0 出厂→配置后置→ssh 接管→opt-in 全绿
+
+整改线终刀。镜像源先行→刷机→n7 产品流七相位→n6 等价→旧套件复绿，设备
+收据 **121 断言零修全绿**（n6 19+47、n7 6+4+3+8+8+18+8、m42c 23、m45 15）
++ check.sh 全绿。
+
+**镜像源先行闸（刀6a，pkgs.aginx.net 上新车）**：直传 5 件——aginx
+v0.1.0（6.3M）/aginx-term v0.1.0（3.0M）/aginx-gateway v0.1.1/
+aginx-secretd v0.1.1/aginx-voice **v0.2.1**（2.5M，**折入 aadf30f**
+pair-apply 补 udhcpc——C11 段「镜像源旧件」欠账结案）；asr/tts/ocr
+v0.2.0 三件服务器侧 sha 比对一致跳传（省 446MB）。8 URL 全 200、
+Content-Length 字节对账、URL 与签名 manifest 一字不差、单层目录
+（#87 双层 404 陷阱）。
+
+**刷机**：手动 Power+VolDown 入 fastboot（BCB 关键字也死——刷机日铁律）
+→ `GO=1 ./devices/redfin/boot/flash-redfin.sh`（**默认免 capture=出厂
+形状**，刀5 转正后的首刷）→ userdata 46.6s + vendor_boot_b 提交点收笔；
+恢复点=stock vendor_boot（脚本回显）。
+
+**首启时序观察**：adb ~20s 即回但系统仍在 vendor ramdisk（满屏 Android
+linker/libc 属性噪声）——readiness 信号=`/etc/aginx-version` 出现
+`aginxos redfin 1bbea61 2026-09-12 l0`。n7 pre 首跑 4/6（svc.d 缺/
+dropbear 死）即此假象，等版本戳后复跑 6/6。**判活别信 adb，信版本戳**。
+
+**n7-l0 七相位（产品流主线，48/0）**：
+- pre 6/6：l0 戳/svc.d 恰 2/无 wifi.conf 无 authorized_keys（零个人信息
+  实证）/var/bin 空/清单见母体/dropbear 在跑。
+- usbconf 4/4：adb 推 wifi.conf（600）+ env（brain 键+AGINX_GATEWAY_ID
+  键名在值零回显）+ 一次性公钥追加（不覆写）→ reboot。
+- netup 3/3：wifi ok+internet ok/钟到 2026/wlan0 192.168.0.166。
+- **ssh 8/8（刀2 欠账「真 Wi-Fi 直连」结案——热验日 Legrand 单向隔离
+  只能 adb forward，本日 host↔设备 22 端口真直连双向通）**：公钥腿
+  BatchMode 往返 + 密码腿 throwaway 闭环往返（chpasswd→expect 登录→
+  sed 锁回 root:!）+ 锁后公键仍通=双通道不互斥。
+- optin-mother 8/8：`opt-in aginx` → face 落 /var/bin/aginx、单元 `aginx`
+  ready（单元名随包名，刀3 定案）、命令面活、**send 真中文回复**
+  （secret.policy pkgfiles 真身放行——刀3 必修① 活体判据，镜像源新车
+  无哑弹）。
+- optin-phone 18/18：五连 opt-in（**依赖闭包：voice 自动带 asr/tts/ocr
+  ~700MB 过 Legrand AP 未断，gateway 自动带 secretd**——刀1 设备面）；
+  8 face 齐、voice/browser/secretd/gateway 四单元 ready（browser 缺席
+  容忍 30s 拾取）、term handoff 装包即亮屏、voice face 出现。
+- steady 8/8：同像真重启→wifi 自动连→**pkg ok 0s 落**（刀4 all_opt 修的
+  活体收据：全 opt 清单 provision 早退，无 6 分钟白等）→六单元恰 ready→
+  二启 send 真回复→sync 零 downloading。
+
+**运维腿**：relay.primary 从 86quan relay 进程 cmdline 取回（--secret
+空格分隔值，65B，零回显零落盘）→ adb push 文件 → `aginx-secret set
+relay.primary <file` → 临时件即删。gateway 8443 长连由此活（见 n6 D 段）。
+
+**n6-egg 等价（19+47）**：pre 19/19=出厂形状+A 哑终端（母体未装：send
+  rc≠0、单元 absent）；paired 47/47=B 配网证+C 五连（重跑=satisfied 快过
+  双证）+D 等价（send 真往返/**8443 ESTABLISHED**=relay.primary 灌注
+  生效/voice local=true/secretd policy 拒读生证）+E grok opt-in 落地
+  （CLI 代行，tap 真人腿注记）。
+
+**套件两修（bake #22 首跑实雷，本提交）**：①svcd 对未知单元真面相是
+`ERR no such unit` 非「absent」——n6 pre 断言收两词；②本机构建 busybox
+chpasswd 写 **DES crypt**（13 字符无 `$` 前缀，刀2 热验同观察）——n7
+「密码已设」断言从 `^root:\$` 改算法无关形状（字段≥12 字节且非 !/* 锁
+种子形）。修断言时踩一坑：case 模式 `'*')` 少一个闭合引号=整条 adb 命令
+`no closing quote`，`__RC=` 整行消失、rc=?——**drv 断言失败先看 rc=?
+（传输层死）还是 rc=N（判断死）**。
+
+**旧套件复绿**：m42c 23/23（A 铸解 round-trip+B 协议冒烟+B2 口令闸+
+C 真重启回来）+ m45 15/15（中英混排/斜拍/双栏/无字图 rc=1）+ check.sh
+全绿。
+
+**bake #21 欠账对账（#311 收笔）**：af08a22 蛋刷机日收据=C11 段（09-09
+paired 38/0+steady 9/0）；brain key 未灌注=刀3 段结案（蛋世界 env 缺、
+Mac 取回灌注）；voice 镜像源旧件=本日 v0.2.1 上新车结案。三笔无悬账，
+#311/#298 随 L0 翻档收官。
+
+**设备终态**：bake #22 L0 在役（镜像 1bbea61、vendor_boot_b slot）；
+九包已装（aginx 家族 8+grok）、六单元 ready、ssh 双通道在（存量公钥+
+密码锁 root:!）；/etc 带 wifi.conf+env。**未跑**：n6 steady（与 n7
+steady 同覆盖）、egg2 段（capture 升级日另日收据）、#198 真人眼验。
