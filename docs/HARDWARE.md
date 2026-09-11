@@ -2644,3 +2644,15 @@ Mac 取回灌注）；voice 镜像源旧件=本日 v0.2.1 上新车结案。三�
 九包已装（aginx 家族 8+grok）、六单元 ready、ssh 双通道在（存量公钥+
 密码锁 root:!）；/etc 带 wifi.conf+env。**未跑**：n6 steady（与 n7
 steady 同覆盖）、egg2 段（capture 升级日另日收据）、#198 真人眼验。
+
+**codex 实装收据（2026-09-12，L0 首次全程 ssh 装包；USB 离线）**：
+Mac Wi-Fi 直连 `ssh root@192.168.0.166` 进场（host 公钥腿，USB 未插）。
+`aginx-pkg available` 见 codex（opt 档）；`aginx-pkg opt-in codex` 同步
+拉镜像源 233,773,456 bytes（pkgs.aginx.net，HTTP 200）。落地三证：
+/var/bin/codex 可执行 + stamps/codex + `codex --version` =
+`codex-cli 0.151.0`。注册面与 grok/python3 同形：裸上游二进制无
+.aginxmd sidecar，不进 `aginx commands` 列表（sidecar 注册表只列
+aginx 族；PATH 面 CLI 即 D12 agent CLI 口味）——非缺口。bake #21
+欠账清单的「codex 实装」由此闭环（#54/M12 官方 musl 路线的 L0 复验）。
+未含：codex 自身凭据（OpenAI key 属 secret sidecar 业务，装包不含，
+owner 腿）。设备现十包在装（aginx 族 8+grok+codex）。
