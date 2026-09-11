@@ -2656,3 +2656,22 @@ aginx 族；PATH 面 CLI 即 D12 agent CLI 口味）——非缺口。bake #21
 欠账清单的「codex 实装」由此闭环（#54/M12 官方 musl 路线的 L0 复验）。
 未含：codex 自身凭据（OpenAI key 属 secret sidecar 业务，装包不含，
 owner 腿）。设备现十包在装（aginx 族 8+grok+codex）。
+
+**codex 原生配置+真答收据（2026-09-12，L0「装上即用」试金石）**：
+用户裁决：codex 不绑 aginx-secretd——原生 codex 配置体系自足，
+`opt-in` 官方二进制 + 拷 host `~/.codex` + brain 真答即底座验收判据。
+三核对：CA 188,900B 在镜像（M12 修复已被 L0 烤线继承）；host
+config.toml（07-21 版）仍是指向 aginxbrain 的在役形状（gpt-5.5/
+wire_api=responses/stream_idle_timeout_ms=600000 蛋时代调优值都在）；
+落点 `/root/.codex`（L0 root HOME=/root，/home 空，`codex --version`
+自建空壳已就位）。**文件上行通道两坑**：L0 无 sftp-server（scp 默认
+SFTP 协议死）→ `-O` 回传统协议也死（无远端 scp 二进制）→ **ssh
+stdin 管道 `cat > /root/.codex/<f>` 是 Wi-Fi 腿唯一上行法**；双端
+md5 一致 + 600 权限。终验：`codex exec --skip-git-repo-check
+"Reply with exactly: pong"` → **pong，8,980 tokens，provider
+aginxbrain**（与 M12 蛋时代 9k tokens 同形；bubblewrap 警告良性同
+前，bundled bwrap 兜底）。auth 单键 OPENAI_API_KEY 只落设备 600，
+不进仓不回显。注记：/ (sda19) 2G 未 resize 剩 795MB（蛋时代同款
+形状，配置 KB 级无压力）。至此 L0 对「任意上游原生工具装上就能跑」
+的等价性承诺以 codex 收了完整收据：纯 ssh 进场 → opt-in → 配置 →
+真答，全程 USB 离线。
