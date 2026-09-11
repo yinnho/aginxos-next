@@ -2675,3 +2675,42 @@ aginxbrain**（与 M12 蛋时代 9k tokens 同形；bubblewrap 警告良性同
 形状，配置 KB 级无压力）。至此 L0 对「任意上游原生工具装上就能跑」
 的等价性承诺以 codex 收了完整收据：纯 ssh 进场 → opt-in → 配置 →
 真答，全程 USB 离线。
+
+**首启自动 resize 收据（2026-09-12，#318 L0 缺口刀1 — M12 诅咒清账）**：
+codex 收据的注记「/ (sda19) 2G 未 resize 剩 795MB」由本刀清账。三层收据：
+
+①**活体在线扩容**（USB 离线，ssh stdin 管道推 3.6MB 未strip版到
+/var/tmp/，双端 md5 一致）：`/var/tmp/resize2fs /dev/sda19` →
+**0.45 s**，`df /` 从 1,992,552 KB → **112,533,608 KB**（1% 用，
+106.7G 空闲）。分区真身 114,409,452 KB（109.1G，userdata；sda18
+9.5G 是 OTA staging 不碰）。在线扩已挂 rw ext4 无卸载无错误。
+蛋时代（M12 起）每次刷机回 2G、装满即 ENOSPC 的诅咒，机上已破。
+
+②**静态 musl 构建配方**（e2fsprogs 1.47.0 via zig cc，
+scripts/build-resize2fs.sh，四坑全档）：(a) configure 的 LSEEK64
+链接探针在 zig cc 下假阴——lib/config.h（注意在 lib/ 不在顶层）
+须**同时**强制定义 HAVE_LSEEK64 与 HAVE_LSEEK64_PROTOTYPE（只定义
+前者则 llseek.c 走不到 lseek64 分支，my_llseek 未声明）；(b)
+fresh 树 `make subs` 会跑裸 config.status **重写 lib/config.h 抹掉
+补丁**——patch 必须在 subs 之后再上一遍；(c) lib/uuid 的 all::
+硬编 tst_uuid/uuid_time 测试件（链接必死）——永不 make all/libs，
+只做手术目标：uuid.h+libuuid.a + et/e2p/blkid/support/ext2fs 五档
++ resize/resize2fs（blkid 被 libsupport plausible.o 拖入又拖 uuid
+符号，所以两档都得建）；(d) **macOS ar 静默拒收 ELF 成员**——
+不报错只产 96 字节空档案，链接全灭在未定义符号；configure 必须带
+`AR="zig ar" RANLIB="zig ranlib"`（zig 0.16 子命令，LLVM 21）。
+产物 `out/resize2fs` LDFLAGS=-s strip 后 **601,872 bytes**。
+
+③**产品化三件+机上 no-op 收据**：devices/redfin/bringup/disk-grow
+（设备无关——root 设备从 mount 表解析，任何「ext4 烤在大分区上」
+的机都同形；每启必跑无标记，df 即真源，M27 纪律）；rcS 在
+varlib-migrate 之后、chown 之前**同步**开槽（provision 会拉 239MB
+包进 /，与 2G fs 赛跑是老诅咒的死法；扩容本身 0.45s 值得同步）；
+烤线落 /usr/bin/resize2fs（usr/sbin 目录不存在，别开新目录——
+首版烤线写 usr/sbin 当场死于 install 无父目录）。机上直跑收据：
+日志 `The filesystem is already 28602363 (4k) blocks long. Nothing
+to do!` rc=0，df 不动。干烤验证四件全对（树里 resize2fs/disk-grow
+md5 与设备一致、rcS 槽在、svc.d 仍恰 2）+ check.sh 全绿，镜像
+148M。设备现状：/usr/bin/resize2fs + /etc/init.d/disk-grow 已
+dev-push 在位（机上是 bake #22 rcS，无槽——脚本在位但下次开机
+不自跑），fs 已扩满 109G。完整首启自扩收据留给 bake #23 刷机日。
