@@ -3,8 +3,8 @@
 # 所以 depends 声明全三）。
 # 见 ../aginx-server/pkg.toml 头注：单元/打包线键同律。
 name = "aginx-voice"
-version = "0.1.0"
+version = "0.2.0"
 summary = "语音对话守护：PTT 嘴耳 + 眼取景，脸写 /run/aginx-voice/face"
 group = "snd"
 depends = "aginx-asr,aginx-tts,aginx-ocr"
-url = "https://pkgs.aginx.net/aginx-voice/v0.1.0/aginx-voice-v0.1.0-4pc.tar"
+url = "https://pkgs.aginx.net/aginx-voice/v0.2.0/aginx-voice-v0.2.0-4pc.tar"
