@@ -141,15 +141,18 @@ fi
 
 # Ops channel sshd (#142) — the maintenance face: ssh in over Wi-Fi, or
 # `adb forward tcp:2222 tcp:22` when the dev box sits on another subnet.
-# Key-only (-s: passwords off); host key lives under /root/.ssh so the
-# state tar carries it across system updates (first boot generates it).
-# Client keys are NOT baked — push your pubkey to /root/.ssh/authorized_keys.
-# -E logs to stderr (no syslogd here) → /var/log/dropbear.log.
+# Both channels open: pubkey (push yours to /root/.ssh/authorized_keys)
+# and password (run `passwd` on the device). Until passwd runs, the
+# seeded /etc/shadow keeps root's hash `*` — every password compare
+# fails, so the password lane is inert-by-default. Host key lives under
+# /root/.ssh so the state tar carries it across system updates (first
+# boot generates it). -E logs to stderr (no syslogd here) →
+# /var/log/dropbear.log.
 mkdir -p /root/.ssh
 if [ -x /bin/dropbear ]; then
   [ -f /root/.ssh/dropbear_ed25519_host_key ] || \
     /bin/dropbearkey -t ed25519 -f /root/.ssh/dropbear_ed25519_host_key >/dev/null 2>&1
-  /bin/dropbear -p 22 -s -r /root/.ssh/dropbear_ed25519_host_key -E \
+  /bin/dropbear -p 22 -r /root/.ssh/dropbear_ed25519_host_key -E \
     >>/var/log/dropbear.log 2>&1
 fi
 

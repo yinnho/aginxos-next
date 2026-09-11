@@ -350,6 +350,9 @@ fi
 mkdir -p "${TREE}/bin" "${TREE}/sbin" "${TREE}/aginxos" "${TREE}/usr/libexec/aginx" "${TREE}/var/bin"
 cp "${RECIPE}/busybox" "${TREE}/bin/busybox"
 cp -R "${RECIPE}/etc/." "${TREE}/etc/"
+# shadow is baked root-locked (* = inert until `passwd`); git carries no
+# file mode beyond the exec bit, so pin 0600 here — never world-readable
+chmod 600 "${TREE}/etc/shadow"
 # 机型数据注入（D14）：bringup 脚本与 device.toml 都来自 devices/<codename>/。
 # bringup 内容 verbatim 搬运（211 行 mixer recipe 那种收据流不重排）；
 # device.toml 落 /etc/aginx/（hwd::load_or_exit 的读点——烤错档案=开机
