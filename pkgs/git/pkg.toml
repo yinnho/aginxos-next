@@ -1,0 +1,18 @@
+# git — 上游裸 CLI 的树包形态（D12 agent-CLI 口味，与 codex/grok 同族：
+# PATH 面 CLI，不注册 aginx 命令面）。L0 缺口刀C（#321），路线 D：
+# Alpine v3.22 main/aarch64 的 apk 闭包 15 件整树搬进 pkgfiles——
+# git 2.49.1 全功能（含 https 传输）+ musl 1.2.5 loader + libcurl/
+# openssl 依赖闭包，apk 以 sha256 逐件钉死（TOFU，APKINDEX 无文件哈希，
+# 钉表在 scripts/build-pkg.sh git) 分支）。
+# 面是 wrapper：git 会 exec 子进程（git-remote-https、libexec/git-core/*），
+# 子进程走内核 PT_INTERP /lib/ld-musl-aarch64.so.1——wrapper 首跑自链
+# /lib loader（python3 包同款工艺，但自持：python3 在不在装都行；两边同
+# musl 1.2.5，provision python-finalize 的 [ ! -e ] 守卫不回抢，先到先得）。
+# ca-certificates-bundle 故意不在闭包：libcurl 编译期默认 CA 路径
+# /etc/ssl/certs/ca-certificates.crt 镜像已烤入（M12，L0 继承）。
+name = "git"
+version = "2.49.1"
+summary = "git 版本控制（Alpine v3.22 整树：git 2.49.1 + https 传输闭包 + musl loader；face /var/bin/git）"
+group = "dev"
+url = "https://pkgs.aginx.net/git/v2.49.1/git-v2.49.1-4pc.tar"
+exec = "bin/git"

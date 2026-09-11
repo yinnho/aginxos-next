@@ -1,0 +1,17 @@
+#!/bin/sh
+# git face — Alpine 树包 wrapper（L0 缺口刀C，pkgs/git）。
+# 不是直接 exec 树内 git：git 会 exec 子进程（git-remote-https、
+# libexec/git-core/*），子进程走内核 PT_INTERP /lib/ld-musl-aarch64.so.1
+# ——系统路径必须有 musl loader。python3 包同款工艺，但本包自持：
+# 首跑自链，python3 在不在装都行（两边同 musl 1.2.5，provision 的
+# python-finalize 带 [ ! -e ] 守卫不回抢，先到先得）。root 环境 ln 必成；
+# 非 root 时 2>/dev/null 吞掉，loader 已在则一切照常。
+# musl ld.so 无 --library-path 旗标——库解析只走 env，LD_LIBRARY_PATH
+# 随 env 继承给全部子进程（这正是 /lib loader 链接 + env 组合的意图）。
+P=/var/lib/aginx/pkgfiles/git
+L=/lib/ld-musl-aarch64.so.1
+[ -e "$L" ] || ln -sf "$P/lib/ld-musl-aarch64.so.1" "$L" 2>/dev/null
+export GIT_EXEC_PATH="$P/usr/libexec/git-core"
+export GIT_TEMPLATE_DIR="$P/usr/share/git-core/templates"
+export LD_LIBRARY_PATH="$P/usr/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+exec "$P/lib/ld-musl-aarch64.so.1" "$P/usr/bin/git" "$@"
