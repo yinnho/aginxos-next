@@ -2714,3 +2714,39 @@ md5 与设备一致、rcS 槽在、svc.d 仍恰 2）+ check.sh 全绿，镜像
 148M。设备现状：/usr/bin/resize2fs + /etc/init.d/disk-grow 已
 dev-push 在位（机上是 bake #22 rcS，无槽——脚本在位但下次开机
 不自跑），fs 已扩满 109G。完整首启自扩收据留给 bake #23 刷机日。
+
+**sftp subsystem 烤入收据（2026-09-12，#319 L0 缺口刀B — Wi-Fi 腿
+文件上行通道清账）**：清的是老账——L0 镜像既无 sftp-server 也
+无 scp 二进制，`scp` 报 `sftp-server not found`、`scp -O` 报
+`scp not found`，上行只剩 ssh stdin 管道一条路。四层收据：
+
+①**survey 先行——dropbear 不用重编**：烤入的 dropbear 2026.94
+binary strings 里已有 `/usr/libexec/sftp-server` 与 `sftp`——SFTP
+支持是编进去的，每连接 exec `DROPBEAR_SFTP_SERVER` 指的路径（无参，
+stdin/stdout 上说 SFTP v3），合同与 OpenSSH 的 sftp-server 一模一样。
+**每连接 exec = 装上二进制即刻生效，dropbear 不用重启**（当日活体
+收据即证：dev-push 后立刻 scp 通，daemon 未动）。
+
+②**实现=Go+pkg/sftp 静态件**（用户定路线）：tools/sftp-server 25
+行 stdio 胶水 + github.com/pkg/sftp v1.13.11（版本由入库的 go.sum
+钉死，host 需要 go）。`GOOS=linux GOARCH=arm64 CGO_ENABLED=0
+go build -trimpath -ldflags='-s -w'` → **2,949,282 bytes 全静态**
+（Go runtime 自带，零 libc 依赖）。API 坑：v1.13 的
+`sftp.NewServer` 只吃**一个** `io.ReadWriteCloser`——os.Stdout 不
+是 Closer，须自写 stdioAdapter（内嵌 Reader+Writer，Close 空操作：
+fd 属于 dropbear，干净断开=io.EOF 静默退出）。build 脚本带 out/
+缓存早���（cacert/resize2fs 同款）。
+
+③**活体三路收据**（dev-push 到 /usr/libexec/sftp-server，md5 与
+host 一致 e8e56f34…，dropbear 未重启）：(a) `scp` put 上行——
+host→设备往返 md5 一致；(b) `sftp -b` batch——ls/get/mkdir/rename
+全通（读回文件 md5 = 源 b277c785…）；(c) `scp` 下行拉回——host 收
+件 md5 一致。测试件双端清干净。GUI SFTP 客户端同协议（SFTP v3），
+无需另证。
+
+④**烤线落位**：build-rootfs.sh 在 dropbear 三件套后 install 到
+`/usr/libexec/sftp-server`（usr/libexec 本是镜像已有目录——子目录
+aginx/ 旁边，不是新开目录）。干烤验证：树里 md5 与设备/host 三方
+一致、svc.d 仍恰 2、镜像 151M（148M 底座 + 2.9M sftp-server）+
+check.sh 全绿。ssh stdin 管道仍可用（兜底），但标准通道从此是
+scp/sftp。镜像收据（刷机自带）留 bake #23。
