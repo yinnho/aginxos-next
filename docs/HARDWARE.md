@@ -2750,3 +2750,27 @@ aginx/ 旁边，不是新开目录）。干烤验证：树里 md5 与设备/host
 一致、svc.d 仍恰 2、镜像 151M（148M 底座 + 2.9M sftp-server）+
 check.sh 全绿。ssh stdin 管道仍可用（兜底），但标准通道从此是
 scp/sftp。镜像收据（刷机自带）留 bake #23。
+
+**密码哈希档 sha512 收据（2026-09-12，#320 L0 缺口刀B余 — DES 档清账）**：
+bake #22 实测裸 `busybox chpasswd` 写 **des crypt**（13 字符、无 $ 前缀、
+8 字符静默截断）。三层收据：
+
+①**能力面（机上 busybox 1.36.1，2026-09-03 构建）**：`chpasswd --help`
+带 `-c ALG`；`mkpasswd` 也在。busybox 是仓内冻结资产（rootfs/busybox
+直拷，本仓无构建线）——重编换默认档（FEATURE_DEFAULT_PASSWD_ALGO）
+不在本刀，旗标钉法即刀形。
+
+②**活体三证（throwaway 密码生灭于单调用，零回显）**：
+(a) `echo root:… | busybox chpasswd -c sha512` → rc=0，/etc/shadow
+第二字段前缀 **`$6$`**；(b) host→设备密码腿真 ssh 往返
+（PubkeyAuthentication=no）**通**——dropbear 静态 musl crypt 验
+$6$ 实证（DES 时代收据只证过 des，$6$ 验证是本刀新收据）；
+(c) 锁回 `root:!` 确认。交互 `passwd` 默认档**未采样**（expect
+过 ssh -t 两轮没驱动成，不猜不记）——说明书一律指向非交互
+`chpasswd -c sha512` 形。
+
+③**契约钉死**：n7-l0.sh 密码腿 `chpasswd -c sha512` + shadow 断言
+从「算法无关 ≥12 字节」收紧为 **`$6` 前缀 case 断言**（`!`/`*`/
+des 13 字符全不收）；rcS sshd 注释与 AGENTS.md 刷机说明书同指
+sha512 形（裸 chpasswd/passwd=des 别用）。bash -n + 断言语义本地
+三值证（$6→true / !→false / *→false）+ check.sh 全绿。
