@@ -2809,3 +2809,10 @@ opt-in 前 404 属预期）。/lib loader 自链腿属设备腿（python3 在装
 则链接已在，wrapper [ -e ] 门直接过）。CA 面零配置：libcurl 编译
 期默认路径 /etc/ssl/certs/ca-certificates.crt 镜像已烤入（M12，
 ca-certificates-bundle 因此故意不在闭包）。
+
+**git 镜像腿收讫（2026-09-12，#321 续）**：scp 直传 86quan
+`/data/pkgs.aginx.net/git/v2.49.1/git-v2.49.1-4pc.tar`（镜像一包一目录
+惯例，单层目录）。回验三对：HTTP/2 200、Content-Length 19,511,808
+字节对账、**在线 sha256 逐字节等于 manifest 钉值 `bc316af6…5a499`**
+（下载即验，运输诚实不承重但这记的是完整链）。剩设备腿：opt-in →
+`git --version` → https clone 真收据，等设备接回。
