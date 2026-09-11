@@ -122,12 +122,13 @@ echo $! > /run/bootcard.pid
 /etc/init.d/provision &
 
 # Service layer (M16 agsvc → N4 aginx-svcd) — inittab respawns
-# /usr/libexec/aginx/aginx-svcd once rcS finishes, which starts the N4
-# units from /etc/aginx/svc.d (aginx-server, aginx-voice, aginxbrowser,
-# aginx-secretd, net-watch), restarts them on crash with backoff, and
-# re-checks absent binaries every 30 s so first provisioning lands
-# without a reboot. Control: aginx-svc list|status|start|stop|restart|
-# reload over /run/aginx-svc/ctl.sock.
+# /usr/libexec/aginx/aginx-svcd once rcS finishes, which starts units
+# from /etc/aginx/svc.d (L0: net-watch + aginxbrowser only — absent-
+# tolerant browser face) plus /var/lib/aginx/units (units that ride
+# their packages: aginx, aginx-secretd, aginx-gateway, aginx-voice …),
+# restarts them on crash with backoff, and re-checks absent binaries
+# every 30 s so an install lands without a reboot. Control: aginx-svc
+# list|status|start|stop|restart|reload over /run/aginx-svc/ctl.sock.
 
 # crond — busybox crond reads /etc/crontabs/root. N5④: the #86 daily
 # backup line is BACK on the new local line (aginx-backup v2 — state

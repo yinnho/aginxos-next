@@ -3,8 +3,10 @@
 #
 # usage: scripts/build-pkg.sh <name> [--push <serial>]
 #
-#   五裸包  aginx-server aginx-runtime aginx-gateway aginx-secretd
-#          aginx-voice    — zigbuild musl 件 + pkgs/<name>/ 配方
+#   四裸包  aginx-gateway aginx-secretd aginx-voice
+#                       — zigbuild musl 件 + pkgs/<name>/ 配方
+#   一树包  aginx        — 母体三件（router/server/runtime，exec=bin/aginx，
+#                         [service] 指 pkgfiles 真身；刀3 合一）
 #   三树包  aginx-asr aginx-tts aginx-ocr
 #                       — .local/device/redfin 冻结 bionic 件 + 模型一树
 #                         （exec=bin/ag-*，模型与整机烤机逐字节同源：asr
@@ -66,7 +68,7 @@ mkdir -p "${OUT}"
 TARNAME="${PKG}-v${VER}-4pc.tar"
 
 case "${PKG}" in
-  aginx-server | aginx-runtime | aginx-gateway | aginx-secretd | aginx-voice)
+  aginx-gateway | aginx-secretd | aginx-voice)
     # crate 名≠包名的唯一例外：secretd 二进制住在 aginx-secret crate（双 bin）
     CRATE="${PKG}"
     [ "${PKG}" = "aginx-secretd" ] && CRATE="aginx-secret"
@@ -75,6 +77,18 @@ case "${PKG}" in
     mkdir -p "${STAGE}/bin"
     install -m 755 "${TARGET_DIR}/${PKG}" "${STAGE}/bin/${PKG}"
     MEMBERS="bin pkg.toml SKILL.md"
+    ;;
+  aginx)
+    # 母体树包（刀3 合一）：三件一树。target 二进制名 aginx（出自
+    # aginx-router crate）+ aginx-server + aginx-runtime。exec=bin/aginx
+    # → /var/bin/aginx symlink 面；[service] cmd 指 pkgfiles 真身。
+    echo "==> zigbuild 母体三件（musl，缓存则秒过）"
+    (cd "${ROOT}" && cargo zigbuild --release --target aarch64-unknown-linux-musl \
+      -p aginx-router -p aginx-server -p aginx-runtime)
+    mkdir -p "${STAGE}/files/bin"
+    install -m 755 "${TARGET_DIR}/aginx" "${TARGET_DIR}/aginx-server" \
+      "${TARGET_DIR}/aginx-runtime" "${STAGE}/files/bin/"
+    MEMBERS="pkg.toml SKILL.md files"
     ;;
   aginx-asr)
     test -x "${VOICE}/bin/ag-asr" || { echo "FATAL: missing ${VOICE}/bin/ag-asr — see devices/redfin/boot/assets.md" >&2; exit 1; }
@@ -106,7 +120,7 @@ case "${PKG}" in
     MEMBERS="pkg.toml SKILL.md files"
     ;;
   *)
-    echo "FATAL: 未知包名 ${PKG}（五裸包 zigbuild / 三树包预编译件）" >&2
+    echo "FATAL: 未知包名 ${PKG}（四裸包 zigbuild / aginx 母体树包 / 三树包预编译件）" >&2
     exit 1
     ;;
 esac
