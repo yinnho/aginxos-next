@@ -199,13 +199,14 @@ phase_ssh() {
   printf 'root:%s\n' "${N7PASS}" > "${KEYDIR}/pw"
   chmod 600 "${KEYDIR}/pw"
   adbx push "${KEYDIR}/pw" /tmp/.n7pw >/dev/null
-  adbx shell "/bin/busybox chpasswd < /tmp/.n7pw; rm -f /tmp/.n7pw"
+  adbx shell "/bin/busybox chpasswd -c sha512 < /tmp/.n7pw; rm -f /tmp/.n7pw"
   rm -f "${KEYDIR}/pw"
-  # bake #22 实测：本机构建的 busybox chpasswd 默认写 des crypt（13 字符、
-  # 无 $ 前缀），sha512 的 '^root:\$' 断言不中。改算法无关形状：第二字段
-  # ≥12 字节且非锁形(!)/种子形(*)——des 与 $id$ 哈希都收。
-  drv "F=\$(cut -d: -f2 /etc/shadow); [ \${#F} -ge 12 ] && case \$F in '!'*|'*') false;; *) true;; esac"
-  expect_rc  "密码已设（shadow 有哈希字段；算法无关，值零回显）"
+  # 密码哈希档=sha512（#320，2026-09-12 活体收据：busybox 1.36.1 带 -c ALG，
+  # -c sha512 落 $6$，dropbear 静态 musl crypt 验 $6$ 密码腿真通）。裸
+  # chpasswd 是 des crypt（13 字符、8 字符截断——bake #22 实测），契约
+  # 钉死 sha512：断言第二字段 $6$ 前缀。
+  drv "F=\$(cut -d: -f2 /etc/shadow); case \$F in '\$6'*) true;; *) false;; esac"
+  expect_rc  "密码已设（shadow \$6\$ sha512 形；值零回显）"
   # expect 走密码路：禁公钥，只许 password
   if PASS="${N7PASS}" IP="${ip}" expect -c '
         set timeout 25
