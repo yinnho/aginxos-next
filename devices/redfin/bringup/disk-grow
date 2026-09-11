@@ -1,0 +1,37 @@
+#!/bin/sh
+# First-boot root-fs grow (L0 缺口刀1, live-proven 2026-09-12 — 2G → 107G
+# online in 0.45 s on /dev/sda19, HARDWARE.md). The L0 image bakes a 2G
+# ext4 onto whatever partition carries / (sda19, 109G, on redfin); every
+# re-flash reverts the fs to 2G until this runs — the M12 curse, now paid
+# down by the boot itself. resize2fs reads the partition geometry itself
+# and no-ops when the fs already spans it, so this runs EVERY boot, no
+# markers (the artifact is the truth: df). rcS runs it synchronously
+# after varlib-migrate and BEFORE the bringup crowd + provision —
+# provision's sync pulls ~239MB of packages into /, and racing that
+# against a 2G fs is how the old curse stayed alive.
+export PATH=/sbin:/bin:/usr/sbin:/usr/bin
+LOG=/var/disk-grow.log
+exec >>"$LOG" 2>&1
+echo "=== disk-grow $(date) ==="
+
+BIN=/usr/bin/resize2fs
+if [ ! -x "$BIN" ]; then
+  # Never block boot over this — but say it loud: an image without the
+  # binary was baked without scripts/build-resize2fs.sh having run.
+  echo "disk-grow: no $BIN baked (build-rootfs ran without out/resize2fs?)"
+  exit 0
+fi
+
+# Root device from the mount table — nothing redfin-specific: any
+# ext4-on-a-bigger-partition root (userdata on any phone) grows the
+# same way. busybox grep wants -a even for mount output.
+set -- $(mount | grep -a ' on / type')
+[ -n "${1:-}" ] || { echo "disk-grow: root mount line not found"; exit 0; }
+RDEV="$1"
+
+df -k / | tail -1
+"$BIN" "$RDEV"
+rc=$?
+df -k / | tail -1
+echo "=== done rc=$rc $(date) ==="
+exit 0

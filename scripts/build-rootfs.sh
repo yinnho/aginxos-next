@@ -333,6 +333,13 @@ for b in "${DEVDIR}"/bringup/*; do
   test -f "${b}" || { echo "missing bringup scripts in ${DEVDIR}/bringup/" >&2; exit 1; }
   install -m 755 "${b}" "${TREE}/etc/init.d/$(basename "${b}")"
 done
+# 首启 root-fs 扩容件（#318，L0 缺口刀1）：rcS 同步跑 disk-grow（上面的
+# bringup 件），它要 resize2fs。落 /usr/bin——镜像 usr 下只有 bin/libexec/
+# share 一个工具目录的惯例位（usr/sbin 不存在，别开新目录）。
+# build-resize2fs.sh 自己有缓存早退（out/ 已建即秒回，cacert 同款模式），
+# 首次才下载+约 2 分钟构建。
+"${ROOT}/scripts/build-resize2fs.sh" >/dev/null
+install -m 755 "${ROOT}/out/resize2fs" "${TREE}/usr/bin/resize2fs"
 # ---- L0 清单组装（刀4；只改 TREE 副本，配方不动）--------------------------
 # 镜像 svc.d 必须恰好 2 单元（net-watch + aginxbrowser——后者是缺席容忍
 # 单元：裸上游二进制无配方可装，30s 自拾取先例，不能删）。母体/UI/网关/
