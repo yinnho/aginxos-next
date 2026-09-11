@@ -135,7 +135,9 @@ phase_pre() {
   drv "aginx agent send me"
   expect_norc "aginx agent send 失败（无母体 = 哑终端本相）"
   drv "/usr/bin/aginx-svc status aginx"
-  expect_out "母体单元 absent（未 opt-in）" 'absent'
+  # svcd 对未知单元的真面相是 'ERR no such unit'（bake #22 首跑实证），
+  # absent 语义由此承载——两词都收，防 svcd 措辞再变。
+  expect_out "母体单元 absent（未 opt-in）" '(absent|no such unit)'
   drv "test -x /usr/bin/aginx-pair"
   expect_rc  "配网 apply 面在（L0 件：voice 包装上即用）"
 }
