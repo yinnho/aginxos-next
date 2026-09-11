@@ -1,0 +1,5 @@
+# Login-shell PATH — /var/bin holds the package faces (aginx,
+# aginx-voice, python3, codex …). rcS exports it for daemons; ssh
+# interactive shells read it here. (dropbear "ssh host cmd" is a
+# non-login shell — use absolute paths there.)
+export PATH=/sbin:/bin:/usr/sbin:/usr/bin:/var/bin
