@@ -2538,3 +2538,31 @@ _b）dev 通道热验：
 设备终态：在役蛋 + 母体包在装在跑（unit `aginx` ready）+ env 含 brain
 key + 老母体单元退役。secretd/gateway/voice 仍是镜像老档跑老 svc.d 单元
 （包版未装——刀6 bake #22 opt-in 序列换血）。
+
+## 2026-09-12 — 刀4 烤线单模化干跑（#315）：L0 底座 148M + all_opt 误判虫（干跑抓到）
+
+host 干跑收据（设备刷机=bake #22 刀6 日；此处只记烤线观察）：
+
+- **首次干跑全绿零修**：EGG=0/1 双档删除后 `build-rootfs.sh` 一发过。
+  产物 **148M**（bake #20 全量档 ~651M——母体三件/term/voice/secretd/
+  gateway/CJK 字体/n5-qr/三模型树全数出镜像）。
+- **树内清点**（/tmp/aginxos-n4-rootfs）：版本戳 `aginxos redfin <sha>
+  … l0`；svc.d=2（net-watch+aginxbrowser，脚本带 die 门）；libexec 仅
+  svcd/net-watch/net-rejoin；/var/bin 空（count 0）；/var/models 三条
+  dangling symlink 指 pkgfiles 未来真身；`usr/bin/aginx|aginx-term|
+  aginx-voice`、`usr/share/fonts`、n5-qr.jpg、老 aginx-server.toml 全
+  MISS ✓。
+- **组装清单**：基础 8 条目（全翻 opt）+ 8 行 opt 附加（aginx/aginx-term/
+  gateway/secretd/asr/tts/ocr/voice，deps 随配方——voice 带
+  asr,tts,ocr）；sig verify=valid；`grep -c core`=0；片段落
+  out/pkgs/agpkg.opt.add。aginx-term v0.1.0 首打（cd55d0e5）补齐 8/8 sha。
+- **干跑抓虫（本刀最有价值的观察）**：provision 首 版 core 探测用
+  `grep -avq ' opt$'` 判行尾——**追加行是 `opt <ver> [deps]`，8 行全被
+  误判 core**，fresh L0 每靴白等 6 分钟网+空转 sync（违反「刷完就是活
+  的机器」）。改第 4 字段判（set-- 字段走，busybox awk 段错误铁律）；
+  宿主双向验证：真组装件 all_opt=1（早退 pkg ok）／掺一条 core=0（原
+  语义保持）。重烤折入。
+- **注册表门**：L0 面 18 commands OK（router 出镜像后 /usr/bin 无 aginx
+  face——`aginx` 命令装母体包后出生）。
+
+刀4 状态：host 侧完结（commit 513e136）；设备收据并入刀6 bake #22。
