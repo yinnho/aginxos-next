@@ -8,15 +8,18 @@
 # bench (enchilada) is exactly why the gate exists.
 #
 # Sequence (crash-safe order, commit point last):
-#   0. state pre-arm: `aginx-update capture` over adb, while the OLD
-#      system is still running — bake #20 receipt (2026-09-09):
-#      state-restore is a one-shot handshake (marker consumed by the
-#      boot that restores it), and `fastboot flash userdata` rewrites
-#      the front 2 GiB only, so nothing re-arms state. Skip this and
-#      the flashed image boots factory-reset shaped (no wifi.conf /
-#      env / secret / stamps). Run `./flash-redfin.sh capture` first,
+#   0. NO state pre-arm by default (刀5, 2026-09-12): the L0 image is a
+#      universal zero-prep base — a fresh flash WANTS the factory shape
+#      (no wifi.conf / env / secret / stamps; you configure AFTER, over
+#      adb: push /etc/wifi.conf + set a root password or ssh pubkey).
+#      CAPTURE=1 opts into the upgrade path (re-flash that keeps the
+#      running system's state — /root/.ssh, wifi.conf, secrets): run
+#      `./flash-redfin.sh capture` while the OLD system is still on adb,
 #      THEN enter fastboot (manual Power+VolDown) — after the device
-#      leaves adb it is too late for this boot.
+#      leaves adb it is too late for this boot. bake #20 receipt
+#      (2026-09-09): state-restore is a one-shot handshake (marker
+#      consumed by the boot that restores it) and `fastboot flash
+#      userdata` rewrites the front 2 GiB only, so nothing re-arms state.
 #   1. rootfs.img must exist (DEVICE=redfin ./scripts/build-rootfs.sh)
 #   2. pack vendor_boot with HOLD=1 USBADB=1 ROOTFS=1 (the working set,
 #      observed 2026-09-02 — ROOTFS=1 without USBADB=1 boots unreachable)
@@ -28,11 +31,9 @@
 #
 # Dry-run by default: prints the plan and exits. GO=1 executes.
 # SKIP_PACK=1 reuses the already-packed vendor_boot (quick re-flash of
-# a new rootfs with an unchanged boot side).
-# SKIP_STATE=1 skips the state pre-arm below (C10 蛋案): a fresh EGG
-# image WANTS the factory shape — no capture, no marker, first boot
-# comes up stateless (扫码配网起步). Normal (full-image / upgrade-path)
-# flash days keep the capture.
+# a new rootfs with an unchanged boot side). CAPTURE=1 additionally
+# pre-arms the state tar (upgrade path — see step 0; fails hard if the
+# capture does not verify).
 #
 # Recovery: fastboot flash vendor_boot the stock image
 # (.local/device/redfin/stock/stock-vendor_boot.img) returns the slot
@@ -94,27 +95,27 @@ if [ "${1:-}" = "capture" ]; then
 fi
 
 # ---- gate: attached device must be THE machine -----------------------------
-# State pre-arm first (opportunistic): if the device is still in adb,
-# capture now. If it already left (fastboot only), warn — the flashed
-# image restores state only from whatever marker is armed, and none may
-# be (the bake #20 shape). Deliberately not fatal: an operator may be
-# re-flashing with state capture handled separately, and state can be
-# reconstructed after the fact (HARDWARE.md bake #20 recipe).
+# L0 default: NO state pre-arm — the fresh image is factory-shaped by
+# design (configure after, over adb/ssh). CAPTURE=1 arms it now and
+# fails hard on any capture defect (the operator asked for the upgrade
+# path; a silent skip would flash away /root/.ssh + wifi.conf).
 if [ -z "${GO:-}" ]; then
   say "dry-run (GO=1 to flash) — plan:"
-  say "  state arm   : adb ${ADB_SERIAL} → aginx-update capture (run './flash-redfin.sh capture' first)"
+  say "  state       : none (L0 出厂形状 — CAPTURE=1 升级路径，先 './flash-redfin.sh capture')"
   say "  serial gate : fastboot devices must list exactly '${FB_SERIAL}'"
   say "  rootfs      : ${ROOTFS_IMG}"
   say "  vendor_boot : HOLD=1 USBADB=1 ROOTFS=1 pack-vendor-boot.sh (SKIP_PACK=1 to reuse)"
   say "  flash order : userdata first, vendor_boot last (commit point), reboot"
+  say "  after boot  : adb push wifi.conf → /etc/, passwd 或 authorized_keys → ssh 接管"
   say "  recovery    : fastboot flash vendor_boot ${STOCK_VB}"
   exit 0
 fi
 
-if [ -n "${SKIP_STATE:-}" ]; then
-  say "SKIP_STATE=1 — state pre-arm SKIPPED (蛋出厂形状：无 marker，首启无 state-restore)"
-elif ! capture_state; then
-  say "WARNING: flashing without a fresh state capture — first boot of the new image may come up stateless"
+if [ -n "${CAPTURE:-}" ]; then
+  capture_state \
+    || { echo "CAPTURE=1 but state pre-arm FAILED — fix before flashing" >&2; exit 1; }
+else
+  say "state pre-arm skipped（L0 出厂形状：无 marker，首启无 state-restore；CAPTURE=1 走升级路径）"
 fi
 
 ATTACHED="$(fastboot devices 2>/dev/null || true)"

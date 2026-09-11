@@ -109,6 +109,29 @@ into a machine.
   machine references; every machine difference lives in a per-device
   directory. See the next section.
 
+## L0 — the image is a base; everything else is a package
+
+Flashing AginxOS is like flashing Linux on a dev board: the image is a
+universal, zero-prep base — kernel + init + supervisor + network + ssh
+(password AND public-key channels) + the package manager + a boot lamp.
+That is the entire image; it is the same bytes for every user and
+carries zero personal data. Everything with an opinion — the mother
+herself (one tree package: router, server, runtime), the panel
+terminal, the voice stack, the gateway, the secret sidecar, the ASR/
+TTS/OCR model trees, Python, agent CLIs — is a signed package in an
+all-optional catalog. First boot provisions nothing; what runs on the
+machine is the owner's `opt-in` (with dependency closure: the voice
+package pulls its three model trees, the gateway pulls the sidecar).
+
+Configuration is post-flash, over USB: push the Wi-Fi config, set a
+root password or drop a public key, then ssh takes over and USB can be
+unplugged. Packages carry their own service units — the supervisor
+adopts a newly installed unit without a reboot, and an absent-tolerant
+unit lets a bare upstream binary join the machine as a package with no
+recipe at all. A default re-flash wants this factory shape back; an
+explicit one-shot capture path preserves the machine's identity (ssh
+keys, Wi-Fi) across an upgrade flash.
+
 ## Machines are data — the device layer (D14)
 
 Adding a machine is a new directory plus a bring-up line; the platform
@@ -172,9 +195,10 @@ The add-a-machine checklist lives in [`devices/README.md`](../devices/README.md)
 - **Flash:** each machine owns its one-command flash script
   (`devices/<codename>/boot/flash-<codename>.sh`) which pins every
   fastboot call to the serial *from that machine's profile* and refuses
-  to run against anything else on the bench. Dry-run by default;
-  payload partition first, the switching image last — the commit point
-  is the final write.
+  to run against anything else on the bench. Dry-run by default; the
+  default flash produces the factory L0 shape (zero-prep — configure
+  after, see the L0 section); payload partition first, the switching
+  image last — the commit point is the final write.
 - **OTA:** update manifests are ed25519-signed and carry a mandatory
   `device` field. Verification happens before the manifest is even
   parsed; a manifest naming another machine is refused before a single

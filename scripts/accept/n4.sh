@@ -1,4 +1,10 @@
 #!/usr/bin/env bash
+# 【已退役 2026-09-12，刀5 L0 翻档——不要跑】本套件断言的是整机烤机世
+# 界：引擎在 /usr/libexec/aginx/、/usr/bin/aginx 裸名、镜像六单元——L0
+# 下全为假（母体/单元/面随包走，镜像 svc.d=2）。设备日回归改用
+# n6-egg.sh（L0 档：pre/paired/steady/egg2）+ n7-l0.sh（ssh+pkg 自持
+# 全链）；m42c/m45 仍按各自前提跑。留档不删：切净段（E）的历史收据
+# 语义仍有对账价值。
 # n4 acceptance — bake 接管整机切换（N4：新仓出的镜像在役，裸命令 aginx
 # 即母体门面；一代线归档为资产库）。
 #

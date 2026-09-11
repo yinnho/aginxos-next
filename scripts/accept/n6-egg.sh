@@ -1,37 +1,47 @@
 #!/usr/bin/env bash
-# n6-egg acceptance — 蛋案设备日（C11）。
+# n6 acceptance — L0 底座设备日（C11 蛋案 → 刀5 L0 翻档，2026-09-12）。
 #
-# 蛋的收据分四段，对应设备日的四个状态——套件按相位跑（刷机/举码是
-# 人工腿，不在套件里；runbook 见 HARDWARE.md 蛋案节）：
+# L0 的世界：镜像=内核+init+svc+网络+ssh+pkg，其余全是包。收据按相位跑
+# （刷机/推配置是人工腿，不在套件里；runbook 见 HARDWARE.md 刀6 节）：
 #
-#   pre     刷完蛋、配网前：出厂形状预检 + A 哑终端（commands 活、
-#           母体死、单元 absent）
-#   paired  用户举屏扫码配网后：B 配网产物证（wifi.conf/boot.state/
-#           env 行数不回显值/钟）+ C 清单自动装（term 自动 sync，15min
-#           窗：8 stamps + 8 faces + sidecar + 模型 symlink 落地 +
-#           wait_ready×6）+ D 等价（send 真往返/8443/voice local/
-#           secretd policy）+ E 点击装（grok opt-in，CLI 代行+注记）
-#   steady  二启后（同像）：wifi 自动连 / pkg ok / 六单元 / send 仍答 /
-#           sync 零 downloading
-#   egg2    第二颗蛋+state 后（capture 正常刷机日）：wifi.conf 从 state
-#           回来（出厂本无此件）→ sync missing—downloading×8 重拉 →
-#           等价复验
+#   pre     刷完 L0、配置前：出厂形状预检 + A 哑终端（pkg/svc 活、路由器
+#           死、清单可见母体）
+#   paired  配网+灌 env 后（adb push wifi.conf / n7 usbconf 腿）：
+#           B 配网产物证（wifi.conf/boot.state/env 键名不回显值/钟）+
+#           C 显式 opt-in 五连（aginx/aginx-term/aginx-voice/aginx-
+#           browser/aginx-gateway——voice 自动带 asr/tts/ocr，gateway 自动
+#           带 secretd，刀1 依赖感知的设备面收据；browser 是裸上游二进制
+#           opt 行，缺席容忍单元 30s 自拾取=设计用途首次实证）+
+#           D 等价（send 真往返/8443/voice local/secretd policy）+
+#           E 点击装（grok opt-in，CLI 代行）
+#   steady  二启后（同像）：wifi 自动连 / pkg ok（全 opt=秒落）/
+#           六单元 / send 仍答 / sync 零 downloading
+#   egg2    capture 升级日（CAPTURE=1 刷机后）：wifi.conf 从 state 回来；
+#           脸被刷没但全 opt 不再自动重拉（provision 早退）——opt-in 重跑
+#           回脸 + 等价复验。与蛋时代的 missing—downloading×8 是两条路。
 #
-# 已知缺口（R13，接受）：首启无语音问候（装完 uptime 已超 #282 闸），
-# 问候收据归 steady 段后的真人眼验（#198 同类）。
+# 前置（刀6 镜像先行闸）：pkgs.aginx.net 已上 8 包新车——opt-in 404 =
+# 镜像源没上，不是套件的失败。env 灌注（brain 键 + AGINX_GATEWAY_ID）
+# 是运维腿：gateway 缺 id 会裸 exit(1) 进断路器（刀3 必修④），send 缺
+# brain 键 401 空答。
 #
-# 纪律同 n5/m42c：钉死 serial；秘密零回显——env 只数行、policy 探针是
-# 套件自有 scope；busybox netstat 禁用（/proc/net/tcp）；设备杀进程
-# pkill -x 或按 pid。
+# 已知缺口（R13 残余，接受）：L0 首启无语音问候（voice 是包，装上时
+# uptime 已过闸）——问候收据归真人眼验（#198 同类）。
+#
+# 纪律同 m42c/n2：钉死 serial；秘密零回显——env 只查键名；busybox
+# netstat 禁用（/proc/net/tcp）；设备杀进程 pkill -x 或按 pid。
 set -euo pipefail
 
 ACCEPT_DEVICE=redfin . "$(dirname "$0")/_serial.sh"  # SERIAL：env 最高，默认读 redfin 档案 [adb]
 NROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 PORT_HEX=20FB          # 8443 = 0x20FB（busybox netstat 必炸，走 /proc/net/tcp）
-GWLOG=/var/log/aginx-svc/aginx-gateway.log
-CORE8="aginx-runtime aginx-server aginx-gateway aginx-secretd aginx-asr aginx-tts aginx-ocr aginx-voice"
-UNITS6="aginx-server aginx-voice aginxbrowser aginx-secretd net-watch aginx-gateway"
-N6_SCOPE=n6-egg-probe
+# L0 八包（刀4 定档）：五连 opt-in 的落地面——voice 带 asr/tts/ocr、
+# gateway 带 secretd 全靠 depends；aginxbrowser 是基础清单裸二进制 opt
+# 行（无配方、无依赖，缺席容忍单元 30s 拾取——svc.d=2 里它活着的理由）。
+CORE8="aginx aginx-term aginx-voice aginx-asr aginx-tts aginx-ocr aginx-gateway aginx-secretd"
+OPTIN5="aginx aginx-term aginx-voice aginxbrowser aginx-gateway"
+UNITS6="aginx aginx-voice aginxbrowser net-watch aginx-secretd aginx-gateway"
+N6_SCOPE=n6-l0-probe
 
 PASS=0
 FAIL=0
@@ -72,8 +82,8 @@ wait_8443() { # label
   echo "FAIL - ${1}（8443 未 ESTABLISHED）"; FAIL=$((FAIL+1)); return 1
 }
 
-# 8 stamps 全落（C 段安装完成信号；term 自动 sync 不写 boot.state，
-# stamps 是唯一的落地面）。tries×sleeps 是给首拉 ~700MB 的窗。
+# 8 stamps 全落（C 段安装完成信号；opt-in 不写 boot.state，stamps 是唯一
+# 落地面）。tries×sleeps 是给首拉 ~700MB 的窗（asr 239MB 贴 MEMBER_MAX）。
 wait_core8_stamps() { # label tries sleep_secs
   local i n missing
   for i in $(seq 1 "${2:-60}"); do
@@ -89,53 +99,68 @@ wait_core8_stamps() { # label tries sleep_secs
 }
 
 phase_pre() {
-  echo "==> 预检（出厂形状：剥面/dangling/无 wifi.conf/无 stamps）"
-  adbx get-state >/dev/null 2>&1 || { echo "n6-egg: device $SERIAL 不在线"; exit 1; }
-  drv "grep -q ' egg\$' /etc/aginx-version"
-  expect_rc  "版本戳尾 egg（n6 蛋形戳）"
+  echo "==> 预检（出厂形状：底座/无路由器/dangling/无 wifi.conf/零 stamps）"
+  adbx get-state >/dev/null 2>&1 || { echo "n6: device $SERIAL 不在线"; exit 1; }
+  drv "grep -q ' l0\$' /etc/aginx-version"
+  expect_rc  "版本戳尾 l0（L0 形戳，刀4）"
+  drv "test ! -e /usr/bin/aginx"
+  expect_rc  "路由器不烤（/usr/bin/aginx 无——母体在包里）"
+  drv "ls /etc/aginx/svc.d | wc -l"
+  expect_out "镜像 svc.d 恰 2 单元（net-watch+aginxbrowser）" '^2$'
   drv "ls /usr/libexec/aginx | wc -l"
   expect_out "libexec 恰三件（svcd/net-watch/net-rejoin）" '^3$'
   for b in aginx-svcd net-watch net-rejoin; do
     drv "test -x /usr/libexec/aginx/$b"; expect_rc "libexec 在：$b"
   done
-  drv "test ! -e /usr/bin/aginx-voice && test ! -e /usr/libexec/aginx/aginx-server"
-  expect_rc  "剥面不在：/usr/bin/aginx-voice、libexec/aginx-server"
-  drv "ls /var/bin 2>/dev/null | grep -vc '\\.aginxmd\$'"
-  expect_out "var/bin 无二进制（只余 sidecar）" '^0$'
+  drv "test ! -e /usr/bin/aginx-voice && test ! -e /usr/bin/aginx-term && test ! -e /usr/libexec/aginx/aginx-server"
+  expect_rc  "剥面不在：/usr/bin/aginx-{voice,term}、libexec/aginx-server"
+  drv "ls -A /var/bin 2>/dev/null | wc -l"
+  expect_out "var/bin 全空（0 件——face 待包装）" '^0$'
   drv "test -L /var/models/asr && test ! -e /var/models/asr && test -L /var/models/ocr && test ! -e /var/models/ocr"
   expect_rc  "models asr/ocr = dangling symlink（装包前 -e 恒假）"
   drv "test -L /var/models/tts/vits-melo-tts-zh_en && test ! -e /var/models/tts/vits-melo-tts-zh_en"
   expect_rc  "models tts = dangling symlink"
   drv "test ! -e /etc/wifi.conf"
-  expect_rc  "出厂形状：无 /etc/wifi.conf（SKIP_STATE 未预武实证）"
+  expect_rc  "出厂形状：无 /etc/wifi.conf（默认免 capture 实证）"
   drv "test ! -e /run/aginx-voice/face"
   expect_rc  "voice 从未起过（face 不存在）"
   drv "ls /var/lib/aginx/stamps 2>/dev/null | wc -l"
-  expect_out "stamps 空（fresh 蛋零包）" '^0$'
+  expect_out "stamps 空（fresh L0 零包）" '^0$'
 
-  echo "==> A 哑终端（壳活、母体死）"
-  drv "aginx commands >/dev/null"
-  expect_rc  "aginx commands rc=0（路由器在蛋里）"
+  echo "==> A 哑终端（pkg/svc 活、路由器死、清单见母体）"
+  drv "aginx-pkg available | grep -qx aginx"
+  expect_rc  "清单见母体（available 列 aginx = 刀6 镜像源闸的设备面）"
+  drv "aginx commands >/dev/null 2>&1"
+  expect_norc "aginx commands 失败（路由器未装——L0 无母体命令面）"
   drv "aginx agent send me"
-  expect_norc "aginx agent send 失败（无 server = 哑终端本相）"
-  drv "/usr/bin/aginx-svc status aginx-server"
-  expect_out "aginx-server 单元 absent（cmd 指未装的 /var/bin）" 'absent'
+  expect_norc "aginx agent send 失败（无母体 = 哑终端本相）"
+  drv "/usr/bin/aginx-svc status aginx"
+  expect_out "母体单元 absent（未 opt-in）" 'absent'
+  drv "test -x /usr/bin/aginx-pair"
+  expect_rc  "配网 apply 面在（L0 件：voice 包装上即用）"
 }
 
 phase_paired() {
-  echo "==> B 配网产物证（举屏扫码后；秘密零回显）"
-  adbx get-state >/dev/null 2>&1 || { echo "n6-egg: device $SERIAL 不在线"; exit 1; }
+  echo "==> B 配网产物证（adb push wifi.conf + env 灌注后；秘密零回显）"
+  adbx get-state >/dev/null 2>&1 || { echo "n6: device $SERIAL 不在线"; exit 1; }
   drv "grep -c '^ssid' /etc/wifi.conf"
   expect_out "wifi.conf 恰一行 ssid" '^1$'
   drv "grep -q '^internet ok' /run/boot.state"
-  expect_rc  "boot.state internet ok（pair apply 定点刷新）"
-  drv "test \$(wc -l < /etc/aginx/env) -ge 3"
-  expect_rc  "env 三键在（只数行，值零回显）"
+  expect_rc  "boot.state internet ok"
+  drv "grep -q '^AGINXBRAIN_API_KEY=' /etc/aginx/env"
+  expect_rc  "env brain 键名在（值零回显——send 真答的前置）"
+  drv "grep -q '^AGINX_GATEWAY_ID=' /etc/aginx/env"
+  expect_rc  "env gateway id 键名在（gateway 缺 id 会裸 exit 断路器）"
   drv "[ \$(date +%Y) -ge 2026 ]"
-  expect_rc  "钟到 2026（quick_clock 腿）"
+  expect_rc  "钟到 2026（TLS 前置）"
 
-  echo "==> C 清单自动装（term 自动 sync；15min 窗）"
-  wait_core8_stamps "8 包 stamps 齐（首拉完成）" 60 15
+  echo "==> C 显式 opt-in 五连（刀1 依赖感知设备面；15min 窗）"
+  local p
+  for p in $OPTIN5; do
+    drv "aginx-pkg opt-in $p"
+    expect_rc  "opt-in $p rc=0"
+  done
+  wait_core8_stamps "8 包 stamps 齐（voice 带 3 模型、gateway 带 secretd）" 60 15
   local n
   for n in $CORE8; do
     drv "test -f /var/lib/aginx/stamps/$n.version"
@@ -145,6 +170,8 @@ phase_paired() {
   done
   drv "test -d /var/models/asr && test -d /var/models/ocr"
   expect_rc  "模型树经 symlink 可达（dangling→真身）"
+  drv "test -s /var/lib/aginx/pkgfiles/aginx-term/share/fonts/agterm-cjk.otf"
+  expect_rc  "term 字体随包落 pkgfiles（cjk.rs 兜底路径）"
   local u
   for u in $UNITS6; do
     wait_ready "$u" "单元 $u" 20
@@ -159,10 +186,13 @@ phase_paired() {
                     || { echo "FAIL - voice face 未出现"; FAIL=$((FAIL+1)); }
 
   echo "==> D 等价（与整机同待遇）"
+  drv "aginx commands >/dev/null"
+  expect_rc  "路由器命令面活了（母体包装上）"
   drv "aginx agent send 现在几点了"
   expect_rc  "send rc=0（母体应答）"
   # 错误行本身是中文（「母体 brain 调用失败…」），[一-龥] 单查会误过——
-  # 先证非错误前缀，再证有字。
+  # 先证非错误前缀，再证有字。真中文回复=secret.policy pkgfiles 真身放行
+  # 实证（刀3 必修①的活体判据，哑弹在此现形）。
   expect_no  "send 非报错行（无 aginx agent: 前缀）" '^aginx agent:'
   expect_out "send 真回复（非空有字）" "[一-龥]"
   wait_8443   "网关远端通道"
@@ -190,7 +220,7 @@ phase_paired() {
 
 phase_steady() {
   echo "==> F 同像重启（套件内真重启 + 等回）"
-  adbx get-state >/dev/null 2>&1 || { echo "n6-egg: device $SERIAL 不在线"; exit 1; }
+  adbx get-state >/dev/null 2>&1 || { echo "n6: device $SERIAL 不在线"; exit 1; }
   drv "/usr/bin/aginx-reboot || true"
   sleep 5
   local BACK=0 i
@@ -217,65 +247,67 @@ phase_steady() {
   done
   [ "$WIFIOK" = 1 ] && { echo "ok   - wifi 自动连 + internet ok（wifi.conf 持久实证）"; PASS=$((PASS+1)); } \
                     || { echo "FAIL - wifi/internet ok 未落（5min）"; FAIL=$((FAIL+1)); }
-  # provision 本靴全程跑（wifi ok 不早退）——pkg ok 分钟级，有界等
-  local PKG_OK=0
+  # 全 opt 清单：provision 早退，pkg ok 应秒落（10min 窗是给异常的——
+  # 秒级不到=有人把清单翻回了 core）。
+  local PKG_OK=0 PKG_T0=$(date +%s)
   for i in $(seq 1 40); do
     drv "grep -q '^pkg ok' /run/boot.state"; [ "${DRV_RC:-}" = "0" ] && { PKG_OK=1; break; }
     sleep 15
   done
-  [ "$PKG_OK" = 1 ] && { echo "ok   - pkg ok（provision resync 全程跑通）"; PASS=$((PASS+1)); } \
+  [ "$PKG_OK" = 1 ] && { echo "ok   - pkg ok（全 opt 早退，$(( $(date +%s) - PKG_T0 ))s 落）"; PASS=$((PASS+1)); } \
                     || { echo "FAIL - pkg ok 未落（10min）"; FAIL=$((FAIL+1)); }
   drv "/usr/bin/aginx-svc list | grep -c ready"
-  expect_out "六单元恰 ready" '^6$'
+  expect_out "六单元恰 ready（aginx/voice/browser/net-watch/secretd/gateway）" '^6$'
   drv "aginx agent send 现在几点了"
   expect_rc  "二启后母体仍应答"
   expect_no  "send 非报错行（无 aginx agent: 前缀）" '^aginx agent:'
   expect_out "二启后母体真回复" "[一-龥]"
   drv "aginx-pkg sync"
-  expect_rc  "sync rc=0"
+  expect_rc  "sync rc=0（全 opt=no-op，但签名链照验）"
   expect_no  "稳态零 downloading" 'downloading'
-  # 蛋上 voice face 在 /var/bin（整机档才是 /usr/bin）——裸名走 PATH
+  # voice face 在 /var/bin（包面）——裸名走 PATH
   drv "aginx-voice --inject 你好; sleep 1; aginx-voice --face"
   expect_out "语音地板仍在（我在）" '我在'
 }
 
 phase_egg2() {
-  echo "==> G 第二颗蛋 + state（capture 正常刷机日后跑）"
-  adbx get-state >/dev/null 2>&1 || { echo "n6-egg: device $SERIAL 不在线"; exit 1; }
-  drv "grep -q ' egg\$' /etc/aginx-version"
-  expect_rc  "还是蛋（版本戳尾 egg）"
+  echo "==> G capture 升级日（CAPTURE=1 刷机后；先跑 './flash-redfin.sh capture'）"
+  adbx get-state >/dev/null 2>&1 || { echo "n6: device $SERIAL 不在线"; exit 1; }
+  drv "grep -q ' l0\$' /etc/aginx-version"
+  expect_rc  "还是 L0（版本戳尾 l0）"
   drv "test -e /etc/wifi.conf"
   expect_rc  "wifi.conf 从 state tar 回来（出厂本无此件 = state-restore 实证）"
   drv "grep -q '^wifi ok' /run/boot.state"
-  expect_rc  "wifi 自动连（无需再扫）"
-  drv "test ! -e /var/bin/aginx-server"
-  expect_rc  "var/bin 被刷没（stamps 在而脸不在 = sync 判 missing 的前提）"
-  # 重拉 8 包 ~700MB——30min 窗
+  expect_rc  "wifi 自动连（无需再推）"
+  drv "test ! -e /var/bin/aginx"
+  expect_rc  "母体脸被刷没（state tar 不带 pkgfiles——C9 排除集）"
+  # 全 opt：provision 早退，不再 missing—downloading 重拉（蛋时代路径已死）
   local PKG_OK=0 i
-  for i in $(seq 1 60); do
+  for i in $(seq 1 40); do
     drv "grep -q '^pkg ok' /run/boot.state"; [ "${DRV_RC:-}" = "0" ] && { PKG_OK=1; break; }
-    sleep 30
+    sleep 15
   done
-  [ "$PKG_OK" = 1 ] && { echo "ok   - pkg ok（重拉完成）"; PASS=$((PASS+1)); } \
-                    || { echo "FAIL - pkg ok 未落（30min）"; FAIL=$((FAIL+1)); return 0; }
-  drv "grep -c 'downloading' /var/tmp/aginx-pkg-sync.log 2>/dev/null"
-  expect_out "sync 日志见 missing—downloading×8（stamp 在脸不在的判据）" '^([89]|1[0-9])$'
-  local n
-  for n in $CORE8; do
-    drv "test -e /var/bin/$n"
-    expect_rc  "face 回来：$n"
+  [ "$PKG_OK" = 1 ] && { echo "ok   - pkg ok（全 opt 早退——不自动重拉）"; PASS=$((PASS+1)); } \
+                    || { echo "FAIL - pkg ok 未落"; FAIL=$((FAIL+1)); return 0; }
+  drv "grep -c 'downloading' /var/tmp/aginx-pkg-sync.log 2>/dev/null || echo 0"
+  expect_out "sync 日志零 downloading（stamp 在脸不在也不拉）" '^0$'
+  # 回脸=显式重跑（satisfied 判 stamp+face，脸缺即重下）；browser 裸件
+  # 同法（stamp 在、脸缺=重拉 55MB）。
+  local p
+  for p in $OPTIN5; do
+    drv "aginx-pkg opt-in $p"
+    expect_rc  "opt-in 重跑 $p rc=0（回脸）"
   done
-  drv "test -d /var/models/asr"
-  expect_rc  "模型树回来（C9 排除 → 重拉即真身）"
+  wait_core8_stamps "8 包脸全回" 60 15
   local u
   for u in $UNITS6; do
     wait_ready "$u" "单元 $u" 20
   done
   drv "aginx agent send 现在几点了"
-  expect_rc  "换蛋后母体仍应答"
+  expect_rc  "重灌后母体仍应答"
   expect_no  "send 非报错行（无 aginx agent: 前缀）" '^aginx agent:'
-  expect_out "换蛋后母体真回复" "[一-龥]"
-  wait_8443   "换蛋后网关重连"
+  expect_out "重灌后母体真回复" "[一-龥]"
+  wait_8443   "重灌后网关重连"
 }
 
 cleanup() {
@@ -291,14 +323,14 @@ case "${1:-}" in
   *)
     cat >&2 <<USAGE
 usage: n6-egg.sh <pre|paired|steady|egg2>
-  pre     刷完蛋配网前（出厂形状 + 哑终端）
-  paired  扫码配网后（B 配网证 + C 自动装 + D 等价 + E 点击装）
-  steady  二启后（同像稳态：pkg ok / 六单元 / send / 零 downloading）
-  egg2    第二颗蛋+state 刷机日后（重拉 + 等价复验）
+  pre     刷完 L0 配置前（出厂形状 + 哑终端 + 清单见母体）
+  paired  配网+灌 env 后（B 配网证 + C 显式 opt-in 五连 + D 等价 + E 点击装）
+  steady  二启后（同像稳态：pkg ok 秒落 / 六单元 / send / 零 downloading）
+  egg2    capture 升级日后（wifi.conf 回来 + opt-in 重跑回脸 + 等价复验）
 USAGE
     exit 2 ;;
 esac
 
 echo
-echo "n6-egg($1): $PASS passed, $FAIL failed"
+echo "n6-l0($1): $PASS passed, $FAIL failed"
 [ "$FAIL" = 0 ]
