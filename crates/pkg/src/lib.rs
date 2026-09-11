@@ -7,8 +7,8 @@
 //! field = core, an absent 5th field = no version (display-only — sha256
 //! equality stays the only truth), and an optional 6th comma-separated
 //! dep list (sync installs deps first); `sync` self-heals core entries
-//! only; `opt-in` installs an opt entry and seeds its launcher registry
-//! entry; installs are atomic (.new → rename) and keep the previous
+//! only; `opt-in` installs an opt entry WITH its transitive deps (deps
+//! first, any tier — only the named entry gets a launcher seed) and
 //! binary on any failure. Mutating verbs hold a cross-process lock
 //! (`PkgLock`) — a concurrent install makes the late caller yield
 //! rc=0, never a boot.state failure.
@@ -39,7 +39,7 @@
 //! Paths are env-overridable (AGINX_PKG_BINDIR etc.) for host tests; on the
 //! phone nobody sets them and the constants below are the truth.
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -965,6 +965,26 @@ impl CmdOut {
     }
 }
 
+/// Up-to-date = the stamp matches AND the binary is actually there.
+/// Stamp alone is not enough: a rootfs swap (or any rm) wipes /var/bin
+/// while the stamps ride the state tar — trusting the stamp alone left
+/// the phone "up to date" with nothing installed (observed 2026-09-03,
+/// first swap with /var/lib in the state tar). Failing that, the v0
+/// legacy check on the binary's own hash — which also heals the stamp
+/// for pre-M26 installs. Shared by sync (core) and opt-in (named +
+/// deps): same up-to-date law, one place.
+fn satisfied(p: &Paths, e: &Entry) -> Result<bool, Fail> {
+    let bin = p.bindir.join(&e.name);
+    if read_stamp(p, &e.name).as_deref() == Some(e.sha256.as_str()) && bin.exists() {
+        return Ok(true);
+    }
+    if sha256_file(&bin).ok().as_deref() == Some(e.sha256.as_str()) {
+        write_stamp(p, &e.name, &e.sha256)?;
+        return Ok(true);
+    }
+    Ok(false)
+}
+
 pub fn cmd_sync(p: &Paths, manifest: Option<&Path>, pubkey_b64: &str) -> Result<i32, Fail> {
     let path = manifest.unwrap_or(&p.manifest);
     if !path.exists() {
@@ -989,27 +1009,14 @@ pub fn cmd_sync(p: &Paths, manifest: Option<&Path>, pubkey_b64: &str) -> Result<
         if broken_names.contains(&e.name.as_str()) {
             continue;
         }
-        // up-to-date = stamp matches AND the binary is actually there.
-        // Stamp alone is not enough: a rootfs swap (or any rm) wipes
-        // /var/bin while the stamps ride the state tar — trusting the
-        // stamp alone left the phone "up to date" with nothing installed
-        // (observed 2026-09-03, first swap with /var/lib in the state
-        // tar). Else the v0 legacy check on the binary's own hash, which
-        // also heals the stamp for pre-M26 installs.
-        let bin = p.bindir.join(&e.name);
-        if read_stamp(p, &e.name).as_deref() == Some(e.sha256.as_str()) && bin.exists() {
+        if satisfied(p, e)? {
             println!("aginx-pkg: {} up to date", e.name);
             continue;
         }
-        let cur = p.bindir.join(&e.name).exists().then(|| sha256_file(&p.bindir.join(&e.name)).ok()).flatten();
-        if cur.as_deref() == Some(e.sha256.as_str()) {
-            write_stamp(p, &e.name, &e.sha256)?;
-            println!("aginx-pkg: {} up to date", e.name);
-            continue;
-        }
-        match cur {
-            Some(_) => println!("aginx-pkg: {} stale — downloading", e.name),
-            None => println!("aginx-pkg: {} missing — downloading", e.name),
+        if p.bindir.join(&e.name).exists() {
+            println!("aginx-pkg: {} stale — downloading", e.name);
+        } else {
+            println!("aginx-pkg: {} missing — downloading", e.name);
         }
         match fetch_install(p, e) {
             Ok(_) => println!("aginx-pkg: installed {} ({})", e.name, e.sha256),
@@ -1055,33 +1062,53 @@ pub fn cmd_opt_in(p: &Paths, name: &str, pubkey_b64: &str) -> Result<(), Fail> {
     if e.tier != Tier::Opt {
         return Err(usage_fail(format!("{name} is not an opt entry (sync handles core)")));
     }
-    // Deps must at least exist in the manifest — opt-in never
-    // auto-installs them (sync owns core deps; the error names what's
-    // absent so the caller knows to sync first).
-    let missing: Vec<&str> = e
-        .deps
-        .iter()
-        .filter(|d| !entries.iter().any(|x| x.name == **d))
-        .map(|d| d.as_str())
-        .collect();
+    // Deps ride the opt-in now (deps before dependents, same law as
+    // sync): `opt-in aginx-voice` lands aginx-asr/tts/ocr in one
+    // command. Walk the transitive closure of the named entry; a dep
+    // named but absent from the manifest fails before any fetch. Deps
+    // may be any tier — refusing a core dep would just recreate the old
+    // "run sync first" dead end. A cycle anywhere refuses the manifest
+    // (dep_order's law). Only the NAMED package gets a launcher entry;
+    // deps are engines, sync-face installs.
+    let mut want: HashSet<String> = HashSet::new();
+    let mut missing: Vec<String> = Vec::new();
+    let mut queue: Vec<String> = vec![name.to_string()];
+    while let Some(n) = queue.pop() {
+        if !want.insert(n.clone()) {
+            continue;
+        }
+        match entries.iter().find(|x| x.name == n) {
+            Some(e2) => queue.extend(e2.deps.iter().cloned()),
+            None => missing.push(n),
+        }
+    }
     if !missing.is_empty() {
         return Err(Fail::new(
             ErrorType::NotFound,
             "pkg_dep_missing",
-            format!("{name} depends on {} not in the manifest", missing.join(", ")),
+            format!("{name} (transitively) depends on {} not in the manifest", missing.join(", ")),
         )
-        .with_hint(format!("run aginx-pkg sync first — core deps install with the rest")));
+        .with_hint(format!("add a manifest line for {}, or drop it from the deps column", missing.join(", "))));
     }
-    let cur = sha256_file(&p.bindir.join(name)).ok();
-    if cur.as_deref() == Some(e.sha256.as_str()) {
-        write_stamp(p, name, &e.sha256)?;
-        seed_app(p, name)?;
-        println!("aginx-pkg: {name} already installed — seeded launcher entry");
-        return Ok(());
+    let (ordered, _broken) = dep_order(&entries)?;
+    for e in ordered.into_iter().filter(|e| want.contains(&e.name)) {
+        if satisfied(p, e)? {
+            if e.name == name {
+                seed_app(p, name)?;
+                println!("aginx-pkg: {name} already installed — seeded launcher entry");
+            } else {
+                println!("aginx-pkg: {} up to date", e.name);
+            }
+            continue;
+        }
+        fetch_install(p, e)?;
+        if e.name == name {
+            seed_app(p, name)?;
+            println!("aginx-pkg: opted in {name}");
+        } else {
+            println!("aginx-pkg: installed dep {} ({})", e.name, e.sha256);
+        }
     }
-    fetch_install(p, e)?;
-    seed_app(p, name)?;
-    println!("aginx-pkg: opted in {name}");
     Ok(())
 }
 
@@ -1765,12 +1792,39 @@ mod tests {
         let app = fs::read_to_string(p.appdir.join("optpkg").join("app.toml")).unwrap();
         assert!(app.contains("scale = 3"));
         assert!(app.contains("/bin/optpkg"));
-        // dep not in the manifest -> typed refusal before any fetch
-        p.manifest = write_signed(&root, "m2", &format!("depclient http://x {sha} opt 1.0 libx\n"), &sk);
+        // deps ride the opt-in: libx (a CORE-tier dep — tier does not
+        // gate deps) installs before depclient, both land with stamps,
+        // and only the named package gets a launcher entry
+        let payload = root.join("payload.bin");
+        fs::write(&payload, b"DEP").unwrap();
+        let stub = root.join("downloader");
+        fs::write(&stub, format!("#!/bin/sh\ncp '{}' \"$2\"\n", payload.display())).unwrap();
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(&stub, fs::Permissions::from_mode(0o755)).unwrap();
+        let dsha = sha256_hex(b"DEP");
+        p.manifest = write_signed(
+            &root,
+            "m2",
+            &format!("depclient http://x/{dsha} {dsha} opt 1.0 libx\nlibx http://x/{dsha} {dsha} core 1.0\n"),
+            &sk,
+        );
+        cmd_opt_in(&p, "depclient", &pub_b64).unwrap();
+        assert!(p.bindir.join("libx").exists());
+        assert!(p.bindir.join("depclient").exists());
+        assert!(p.stamps.join("libx").exists());
+        assert!(p.stamps.join("depclient").exists());
+        assert!(p.appdir.join("depclient").join("app.toml").exists());
+        assert!(!p.appdir.join("libx").join("app.toml").exists());
+        // dep named but absent -> typed refusal before any fetch
+        p.manifest = write_signed(&root, "m3", &format!("depclient http://x/{dsha} {dsha} opt 1.0 ghost\n"), &sk);
         let f = cmd_opt_in(&p, "depclient", &pub_b64).unwrap_err();
         assert_eq!(f.code, "pkg_dep_missing");
-        assert!(f.message.contains("libx"));
-        assert!(!p.bindir.join("depclient").exists());
+        assert!(f.message.contains("ghost"));
+        assert!(!p.bindir.join("ghost").exists());
+        // a cycle anywhere refuses the manifest (dep_order's law)
+        p.manifest = write_signed(&root, "m4", &format!("x http://x/{dsha} {dsha} opt 1.0 y\ny http://x/{dsha} {dsha} opt 1.0 x\n"), &sk);
+        let f = cmd_opt_in(&p, "x", &pub_b64).unwrap_err();
+        assert_eq!(f.code, "pkg_dep_cycle");
     }
 
     #[test]
