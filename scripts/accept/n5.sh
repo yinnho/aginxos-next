@@ -1,4 +1,10 @@
 #!/usr/bin/env bash
+# 【已退役 2026-09-12，刀5 L0 翻档——不要跑】本套件断言镜像自带六单元
+# （含 gateway/secretd 烤机）与 /var/bin 众生——L0 下网关/密钥走 opt-in
+# 包，镜像 svc.d=2。等价面由 n6-egg.sh（L0 档 C/D 段：opt-in 五连 +
+# 8443/secretd policy）与 n7-l0.sh 覆盖；aginx-backup 线未入 L0 首跑
+# 范围，复用时按新现实改写。留档不删：K/L 段（网关 registered + 宿主
+# agc 往返）是远端通道的历史首收据。
 # n5 acceptance — 吸收归并 + 远端通道 + 备份线（N5：六冻结件吸收、
 # /var/lib/aginx 状态世界、aginx-gateway 六单元、aginx-backup 本地线）。
 #

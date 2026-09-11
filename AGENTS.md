@@ -54,6 +54,21 @@ the old repo's ARCH/CARRIER/SYSTEM docs; `.gitignore` enforces it).
   relay.aginx.net, external JSON-RPC collapsed onto the server's UDS
   front (ACP.md wire authority = ecosystem repo). Acceptance gate:
   `scripts/accept/n5.sh`.
+- **L0 无头底座 (2026-09-12, 刀1–刀6 翻档)**: the image is the base and
+  nothing else — kernel + init + supervisor + network + ssh (dropbear,
+  password AND pubkey channels) + pkg + the bootcard lamp; image svc.d
+  ships exactly 2 units (net-watch + absent-tolerant aginxbrowser).
+  The mother (one `aginx` tree package: router/server/runtime), term,
+  voice, gateway, secretd and the three model trees all ride packages
+  carrying their own `[service]` units; provision installs NOTHING
+  (manifest is all-opt) — `aginx-pkg opt-in <name>` pulls a package
+  with its dependency closure (voice brings asr/tts/ocr, gateway brings
+  secretd). Flash is zero-prep — one universal image, no personal data
+  baked; configuration is post-flash over adb (`/etc/wifi.conf` +
+  `passwd` or authorized_keys, then ssh takes over; acceptance =
+  `n7-l0.sh`). `./flash-redfin.sh capture` is the upgrade path (pre-arms
+  the state tar so /root/.ssh + wifi.conf survive a re-flash); the
+  default flash wants the factory shape.
 
 ## Ground Rules
 
@@ -75,6 +90,11 @@ the old repo's ARCH/CARRIER/SYSTEM docs; `.gitignore` enforces it).
   `<binary>.aginxmd` sidecar (`# aginx:key=value`, summary mandatory);
   shebang scripts carry inline `# aginx:` headers. Daemons live in
   `/usr/libexec/aginx/` — outside the router's scan, no sidecar needed.
+- The image is L0 (2026-09-12): anything beyond kernel+init+svc+network+
+  ssh+pkg is a package. New engine work lands as `pkgs/<name>/` with
+  its `[service]` unit, never as a baked unit — `build-rootfs.sh` dies
+  if image svc.d grows past 2. Provision ships an all-opt manifest and
+  installs nothing; what runs on a phone is the user's `opt-in`.
 - Secrets never enter the repo or docs. Brain access is
   `AGINXBRAIN_API_KEY` in `/etc/aginx/env` at runtime (unit env_file) —
   never committed, never echoed; on host it rides the environment only.
@@ -118,7 +138,7 @@ builds from `devices/<codename>/cam/` via `scripts/build-cam.sh`.
 | `rootfs/` | the image recipe — see `rootfs/README.md` (placement matrix, asset split) |
 | `devices/` | per-machine data, one dir per codename: `device.toml`, `modules.txt`, `bringup/`, `boot/` (pack line), `cam/` — add-a-machine checklist in `devices/README.md` |
 | `scripts/build-rootfs.sh` | the bake, `DEVICE=<codename>`: recipe + zigbuild + that machine's assets (`.local/device/<codename>`) → `out/rootfs.img` |
-| `scripts/accept/` | device acceptance suites (n4.sh switch gate, n5.sh absorption+remote gate, m42c.sh pairing gate) |
+| `scripts/accept/` | device acceptance suites: `n6-egg.sh` (L0 bake-day shape/equivalence: pre/paired/steady/egg2), `n7-l0.sh` (product flow: usbconf→netup→ssh→opt-in→steady), `m42c.sh` pairing gate; n4/n5 retired 2026-09-12 (headers say why) |
 | `shims/` | repo-local `aginx-*` command faces (host trial registry) |
 | `docs/ARCH.md` | the constitution (local only, gitignored) |
 | `docs/HARDWARE.md` | device experiment log — this repo's receipts from N4 on |
