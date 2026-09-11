@@ -1,0 +1,21 @@
+# aginx — 母体包（D11 母体=aginx；L0 定案 2026-09-11）：router+server+
+# runtime 一树三件，替代旧 aginx-server/aginx-runtime 两裸包。
+# tree 包：/var/bin/aginx 是指进 pkgfiles 的 symlink（exec=bin/aginx）；
+# server 真身由单元直接指 pkgfiles 路径 spawn——/proc/exe 解析到真身，
+# secret.policy brain.primary 已加该路径（必修①，不补=绿灯无脑）。
+# 单元名=包名 aginx（write_unit 按安装名落）：aginx-svc status aginx、
+# 日志 aginx.log。AGINX_BIN 指 /var/bin/aginx（face symlink）；runtime
+# 直接指 pkgfiles 真身（省一层 symlink 解析）。
+name = "aginx"
+version = "0.1.0"
+summary = "母体：路由器 face /var/bin/aginx + 心脏 server + fast-agi runtime（UDS /run/aginx.sock）"
+group = "agent"
+url = "https://pkgs.aginx.net/aginx/v0.1.0/aginx-v0.1.0-4pc.tar"
+exec = "bin/aginx"
+
+[service]
+cmd = "/var/lib/aginx/pkgfiles/aginx/bin/aginx-server"
+args = []
+type = "simple"
+envs = ["AGINX_HOME=/home/.aginx", "AGINX_BIN=/var/bin/aginx", "AGINX_RUNTIME_BIN=/var/lib/aginx/pkgfiles/aginx/bin/aginx-runtime"]
+env_file = "/etc/aginx/env"

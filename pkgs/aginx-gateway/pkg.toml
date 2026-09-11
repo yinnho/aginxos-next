@@ -1,8 +1,20 @@
-# aginx-gateway — 远端通道守护的包形态（C8 蛋案）。
-# id/secret 走 env_file（刷机日灌注），不进包不进库。
-# 见 ../aginx-server/pkg.toml 头注：单元/打包线键同律。
+# aginx-gateway — 远端通道守护的包形态（C8 蛋案 → L0 刀3：单元入包）。
+# id/secret 走 env_file（/etc/aginx/env，刷机日灌注），不进包不进库。
+# 运维序铁律（必修④）：先写 env（AGINX_GATEWAY_ID 等）再 opt-in 本包——
+# 裸 exit(1) 于缺 ID 会 5 连崩进断路器停摆，provision revive 只救 sync
+# 装的；停摆=显式 `aginx-svc start aginx-gateway` 才醒。
+# depends=aginx-secretd 只保安装序；启动序由 requires_weak 延到 secretd
+# ready（弱依赖，secretd 后死不拖累）。
 name = "aginx-gateway"
-version = "0.1.0"
+version = "0.1.1"
 summary = "远端通道守护：8443 长连、agc 往返（凭据走 env 不进包）"
 group = "net"
-url = "https://pkgs.aginx.net/aginx-gateway/v0.1.0/aginx-gateway-v0.1.0-4pc.tar"
+depends = "aginx-secretd"
+url = "https://pkgs.aginx.net/aginx-gateway/v0.1.1/aginx-gateway-v0.1.1-4pc.tar"
+
+[service]
+cmd = "/var/bin/aginx-gateway"
+args = []
+type = "simple"
+env_file = "/etc/aginx/env"
+requires_weak = ["aginx-secretd"]

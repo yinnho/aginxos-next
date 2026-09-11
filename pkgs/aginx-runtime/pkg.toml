@@ -1,7 +1,0 @@
-# aginx-runtime — 化身执行引擎的包形态（C8 蛋案）。
-# 见 ../aginx-server/pkg.toml 头注：单元/打包线键同律。
-name = "aginx-runtime"
-version = "0.1.0"
-summary = "fast-agi 引擎：server 按需 spawn 的化身执行器（AGINX_RUNTIME_BIN）"
-group = "agent"
-url = "https://pkgs.aginx.net/aginx-runtime/v0.1.0/aginx-runtime-v0.1.0-4pc.tar"
