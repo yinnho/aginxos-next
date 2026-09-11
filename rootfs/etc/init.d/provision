@@ -38,6 +38,24 @@ mkdir -p /var/lib/aginx/done /var/lib/aginx/skills /var/lib/aginx/units /var/lib
 [ -f /etc/agpkg.manifest ] || exit 0
 grep -qE '^[a-z]' /etc/agpkg.manifest || exit 0   # all entries commented
 
+# L0 (刀4): the manifest ships ALL-opt — sync has no core work, so the
+# 6-minute net wait + sync are skipped entirely and the boot line goes
+# straight to `pkg ok` (provision installs NOTHING by default; what runs
+# on this phone is the user's opt-in). A future core entry re-arms the
+# original semantics untouched. Tier grammar: field 4, absent = core —
+# the baked append lines carry `opt <ver> [deps]` after the sha, so a
+# "line ends in opt" grep would misread every one of them as core
+# (busybox awk segfaults on this build — set-- field walk instead).
+all_opt=1
+while IFS= read -r line; do
+  case "${line}" in ''|'#'*) continue ;; esac
+  set -- ${line}
+  [ "${4:-core}" = "opt" ] || all_opt=0
+done < /etc/agpkg.manifest
+if [ "${all_opt}" = "1" ]; then
+  say pkg ok
+else
+
 # ---- wait for internet (resync + finalize both need it) -------------------
 # Give net-bringup up to 6 minutes (radio + join + dhcp on a cold boot).
 n=0
@@ -78,6 +96,7 @@ fi
 for u in $(sed -n 's/^aginx-pkg: installed \([^ ]*\).*/\1/p' "$LOG" 2>/dev/null); do
   aginx-svc restart "$u" 2>/dev/null
 done
+fi  # (a core entry present — wait + sync ran; all-opt took the early `pkg ok` above)
 
 # ---- model links (2026-09-09 蛋案) ----------------------------------------
 # asr/tts/ocr 三包的模型树住 pkgfiles（大件可重下物，不进 state tar），
@@ -105,10 +124,12 @@ ensure_model_link aginx-ocr ocr
 # not node. Re-seeded every boot — idempotent overwrite, no marker.
 mkdir -p /var/lib/aginx/skills/_system
 cat >/var/lib/aginx/skills/_system/SKILL.md <<'SYSEOF'
-# _system — 系统级保证（provision seed，每靴覆写）
+# _system — 系统级说明（provision seed，每靴覆写）
 
-- **python3 保证在**：core tier 四件套（musl CPython 3.12），sync 自愈；
-  `python3 -m pip` 装 musllinux aarch64 wheel。细节见 skills/python3/。
+- **L0 无头底座**：provision 默认什么都不装——清单全 opt，装什么
+  （python3/codex/母体/语音…）是用户自己的事（`aginx-pkg opt-in <name>`）。
+- **python3 是包不是保证**：opt-in 后 `python3 -m pip` 装 musllinux
+  aarch64 wheel；loader 链接由 python-finalize 幂等补。
 - **node 不保证**：要 JS 运行时自己装（opt tier 或 wheel 生态替代）。
 - 其余系统工具面以 `aginx commands --all` 为准（D13 路由器，文件即注册表）。
 SYSEOF

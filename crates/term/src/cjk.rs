@@ -2,11 +2,11 @@
 //
 // The 5x8 bitmap font in font.rs stays the ASCII fast path and the boot
 // fallback; this module rasterizes codepoints that need more than 8 rows
-// through ab_glyph against a Noto Sans Mono CJK SC subset baked into the
-// rootfs at /usr/share/fonts/agterm-cjk.otf (OFL; produced on the host by
-// scripts/subset-cjk-font.sh). If that file is missing — recovery boot,
-// adb-pushed aginx-term without the rootfs — the terminal degrades to today's
-// '?' fallback for CJK instead of failing to start.
+// through ab_glyph against a Noto Sans Mono CJK SC subset (OFL; the frozen
+// asset rootfs/usr/share/fonts/agterm-cjk.otf rides the aginx-term PACKAGE
+// since L0 — font_path probes the pkgfiles tree). If no font file is found
+// (package absent, recovery boot, adb-pushed aginx-term) the terminal
+// degrades to today's '?' fallback for CJK instead of failing to start.
 //
 // ab_glyph has no hinting; at terminal cell sizes (>= ~24 px) rasterizing
 // at the exact pixel size and alpha-blending the coverage is enough
@@ -21,13 +21,26 @@ use std::sync::{Mutex, OnceLock};
 use ab_glyph::{Font, FontArc, Glyph, Point, PxScale};
 
 const FONT_PATH: &str = "/usr/share/fonts/agterm-cjk.otf";
+// L0 (刀4): the font left the image with aginx-term itself — it rides the
+// package tree now. Same layout rule as every tree package: files/ members
+// land under /var/lib/aginx/pkgfiles/<name>/.
+const PKGFILES_FONT_PATH: &str =
+    "/var/lib/aginx/pkgfiles/aginx-term/share/fonts/agterm-cjk.otf";
 const CACHE_CAP: usize = 1024;
 
 /// Override for the host/adb dev loop (`aginx-term --ppm`, pre-rebake pushes):
-/// AGINX_TERM_CJK_FONT=/path/to/agterm-cjk.otf. On device the baked rootfs path
-/// above is the truth.
+/// AGINX_TERM_CJK_FONT=/path/to/agterm-cjk.otf. On device the font lives in
+/// the aginx-term package tree (L0); the baked path is probed first so a
+/// dev-pushed binary on an old full image still finds its font.
 fn font_path() -> String {
-    std::env::var("AGINX_TERM_CJK_FONT").unwrap_or_else(|_| FONT_PATH.to_string())
+    if let Ok(p) = std::env::var("AGINX_TERM_CJK_FONT") {
+        return p;
+    }
+    if std::path::Path::new(FONT_PATH).exists() {
+        FONT_PATH.to_string()
+    } else {
+        PKGFILES_FONT_PATH.to_string()
+    }
 }
 
 /// Terminal cell width of `ch` in 6x8-cell units: 2 for CJK / fullwidth
