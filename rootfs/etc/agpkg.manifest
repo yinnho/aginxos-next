@@ -63,3 +63,10 @@ agmem          https://pkgs.aginx.net/agmem/v0.2.0/agmem-v0.2.0-4pc.tar 4b9c4690
 # grok is optional since M23 (选装 tier): an agent CLI like codex, but
 # self-built and not needed for the phone's own loop — pick it via "+".
 grok           https://pkgs.aginx.net/grok/v1.0.12/grok-v1.0.12-aarch64-unknown-linux-musl dac1ccb2084ee8ccbfd3e9656210e5dfb689c080b05d0fc1c5349c010fd6796d opt
+# git (L0 缺口刀C, 2026-09-12) — Alpine v3.22 aarch64 apk 闭包整树
+# （route D）：git 2.49.1 全功能 + musl 1.2.5 loader + https 传输闭包
+# （libcurl/openssl…，CA 走镜像烤入的 /etc/ssl/certs 绝对路径）。
+# wrapper 面 bin/git 首跑自链 /lib/ld-musl-aarch64.so.1（python3 包同
+# 工艺、自持共存）。配方 pkgs/git/，apk sha256 钉表在 build-pkg.sh
+# git) 分支；PATH 面 CLI（D12 agent-CLI 口味），不注册 aginx 命令面。
+git            https://pkgs.aginx.net/git/v2.49.1/git-v2.49.1-4pc.tar bc316af669557fa06b053523e4974cbc58e1c9bf6668d135d0eed9094953a499 opt
