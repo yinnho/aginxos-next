@@ -2774,3 +2774,38 @@ $6$ 实证（DES 时代收据只证过 des，$6$ 验证是本刀新收据）；
 des 13 字符全不收）；rcS sshd 注释与 AGENTS.md 刷机说明书同指
 sha512 形（裸 chpasswd/passwd=des 别用）。bash -n + 断言语义本地
 三值证（$6→true / !→false / *→false）+ check.sh 全绿。
+
+**git opt 树包 host 侧收据（2026-09-12，#321 L0 缺口刀C — 设备腿未收）**：
+route D（Alpine 树包）落地。产物 `out/pkgs/git-v2.49.1-4pc.tar`
+**19,511,808B / 234 成员 / sha256 `bc316af6…5a499`**。三证：
+
+①**闭包钉死**：Alpine v3.22 main/aarch64 15 apk（musl-1.2.5-r12、
+git-2.49.1-r0、libcurl-8.14.1-r3、libssl3/libcrypto3-3.5.8、
+zlib/pcre2/expat/zstd/brotli/psl/unistring/idn2/nghttp2/c-ares）
+sha256 逐件钉死在 build-pkg.sh `git)` 分支（TOFU 于下载日——
+APKINDEX 无 apk 文件哈希，钉表即真源）；out/apk-cache 缓存复用
+（sha 合则不拉）。构建门全过：usr/bin/git 本体 + loader +
+git-remote-https + templates + **15 soname find -maxdepth 1 逐件**。
+
+②**symlink 农场透传实证**：apk v2 tarball 内是目录正确的相对
+symlink（非 hardlink）——`git-add -> ../../bin/git`、
+`git-remote-https -> git-remote-http`、`libc.musl-aarch64.so.1 ->
+ld-musl-aarch64.so.1`、`libcurl.so.4 -> libcurl.so.4.8.0` 均在
+重打后的 ustar 里原样在（bsdtar 解 → macOS tar 重打两跳无损；
+安装器 lib.rs :428-439 本就按 symlink 重建，:440+ 拒绝对目标）。
+裁掉全数 0：.PKGINFO/.SIGN/.pre/.post/.trigger、man/doc/locale、
+files/etc、engines-3、ossl-modules。wrapper `files/bin/git` 755
+（1109B）+ 树内 loader 真文件 723,480B（apk 树只有 usr/bin，
+bin/ 是 wrapper 专属层）。
+
+③**manifest+重签**：git opt 行入 `/etc/agpkg.manifest`（D12 agent-
+CLI 口味，与 codex/grok 同族——PATH 面 CLI，不注册 aginx 命令面），
+aginx-sign 重签 verify=valid；check.sh 全绿。代码提交 cfe7f53。
+
+**未收两腿（设备离线，ssh 超时无 USB）**：设备腿（opt-in →
+`git --version` / `--exec-path` → https clone 真收据——SKILL.md
+验证节已写好）与镜像���腿（pkgs.aginx.net/git/v2.49.1/ 未上传，
+opt-in 前 404 属预期）。/lib loader 自链腿属设备腿（python3 在装
+则链接已在，wrapper [ -e ] 门直接过）。CA 面零配置：libcurl 编译
+期默认路径 /etc/ssl/certs/ca-certificates.crt 镜像已烤入（M12，
+ca-certificates-bundle 因此故意不在闭包）。
