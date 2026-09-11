@@ -2477,3 +2477,29 @@ QR-in-grace 回归检查（09-10 已收，绿）：铸文本码（aginx.net/qr-g
 **设备终态**：在役 slot + dev-push 领先（cam-shot md5 07d8666f +
 voice md5 c64450cf + device.toml AF 旗标三件），下次 bake 折叠（bake
 #21 债单）。
+
+## 2026-09-11 — 刀2 ssh 双通道热验（#313）：密码腿史上首收据 + Legrand AP 单向隔离实锤
+
+整改线（L0 无头底座）刀2，提交 04de4f8（rcS 摘 `-s` + 烤入 root-locked
+`/etc/shadow` + `/etc/profile` + build-rootfs chmod 600）。不刷机先行热验，
+在役 af08a22 蛋（slot _b）上直接改运行态：
+
+- **密码腿（首条密码 ssh 收据）**：`chpasswd`（throwaway 值经 /tmp 文件喂
+  入，单 Bash 调用内生成+消费，零回显）→ dropbear 去 `-s` 手动重启
+  （pid 11949）→ `sshpass` ssh 往返 `SSH-PW-LEG-OK aarch64` + 版本戳读回。
+  坑①：busybox chpasswd 写 **DES crypt**（无 `$` 前缀）——`grep -ac
+  "^root:\$"` 探针假阴性，收据别用 `$` 前缀判活。坑②：首跑 Bash 60s 超时
+  肢解了持密码变量的壳（值永失），重验一律「生成→推送→喂→往返」单调用
+  闭环。
+- **公钥腿**：Mac `id_ed25519.pub` → `/root/.ssh/authorized_keys`（去重
+  追加、chmod 600）→ `BatchMode=yes` 纯密钥往返 `SSH-KEY-LEG-OK`。
+- **网络面（Legrand AP 又一性）**：Mac→设备 ping 100% 丢、TCP22 不可达；
+  设备→Mac ping 0% 丢。**单向隔离**——真 IP 运维腿在 AP 上不通，收据全
+  走 `adb forward tcp:2222 tcp:22`（rcS 注释即此回退）。设备 ssh 直连收
+  据留 bake #22 刷机日（换网或换 AP 复验）。
+- **清场**：`/etc/shadow` 删（unknown DES 哈希不留，密码道回锁——无
+  shadow 则 getspnam 空、比对恒败）；authorized_keys 留 1 行（开发机自
+  钥）；dropbear 维持无 `-s` 跑（密码道已 inert，方向即烤线新常态）。
+
+设备终态：在役 af08a22 + 本会话运行态三处（authorized_keys 1 行、无
+/etc/shadow、dropbear 无 -s）——bake #22 全部折叠进镜像。
