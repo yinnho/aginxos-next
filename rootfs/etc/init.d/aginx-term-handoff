@@ -8,14 +8,25 @@
 # The old wait-here-then-cold-start put ~3 s of silent black between the
 # two stages. bootcard always self-exits (`done` verdict hold or the
 # 150 s deadline), so the timeout kill retired with the wait.
-export PATH=/sbin:/bin:/usr/sbin:/usr/bin
+#
+# L0 (刀4): aginx-term is a package — nothing is baked at /usr/bin, the
+# panel face is /var/bin/aginx-term (installer-seeded symlink). Absent =
+# quiet 5 s poll (no log writes — a bare L0 is headless by design, the
+# boot story is the bootcard wordmark); the moment the package lands the
+# panel relights within one tick, no reboot. Same absent-tolerant shape
+# as svcd's unit re-check (aginxbrowser precedent).
+export PATH=/sbin:/bin:/usr/sbin:/usr/bin:/var/bin
 # M17 voice hook: watch /run/aginx-term.inject (ASR text lands there; aginx-term
 # types it into the pty). Was hand-exported since M18 — baked here in
 # #13 so it survives rootfs swaps.
 export AGINX_TERM_INJECT=1
 
 ( while :; do
-    echo "=== aginx-term start $(date) ===" >> /var/aginx-term.log
-    /usr/bin/aginx-term >> /var/aginx-term.log 2>&1
-    sleep 2
+    if [ -x /var/bin/aginx-term ]; then
+      echo "=== aginx-term start $(date) ===" >> /var/aginx-term.log
+      /var/bin/aginx-term >> /var/aginx-term.log 2>&1
+      sleep 2
+    else
+      sleep 5
+    fi
   done ) &

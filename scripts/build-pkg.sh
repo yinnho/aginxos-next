@@ -5,8 +5,9 @@
 #
 #   四裸包  aginx-gateway aginx-secretd aginx-voice
 #                       — zigbuild musl 件 + pkgs/<name>/ 配方
-#   一树包  aginx        — 母体三件（router/server/runtime，exec=bin/aginx，
-#                         [service] 指 pkgfiles 真身；刀3 合一）
+#   两树包  aginx aginx-term
+#                       — 母体三件（router/server/runtime，刀3 合一）+
+#                         终端面板（term+字体，刀4 出镜像）
 #   三树包  aginx-asr aginx-tts aginx-ocr
 #                       — .local/device/redfin 冻结 bionic 件 + 模型一树
 #                         （exec=bin/ag-*，模型与整机烤机逐字节同源：asr
@@ -14,7 +15,7 @@
 #                          det/rec/dict 三件）
 #
 # 产物 out/pkgs/<name>-v<ver>-4pc.tar + .sha256（裸 hex），尾行打一行
-# manifest 片段（name url sha core version [deps]）——C10 EGG 清单组装
+# manifest 片段（name url sha opt version [deps]）——L0 清单组装（刀4）
 # 直接收走。`--push <serial>` = adb push + `aginx-pkg install`（显式路径
 # = dev 免签通道）。镜像发布保持手工 scp（sync.sh 留服务器端）。
 #
@@ -90,6 +91,18 @@ case "${PKG}" in
       "${TARGET_DIR}/aginx-runtime" "${STAGE}/files/bin/"
     MEMBERS="pkg.toml SKILL.md files"
     ;;
+  aginx-term)
+    # 终端树包（刀4 出镜像）：term + CJK 字体一树。字体真源是 rootfs
+    # 配方里的冻结资产（M38a，同 n5-qr.jpg 先例——文件不搬家）。
+    echo "==> zigbuild aginx-term（musl，缓存则秒过）"
+    (cd "${ROOT}" && cargo zigbuild --release --target aarch64-unknown-linux-musl \
+      -p aginx-term)
+    mkdir -p "${STAGE}/files/bin" "${STAGE}/files/share/fonts"
+    install -m 755 "${TARGET_DIR}/aginx-term" "${STAGE}/files/bin/aginx-term"
+    install -m 644 "${ROOT}/rootfs/usr/share/fonts/agterm-cjk.otf" \
+      "${STAGE}/files/share/fonts/agterm-cjk.otf"
+    MEMBERS="pkg.toml SKILL.md files"
+    ;;
   aginx-asr)
     test -x "${VOICE}/bin/ag-asr" || { echo "FATAL: missing ${VOICE}/bin/ag-asr — see devices/redfin/boot/assets.md" >&2; exit 1; }
     test -s "${VOICE}/models/asr/model.int8.onnx" || { echo "FATAL: missing asr models" >&2; exit 1; }
@@ -120,7 +133,7 @@ case "${PKG}" in
     MEMBERS="pkg.toml SKILL.md files"
     ;;
   *)
-    echo "FATAL: 未知包名 ${PKG}（四裸包 zigbuild / aginx 母体树包 / 三树包预编译件）" >&2
+    echo "FATAL: 未知包名 ${PKG}（四裸包 zigbuild / aginx·aginx-term 树包 / 三树包预编译件）" >&2
     exit 1
     ;;
 esac
@@ -159,8 +172,8 @@ else
 fi
 printf '%s\n' "${SHA}" > "${OUT}/${TARNAME}.sha256"
 
-# manifest 片段（deps 是清单第 6 列；C10 EGG 组装收走此行）
-echo "${PKG} ${URL} ${SHA} core ${VER}${DEPS:+ ${DEPS}}"
+# manifest 片段（deps 是清单第 6 列；L0 全 opt——刀4 翻档，镜像组装段收走）
+echo "${PKG} ${URL} ${SHA} opt ${VER}${DEPS:+ ${DEPS}}"
 
 if [ -n "${SERIAL}" ]; then
   echo "==> push ${SERIAL}（dev 免签通道）"

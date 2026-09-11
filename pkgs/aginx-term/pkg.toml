@@ -1,0 +1,12 @@
+# aginx-term — 终端面板面的包形态（L0 刀4：term 出镜像走包）。
+# 树包两成员：bin/aginx-term（zigbuild musl）+ share/fonts/agterm-cjk.otf
+# （M38a 冻结资产，rootfs 配方原文件即真源——cjk.rs font_path 兜底探测
+# pkgfiles 路径）。无 [service]：rcS 的 aginx-term-handoff 缺席静默轮询
+# /var/bin/aginx-term，装包 5s 内亮屏无需重启。
+name = "aginx-term"
+version = "0.1.0"
+summary = "终端面板：DRM 光标面/键盘/扫码配网/清单面（face /var/bin/aginx-term）"
+group = "ui"
+url = "https://pkgs.aginx.net/aginx-term/v0.1.0/aginx-term-v0.1.0-4pc.tar"
+
+exec = "bin/aginx-term"
