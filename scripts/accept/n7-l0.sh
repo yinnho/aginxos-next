@@ -201,8 +201,11 @@ phase_ssh() {
   adbx push "${KEYDIR}/pw" /tmp/.n7pw >/dev/null
   adbx shell "/bin/busybox chpasswd < /tmp/.n7pw; rm -f /tmp/.n7pw"
   rm -f "${KEYDIR}/pw"
-  drv "grep -q '^root:\$' /etc/shadow"
-  expect_rc  "密码已设（shadow 出现哈希；值零回显）"
+  # bake #22 实测：本机构建的 busybox chpasswd 默认写 des crypt（13 字符、
+  # 无 $ 前缀），sha512 的 '^root:\$' 断言不中。改算法无关形状：第二字段
+  # ≥12 字节且非锁形(!)/种子形(*)——des 与 $id$ 哈希都收。
+  drv "F=\$(cut -d: -f2 /etc/shadow); [ \${#F} -ge 12 ] && case \$F in '!'*|'*') false;; *) true;; esac"
+  expect_rc  "密码已设（shadow 有哈希字段；算法无关，值零回显）"
   # expect 走密码路：禁公钥，只许 password
   if PASS="${N7PASS}" IP="${ip}" expect -c '
         set timeout 25
