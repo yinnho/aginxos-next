@@ -240,6 +240,14 @@ for b in dropbear dbclient dropbearkey; do
   cp "${DROPBEAR}/${b}" "${TREE}/bin/${b}"
   chmod 755 "${TREE}/bin/${b}"
 done
+# sftp subsystem (#319, L0 缺口刀B) — dropbear 2026.94 编入 SFTP 支持，
+# 每连接 exec DROPBEAR_SFTP_SERVER=/usr/libexec/sftp-server（无参、
+# stdin/stdout 说 SFTP v3）。Go+pkg/sftp 静态件（build 脚本带 out/ 缓存
+# 早退，cacert/resize2fs 同款）；烤进去 = host scp/sftp/GUI 客户端直连。
+# usr/libexec 在下面 320 行 mkdir 才出现，这里自带。
+"${ROOT}/scripts/build-sftp-server.sh" >/dev/null
+mkdir -p "${TREE}/usr/libexec"
+install -m 755 "${ROOT}/out/sftp-server" "${TREE}/usr/libexec/sftp-server"
 # aginx-net-scan (原 nlscan): nl80211 trigger-scan + dump client — busybox
 # has no wireless tools and we ship no libnl. Our WLAN operability check
 # (M3f).

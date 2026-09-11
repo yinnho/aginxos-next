@@ -110,7 +110,9 @@ target is `aarch64-unknown-linux-musl` via zig / cargo-zigbuild, fully
 static; `build-rootfs.sh` zigbuilds everything it needs. The brain-facing
 C tools and /bin internals are zig cc musl statics built from the in-tree
 `rootfs/src/` sources (moved from the old repo at P1); the camera chain
-builds from `devices/<codename>/cam/` via `scripts/build-cam.sh`.
+builds from `devices/<codename>/cam/` via `scripts/build-cam.sh`; the
+dropbear sftp subsystem is a Go static (`tools/sftp-server` +
+`scripts/build-sftp-server.sh`, deps pinned by go.sum — host needs go).
 
 ## Layout
 
