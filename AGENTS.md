@@ -65,8 +65,9 @@ the old repo's ARCH/CARRIER/SYSTEM docs; `.gitignore` enforces it).
   with its dependency closure (voice brings asr/tts/ocr, gateway brings
   secretd). Flash is zero-prep — one universal image, no personal data
   baked; configuration is post-flash over adb (`/etc/wifi.conf` +
-  `passwd` or authorized_keys, then ssh takes over; acceptance =
-  `n7-l0.sh`). `./flash-redfin.sh capture` is the upgrade path (pre-arms
+  `busybox chpasswd -c sha512` or authorized_keys, then ssh takes
+  over; acceptance = `n7-l0.sh`). `./flash-redfin.sh capture` is the
+  upgrade path (pre-arms
   the state tar so /root/.ssh + wifi.conf survive a re-flash); the
   default flash wants the factory shape.
 
