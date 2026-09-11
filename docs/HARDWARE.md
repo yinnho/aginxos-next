@@ -2503,3 +2503,38 @@ voice md5 c64450cf + device.toml AF 旗标三件），下次 bake 折叠（bake
 
 设备终态：在役 af08a22 + 本会话运行态三处（authorized_keys 1 行、无
 /etc/shadow、dropbear 无 -s）——bake #22 全部折叠进镜像。
+
+## 2026-09-11 — 刀3 母体包上机（#314）：pkgfiles 真身真脑直答 + 蛋世界 key 缺失结案
+
+整改线刀3，提交 d1d2ce4（母体合一 `aginx` 树包 + secretd/gateway/voice
+单元入包 + secret.policy 补 pkgfiles 真身路径）。在役 af08a22 蛋（slot
+_b）dev 通道热验：
+
+- **母体包安装**：`build-pkg.sh aginx` 出
+  aginx-v0.1.0-4pc.tar（sha 408893fc…）→ adb push + `aginx-pkg install`
+  （显式路径=dev 免签）。装后：/var/lib/aginx/pkgfiles/aginx/bin/ 三件
+  落位、/var/bin/aginx → 相对 face、**单元文件
+  /var/lib/aginx/units/aginx.toml 由 [service] 生成且 reload 立即拉起**
+  （unit 名随包名=`aginx`，日志 aginx-svc/aginx.log——与镜像 svc.d 老名
+  `aginx-server` 不同名，互不覆写）。老 svc.d 单元 aginx-server 手动
+  stop + 设备侧单元文件已删（防重启双拉抢 /run/aginx.sock；镜像侧文件
+  刀3 已删，bake #22 起镜像自带清态）。
+- **必修① 活体判据=真脑中文直答**：首两发 `send me` 空回误判为前台路由
+  语义；带 rc 探针复跑现形 `brain rejected credentials (401)` 空体——
+  **蛋世界 /etc/aginx/env 只剩 HOME、secretd store count=0，key 从未灌注**
+  （bake #21 欠账实锤，非刀3 回归）。runtime 侧 AGINXBRAIN_API_KEY 只从
+  env 来（brain.rs from_env，空值→请求不带 auth 头→真端点 401）。从 Mac
+  `~/.aginx/carrier/.env` 取回（值单调用内走 mktemp→push→合并→删，零
+  回显；老仓 M31 收据即此源）→ env 追加 + `aginx-svc restart aginx` →
+  **`send me 请用一句话自我介绍` 真脑直答「我是 me，AginxOS 的母体……」**
+  （pid 13252，cmd=pkgfiles 真身——policy 新条目放行实证）。
+- **观察**：reply 落 CLI stdout（当前前台 voice 与新 server 未重连——
+  前台登记随旧 server 死亡而失效，D9/D10 路由面无前台即回退 stdout）。
+  /home/.aginx 装包后不预建（懒建，send 真答即管线全通，不立案）。
+- **四包出厂**：aginx v0.1.0（408893fc）+ secretd v0.1.1（d1475fbc）+
+  gateway v0.1.1（9d7fa667）+ voice v0.2.1（f57b7d84）齐备 out/pkgs/，
+  待刀6 镜像源上新车。
+
+设备终态：在役蛋 + 母体包在装在跑（unit `aginx` ready）+ env 含 brain
+key + 老母体单元退役。secretd/gateway/voice 仍是镜像老档跑老 svc.d 单元
+（包版未装——刀6 bake #22 opt-in 序列换血）。
