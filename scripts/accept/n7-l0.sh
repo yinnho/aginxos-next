@@ -263,9 +263,10 @@ phase_optin_codex() {
   h="$(md5 -q "${N7_CODEX_DIR}/auth.json" 2>/dev/null || md5sum "${N7_CODEX_DIR}/auth.json" | cut -d' ' -f1)"
   drv "md5sum /root/.codex/auth.json"
   expect_out "auth.json 双端一致（600，键值零回显）" "^${h}"
-  # 装：镜像源拉官方 musl 二进制（233MB 级，opt-in 同步完成才返 rc）
-  drv "aginx-pkg available | grep -qx codex"
-  expect_rc  "清单见 codex（opt 目录）"
+  # 装：镜像源拉官方 musl 二进制（233MB 级，opt-in 同步完成才返 rc）。
+  # 复跑语义：available 剔除已装件——首跑在目录、复跑在 list，两态都收。
+  drv "aginx-pkg available | grep -qx codex || aginx-pkg list | grep -q '^codex'"
+  expect_rc  "清单见 codex（opt 目录，或已装）"
   drv "aginx-pkg opt-in codex"
   expect_rc  "opt-in codex rc=0"
   wait_stamp codex "codex face 落地（/var/bin/codex）" 8
