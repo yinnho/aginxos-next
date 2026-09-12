@@ -3313,3 +3313,43 @@ codex 装上 **brain 真答 pong** → 二启 wifi 自动连 / pkg ok 0s 落 / r
 精简账（used）：187.8M → 152.6M(A) → 66.6M(B) → 47.3M(C) → 46.3M(D) →
 **45.25M(E)**。下一刀=bake #28（刀F 镜像收据）：镜像源先上车三新包 +
 aginx/term/voice 重传 + manifest 刷新，checkout 0d8ed39 落戳重烤。
+
+## 2026-09-12 — Bake #28 刷机日（#328）：刀F 上镜像 used 43.29M——qr/pair/update 走包收官，裸 bar 到 codex 为止
+
+**镜像源先行闸**（bake #28 前置）：pkgs.aginx.net 上三新目录
+aginx-qr/aginx-pair/aginx-update v0.1.0 + aginx/aginx-term/aginx-voice
+(v0.2.1) 三覆盖件，服务器 sha256 六件全对，在线 curl 三新包 200
+（1,042,432 / 439,808 / 902,144B）+ sha 同。覆盖窗注记：在役 bake #27
+设备若持旧清单 opt-in aginx/term/voice 会 sha 不符（可接受——新清单随
+本镜像到）。
+
+**烤**：checkout 0d8ed39 落戳重烤（重烤落戳法第三轮）：镜像 38M、
+直装五件（pkg/svc/download/done/secret）、var/bin 0 件、注册表 15 命令。
+host 超块直读 used = 524288−513207 = **11,081 块 = 43.29 MiB**，与刀F
+干烤收据逐块相符。版本戳活体 = `aginxos redfin 0d8ed39 2026-09-12 l0`。
+
+**刷机**：预打包 + 监视器自动 GO=1 SKIP_PACK=1；用户手动 Power+VolDown。
+userdata 45.4s → vendor_boot_b（commit 点）2.2s → reboot。首启 pkg ok +
+done ok，wifi fail no /etc/wifi.conf = 出厂形状。
+
+**n6 pre 19/0**（fresh 形状 + 刀F 缺席断言：qr/pair/update 不烤、var/bin
+空、stamps 零）→ **n7 六相位 42/0**（pre 7 / usbconf 4 / netup 3 / ssh 8 /
+optin-codex 10 / steady 10）：IP 192.168.3.93、双通道 ssh、codex 装上
+**brain 真答 pong** ×2、二启在装恰 {codex}、sync 零 downloading。
+
+**刀F 依赖身份的设备面实证**（源自一次越界跑的 n6 paired，用户即时叫停
+——教训入档：刷机日验收尺=裸 bar 到 codex 为止，全家装收据未经明示不上
+主力设备）：opt-in aginx 自动落 aginx-update stamp、opt-in aginx-term
+自动落 aginx-qr + aginx-pair stamp——qr/pair/update 以 depends 身份随装
+全实证。voice 链死于 tts 拉取（asr 239MB 拉完后 207MB tts 传输中断；镜像
+源侧 range 探活 206/200 + content-length 217,256,960 无恙=设备侧长传输
+抖动）。误装全家桶按裁决走重刷清场（同像 45.3s + 2.3s），n7 重走
+usbconf→steady 回终点：**裸 L0 + 恰 {codex}**，屏幕回无头黑屏。
+
+**精简账（used）收官**：187.8M → 152.6M(A) → 66.6M(B) → 47.3M(C) →
+46.3M(D) → 45.25M(E) → **43.29M(F)**，全幅 −77%。刀池空——精简循环
+随刀F 镜像收据收档。挂账：m42c A 段 /var/bin qr 解码、n6 paired 全家
+链——不属裸 bar，另约设备日。
+
+设备在役=bake #28 镜像（0d8ed39 l0 + codex）；vendor_boot=测试件
+（HOLD/USBADB/ROOTFS），恢复点=stock-vendor_boot.img。
