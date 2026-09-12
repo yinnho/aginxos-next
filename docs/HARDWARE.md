@@ -3107,3 +3107,41 @@ strip）→ 66.6M（B 几何）→ **47.3M（C 死件考古）**——全幅 −
 **设备终态**：4fd27c1 l0 在役（镜像自带 libbinder，无场外补丁）、
 华为 AP 192.168.3.93、在装恰 {codex}、net-watch 独苗、密码锁 root:!、
 /root/.codex 配置在位。
+
+## 2026-09-12 — L0 精简循环④：toybox 退役 + 三 lib 连坐（刀D）——used 47.3M→46.3M（host 干烤；镜像收据留 bake #26）
+
+**证据链（编辑前全部收讫）**：
+- **双份事实**：adb shell PATH=/system/bin:/sbin:/bin，toybox 只抢到同名
+  优先权，busybox farm 同名全覆盖。toybox-only 25 名（acpi/chcon/
+  getenforce/iconv/inotifyd/netcat/readelf/restorecon/sendevent/setenforce/
+  uuidgen/vmstat…——SELinux/logcat 桥那域）在 scripts/accept、rootfs 配方、
+  devices/redfin/bringup 全树零引用。
+- **连坐链（llvm-readelf 全档）**：keep-19 lib 互查 NEEDED——libz 与
+  libprocessgroup 的唯一消费者是 toybox 本体；libcgrouprc 的唯一消费者是
+  libprocessgroup。adbd 闭包（10 NEEDED+传递）、/bin/rmt_storage、
+  cnss-daemon 的 11-lib 跨分区闭包（bake #25 实算）均不碰这三件。
+- **netcat 正名**：busybox 的 applet 本名是 nc——`/bin/netcat` 活体打出
+  `netcat: applet not found`（curated farm 里这条链**从来就是死的**，非
+  刀D 产物）；/system/bin/netcat→toybox 今天活着、随刀走。APPLETS 表
+  netcat→nc。
+- **迁移税活体在案**：busybox grep 接受 -a 且无二进制检测（用 usage 串
+  判能力是假证据，活体才算）；ps 输出格式差异纯观感；全树零绝对
+  /system/bin applet 引用。
+
+**刀形（build-rootfs.sh 五处）**：SYSTEM_KEEP_BIN 4→3（去 toybox）、
+SYSTEM_DEAD_BIN +toybox（点名后 178 条农场悬链被既有悬链清扫整体回收，
+零新增清扫代码）、SYSTEM_KEEP_LIB 19→16（libz 105,280 + libprocessgroup
+365,456 + libcgrouprc 14,848）、APPLETS netcat→nc、prune 回显标签刷新。
+
+**干烤收据（check.sh 全绿）**：system/bin **182→3 条目**（恰 adbd/
+linker64/sh 三真身）、system/lib64 19→**16** 件（三连坐 0 残留）、
+/bin farm nc 在位 netcat 消失、版本戳 3e819eb l0 落、超块直读 used
+12107→**11858 blocks = 47.3→46.3 MiB**（−249 blocks = 1,019,904 B，与
+四件 1,005,760 B + 取整零头自洽）、du 39M。真收益不止 0.97M：multicall
+单源=busybox，system/bin 塌缩到 3 真身——keep 岛一眼可审计，白名单法
+从此在 bin 也安全（点名法留作考古档案）。
+
+镜像收据（fresh boot + 裸 bar：启动 + codex 装上真跑）= bake #26 刷机日
+（不与刀C 的 bake #25 叠刀；届时 checkout 刀D commit 重烤落戳——
+out/rootfs.img 现为 3e819eb 干烤像）。下一刀候选=刀E ko strip-debug /
+Rust opt-level=z（ko 堆 ~5.5M、Rust bins ~8.6M 待剥）。
