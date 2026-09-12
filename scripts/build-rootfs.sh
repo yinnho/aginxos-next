@@ -133,6 +133,63 @@ mkdir -p "${TREE}"/var/lib/aginx/{skills,units,stamps,pkgfiles,done,secret,voice
 # Android pieces: /system (adbd + linker config + lib64) and the root-level
 # property/SELinux files adbd reads at startup.
 cp -R "${RAMDISK}/system" "${TREE}/system"
+# 刀C system/ 死件考古（2026-09-12，L0 精简循环第3刀）：system/ 的活消费者
+# 只有四个——init.d/adbd 的 `exec /system/bin/adbd`（树内唯一活引用）、
+# adb shell 的 sh+toybox（219 条目 = 24 常规 + 195 个 applet symlink 农场，
+# adbd 的 PATH 把 /system/bin 放在最前）、radio-bringup 的 /bin/rmt_storage
+# （qmi 三库走 /vendor_a/lib64 分区解析；活体 /proc maps 还映射 libutils——
+# 静态 NEEDED 漏报的运行时依赖）。其余全死：冻结 trampoline 只 exec busybox
+# /sbin/init；fake-sm 顶 servicemanager；aginx-svcd 持狗；busybox+aginx-reboot
+# 持重启；f2fs/erofs 工具无处跑（rootfs 是 ext4，mkfs 在 host）。keep 岛 =
+# 4 bin + ld.config.txt + lib64 白名单 18 件（闭包 17 = 根并集 13 + 传递 4，
+# 另 libutils 走 maps 证据）。死件 ~20M。镜像收据 = bake #25（不与刀B 叠刀）。
+# die 闸：keep 岛任一缺失 = vendor 资产漂移，大声死、绝不静默剪残。
+SYSTEM_KEEP_BIN="adbd linker64 sh toybox"
+SYSTEM_KEEP_LIB="libadbd_auth.so libadbd_fs.so libbase.so libc++.so libc.so"
+SYSTEM_KEEP_LIB="${SYSTEM_KEEP_LIB} libcutils.so libcgrouprc.so libcrypto.so libdl.so"
+SYSTEM_KEEP_LIB="${SYSTEM_KEEP_LIB} liblog.so libm.so libpackagelistparser.so libpcre2.so"
+SYSTEM_KEEP_LIB="${SYSTEM_KEEP_LIB} libprocessgroup.so libselinux.so libutils.so libz.so"
+SYSTEM_KEEP_LIB="${SYSTEM_KEEP_LIB} ld-android.so"
+for f in ${SYSTEM_KEEP_BIN}; do
+  test -f "${TREE}/system/bin/${f}" \
+    || { echo "FATAL: system keep bin ${f} missing — vendor asset drift" >&2; exit 1; }
+done
+for f in ${SYSTEM_KEEP_LIB}; do
+  test -f "${TREE}/system/lib64/${f}" \
+    || { echo "FATAL: system keep lib ${f} missing — vendor asset drift" >&2; exit 1; }
+done
+test -f "${TREE}/system/etc/ld.config.txt" \
+  || { echo "FATAL: system/etc/ld.config.txt missing — vendor asset drift" >&2; exit 1; }
+# bin：显式点名死件（考古清单即文档）——白名单法在这里会误杀 195 个 toybox
+# applet symlink。resize.f2fs/dump.f2fs/defrag.f2fs/linker_hwasan64/
+# linker_asan64 是指向死目标的 symlink，一并点名；init.android 与 init md5
+# 全同——pack-vendor-boot 在 RAMDISK 世界造的副本随树混入。
+SYSTEM_DEAD_BIN="update_engine_sideload init init.android recovery fastbootd \
+sload_f2fs mkfs.erofs fsck.erofs dump.erofs fsck.f2fs make_f2fs mke2fs \
+e2fsdroid minadbd toolbox charger servicemanager ziptool watchdogd reboot \
+resize.f2fs dump.f2fs defrag.f2fs linker_hwasan64 linker_asan64"
+for f in ${SYSTEM_DEAD_BIN}; do rm -f "${TREE}/system/bin/${f}"; done
+# 悬链清扫：rm 之后目标已亡的 symlink（ueventd→init 这类没点名的）一并清。
+# 残链本无害（-x 恒假，PATH 落到 busybox），清了是整洁。
+find "${TREE}/system/bin" -type l ! -exec test -e {} \; -delete
+# etc：recovery/fastbootd 的配置与证书；init/、security/（otacerts.zip 在
+# security/ 下）、lib64/hw（四个死 HAL：boot/fastboot/health/bootctrl——
+# 消费者全在死件清单里，aginx-update/aginx-boot-ok 自写 GPT）整目录。
+rm -f "${TREE}/system/etc/ueventd.rc" "${TREE}/system/etc/recovery.fstab" \
+      "${TREE}/system/etc/mke2fs.conf" "${TREE}/system/etc/recovery.wipe" \
+      "${TREE}/system/etc/cgroups.json"
+rm -rf "${TREE}/system/etc/init" "${TREE}/system/etc/security" \
+       "${TREE}/system/lib64/hw"
+# lib64：白名单法（68 条目实测无 symlink，全常规文件+hw 目录，[ -f ] 护
+# 目录）。case 模式判定——`[ x = y ] && keep=1` 当循环末句会踩 set -e。
+for f in "${TREE}"/system/lib64/*; do
+  [ -f "${f}" ] || continue
+  case " ${SYSTEM_KEEP_LIB} " in
+    *" $(basename "${f}") "*) ;;
+    *) rm -f "${f}" ;;
+  esac
+done
+echo "==> 刀C system/ prune: bin $(ls "${TREE}/system/bin" | wc -l | tr -d ' ') 条目、lib64 $(ls "${TREE}/system/lib64" | wc -l | tr -d ' ') 件、etc 只留 ld.config.txt"
 for f in default.prop prop.default *_contexts; do
   cp "${RAMDISK}"/${f} "${TREE}/" 2>/dev/null || true
 done
