@@ -530,5 +530,17 @@ echo "strip gate: ${stripped} ELF binaries stripped"
 # change leaves stale bytes past the new fs end (a 2g image stayed 2 GiB
 # after re-baking at 1g — the tail was the old image, 2026-09-02).
 rm -f "${IMG}"
-"${MKE2FS}" -t ext4 -b 4096 -F -d "${TREE}" "${IMG}" "${SIZE}"
+# 刀B mkfs 几何（2026-09-12，L0 精简循环第2刀）：bake #23 直读超块，
+# used 152.6M 里内容只占 ~51M——journal 16384 块=64M + inode 表
+# 131072×256B=32M 两项就是 used 的 2/3。两刀主食：
+#   -N 8192   树 239 文件，8192 inode=34 倍余量；disk-grow 在 rcS 里先于
+#             provision 跑，resize2fs 按块比同比例长 inode（bake #23 活体：
+#             131072→7,151,616 = 28602363/524288 整——54.56×），装包全落
+#             扩容后 ~447k inode，永不受初始数卡。
+#   -J size=8 journal 64M→8M。原子性不变：journal 尺寸只界定批处理/检查点
+#             频率，不界定断电滚回语义。resize2fs 1.47.0 扩容不重长 journal
+#             （resize 源码只有 fix_sb_journal_backup 搬家记账），109G fs
+#             顶 8M journal 功能无损（机上无 e2fsck，无尺寸校验面）。
+# 不加 -m 0：预留块是水位线不占 used（root 恒可用），零镜像收益。
+"${MKE2FS}" -t ext4 -b 4096 -N 8192 -J size=8 -F -d "${TREE}" "${IMG}" "${SIZE}"
 echo "built ${IMG} ($(du -h "${IMG}" | cut -f1)) from ${TREE}"
