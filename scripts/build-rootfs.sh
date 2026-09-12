@@ -62,10 +62,16 @@ done
 # build-pkg.sh 打包，再生路径 devices/${DEVICE}/boot/assets.md）。
 
 echo "==> zigbuild 新仓 musl 件（缓存则秒过）"
+# 刀E（2026-09-12）：镜像 Rust 件 opt-level=z，env 挂在三连 zigbuild 上。
+# - 只动镜像线：build-pkg.sh 的包构建不吃这个 env（包 sha 与 manifest/
+#   镜像源耦���，改包的 codegen = 断 opt-in 门），故不用 Cargo.toml profile。
+# - 收据：十件剥后 7,227,608→6,099,392 B（−1,128,216B）；LTO+cg1 只再多
+#   68KB 且 qr/update 反涨，弃。设备冒烟：qr 解码 round-trip + 与在役件
+#   50 连发墙钟平手、update status 出全 boot 表、svc 行为逐位同。
 # L0 六件：pkg/svc/download/update/done/secret（刀4：router/server/
 # runtime/voice/term/gateway 出镜像走包——build-pkg.sh 烤，不在此列。
 # aginx-secret crate 双 bin，secretd 产物本线不装、由 aginx-secretd 包走）。
-(cd "${ROOT}" && cargo zigbuild --release --target aarch64-unknown-linux-musl \
+(cd "${ROOT}" && CARGO_PROFILE_RELEASE_OPT_LEVEL=z cargo zigbuild --release --target aarch64-unknown-linux-musl \
   -p aginx-pkg -p aginx-svc \
   -p aginx-download -p aginx-update -p aginx-done -p aginx-secret)
 
@@ -73,7 +79,7 @@ echo "==> zigbuild 新仓 musl 件（缓存则秒过）"
 # 级旗标——并进共享调用会把 quircs+aginx-img 织进任何依赖 aginx-qr 的
 # crate（N5② 特性陷阱的出生地，当年受害者 aginx-voice）。L0 名单里没有
 # 它的依赖者，但独立调用法保持：解码器必须是自己一个进程。
-(cd "${ROOT}" && cargo zigbuild --release --target aarch64-unknown-linux-musl \
+(cd "${ROOT}" && CARGO_PROFILE_RELEASE_OPT_LEVEL=z cargo zigbuild --release --target aarch64-unknown-linux-musl \
   -p aginx-qr --features aginx-qr/jpeg)
 
 # 蛋案 C3/C10：设备面 aginx-pair 走第三次独立调用（--no-default-features
@@ -81,7 +87,7 @@ echo "==> zigbuild 新仓 musl 件（缓存则秒过）"
 # 连带 aginx-qr/jpeg 的 quircs+aginx-img 织进其它包）。设备只要 apply 面
 # （stdin payload，C4 voice 依赖）；铸码在 host 跑 default 特性。两档都装。
 # <2MB 绊网同律：尺寸变化=feature 折叠事故。
-(cd "${ROOT}" && cargo zigbuild --release --target aarch64-unknown-linux-musl \
+(cd "${ROOT}" && CARGO_PROFILE_RELEASE_OPT_LEVEL=z cargo zigbuild --release --target aarch64-unknown-linux-musl \
   -p aginx-pair --no-default-features)
 PAIR_SZ="$(stat -f%z "${TARGET}/aginx-pair")"
 [ "${PAIR_SZ}" -lt 2097152 ] \
@@ -578,7 +584,11 @@ mkdir -p "${ROOT}/out"
 # 不带 -s——bin/ 30M 里 27M 是 debug_info+symtab（实测 dropbear
 # 2.8M→0.55M，-80%）。烤前对全树 ELF 可执行档（e_type EXEC/DYN）过
 # 一道 --strip-all。ET_REL 跳过——lib/modules 的 .ko 靠 modinfo 等
-# 段活着，strip-all 会毁（strip-debug 才是 ko 的正解，另立刀）。
+# 段活着，strip-all 会毁。（刀E 勘误 2026-09-12：strip-debug 在这批
+# vendor .ko 上实测 0 字节收益——23 件+modules.aginx 无一 debug 段；
+# msm_drm.ko 653 段的大头是 .rela.* LTO 重定位 1.6M、.text 1.2M、
+# .symtab+.strtab 0.47M（模块加载按名解析，承重）。刀A 的「另立刀」
+# 承诺就此退役，刀E 收的是 Rust 半边 opt-level=z，见 zigbuild 注释。）
 # Rust 件/AOSP 件已 stripped，过一遍是无害 no-op。工具：llvm-strip
 # （本机是版本化 Cellar 安装、无裸名软链，command -v 摸不到——glob
 # 兜底）；Linux 上 binutils strip 同参等价。
