@@ -3057,3 +3057,53 @@ opted in、face 落位）。
 /root/.codex 配置在位、authorized_keys 2 行（一次性键缓涨）。
 下一刀=刀C 镜像收据（bake #25 刷机日，不叠刀；重烤须 checkout
 f8f35f4 落戳——out/rootfs.img 现为刀B 像）。
+
+## 2026-09-12 — Bake #25 刷机日（#325）：刀C 上镜像 used 47.3M + 首刷 wlan0 不生 → libbinder 跨分区闭包根因 → 4fd27c1 重刷全绿
+
+版本线：bake #24 `70ae2a5 l0` → 首刷 `f8f35f4 l0`（刀C 18 lib）→
+本刷 `aginxos redfin 4fd27c1 2026-09-12 l0`（keep 岛 18→19 lib）。
+
+**首刷红（f8f35f4）**：pre 7/7、usbconf 4/4 后 netup 红——`wlan fail
+"no netdev"`，480s 等穿。排查链：wifi.conf ✓（usbconf 推的华为 conf）→
+模块 ✓（wlan 驱动已载）→ FW 链 ✓ → netdev ✗（/sys/class/net/wlan0
+不生）→ cnss-daemon ✗（pidof 空）→ /tmp/cnss-daemon.log 现真凶：
+`CANNOT LINK ... library "libbinder.so" not found: needed by
+/vendor_a/lib64/libperipheral_client.so`。根因=刀C 白名单漏了
+libbinder——**vendor 件反吃 system 库**：radio-bringup 以
+`LD_LIBRARY_PATH=/vendor/lib64:/system/lib64` 起 /vendor/bin/cnss-daemon
+（WLFW 用户态半边），其 vendor 侧 libperipheral_client.so 的 NEEDED
+指向 system 的 libbinder。无 cnss-daemon → wlan_pd 不生 → FW 不载 →
+wlan0 永不出生。我们的树内闭包只算 /system 自己——**ELF 闭包必须跨
+/vendor 算**（bringup 脚本 exec 的 vendor 二进制也是 system/lib64 的
+消费者），这是白名单法的边界定理。
+
+**host 闭包对账**：/vendor_a/lib64 全 768 件拉回，llvm-readelf BFS
+按 vendor-first 解析序（同 LD_LIBRARY_PATH）算 cnss-daemon 的 /system
+闭包=11 lib（ld-android/base/binder/c++/c/crypto/cutils/dl/log/m/
+utils），与 keep18 求差=**恰 libbinder.so 一件**（888,432B）；libnl
+未解析 ×2=我们 /lib/libnl.so 自家 radio payload，无恙。
+
+**热推活体收据（判据闭环）**：adb push libbinder.so →
+/system/lib64/ → `/usr/bin/aginx-reboot`（绝对路径——adb shell PATH
+无 /usr/bin，裸名 rc=127 假重启陷阱又见）→ 开机管线真路径复跑：
+wlan0/wlan1 俱生、cnss-daemon pid 在、net 链 5 行绿、同租约
+192.168.3.93。修复成立，热推只是场外证据——镜像不带=下刷即失。
+
+**固化+重刷**：4fd27c1（keep 19 lib+注释立案）checkout 重烤：戳
+4fd27c1 落、used 46.4→**47.3M**（+0.9M=libbinder）、lib64 19 件、
+sparse 32.3→33.1MB 自洽。重刷（监视哨被停一次，重布后同配方 GO=1
+SKIP_PACK=1）→ **n7 六相位 42/0 全绿**：pre 7/7 → usbconf 4/4 →
+netup 3/3（首跑踩 usbconf 重启竞态"设备不在线"，wait-for-device
+复跑即绿——套件自身小缺口，收据不受影响）→ ssh **8/8**（公钥+密码
+$6$+锁回+不互斥，全直连）→ optin-codex **10/10**（233MB 一发落地、
+brain 真答 pong）→ steady **10/10**（在装恰 {codex}、二启仍真答、
+零 downloading）。裸 bar 两判据全收，刀C 镜像收据入档。
+
+**精简循环账（A→B→C 三刀齐）**：187.8M（#22 全量）→ 152.6M（A
+strip）→ 66.6M（B 几何）→ **47.3M（C 死件考古）**——全幅 −75%。
+下一刀候选=刀D toybox+busybox 双 multicall 合一（先证双份事实）、
+刀E ko strip-debug/Rust opt-level=z。
+
+**设备终态**：4fd27c1 l0 在役（镜像自带 libbinder，无场外补丁）、
+华为 AP 192.168.3.93、在装恰 {codex}、net-watch 独苗、密码锁 root:!、
+/root/.codex 配置在位。
