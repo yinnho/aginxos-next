@@ -3284,3 +3284,32 @@ aginx-qr/aginx-pair/aginx-update 三目录 + 重传 aginx/term/voice（spawn 路
 变了的新 tar）+ 刷新 manifest（gateway/secretd/asr/tts/ocr sha 不动）；
 checkout 0d8ed39 落戳重烤 → 刷机 → n7 裸 bar + n6-egg CORE11 全相位 +
 m42c A 段走 /var/bin。不与刀E 的 bake #27 叠刀。
+
+## 2026-09-12 — Bake #27 刷机日（#327）：刀E 上镜像 used 45.25M——opt-level=z 十件全绿，n7 42/0
+
+checkout 6f45726 落戳重烤（重烤落戳法第二轮，bake #26 同法）：镜像
+40M、`aginx check: 18 commands OK`（刀E 形状——qr/pair/update 尚在镜像，
+刀F 在其后）、strip gate 60、刀B 几何。host 超块直读 used = 524288−
+512705 = **11,583 块 = 45.25 MiB**，与刀E 干烤收据逐块相符——血统证明。
+
+**刷机**：预打包 vendor_boot + fastboot 监视器（探到 13201FDD4001N8 自动
+GO=1 SKIP_PACK=1）；用户手动 Power+VolDown 入口。userdata 30,952KB sparse
+写入 45.4s → vendor_boot_b（commit 点）2.2s → reboot。首启 boot.state 全绿
+（pkg/touch/camera/battery/audio/modem/wlan → done @55s），wifi fail no
+/etc/wifi.conf = 出厂形状正确。版本戳活体 = `aginxos redfin 6f45726
+2026-09-12 l0`。
+
+**z 件活体对账**：/usr/bin 尺寸 qr 886,632 / pair 401,984 / update 747,864 /
+svc 314,000——与刀E staging 对账逐字节同（dev-push 冒烟是在役线上，今天
+是镜像自证）。
+
+**n7 六相位 42/0**（pre 7 / usbconf 4 / netup 3 / ssh 8 / optin-codex 10 /
+steady 10）：出厂零个人信息 → wifi-huawei.conf + 一次性公钥 → IP
+192.168.3.93 → 双通道 ssh（密码腿 sha512 真往返后锁回，锁后公钥仍通）→
+codex 装上 **brain 真答 pong** → 二启 wifi 自动连 / pkg ok 0s 落 / root
+≥100G / net-watch 独苗 ready / 在装集合恰 {codex} / codex 仍真答 / sync
+零 downloading。裸 bar 两条验收线（启动 + codex 可装可用）全过。
+
+精简账（used）：187.8M → 152.6M(A) → 66.6M(B) → 47.3M(C) → 46.3M(D) →
+**45.25M(E)**。下一刀=bake #28（刀F 镜像收据）：镜像源先上车三新包 +
+aginx/term/voice 重传 + manifest 刷新，checkout 0d8ed39 落戳重烤。
