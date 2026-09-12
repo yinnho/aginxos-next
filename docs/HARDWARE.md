@@ -3014,3 +3014,46 @@ used **17061→11891 块 = 66.6→46.4 MiB（−20.2M）**；镜像 du 62M→42M
 镜像收据（fresh boot + 裸 bar：启动 + codex 装上真跑）= bake #25 刷机日
 （不与刀B 的 bake #24 叠刀）。下一刀候选=刀D toybox+busybox 双 multicall
 合一（先证双份事实）、刀E ko strip-debug/Rust opt-level=z。
+
+## 2026-09-12 — Bake #24 刷机日（#324）：刀B 上镜像 used 66.6M + 裸 bar 全绿 + 换华为 AP（ssh 直连腿首真收据）
+
+版本线：bake #23 `5b52a6a l0` → 本刷 `aginxos redfin 70ae2a5 2026-09-12 l0`。
+折叠：刀B mke2fs `-N 8192 -J size=8`（70ae2a5）+ n7 清单断言两态化（743a317）。
+烤机日志对账：strip gate 136 件、inode 表 8192、journal 2048 块、du 62M。
+刷机=手动 Power+VolDown → host 2s 监视器自动 GO=1 SKIP_PACK=1（复用
+bake #23 同款 vendor_boot 35,774,464B）→ userdata 45.9s → boot UP 42s。
+
+**活体超块对账（刀B 镜像收据）**：真机 od 直读超块 (524288−507227)×4096
+= **66.6M used**（bake #23 152.6M → −56%）。承重假设双面成立：首启
+disk-grow 扩满（steady df ≥100G 断言过）、二启 resize2fs no-op 不炸几何
+（journal 仍 8M、inode 表按块比长不重长——1.47.0 源码结论的活体面）。
+
+**n7 六相位**：pre 7/7（出厂形状）→ usbconf 4/4 → netup 3/3 → ssh 5/3
+（3 红环境性：Mac 192.168.3.26 与设备 192.168.0.166 异网段；adb forward
+机械代验全绿——公钥腿+密码腿 $6$+锁回，见下文直连补真）→ optin-codex
+**10/10**（清单断言两态化复验：首跑 available 命中）→ steady **10/10**
+（pkg ok 0s 落/net-watch 独苗/在装恰 {codex}/二启 codex 仍真答 pong/
+零 downloading）。裸 bar 两判据全收：①AginxOS 启动 ②codex 装上真跑。
+
+**拉包风波 → 换 AP 裁决（用户指定华为 AP）**：Legrand 上 6 发全灭
+（2×`timeout: receive body` + 4×DNS EAI_AGAIN；wlan0 NO-CARRIER 反复
+拍打；resolv.conf nameserver 双行=udhcpc 复跑痕迹；net-watch 日志现
+EAPOL M1–M4 全通+keys installed 后 DHCP 拒答循环——09-10 同款甩站）。
+本日 AP -45dBm 强信号照样掐——**判据升级：Legrand 对长传输一律不友好，
+与信号强度无关**（bake #23 -83dBm 三发落包是运气）。用户改指
+HUAWEI-凌霄-N1CE7L（-66dBm）→ wifi.conf 换装（Legrand 原配置备份
+`/etc/wifi.conf.legrand.bak`；host 源 `.local/wifi-huawei.conf`，密码
+只进文件不进命令行）→ `aginx-reboot` 走开机管线自读 conf 入网
+（顺带验配置持久）→ **233,773,456 B 第一发整包落地**（HTTP 200、
+opted in、face 落位）。
+
+**中彩副作用——ssh 直连腿首真收据**：华为 AP 与 Mac 同网段（设备
+192.168.3.93 / Mac 192.168.3.26）→ n7 ssh 复跑 **8/8 全绿**：公钥腿、
+密码腿（$6$ 契约）、锁回 root:!、锁后公钥仍通（双通道不互斥）——
+全部真直连，bake #23 三红挂账清。
+
+**设备终态**：70ae2a5 l0 在役、华为 AP（HUAWEI-凌霄-N1CE7L，
+192.168.3.93）、在装恰 {codex}、net-watch 独苗、密码锁 root:!、
+/root/.codex 配置在位、authorized_keys 2 行（一次性键缓涨）。
+下一刀=刀C 镜像收据（bake #25 刷机日，不叠刀；重烤须 checkout
+f8f35f4 落戳——out/rootfs.img 现为刀B 像）。
