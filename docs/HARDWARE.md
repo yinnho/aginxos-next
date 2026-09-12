@@ -3108,6 +3108,49 @@ strip）→ 66.6M（B 几何）→ **47.3M（C 死件考古）**——全幅 −
 华为 AP 192.168.3.93、在装恰 {codex}、net-watch 独苗、密码锁 root:!、
 /root/.codex 配置在位。
 
+## 2026-09-12 — Bake #26 刷机日（#326）：��D 上镜像 used 46.3M——toybox 退役 + 三 lib 连坐，n7 42/0
+
+版本线：bake #25 `4fd27c1 l0` → 本刷 `aginxos redfin ae033ab 2026-09-12 l0`。
+折叠：刀D（ae033ab＝origin 0ab409f 的代码孪生）——双 multicall 合一
+（toybox 0.52M 退役，busybox 单源）+ 三 lib 连坐（libz 105,280B /
+libprocessgroup 365,456B / libcgrouprc 14,848B，消费者闭包证明只有
+toybox 链）。重烤纪律：checkout ae033ab（backup-prepush-0912f 保全的
+原 sha）落戳重烤——版本戳必须名代码血统，不用 3e819eb 干烤像。
+
+**重烤对账（与 host 干烤逐项同）**：strip gate **60** 件（刀C 63——
+toybox+3 lib 离场）；staging 树 system/bin 恰 **3 真身**（adbd/linker64/
+sh）、system/lib64 **16**、`/bin/nc -> busybox`（netcat 消失——活体
+"applet not found" 从来就是死链，刀D 考古结论）；超块直读 total
+524288 / free 512430 → **used 11858 块 = 46.3 MiB**。方法诚实注记：
+本靴 vendor ramdisk 窗内活体超块读失败两次（by-name 路径不在、
+/dev/sda19 静默）——46.3M 的收据是 host 侧对**所刷字节本身**的 od
+（sparse 32052 KB 全量即镜像），非活体读数。
+
+**刷机**：手动 Power+VolDown → `GO=1 SKIP_PACK=1`（复用 bake #23 同款
+vendor_boot-test.img 35,774,464B）→ userdata 45.4s → vendor_boot_b
+提交点 2.27s → 重启。版本戳 adb 后 ~15s 即出；boot.state 首启
+`pkg/touch/camera/battery ok → done ok + wifi fail no /etc/wifi.conf`
+（出厂形状，L0 默认免 capture）。
+
+**n7 六相位 42/0 全绿**：pre 7/7（svc.d 恰 2/var/bin 空/零个人信息）→
+usbconf 4/4（华为 conf + env + 一次性公钥 → reboot）→ netup 3/3
+（192.168.3.93，本次 wait-for-device+45s 后跑，未踩重启竞态）→
+ssh 8/8（真直连：公钥腿/密码腿 $6$/锁回 root:!/双通道不互斥）→
+optin-codex 10/10（config/auth md5 双端一致 → opt-in → codex-cli
+0.151.0 → **brain 真答 pong**）→ steady 10/10（同像真重启 → wifi
+自动连 → pkg ok 0s 落 → root ≥100G → net-watch 独苗 → **在装恰
+{codex}** → 二启 codex 仍真答 → sync 零 downloading）。裸 bar 两判据
+全收：①AginxOS 启动 ②codex 装上真跑。
+
+**精简循环账（A→D 四刀齐）**：187.8M（#22 全量）→ 152.6M（A strip）→
+66.6M（B 几何）→ 47.3M（C 死件）→ **46.3M（D toybox 退役）**。下一刀
+= 刀E：ko strip-debug（ET_REL 只能 strip-debug，strip-all 毁 modinfo）/
+Rust opt-level=z（ko 堆 ~5.5M、Rust bins ~8.6M 待剥）。
+
+**设备终态**：ae033ab l0 在役、华为 AP 192.168.3.93、在装恰 {codex}、
+net-watch 独苗、密码锁 root:!、/root/.codex 配置在位、authorized_keys
+2 行（usbconf+ssh 各一次性键，缓涨运维注记同 bake #23）。
+
 ## 2026-09-12 — L0 精简循环④：toybox 退役 + 三 lib 连坐（刀D）——used 47.3M→46.3M（host 干烤；镜像收据留 bake #26）
 
 **证据链（编辑前全部收讫）**：
