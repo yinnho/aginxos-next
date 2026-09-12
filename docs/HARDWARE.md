@@ -3512,3 +3512,62 @@ codex 记得前文（LLM 对话体感）。
 
 教训：设备失联先分诊通道——ping/ssh 死≠死机，relay 出站（agc 探活）
 单边可达是冻结醒后恢复期常态，别急着重启。
+
+---
+
+## #335 enchilada（OnePlus 6）节点机上机 — E0–E3 收据
+
+设备：OnePlus 6 (enchilada, sdm845)，LineageOS 22.2-20260401-NIGHTLY，
+BL 解锁，current-slot **b**。fastboot/adb 均为 `-s b0d9f7fe`。资产在
+`.local/device/enchilada/`（不入库）；实验镜像存 `lab/`（/tmp 会被
+macOS 周期清空，不放 /tmp）。
+
+**内核**：86quan 构建 `6.11.0-sdm845-g2fa43795f607`（pmOS 生产 config，
+gadget 栈/UFS/ext4/DWC3 全内建）。7.1-rc1 弃用（pmOS 不用、无人验过）。
+
+### E3 行为矩阵（全部真机实测）
+
+1. **ABL「拒 dtb」真因 = dtbo_b 在场 + base dtb 无 `__symbols__` → 快退**
+   （0.5–10s 回 fastboot）。LOS dtb#1 有 `__symbols__` 所以能靴；
+   pmOS dtb 无 → pmOS 官方 boot.img 在本机同样快退（对照组实锤）。
+   **dtbo_b 清零后 ABL 直接跳我们内核附带的 dtb** → 我们内核活。
+2. **零 dtbo 只配自含 mainline dtb**：LOS 下游 4.9 内核、fastbootd、
+   recovery 在零 dtbo 下全黑（无 adb）。恢复材料 = LOS API v2 逐件
+   下载（`curl -sSL` 必须，mirrorbits 是重定向）。
+3. **内核早就在靴，是探测瞎**：屏幕 8 只静止企鹅 = fbcon 上屏 =
+   我们内核活的铁证（用户眼见，此前 ping/ifconfig 全没抓到）。
+   **屏幕（真人眼）是一等观察通道**；cmdline `console=tty0` 让
+   klog 上屏后更直接。
+4. **NCM gadget 全通**：t+8~15s Mac 出 en14，udhcpd 给 Mac 派
+   10.9.8.2，ping 10.9.8.1 通（2.5ms）。UDC=a600000.usb。
+5. **看门狗理论作废**：`/dev/watchdog` 不存在（内核没编 qcom wdt
+   驱动）。历靴「3-4 分钟死」实为 ABL 快退循环，非硬件咬死。
+   L2 曾稳定跑 >10 分钟直到手动强关。init 里的 watchdog 喂养行
+   因此静默 no-op（保留无害）。
+
+### E3 ssh 攻坚（两刀才进）
+
+- 第一刀（uid）：macOS cpio 打包 uid=501，dropbear checkfileperm 拒
+  authorized_keys 链 → `cpio -R 0:0` + init 运行时 chown 兜底。
+  **修完仍拒**（ssh -vv：客户端已 offer、服务端拒）。
+- 第二刀（真根因）：**initramfs 无 `/etc/passwd`，dropbear 认证前
+  getpwnam("root") 直接 NULL → 一律 Permission denied**（公钥对了
+  也没用）。补 passwd/group/shells 三件后一发入魂。
+- 收据（dropbear.log）：`Pubkey auth succeeded for 'root' with
+  ssh-ed25519 key SHA256:8j8h…` + `uname -r` = 6.11.0-sdm845-…。
+- 教训：**initramfs-only dropbear 要自带用户数据库**，redfin 线一直
+  有 rootfs 的 /etc/passwd 撑着，这个坑第一次见光。
+
+### E3 端态 + E4 顺手事实
+
+- ssh root@10.9.8.1（NCM 救援网）+ 我们内核 = **E3 达成**。
+- **userdata (sda17) 本来就是 ext4**（LOS enchilada 用 ext4 而非
+  f2fs），rw 直挂成功，111GB 总量仅用 544MB——E4 灌 L0 无格式障碍。
+- 当前设备态：L4 内存靴在跑（fastboot boot，一次性）；dtbo_b=零档；
+  boot_a=旧 LOS、boot_b=LOS 完好；vbmeta 已 disable。lab/ 有全套
+  恢复材料（LOS dtbo、boot_b 备份）。
+
+### 刷靴操作纪（可复用）
+
+中毒 ABL 协议：`fastboot boot` 快退后先 `fastboot reboot bootloader`
+清态再试（有时要两次）。手动入口：长按电源 ~10s 强关 → 电源+音量下。
