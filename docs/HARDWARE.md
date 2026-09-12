@@ -3226,3 +3226,61 @@ du 40M。
 （不与刀D 的 bake #26 叠刀；届时 checkout 6f45726 落戳重烤——版本戳必须
 名代码血统）。下一刀候选=刀F：qr/pair/update 出镜像走包（用户 09-12
 裁决：现在是 Linux，不需要生成二维码——agent 形态能力以依赖身份随装）。
+
+## 2026-09-12 — L0 精简循环⑥：qr/pair/update 出镜像走包（刀F）——used 45.25M→43.29M（host 干烤；镜像收据留 bake #28）
+
+用户裁决（09-12）：「aginx-qr aginx-update 这些蛋体里都不应该在，现在确认是
+liunx，不需要生成二维码啊……后面安装aginx啥的，以依赖的身份被安装」。裸 L0
+= 完整产品（bar：启动 + codex 可装可用）；qr/pair/update 是 agent 形态能力，
+不该烤在出厂底座里——依赖身份随 opt-in 闭包进机。批准三项：update 挂母体包
+depends、aginx-secret 留底座（ssh 运维面）、裸箱升级=fastboot 重刷（未 opt-in
+update 前不保 state）。
+
+**消费者对账（grep 全仓 `/usr/bin/aginx-{qr,pair,update}`）**：qr 的调用者=
+voice（scan_qr/eye_decode_qr）+ term（扫码配网）+ m42c A 段；pair 的调用者=
+voice（PairApply）+ term（Mode::Install）；update 的镜像内调用者=零（只有
+flash-redfin capture 与 OTA 链）。三件的镜像内消费者全部本身已是包——spawn
+路径翻 `/var/bin/*`（voice/term 两 crate），m42c A 段同步改判。镜像里没有别
+的钉死路径。
+
+**改动面（0d8ed39，16 文件）**：
+- build-rootfs.sh：zigbuild 剩一次五件（pkg/svc/download/done/secret——
+  download 是 pkg 的 TLS 取件腿、boot-ok 是 rcS:182 slot-retry 泄水、done
+  是 provision、secret 是 ssh 运维面，五件即 L0 直装全集）；qr/pair 的构建
+  分叉与 PAIR_SZ 三绳全删；OPT_ADD 8→11 行；三件从 install 块与 sidecar
+  群撤下。
+- 三包新配方 pkgs/{aginx-qr,aginx-pair,aginx-update}/：tree 包（files/bin/
+  脸 /var/bin），group 分归 cam/net/sys；qr 分支独立 zigbuild 调用带
+  `--features aginx-qr/jpeg`（调用级旗标不能折进共享调用——N5② 教训）；
+  pair 分支 `--no-default-features`（mint 是 host-only）+ PAIR_SZ<2MiB 三绳
+  随迁 build-pkg.sh（`stat -f%z`）；update 代码零改（BOOT_OK_BIN/
+  DOWNLOAD_BIN 指向 L0 直装件）。
+- depends 三处：voice `aginx-asr,aginx-tts,aginx-ocr,aginx-qr,aginx-pair`、
+  term 新增 `aginx-qr,aginx-pair`、母体 aginx 新增 `aginx-update`（装母体
+  自动带自更新器）。z-env 律不动：包构建不带 opt-level=z（刀E 裁定，包 sha
+  与镜像/manifest 耦合）。
+- 套件：n6-egg CORE8→CORE11（wait_core11_stamps；pre 段加「三脸不在镜像」
+  断言）；m42c A 段 qr 走 /var/bin；flash-redfin capture 改路径弹性解析
+  （/var/bin → /usr/bin 旧像 → 都没有=裸 L0 fail-open 提示）。注册表命令
+  数 18→15（三条 sidecar 撤出）。
+- hwd 后果：镜像侧 device.toml 消费者归零（voice/term/qr/update 全是包了）
+  ——schema 加键的重推单元=包本身；三包 SKILL.md 注记「device.toml 加键=
+  重打本包」。
+
+**干烤收据（check.sh 全绿）**：六包出 tar（三新 + aginx/term/voice 因
+spawn 路径与 pkg.toml 重打），manifest 依赖列对账逐字相符（voice 行
+`aginx-asr,aginx-tts,aginx-ocr,aginx-qr,aginx-pair`、term 行 `aginx-qr,
+aginx-pair`、aginx 行 `aginx-update`）；pair 三绳过（mint 未漏）；11 行
+opt 签注齐。超块直读 used **11858→? 刀E 后=11583，刀F=11081 块 = 45.25→
+43.29 MiB（−502 块 ≈ 1.96 MiB）**，与三件离镜像账自洽（886,632+401,984+
+747,864 = 2,036,480 B ≈ 497 块 + 三条 sidecar）；组装树 /usr/bin 无
+aginx-{qr,pair,update}；注册表门重跑 `aginx check: 15 commands OK`。
+包 sha（out/pkgs）：qr v0.1.0 71eaf07c…6d7、pair v0.1.0 38483493…5eb、
+update v0.1.0 beda1a8d…76a、aginx v0.1.0 dfc22836…328、term v0.1.0
+04cba6ce…c9e、voice v0.2.1 8280968c…ea6。
+
+**bake #28 排程（镜像收据日）**：镜像源先上车——pkgs.aginx.net 新上
+aginx-qr/aginx-pair/aginx-update 三目录 + 重传 aginx/term/voice（spawn 路径
+变了的新 tar）+ 刷新 manifest（gateway/secretd/asr/tts/ocr sha 不动）；
+checkout 0d8ed39 落戳重烤 → 刷机 → n7 裸 bar + n6-egg CORE11 全相位 +
+m42c A 段走 /var/bin。不与刀E 的 bake #27 叠刀。
