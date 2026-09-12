@@ -501,6 +501,31 @@ AGINX_GROUPS_DESC="${TREE}/etc/aginx/groups.desc" \
   || { echo "aginx commands --check failed — fix the faces" >&2; exit 1; }
 
 mkdir -p "${ROOT}/out"
+
+# 刀A strip 门（2026-09-12，L0 精简循环第1刀）：bringup C 件 zig cc 链
+# 不带 -s——bin/ 30M 里 27M 是 debug_info+symtab（实测 dropbear
+# 2.8M→0.55M，-80%）。烤前对全树 ELF 可执行档（e_type EXEC/DYN）过
+# 一道 --strip-all。ET_REL 跳过——lib/modules 的 .ko 靠 modinfo 等
+# 段活着，strip-all 会毁（strip-debug 才是 ko 的正解，另立刀）。
+# Rust 件/AOSP 件已 stripped，过一遍是无害 no-op。工具：llvm-strip
+# （本机是版本化 Cellar 安装、无裸名软链，command -v 摸不到——glob
+# 兜底）；Linux 上 binutils strip 同参等价。
+STRIP_BIN="$(command -v llvm-strip || true)"
+[ -z "${STRIP_BIN}" ] \
+  && STRIP_BIN="$(ls /opt/homebrew/Cellar/llvm@*/[0-9]*/bin/llvm-strip 2>/dev/null | head -n1 || true)"
+[ -z "${STRIP_BIN}" ] && STRIP_BIN="$(command -v strip || true)"
+[ -n "${STRIP_BIN}" ] || { echo "FATAL: no ELF strip tool (llvm-strip / binutils strip)" >&2; exit 1; }
+stripped=0
+while IFS= read -r -d '' f; do
+  # ELF magic + e_type@16：02 00=EXEC、03 00=DYN（01 00=REL=.ko 跳过）
+  [ "$(head -c 4 "${f}" | od -An -tx1 | tr -d ' \n')" = "7f454c46" ] || continue
+  case "$(od -An -tx1 -j16 -N2 "${f}" | tr -d ' \n')" in
+    0200|0300) ;;
+    *) continue ;;
+  esac
+  "${STRIP_BIN}" --strip-all "${f}" && stripped=$((stripped + 1))
+done < <(find "${TREE}" -type f -print0)
+echo "strip gate: ${stripped} ELF binaries stripped"
 # rm first: mke2fs never truncates an existing output file, so a SIZE
 # change leaves stale bytes past the new fs end (a 2g image stayed 2 GiB
 # after re-baking at 1g — the tail was the old image, 2026-09-02).
