@@ -191,6 +191,15 @@ case "${PKG}" in
     # usr/bin，bin/ 是 wrapper 专属层。
     mkdir -p "${STAGE}/files/bin"
     install -m 755 "${RECIPE}/bin/git" "${STAGE}/files/bin/git"
+    # 模板自持：Alpine git apk 只发一个空 templates 目录（sample hooks
+    # 一概不发），空目录过不了安装器（只为文件成员建目录）——上机腿
+    # 实测每次 clone 打「templates not found」。配方自带官方模板的
+    # 非噪音子集（description + info/exclude），有文件成员目录才落地。
+    mkdir -p "${STAGE}/files/usr/share/git-core/templates/info"
+    install -m 644 "${RECIPE}/templates/description" \
+      "${STAGE}/files/usr/share/git-core/templates/description"
+    install -m 644 "${RECIPE}/templates/info/exclude" \
+      "${STAGE}/files/usr/share/git-core/templates/info/exclude"
     find "${STAGE}/files" -type d -exec chmod 755 {} +
     # 闭包钉死门：本体 + loader + git-core multicall 面 + 模板 + 全部
     # DT_NEEDED soname（闭包声明与树内容不一致时这里现形）
@@ -198,7 +207,7 @@ case "${PKG}" in
     test -f "${STAGE}/files/lib/ld-musl-aarch64.so.1" || { echo "FATAL: 树里无 musl loader" >&2; exit 1; }
     test -e "${STAGE}/files/usr/libexec/git-core/git-remote-https" \
       || { echo "FATAL: 树里无 git-remote-https（https 传输面）" >&2; exit 1; }
-    test -d "${STAGE}/files/usr/share/git-core/templates" \
+    test -f "${STAGE}/files/usr/share/git-core/templates/description" \
       || { echo "FATAL: 树里无 git 模板（init/clone 要用）" >&2; exit 1; }
     for so in libc.musl-aarch64.so.1 libcurl.so.4 libexpat.so.1 libpcre2-8.so.0 \
               libz.so.1 libzstd.so.1 libbrotlicommon.so.1 libbrotlidec.so.1 \
