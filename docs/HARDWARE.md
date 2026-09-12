@@ -2969,3 +2969,48 @@ check.sh 全绿。
 已是刀B 像，待刷）。下一刀候选=刀C system/ 死件考古
 （update_engine_sideload 2.5M / recovery 2.0M / init.android 2.1M /
 fastbootd 1.4M / f2fs 工具，逐个过引用）。
+
+## 2026-09-12 — L0 精简循环③：system/ 死件考古（刀C）——used 66.6M→46.4M（host 干烤；镜像收据留 bake #25）
+
+提交 cb22b60（build-rootfs.sh，`cp -R system` 之后插 prune 块）。
+
+**考古证据链（编辑前全部收讫）**：
+- 树内引用 grep：/etc 对 system/ 的唯一活引用 = init.d/adbd 的
+  `exec /system/bin/adbd`；radio-bringup 的 /bin/rmt_storage（补丁副本）。
+- 冻结 trampoline strings：exec busybox /sbin/init，从不碰 system/bin/init
+  （init.android 与 init md5 全同——pack-vendor-boot 在 RAMDISK 世界造的
+  副本随树混入）。
+- 静态 ELF：keep 根 {adbd, sh, toybox, /bin/rmt_storage} 的 NEEDED 闭包
+  两层展开 = 13（根并集）+ 4（传递：libcgrouprc/libpackagelistparser/
+  libpcre2/ld-android）= 17 件；rmt_storage 的 qmi 三库（libqmi_csi/
+  libqmi_common_so/libmdmdetect）活体从 **/vendor_a/lib64 分区**解析
+  （mount-super + ln -sfn /vendor_a /vendor），不在树内非本刀事。
+- 活体 /proc maps（bake #23 在役机）：adbd maps 恰 12 lib = 静态闭包
+  （无隐藏 dlopen）；**rmt_storage maps 还多一个 libutils.so——静态
+  NEEDED 漏报的运行时依赖**，第 18 件 keep。/proc maps > readelf 的一课。
+- bin 岁差：system/bin 219 条目 = **24 常规 + 195 个 toybox applet
+  symlink 农场**（adbd PATH 把 /system/bin 放最前，adb shell 的活路径）。
+  白名单法会误杀农场 → bin 用显式点名 25 死件 + 悬链清扫；
+  lib64 实测 68 条目**零 symlink** → 白名单 case 法安全。
+
+**刀形**：keep 岛 die 闸（4 bin + 18 lib + ld.config.txt 任缺即死，防
+vendor 资产漂移）；bin 点名 rm 25（20 常规死件 + 5 指向死目标的 symlink
+resize.f2fs/dump.f2fs/defrag.f2fs/linker_hwasan64/linker_asan64）+
+`find -type l ! -exec test -e` 悬链清扫（扫掉 ueventd→init 等 12 条残链；
+残链本无害——-x 恒假 PATH 落 busybox）；etc rm 5 文件 + init/security/
+lib64/hw 三整目录（otacerts.zip 在 security/ 下；hw 四死 HAL ≈446K，
+消费者全在死件清单，aginx-update/aginx-boot-ok 自写 GPT）；lib64
+白名单 68→18。servicemanager 被 fake-sm 顶、watchdogd 被 aginx-svcd 持、
+reboot 被 busybox+aginx-reboot 持、f2fs/erofs 工具无处跑（rootfs ext4，
+mkfs 在 host）。
+
+**干烤收据（check.sh 全绿）**：prune 后 system/bin **182** 条目（219−37：
+点名 25 + 悬链 12）、system/lib64 **18** 件、etc 只剩 ld.config.txt；
+system/ 29.5M→**8.6M**；树 239→**158** 文件；strip gate **136→63**
+（vendor 死件本就占 73 件，AOSP ramdisk 件未剥过）；超块直读
+used **17061→11891 块 = 66.6→46.4 MiB（−20.2M）**；镜像 du 62M→42M；
+账目自洽（内容 ~30M + journal 8 + itable 2 + 位图/备份超块 ~5.6）。
+
+镜像收据（fresh boot + 裸 bar：启动 + codex 装上真跑）= bake #25 刷机日
+（不与刀B 的 bake #24 叠刀）。下一刀候选=刀D toybox+busybox 双 multicall
+合一（先证双份事实）、刀E ko strip-debug/Rust opt-level=z。
