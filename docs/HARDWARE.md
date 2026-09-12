@@ -2816,3 +2816,44 @@ ca-certificates-bundle 因此故意不在闭包）。
 字节对账、**在线 sha256 逐字节等于 manifest 钉值 `bc316af6…5a499`**
 （下载即验，运输诚实不承重但这记的是完整链）。剩设备腿：opt-in →
 `git --version` → https clone 真收据，等设备接回。
+
+**git 设备腿收讫 + 模板自持修（2026-09-12，#321 收官）**：设备接回
+（强制重启后）走产品路径全链：
+
+①**opt-in 全链**：host 推新 manifest+sig → `available` 列出 git（签名
+链拒篡改=真验）→ `aginx-pkg opt-in git` 镜像拉 19,511,808B 整、
+HTTP 200、sha 过闸。wrapper 三连：`git version 2.49.1` ✓、
+`--exec-path` 指 pkgfiles 树 ✓、**/lib/ld-musl-aarch64.so.1 首跑自链**
+（python3 未装，[ -e ] 门直落）✓。
+
+②**https 真收据**：`ls-remote https://github.com/git/git HEAD` 一发
+命中（真 CA 验证走镜像烤入 /etc/ssl/certs——GitHub 本次未掐，与
+bake #10 时代相反）；`clone --depth 1` rc=0，checkout 落地，log
+`47ce805` 与 ls-remote HEAD 一字不差。
+
+③**模板缺口与修**：clone 打「templates not found」——设备上整棵
+usr/share/ 缺席。根因三跳：上游 Alpine git apk **本体只含一个空
+templates 目录**（sample hooks 不发）→ 空目录 tar 成员过不了流式
+安装器（只为文件成员建目录）→ GIT_TEMPLATE_DIR 指向不存在路径。
+修=配方自带官方模板非噪音子集（description + info/exclude），
+门收紧 test -f。重打 tar 19,514,368B sha `8a4923db…`，镜像换血，
+设备侧 **sha 变 → 不满足 → opt-in 强制重装**（rollback 无前版可回
+也不挡路）——sha 感知重装路径顺手实证。复验：`git init /tmp/tpl`
+零 warning，.git/description 从模板落地。代码 8fada95。
+
+**晨间失联事故还原（2026-09-12，观察收据）**：设备隔夜双通道失联
+（USB 无枚举 + Wi-Fi ssh 超时），屏显「aginxos 无网络 自动重连中」
+（=设计的无网待机红警面，非死屏）。net-watch 日志全链在场：
+
+- **AP 侧 EAPOL 楔死**：0911-23:15:39（GMT，=北京 07:15）起 link
+  lost，AP 信标满格（-36dBm）但 **no EAPOL M1**——assoc 成功、四次
+  握手第一步即 DISCONNECT，`join failed rc=3` × 29 窗口/49 分钟。
+  net-watch 原地重连（flush+join）救不回；强制重启=驱动整装重载后
+  一发入魂。**M20b 原地重连的天花板实证**：AP 认证态楔死需要驱动
+  重载级恢复。
+- **adbd 无监督**：USB 失联与 Wi-Fi 事故独立（net-watch 显示网络
+  到 07:15 才断）——adbd 昨日已死，且它是 init 孤儿（rcS 一次性
+  拉起、不在 svcd 六单元内），死了无人拉。立案待办：adbd 进监督
+  面；net-watch N 窗口失败后的升级策略（重启 vs 挂着等 AP 自愈）。
+- 恢复=长按电源 30s 硬复位（唯一入口）；kmsg 已丢，持久日志
+  （net-watch/aginx-svc/*）完整够用。
