@@ -2887,3 +2887,52 @@ opt-in codex→真跑出答案→回来下一刀。第一刀：
   候选，逐个过引用）。
 - 镜像收据（fresh boot + 裸 bar 尺）= bake #23 刷机日。
 
+
+## 2026-09-12 — Bake #23 刷机日（#323）：刀A 上镜像 + 裸 bar 全绿（L0 缺口三刀收镜像收据）
+
+版本线：slot _b `aginxos redfin 1bbea61 2026-09-12 l0`（bake #22）→ 本刷
+`aginxos redfin 5b52a6a 2026-09-12 l0`。折叠：刀A strip 门（8790802，ext4
+used 187.8M→**152.6M**）、#318 disk-grow+resize2fs 首启自扩、#319
+sftp-server 烤入、#320 sha512 契约、#321 git 目录行。刷机=手动
+Power+VolDown → `GO=1 flash-redfin.sh`（默认免 capture=出厂形状）。
+
+**首启时序**：版本戳 t=50s 出现（判活铁律复验：adb ~20s 即回但系统仍在
+vendor ramdisk——pre 相位等版本戳后才跑）。disk-grow 首启自扩落地
+（steady 相位断言 df ≥100G，**#318 的镜像收据清账**）。
+
+**n7 六相位 39/3**（3 红全环境性，见 ssh 注记）：
+- pre 7/7：出厂形状（无 wifi.conf 无 authorized_keys/var/bin 空/svc.d 恰
+  2/清单见母体+codex/dropbear 在跑——**剥过的 dropbear 正常起**=刀A 活体
+  面）。
+- usbconf 4/4 → netup 3/3（wifi/internet ok/钟到 2026/wlan0 .166）。
+- **ssh 5/3——直连腿环境性阻塞**：Mac 本日挂 192.168.3.26/24（gw .3.1），
+  设备 192.168.0.166，异网段直连 TCP 不可能（与 09-11 刀2 的 AP 单向隔离
+  不同物——那次 Mac 同网段被 L2 挡）。机械面经 #142 forward 代验全绿：
+  `adb forward tcp:2222 tcp:22` → 公钥腿往返 + 版本戳读回；密码腿
+  throwaway→`chpasswd -c sha512`→shadow `$6$` 断言（**#320 契约在新镜像
+  上的活体面**）→expect 登录→锁回 root:!。直连腿待 Mac 回 Legrand AP 补跑。
+- optin-codex **10/10**：config.toml/auth.json md5 双端一致（值零回显）→
+  opt-in 拉镜像源 **233,773,456 B**→`codex-cli 0.151.0`→**brain 真答
+  pong**（provider aginxbrain）→零鉴权炸毛。
+- steady **10/10**：同像真重启→wifi 自动连→pkg ok **0s 落**（全 opt 早
+  退）→root fs ≥100G→net-watch 独苗 ready→**在装集合恰 {codex}**（裸
+  bar 硬断言首跑即中）→二启后 codex 仍真答→sync 零 downloading。
+
+**拉包风波（环境，非镜像缺陷）**：233MB 拉包两发 `timeout: receive body`
+——AP 掐长传输旧病（扫描见 AP -83dBm 弱信号）；net-watch 日志现
+`join ok but no lease`（EAPOL 全通、DHCP 拒答=09-10 批③同款 AP 甩站），
+~2min 自愈（0912-01:37:22 rejoin ok），第三发整包落地。弱信号+持续传输
+=AP 踢弱客户端的已知组合（换线日 -47dBm 时 235MB 背靠背零失败）。
+
+**当日套件修（e5d5a41）**：`available` 剔除已装件——optin-codex 复跑时
+codex 已从 available 消失、只在 list。清单断言两态化（available ‖ list）。
+
+**镜像内三刀收据对账**：sftp-server 烤入（md5 与 #319 活体件同源；本日
+未走 scp 腿，活体三路收据在 09-12 #319 段）；git 目录行在 available 列
+（#321 manifest 行上镜像✓）；sha512 契约=ssh 相位 `$6$` 断言活体✓。
+
+**设备终态**：bake #23 在役（版本戳 5b52a6a l0）、在装恰 {codex}、
+net-watch 独苗、/etc 带 wifi.conf+env（brain 键+网关 id）、authorized_keys
+3 行（套件一次性键缓涨——运维注意）、密码锁 root:!、/root/.codex 配置
+在位。裸 bar 两判据全收：①AginxOS 启动 ②codex 装上真跑。下一刀=刀B
+（mke2fs -N + journal 答辩，#324）。
