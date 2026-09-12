@@ -3431,3 +3431,34 @@ result-report.md…'` → 设备落盘 → 终帧 files → Mac
 上轮旧文件 hello-from-agc.txt 未回流（/tmp/agc-files 仅 1 文件）。
 
 教训：仓从未整体 rustfmt（fmt --check 全仓红），不跑 fmt 免污染提交。
+
+## 2026-09-12 — aginx 多轮 resume 上机（#333）：codex-exec-json 方言 + thread_id 收割 + 续话
+
+**需求**：多轮对话接上——agc 派活后拿 sessionId，下轮 `--session` 续话，
+codex 记得前文（LLM 对话体感）。
+
+**实现**（aginx 仓 37b9a94，已推 github）：
+- 网关新方言 `codex-exec-json`（translate.rs）：`thread.started` 收割
+  thread_id 作真会话 id（§2.5 立法语义，记台账→sessions/list 即活）；
+  `item.completed` 的 agent_message → chunk；`turn.failed` → error 帧。
+  ACP.md §2.8 方言表立行。
+- codex 接入包 v1.1.0：args 去 `-`（codex exec 无位置参时自动读 stdin，
+  设备实测）+ `--json`；`output = "codex-exec-json"`；
+  `[session] resume_args = ["resume", "${SESSION_ID}"]`——网关现有机制：
+  客户端带 sessionId 时自动追加 → `codex exec … resume <uuid>`。
+- agc 零改动（--session + sessionId 打印已有）。
+
+**部署**：二进制 88dbb286…（md5 两端对账）+ 接入包重写 + restart。
+
+**收据（纯 agc 链路，零 ssh）**：
+- 轮1 `agc …/codex '记住一个暗号：菠萝蜜。只回：收到'` → chunk「收到」
+  + `[agc] sessionId: 01a09510-e05b-7e13-bd37-d72393f927ca`
+- 轮2 `agc --session 01a09510-… '暗号是什么？只回答暗号本身'` → 「菠萝蜜」
+  （同 thread_id 回显）——记忆跨轮成立。
+
+侦察注：方言立法前用 ssh 跑了两条裸 codex 看 --json 事件形状
+（thread.started/item.completed/turn.completed+resume 记忆性）——agc
+通道只见翻译后 chunk，看原料必须裸跑；跑活与收据一律 agc。
+
+挂账更新：#331 挂的「raw 方言无 session harvest → 多轮 resume 未接」
+已清。
