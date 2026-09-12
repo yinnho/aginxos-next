@@ -3462,3 +3462,53 @@ codex 记得前文（LLM 对话体感）。
 
 挂账更新：#331 挂的「raw 方言无 session harvest → 多轮 resume 未接」
 已清。
+
+## 2026-09-12 — 闲时 s2idle 守护上机（#334）：freeze 三档收据 + 唤醒源地图 + 生产部署
+
+**需求**：裸 L0 服务器形态永不休眠（Wi-Fi 常开+8 核在线），基线放电
+**1.47W**（100%、4.37V、-336mA、屏灭、CPU 合计 ~1%/8 核——schedstat 法，
+/proc/PID/stat utime 不可信）。给闲时降耗。
+
+**机制收据（当日在机）**：
+- freeze(s2idle) 在 redfin 4.19 可靠：**22s / 50s / 16s 三档实测**，醒来
+  ssh 会话/进程无损；`/proc/uptime` 冻结期间照走（boottime 基）。
+- **必须走 wakeup_count 读-写回协议**（裸写被网络竞态 76ms 秒中止）；
+  协议只收窄窗口堵不死——relay TCP 数秒一跳，竞态率 ~4/5（10:44-10:49
+  验收窗 6 次尝试 5 次中止）；中止=wakeup pending，`echo freeze >
+  /sys/power/state` 直接回 **EBUSY**（sh 回显 "write error: Resource
+  busy"）。
+- **唤醒源地图**：RTC wakealarm 可靠（纪元 1970-01-31 但石英走秒为真，
+  作相对定时器；重臂前必须 `echo 0` 清残 Alarm 否则 EBUSY）；wlan FW
+  **无 WoW 唤醒模式**（睡着时普通单播叫不醒；AP ~20-30s 踢关联，醒后
+  net-watch 全量重关联 ~45s+余震 ~45s=「醒税」）。
+- **中止的次生伤害**：竞态中止可把 wlan 打成僵尸态（关联在、入站流量
+  黑洞），net-watch 探死→重关联 ≤6 分钟自愈；期间设备 ssh/ping 全灭
+  但 relay 出站可能先活（单向可达，agc 探活比 ssh 早通）。
+
+**坑三枚（尸检得出）**：
+1. busybox ash 算术**除零是致命错误杀整个 shell**（浸泡脚本 avg_mA
+   $((…/d)) 遇 dur=0 暴毙，醒来行失踪的根因）——派生量先判分母。
+2. 竞态中止后立刻重试大概率连环中止——冷却 60s 再试。
+3. 监督者进程名是 **aginx-svcd**（pidof svcd 查无≠死了，虚惊一场）；
+   svc CLI 真身 `/usr/bin/aginx-svc`（/usr/sbin 是旧路径）。
+
+**部署（纯运维，零刷机）**：
+- `/etc/aginx/scripts/s2idle-watch.sh` + `/etc/aginx/svc.d/aginx-s2idle.toml`
+  （unit aginx-s2idle，log /var/log/aginx-svc/aginx-s2idle.log）。
+- 闲判定 v0：无 ssh 会话（/proc/net/tcp :0016 ESTABLISHED）且无 codex
+  进程；relay 心跳故意不算忙。参数 env 可覆盖。
+- 验收档（tick5×2 拍/RTC15s）收据：**10:47:51 入睡 → RTC IRQ203 唤醒
+  → 10:48:07 `slept 16s rtc=armed`**——守护自主入睡+自主醒全链在案；
+  4 次竞态中止全部存活（spawns=1 pid 不变）+ 冷却重试收敛。
+- 生产档在役：**30s×20 拍（静默 10 分钟入睡）+ RTC 900s 自醒（15 分钟
+  活窗给 relay/入站）+ 开机前 5 分钟不睡**。停用=/usr/bin/aginx-svc
+  stop aginx-s2idle。
+- svcd 换档语义：改 toml 后 **restart 用缓存旧定义，必须先 reload**
+  （重读 svc.d）再 restart。
+
+**端态**：守护生产档在役；最后一条 ssh 断开 10 分钟后自主入睡循环。
+排程暗礁：crond 日备 `17 4 * * *` 落在睡窗=漏跑（busybox crond 不补），
+挂账未决。
+
+教训：设备失联先分诊通道——ping/ssh 死≠死机，relay 出站（agc 探活）
+单边可达是冻结醒后恢复期常态，别急着重启。
