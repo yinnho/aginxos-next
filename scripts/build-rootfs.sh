@@ -147,12 +147,21 @@ cp -R "${RAMDISK}/system" "${TREE}/system"
 # 4 bin + ld.config.txt + lib64 白名单 19 件（闭包 17 = 根并集 13 + 传递 4，
 # 另 libutils 走 maps 证据、libbinder 走 cnss-daemon 链）。死件 ~19M。
 # 镜像收据 = bake #25（不与刀B 叠刀）。
+# 刀D toybox 退役（2026-09-12，第4刀）：双 multicall 合一。adb shell 的
+# PATH=/system/bin:/sbin:/bin 里 toybox 只抢到同名优先权，busybox farm
+# 同名全覆盖；toybox-only 25 名（SELinux/logcat 桥那域）在 accept/配方/
+# bringup 全树零引用。连坐三 lib——libz/libprocessgroup 的全树 NEEDED
+# 唯一消费者是 toybox、libcgrouprc 的唯一消费者是 libprocessgroup
+# （adbd/rmt_storage/cnss-daemon 三条闭包均不碰，readelf 全档在案）。
+# toybox 进点名死单后，农场悬链被上方清扫一并回收——system/bin 塌缩到
+# 3 真身。busybox 的 netcat 本名是 nc（/bin/netcat 活体 "applet not
+# found"，从来就是死链），APPLETS 表正名。四件合计 ~0.96M。
 # die 闸：keep 岛任一缺失 = vendor 资产漂移，大声死、绝不静默剪残。
-SYSTEM_KEEP_BIN="adbd linker64 sh toybox"
+SYSTEM_KEEP_BIN="adbd linker64 sh"
 SYSTEM_KEEP_LIB="libadbd_auth.so libadbd_fs.so libbase.so libc++.so libc.so"
-SYSTEM_KEEP_LIB="${SYSTEM_KEEP_LIB} libcutils.so libcgrouprc.so libcrypto.so libdl.so"
+SYSTEM_KEEP_LIB="${SYSTEM_KEEP_LIB} libcutils.so libcrypto.so libdl.so"
 SYSTEM_KEEP_LIB="${SYSTEM_KEEP_LIB} liblog.so libm.so libpackagelistparser.so libpcre2.so"
-SYSTEM_KEEP_LIB="${SYSTEM_KEEP_LIB} libprocessgroup.so libselinux.so libutils.so libz.so"
+SYSTEM_KEEP_LIB="${SYSTEM_KEEP_LIB} libselinux.so libutils.so"
 SYSTEM_KEEP_LIB="${SYSTEM_KEEP_LIB} ld-android.so libbinder.so"
 for f in ${SYSTEM_KEEP_BIN}; do
   test -f "${TREE}/system/bin/${f}" \
@@ -164,14 +173,16 @@ for f in ${SYSTEM_KEEP_LIB}; do
 done
 test -f "${TREE}/system/etc/ld.config.txt" \
   || { echo "FATAL: system/etc/ld.config.txt missing — vendor asset drift" >&2; exit 1; }
-# bin：显式点名死件（考古清单即文档）——白名单法在这里会误杀 195 个 toybox
-# applet symlink。resize.f2fs/dump.f2fs/defrag.f2fs/linker_hwasan64/
+# bin：显式点名死件（考古清单即文档）。刀C 时代白名单法在这里会误杀
+# 195 个 toybox applet symlink——刀D 起 toybox 本身进死单，农场悬链由下方
+# 悬链清扫整体回收（bin 只剩 3 真身，白名单法从此也可用，点名法留着当
+# 考古档案）。resize.f2fs/dump.f2fs/defrag.f2fs/linker_hwasan64/
 # linker_asan64 是指向死目标的 symlink，一并点名；init.android 与 init md5
 # 全同——pack-vendor-boot 在 RAMDISK 世界造的副本随树混入。
 SYSTEM_DEAD_BIN="update_engine_sideload init init.android recovery fastbootd \
 sload_f2fs mkfs.erofs fsck.erofs dump.erofs fsck.f2fs make_f2fs mke2fs \
 e2fsdroid minadbd toolbox charger servicemanager ziptool watchdogd reboot \
-resize.f2fs dump.f2fs defrag.f2fs linker_hwasan64 linker_asan64"
+resize.f2fs dump.f2fs defrag.f2fs linker_hwasan64 linker_asan64 toybox"
 for f in ${SYSTEM_DEAD_BIN}; do rm -f "${TREE}/system/bin/${f}"; done
 # 悬链清扫：rm 之后目标已亡的 symlink（ueventd→init 这类没点名的）一并清。
 # 残链本无害（-x 恒假，PATH 落到 busybox），清了是整洁。
@@ -193,7 +204,7 @@ for f in "${TREE}"/system/lib64/*; do
     *) rm -f "${f}" ;;
   esac
 done
-echo "==> 刀C system/ prune: bin $(ls "${TREE}/system/bin" | wc -l | tr -d ' ') 条目、lib64 $(ls "${TREE}/system/lib64" | wc -l | tr -d ' ') 件、etc 只留 ld.config.txt"
+echo "==> system/ prune (刀C 死件+刀D toybox): bin $(ls "${TREE}/system/bin" | wc -l | tr -d ' ') 条目、lib64 $(ls "${TREE}/system/lib64" | wc -l | tr -d ' ') 件、etc 只留 ld.config.txt"
 for f in default.prop prop.default *_contexts; do
   cp "${RAMDISK}"/${f} "${TREE}/" 2>/dev/null || true
 done
@@ -523,7 +534,7 @@ chmod 755 "${TREE}"/usr/libexec/aginx/net-watch "${TREE}"/usr/libexec/aginx/net-
 # `busybox --install -s /bin` to fill in the full set on first boot.
 APPLETS="[ awk blkid cat chmod chown clear cp cut date dd df dmesg echo env \
 expr false fdisk find free getty grep gunzip gzip head hostname id insmod ip \
-kill less ln ls lsmod mkdir mknod more mount mv netcat netstat nice passwd \
+kill less ln ls lsmod mkdir mknod more mount mv nc netstat nice passwd \
 pidof ping printf ps renice rm rmdir route sed setsid sh sleep sort \
 start-stop-daemon stat su switch_root sync tail tar telnet test top touch tr \
 true umount uname uniq uptime vi wc wget which whoami xargs zcat"
