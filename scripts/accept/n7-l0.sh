@@ -1,45 +1,47 @@
 #!/usr/bin/env bash
-# n7 acceptance — L0 产品流全链（刀5，2026-09-12）：刷机=刷蛋，配置后置，
-# ssh+pkg 自持。「刷完就是一台活的机器，装什么是用户自己的事」的收据线。
+# n7 acceptance — L0 产品流全链（刀5，2026-09-12；09-12 晚裁到裸 bar）：
+# 刷机=刷蛋，配置后置，ssh+pkg 自持。「刷完就是一台活的机器，装什么是
+# 用户自己的事」的收据线——而出厂形态本身就是产品：裸 L0 即完整形态，
+# 验收尺只有两条（AginxOS 能启动；codex 能装能正常用）。
 #
 # 与 n6 分工：n6=镜像形状与整机等价（pre/opt-in/等价/capture 日）；n7=
-# 产品流——出厂→配置→接管→安装→稳态。刷机腿是人工的（flash-redfin.sh
-# 默认免 capture，刷完跑 pre）。
+# 产品流——出厂→配置→接管→装 codex→稳态。刷机腿是人工的
+# （flash-redfin.sh 默认免 capture，刷完跑 pre）。
 #
 #   pre          刷完 L0：出厂形状速检（详细形状断言在 n6 pre，这里只锁
 #                门面事实：l0 戳/svc.d=2/无 wifi.conf/var/bin 空/清单见母体）
 #   usbconf      配置后置第一腿（host 驱动 adb）：推 wifi.conf → /etc/，
 #                追加 ssh 公钥（套件自生成一次性键），可选 N7_ENV 灌注
-#                /etc/aginx/env（brain 键 + AGINX_GATEWAY_ID），reboot
+#                /etc/aginx/env（裸 bar 不需要——留给将来 gateway 装机日），
+#                reboot
 #   netup        等网回来：boot.state wifi/internet ok + 钟到 2026
 #   ssh          host 腿真 ssh 往返（Wi-Fi 直连，不走 adb forward——产品
 #                故事）：公钥腿 BatchMode 硬断言；密码腿=本相位内闭环
 #                （throwaway 密码生成→chpasswd→expect 登录→passwd 锁回→
 #                证锁后公钥仍在=双通道不互斥）；值零回显、零落盘
-#   optin-mother 母体一句话：opt-in aginx → unit aginx ready → env 键名
-#                在 → send 真中文回复（真脑断言——secret.policy 哑弹在
-#                此现形）
-#   optin-phone  手机形态：opt-in aginx-term / aginx-voice（自动带
-#                asr/tts/ocr）/ aginxbrowser（裸上游件，缺席容忍拾取）/
-#                aginx-gateway（自动带 secretd，env 已灌注不进断路器）
-#                → 单元 ready + term handoff 亮屏 + voice face
+#   optin-codex  裸 bar 的尺：推 /root/.codex（config.toml+auth.json，
+#                adb push 文件、md5 对账、键值零回显）→ opt-in codex →
+#                codex exec brain 真答 pong（母体/界面/外围一概不装——
+#                09-12 用户裁决，aginx 族全 opt-in 用户自装）
 #   steady       同像重启：wifi 自动连 / pkg ok 秒落（全 opt 早退）/
-#                六单元 / send 仍答 / sync 零 downloading
+#                root 已扩（disk-grow）/ net-watch 独苗 ready / 在装集合
+#                恰 {codex} / codex 仍真答 / sync 零 downloading
 #
 # 用法（相位序即产品序）：
 #   N7_WIFI_CONF=~/somewhere/wifi.conf ./scripts/accept/n7-l0.sh usbconf
-#   ./scripts/accept/n7-l0.sh netup|ssh|optin-mother|optin-phone|steady
+#   ./scripts/accept/n7-l0.sh netup|ssh|optin-codex|steady
 #
-# 秘密纪律：wifi.conf/env 走 adb push 推文件（路径进命令行，内容不进）；
-# throwaway 密码与 ssh 键对生灭于单次相位进程内（mktemp -d + trap 清理），
-# 值零回显；锁回用 sed 直写 shadow（root:! = 确定性锁，不赌 busybox
-# passwd -l 旗标面）。
+# 秘密纪律：wifi.conf/env/codex auth 走 adb push 推文件（路径进命令行，
+# 内容不进；auth 只 md5 对账）；throwaway 密码与 ssh 键对生灭于单次相位
+# 进程内（mktemp -d + trap 清理），值零回显；锁回用 sed 直写 shadow
+# （root:! = 确定性锁，不赌 busybox passwd -l 旗标面）。
 set -euo pipefail
 
 ACCEPT_DEVICE=redfin . "$(dirname "$0")/_serial.sh"  # SERIAL：env 最高，默认读 redfin 档案 [adb]
 REPO="$(cd "$(dirname "$0")/../.." && pwd)"
 N7_WIFI_CONF="${N7_WIFI_CONF:-${REPO}/.local/wifi.conf}"
 N7_ENV="${N7_ENV:-${REPO}/.local/aginx-env}"
+N7_CODEX_DIR="${N7_CODEX_DIR:-${HOME}/.codex}"
 
 PASS=0
 FAIL=0
@@ -104,6 +106,8 @@ phase_pre() {
   expect_rc  "dropbear 在跑（ssh 是 L0 自持件）"
   drv "aginx-pkg available | grep -qx aginx"
   expect_rc  "清单见母体（available 列 aginx）"
+  drv "aginx-pkg available | grep -qx codex"
+  expect_rc  "清单见 codex（裸 bar 的验收包在目录）"
 }
 
 phase_usbconf() {
@@ -122,7 +126,7 @@ phase_usbconf() {
     drv "grep -q '^AGINXBRAIN_API_KEY=' /etc/aginx/env && grep -q '^AGINX_GATEWAY_ID=' /etc/aginx/env"
     expect_rc  "env 已灌注（brain/gateway 键名在，值零回显）"
   else
-    echo "warn - N7_ENV 未给（${N7_ENV} 缺）——optin-mother 段会 FAIL；这是 send 真回复的前置" >&2
+    echo "warn - N7_ENV 未给（${N7_ENV} 缺）——裸 bar 不需要；留给将来 gateway 装机日再灌" >&2
   fi
   # 公钥腿材料：一次性键对（相位内闭环，trap 清理）——authorized_keys 用
   # 追加不覆写（capture 日已有运维键时双键并存=不互斥的另一面）。
@@ -239,59 +243,44 @@ phase_ssh() {
   rm -rf "${KEYDIR}"
 }
 
-phase_optin_mother() {
-  echo "==> 母体一句话（opt-in aginx → 真脑断言）"
+phase_optin_codex() {
+  echo "==> 裸 bar 的尺：opt-in codex → brain 真答（其余一概不装）"
   online
-  drv "grep -q '^AGINXBRAIN_API_KEY=' /etc/aginx/env"
-  expect_rc  "env brain 键名在（缺=N7_ENV 未灌注，send 只会 401 空答）"
-  drv "aginx-pkg opt-in aginx"
-  expect_rc  "opt-in aginx rc=0"
-  wait_stamp aginx "母体 face 落地（/var/bin/aginx）" 40
-  wait_ready aginx "单元 aginx ready（刀3：单元名随包名）" 20
-  drv "aginx commands >/dev/null"
-  expect_rc  "命令面活了"
-  drv "aginx agent send 现在几点了"
-  expect_rc  "send rc=0"
-  expect_no  "send 非报错行（无 aginx agent: 前缀）" '^aginx agent:'
-  expect_out "send 真中文回复（secret.policy pkgfiles 真身放行——哑弹现形门）" "[一-龥]"
-}
-
-phase_optin_phone() {
-  echo "==> 手机形态（term+voice(带 3 模型)+browser+gateway(带 secretd)）"
-  online
-  local p
-  for p in aginx-term aginx-voice aginxbrowser aginx-gateway; do
-    drv "aginx-pkg opt-in $p"
-    expect_rc  "opt-in $p rc=0"
-  done
-  local n
-  for n in aginx-term aginx-voice aginx-asr aginx-tts aginx-ocr aginxbrowser aginx-gateway aginx-secretd; do
-    wait_stamp "$n" "face 落地：$n" 40
-  done
-  wait_ready aginx-voice   "单元 aginx-voice ready" 20
-  wait_ready aginxbrowser  "单元 aginxbrowser ready（缺席容忍 30s 拾取）" 10
-  wait_ready aginx-secretd "单元 aginx-secretd ready" 20
-  wait_ready aginx-gateway "单元 aginx-gateway ready（env 已灌注→不进断路器）" 20
-  local TWAIT=0 i
-  for i in $(seq 1 20); do
-    drv "pidof aginx-term >/dev/null"
-    [ "${DRV_RC:-}" = "0" ] && { TWAIT=1; break; }
-    sleep 3
-  done
-  [ "$TWAIT" = 1 ] && { echo "ok   - term handoff 亮屏（装包即亮）"; PASS=$((PASS+1)); } \
-                  || { echo "FAIL - aginx-term 未起（handoff 静默轮询没接住？）"; FAIL=$((FAIL+1)); }
-  local FWAIT=0
-  for i in $(seq 1 20); do
-    drv "test -s /run/aginx-voice/face"
-    [ "${DRV_RC:-}" = "0" ] && { FWAIT=1; break; }
-    sleep 3
-  done
-  [ "$FWAIT" = 1 ] && { echo "ok   - voice face 出现"; PASS=$((PASS+1)); } \
-                  || { echo "FAIL - voice face 未出现"; FAIL=$((FAIL+1)); }
+  test -s "${N7_CODEX_DIR}/config.toml" && test -s "${N7_CODEX_DIR}/auth.json" \
+    || die "codex 配置不全（${N7_CODEX_DIR} 需 config.toml+auth.json；N7_CODEX_DIR= 指真源——auth 键值零回显铁律）"
+  # 配置先行：adb push 推文件（路径进命令行、内容不进），600 落位。
+  # 落点 /root/.codex——L0 root HOME=/root（/home 空）；drv 默认 HOME=/home，
+  # codex 命令一律 HOME=/root 前缀盖写。
+  adbx shell "mkdir -p /root/.codex && chmod 700 /root/.codex"
+  adbx push "${N7_CODEX_DIR}/config.toml" /root/.codex/config.toml >/dev/null
+  adbx push "${N7_CODEX_DIR}/auth.json" /root/.codex/auth.json >/dev/null
+  adbx shell "chmod 600 /root/.codex/config.toml /root/.codex/auth.json"
+  # 双端 md5 对账（值零回显——md5-only 验证，09-12 codex 收据同法）
+  local h
+  h="$(md5 -q "${N7_CODEX_DIR}/config.toml" 2>/dev/null || md5sum "${N7_CODEX_DIR}/config.toml" | cut -d' ' -f1)"
+  drv "md5sum /root/.codex/config.toml"
+  expect_out "config.toml 双端一致（${h:0:8}…）" "^${h}"
+  h="$(md5 -q "${N7_CODEX_DIR}/auth.json" 2>/dev/null || md5sum "${N7_CODEX_DIR}/auth.json" | cut -d' ' -f1)"
+  drv "md5sum /root/.codex/auth.json"
+  expect_out "auth.json 双端一致（600，键值零回显）" "^${h}"
+  # 装：镜像源拉官方 musl 二进制（233MB 级，opt-in 同步完成才返 rc）
+  drv "aginx-pkg available | grep -qx codex"
+  expect_rc  "清单见 codex（opt 目录）"
+  drv "aginx-pkg opt-in codex"
+  expect_rc  "opt-in codex rc=0"
+  wait_stamp codex "codex face 落地（/var/bin/codex）" 8
+  drv "HOME=/root codex --version"
+  expect_rc  "codex --version rc=0"
+  expect_out "codex --version（官方 musl 二进制）" 'codex-cli'
+  # 真答：brain 往返——裸 bar 第②条（codex 能正常用）
+  drv "HOME=/root codex exec --skip-git-repo-check 'Reply with exactly: pong'"
+  expect_rc  "codex exec rc=0"
+  expect_out "brain 真答 pong" 'pong'
+  expect_no  "无未配置/鉴权炸毛" 'not logged in|missing API key|not authenticated'
 }
 
 phase_steady() {
-  echo "==> 同像重启稳态（pkg ok 秒落/六单元/send 仍答）"
+  echo "==> 同像重启稳态（裸形态持久：pkg ok 秒落/在装恰 codex/codex 仍真答）"
   online
   drv "/usr/bin/aginx-reboot || true"
   sleep 5
@@ -316,20 +305,30 @@ phase_steady() {
   done
   [ "$PKG_OK" = 1 ] && { echo "ok   - pkg ok（全 opt 早退，$(( $(date +%s) - PKG_T0 ))s 落）"; PASS=$((PASS+1)); } \
                   || { echo "FAIL - pkg ok 未落"; FAIL=$((FAIL+1)); }
-  # 六单元=svc.d 两件(net-watch/aginxbrowser)+包四单元(aginx/voice/
-  # secretd/gateway)；刚重启单元还在起，有界等。
-  local READY_OK=0 i
+  # disk-grow 收据：root fs 首启已扩满 userdata（二启 resize2fs no-op，
+  # 几何持久即证）——1K-blocks 9 位以上 ≈ ≥100G。
+  drv "df / | sed -n 2p"
+  expect_out "root fs 已扩 ≥100G（disk-grow 首启自扩收据线）" ' [0-9]{9,} '
+  # 单元：net-watch 独苗 ready——裸形态无包单元；aginxbrowser 缺席容忍
+  # （裸上游件不装）永不 ready，不计入。
+  local READY_OK=0
   for i in $(seq 1 20); do
     drv "/usr/bin/aginx-svc list | grep -c ready"
-    printf '%s' "${DRV_OUT:-}" | grep -q '^6$' && { READY_OK=1; break; }
+    printf '%s' "${DRV_OUT:-}" | grep -q '^1$' && { READY_OK=1; break; }
     sleep 5
   done
-  [ "$READY_OK" = 1 ] && { echo "ok   - 六单元恰 ready（aginx/voice/browser/net-watch/secretd/gateway）"; PASS=$((PASS+1)); } \
-                    || { echo "FAIL - 六单元未齐（out=$(printf '%s' "${DRV_OUT:-}" | head -2)）"; FAIL=$((FAIL+1)); }
-  drv "aginx agent send 现在几点了"
-  expect_rc  "二启后母体仍应答"
-  expect_no  "send 非报错行" '^aginx agent:'
-  expect_out "二启后真回复" "[一-龥]"
+  [ "$READY_OK" = 1 ] && { echo "ok   - 单元恰 net-watch 独苗 ready（裸形态）"; PASS=$((PASS+1)); } \
+                    || { echo "FAIL - ready 计数≠1（out=$(printf '%s' "${DRV_OUT:-}" | head -2)）"; FAIL=$((FAIL+1)); }
+  # 在装集合恰 {codex}——裸 bar 硬断言（aginx 族全 opt，用户要装再装）。
+  # cmd_list 按 /var/bin 面清点（滤 .aginxmd），即装即列。
+  drv "aginx-pkg list | wc -l"
+  expect_out "在装集合恰 1 件" '^1$'
+  drv "aginx-pkg list | sed -n 1p"
+  expect_out "在装=codex" '^codex([[:space:]]|$)'
+  # 二启后 codex 仍真答（裸 bar 第②条的持久面；配置在 /root 非 tmpfs）
+  drv "HOME=/root codex exec --skip-git-repo-check 'Reply with exactly: pong'"
+  expect_rc  "二启后 codex exec rc=0"
+  expect_out "二启后仍真答 pong" 'pong'
   drv "aginx-pkg sync"
   expect_rc  "sync rc=0（no-op 但签名链照验）"
   expect_no  "稳态零 downloading" 'downloading'
@@ -340,19 +339,19 @@ case "${1:-}" in
   usbconf)      phase_usbconf ;;
   netup)        phase_netup ;;
   ssh)          phase_ssh ;;
-  optin-mother) phase_optin_mother ;;
-  optin-phone)  phase_optin_phone ;;
+  optin-codex)  phase_optin_codex ;;
   steady)       phase_steady ;;
   *)
     cat >&2 <<USAGE
-usage: n7-l0.sh <pre|usbconf|netup|ssh|optin-mother|optin-phone|steady>
+usage: n7-l0.sh <pre|usbconf|netup|ssh|optin-codex|steady>
   pre          刷完 L0 出厂速检
   usbconf      推 wifi.conf(+可选 N7_ENV)+公钥 → reboot（N7_WIFI_CONF= 指真源）
   netup        等网回来（wifi/internet ok + 钟 + IP）
   ssh          真 ssh 往返：公钥腿 + 密码腿（throwaway 闭环）+ 锁回
-  optin-mother opt-in aginx → 真脑断言
-  optin-phone  opt-in term/voice/browser/gateway → 手机形态（steady 六单元的地基）
-  steady       重启稳态（pkg ok 秒落 / 六单元 / send / 零 downloading）
+  optin-codex  推 /root/.codex → opt-in codex → brain 真答（裸 bar 的尺；
+               N7_CODEX_DIR= 指 host codex 配置真源，缺省 ~/.codex）
+  steady       重启稳态（pkg ok 秒落 / disk-grow / net-watch 独苗 /
+               在装恰 {codex} / codex 仍真答 / 零 downloading）
 USAGE
     exit 2 ;;
 esac
