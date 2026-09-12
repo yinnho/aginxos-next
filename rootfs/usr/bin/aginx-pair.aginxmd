@@ -1,4 +1,0 @@
-# aginx:summary=配对码落地：stdin 一行 payload（AGINXPAIR1|… 或 WIFI:…）→ join+env+校时+母体，boot.state 网行定点刷新
-# aginx:args=apply
-# aginx:examples=echo 'WIFI:T:WPA;S:home;P:secret;;' | aginx-pair apply
-# aginx:group=net

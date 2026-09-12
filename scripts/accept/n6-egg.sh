@@ -9,8 +9,9 @@
 #   paired  配网+灌 env 后（adb push wifi.conf / n7 usbconf 腿）：
 #           B 配网产物证（wifi.conf/boot.state/env 键名不回显值/钟）+
 #           C 显式 opt-in 五连（aginx/aginx-term/aginx-voice/aginx-
-#           browser/aginx-gateway——voice 自动带 asr/tts/ocr，gateway 自动
-#           带 secretd，刀1 依赖感知的设备面收据；browser 是裸上游二进制
+#           browser/aginx-gateway——voice 自动带 asr/tts/ocr/qr/pair、
+#           gateway 自动带 secretd、母体自动带 update，刀1 依赖感知+
+#           刀F 依赖身份的设备面收据；browser 是裸上游二进制
 #           opt 行，缺席容忍单元 30s 自拾取=设计用途首次实证）+
 #           D 等价（send 真往返/8443/voice local/secretd policy）+
 #           E 点击装（grok opt-in，CLI 代行）
@@ -20,8 +21,9 @@
 #           脸被刷没但全 opt 不再自动重拉（provision 早退）——opt-in 重跑
 #           回脸 + 等价复验。与蛋时代的 missing—downloading×8 是两条路。
 #
-# 前置（刀6 镜像先行闸）：pkgs.aginx.net 已上 8 包新车——opt-in 404 =
-# 镜像源没上，不是套件的失败。env 灌注（brain 键 + AGINX_GATEWAY_ID）
+# 前置（刀6 镜像先行闸）：pkgs.aginx.net 已上 11 包新车（刀F +qr/pair/
+# update）——opt-in 404 = 镜像源没上，不是套件的失败。env 灌注（brain 键 +
+# AGINX_GATEWAY_ID）
 # 是运维腿：gateway 缺 id 会裸 exit(1) 进断路器（刀3 必修④），send 缺
 # brain 键 401 空答。
 #
@@ -35,10 +37,11 @@ set -euo pipefail
 ACCEPT_DEVICE=redfin . "$(dirname "$0")/_serial.sh"  # SERIAL：env 最高，默认读 redfin 档案 [adb]
 NROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 PORT_HEX=20FB          # 8443 = 0x20FB（busybox netstat 必炸，走 /proc/net/tcp）
-# L0 八包（刀4 定档）：五连 opt-in 的落地面——voice 带 asr/tts/ocr、
-# gateway 带 secretd 全靠 depends；aginxbrowser 是基础清单裸二进制 opt
-# 行（无配方、无依赖，缺席容忍单元 30s 拾取——svc.d=2 里它活着的理由）。
-CORE8="aginx aginx-term aginx-voice aginx-asr aginx-tts aginx-ocr aginx-gateway aginx-secretd"
+# L0 十一包（刀4 定档；刀F +3）：五连 opt-in 的落地面——voice 带 asr/
+# tts/ocr/qr/pair、gateway 带 secretd、母体带 update 全靠 depends；
+# aginxbrowser 是基础清单裸二进制 opt 行（无配方、无依赖，缺席容忍单元
+# 30s 拾取——svc.d=2 里它活着的理由）。
+CORE11="aginx aginx-term aginx-voice aginx-asr aginx-tts aginx-ocr aginx-gateway aginx-secretd aginx-qr aginx-pair aginx-update"
 OPTIN5="aginx aginx-term aginx-voice aginxbrowser aginx-gateway"
 UNITS6="aginx aginx-voice aginxbrowser net-watch aginx-secretd aginx-gateway"
 N6_SCOPE=n6-l0-probe
@@ -82,13 +85,13 @@ wait_8443() { # label
   echo "FAIL - ${1}（8443 未 ESTABLISHED）"; FAIL=$((FAIL+1)); return 1
 }
 
-# 8 stamps 全落（C 段安装完成信号；opt-in 不写 boot.state，stamps 是唯一
+# 11 stamps 全落（C 段安装完成信号；opt-in 不写 boot.state，stamps 是唯一
 # 落地面）。tries×sleeps 是给首拉 ~700MB 的窗（asr 239MB 贴 MEMBER_MAX）。
-wait_core8_stamps() { # label tries sleep_secs
+wait_core11_stamps() { # label tries sleep_secs
   local i n missing
   for i in $(seq 1 "${2:-60}"); do
     missing=""
-    for n in $CORE8; do
+    for n in $CORE11; do
       drv "test -f /var/lib/aginx/stamps/$n"
       [ "${DRV_RC:-}" = "0" ] || missing="$missing $n"
     done
@@ -138,8 +141,8 @@ phase_pre() {
   # svcd 对未知单元的真面相是 'ERR no such unit'（bake #22 首跑实证），
   # absent 语义由此承载——两词都收，防 svcd 措辞再变。
   expect_out "母体单元 absent（未 opt-in）" '(absent|no such unit)'
-  drv "test -x /usr/bin/aginx-pair"
-  expect_rc  "配网 apply 面在（L0 件：voice 包装上即用）"
+  drv "test ! -e /usr/bin/aginx-pair && test ! -e /usr/bin/aginx-qr && test ! -e /usr/bin/aginx-update"
+  expect_rc  "qr/pair/update 不烤（刀F：依赖身份走包——voice/term/母体的 depends 带装）"
 }
 
 phase_paired() {
@@ -162,9 +165,9 @@ phase_paired() {
     drv "aginx-pkg opt-in $p"
     expect_rc  "opt-in $p rc=0"
   done
-  wait_core8_stamps "8 包 stamps 齐（voice 带 3 模型、gateway 带 secretd）" 60 15
+  wait_core11_stamps "11 包 stamps 齐（voice 带 3 模型+qr+pair、gateway 带 secretd、母体带 update）" 60 15
   local n
-  for n in $CORE8; do
+  for n in $CORE11; do
     drv "test -f /var/lib/aginx/stamps/$n.version"
     expect_rc  "version stamp 在：$n"
     drv "test -e /var/bin/$n && test -f /var/bin/$n.aginxmd"
@@ -300,7 +303,7 @@ phase_egg2() {
     drv "aginx-pkg opt-in $p"
     expect_rc  "opt-in 重跑 $p rc=0（回脸）"
   done
-  wait_core8_stamps "8 包脸全回" 60 15
+  wait_core11_stamps "11 包脸全回" 60 15
   local u
   for u in $UNITS6; do
     wait_ready "$u" "单元 $u" 20

@@ -13,6 +13,12 @@
 #                         （exec=bin/ag-*，模型与整机烤机逐字节同源：asr
 #                          全树；tts=vits-melo 去 133B lfs 指针；ocr=
 #                          det/rec/dict 三件）
+#   刀F三包  aginx-qr aginx-pair aginx-update
+#                       — 出镜像走包（2026-09-12：L0 是 Linux，不预生成
+#                         二维码）：qr=jpeg 特性独立调用；pair=apply 面
+#                         --no-default-features + <2MB 绊网；update=母体
+#                         包 depends 锚。均不吃 opt-level=z（包 sha 与
+#                         manifest/镜像源耦合——刀E 的镜像线专属 env）
 #   上游树包  git
 #                       — Alpine v3.22 aarch64 apk 闭包 15 件（sha256 逐件
 #                         钉死）+ wrapper 面 bin/git（L0 刀C：https 传输
@@ -105,6 +111,44 @@ case "${PKG}" in
     install -m 755 "${TARGET_DIR}/aginx-term" "${STAGE}/files/bin/aginx-term"
     install -m 644 "${ROOT}/rootfs/usr/share/fonts/agterm-cjk.otf" \
       "${STAGE}/files/share/fonts/agterm-cjk.otf"
+    MEMBERS="pkg.toml SKILL.md files"
+    ;;
+  aginx-qr)
+    # 刀F（2026-09-12）出镜像走包：voice/term 的取景扫码 spawn 本面。
+    # --features aginx-qr/jpeg 必须独立调用——特性选择是调用级旗标，
+    # 并进共享调用会把 quircs+aginx-img 织进任何依赖 aginx-qr 的 crate
+    # （N5② 特性陷阱的出生地，当年受害者 aginx-voice）。解码器必须
+    # 是自己一个进程。
+    echo "==> zigbuild aginx-qr（musl jpeg 特性，缓存则秒过）"
+    (cd "${ROOT}" && cargo zigbuild --release --target aarch64-unknown-linux-musl \
+      -p aginx-qr --features aginx-qr/jpeg)
+    mkdir -p "${STAGE}/files/bin"
+    install -m 755 "${TARGET_DIR}/aginx-qr" "${STAGE}/files/bin/aginx-qr"
+    MEMBERS="pkg.toml SKILL.md files"
+    ;;
+  aginx-pair)
+    # 刀F 出镜像走包：设备面只要 apply（stdin payload，C4 voice/term
+    # 依赖）。--no-default-features 是调用级旗标——并进共享调用会把
+    # mint 的 qrcodegen/jpeg-encoder 连带 aginx-qr/jpeg 的 quircs+
+    # aginx-img 织进其它包；铸码在 host 跑 default 特性。
+    # <2MB 绊网同律：尺寸变化=feature 折叠事故。
+    echo "==> zigbuild aginx-pair（musl apply 面，缓存则秒过）"
+    (cd "${ROOT}" && cargo zigbuild --release --target aarch64-unknown-linux-musl \
+      -p aginx-pair --no-default-features)
+    PAIR_SZ="$(stat -f%z "${TARGET_DIR}/aginx-pair")"
+    [ "${PAIR_SZ}" -lt 2097152 ] \
+      || { echo "FATAL: aginx-pair is ${PAIR_SZ}B (≥2MiB) — mint feature leaked into the device build" >&2; exit 1; }
+    mkdir -p "${STAGE}/files/bin"
+    install -m 755 "${TARGET_DIR}/aginx-pair" "${STAGE}/files/bin/aginx-pair"
+    MEMBERS="pkg.toml SKILL.md files"
+    ;;
+  aginx-update)
+    # 刀F 出镜像走包：母体包 depends 锚住（装 aginx 自动带）；裸箱
+    # 升级=重刷。BOOT_OK_BIN/DOWNLOAD_BIN 都指 L0 直装件，包体零改。
+    echo "==> zigbuild aginx-update（musl，缓存则秒过）"
+    (cd "${ROOT}" && cargo zigbuild --release --target aarch64-unknown-linux-musl -p aginx-update)
+    mkdir -p "${STAGE}/files/bin"
+    install -m 755 "${TARGET_DIR}/aginx-update" "${STAGE}/files/bin/aginx-update"
     MEMBERS="pkg.toml SKILL.md files"
     ;;
   aginx-asr)
@@ -219,7 +263,7 @@ case "${PKG}" in
     MEMBERS="pkg.toml SKILL.md files"
     ;;
   *)
-    echo "FATAL: 未知包名 ${PKG}（四裸包 zigbuild / aginx·aginx-term 树包 / 三树包预编译件）" >&2
+    echo "FATAL: 未知包名 ${PKG}（四裸包/两树包/三树包/刀F三包 zigbuild / 上游树包 git）" >&2
     exit 1
     ;;
 esac

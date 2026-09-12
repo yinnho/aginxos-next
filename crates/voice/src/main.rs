@@ -887,8 +887,8 @@ fn read_wifi_conf() -> Option<(String, String)> {
     Some((ssid?, psk))
 }
 
-/// Act::PairApply（M42c 一眼自举的机器侧全流程）委外 `/usr/bin/aginx-pair
-/// apply`（C3）：payload 一行进 stdin——argv 恒两词，psk/三键永不进
+/// Act::PairApply（M42c 一眼自举的机器侧全流程）委外 `/var/bin/aginx-pair
+/// apply`（C3；刀F 起包面）：payload 一行进 stdin——argv 恒两词，psk/三键永不进
 /// /proc/*/cmdline。join+IP 轮询+落 wifi.conf、env 三键合并、快速校时、
 /// internet 探测、母体两单元 restart-ready、boot.state 网四行定点刷新全
 /// 在那一侧；汇总行（stdout 首行）回来作报告话。秘密只进 env 文件
@@ -899,7 +899,7 @@ const PAIR_APPLY_BUDGET_SECS: u32 = 240;
 
 fn pair_apply(bundle: &aginx_qr::PairBundle) -> Result<String, String> {
     use std::io::Write as _;
-    let mut child = Command::new("/usr/bin/aginx-pair")
+    let mut child = Command::new("/var/bin/aginx-pair")
         .arg("apply")
         .stdin(std::process::Stdio::piped())
         .stdout(std::process::Stdio::piped())
@@ -970,7 +970,7 @@ fn scan_qr() -> Result<Vec<String>, String> {
         }
         // 解码（aginx-qr 进程，payload 一行一个）。output() 不带超时——解码
         // 是 <300ms 量级的纯计算，等待预算都在拍照那侧
-        let dec = Command::new("/usr/bin/aginx-qr").arg(&qr_jpg).output();
+        let dec = Command::new("/var/bin/aginx-qr").arg(&qr_jpg).output();
         match dec {
             Ok(out) if out.status.success() => {
                 let payloads = String::from_utf8_lossy(&out.stdout)
@@ -1068,7 +1068,7 @@ fn eye_stop(child: &mut std::process::Child) {
 /// 仍在 quirc + Bradley 已证域（实测定终）。None = 没码/解码器不在——
 /// 取景继续等下一帧。
 fn eye_decode_qr() -> Option<Vec<String>> {
-    let out = Command::new("/usr/bin/aginx-qr")
+    let out = Command::new("/var/bin/aginx-qr")
         .arg(face::EYE_JPG)
         .output()
         .ok()?;
