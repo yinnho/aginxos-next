@@ -2857,3 +2857,33 @@ templates 目录**（sample hooks 不发）→ 空目录 tar 成员过不了流�
   面；net-watch N 窗口失败后的升级策略（重启 vs 挂着等 AP 自愈）。
 - 恢复=长按电源 30s 硬复位（唯一入口）；kmsg 已丢，持久日志
   （net-watch/aginx-svc/*）完整够用。
+
+## 2026-09-12 — L0 精简循环①：strip 门（刀A）——内容 86M→51M、used 187.8M→152.6M（host 干烤+真机热验；本地不推）
+
+用户定循环纪律：不停精简到最小，每刀同一把尺——刷完→裸系统起→
+opt-in codex→真跑出答案→回来下一刀。第一刀：
+
+- **构成普查（先报告后动手）**：staging 真内容 86M（bin/ 30M 静态 C
+  bringup 件、system/ 31M AOSP 用户态、usr/ 18M Rust 件、lib/ 6M
+  内核模块、其他 ~1M）；ext4 used 187.8M（superblock 直读：blocks
+  total=524288 free=476204）——几何 ~102M（journal 16384 块=64M +
+  inode 表 131072×256B=32M + 位图/备份超块）。旧收据「148M 底座」
+  测量方法未记档、与直测对不齐，弃用。
+- **刀A**：build-rootfs.sh 烤前加 strip 门——全树 ELF 可执行档
+  （e_type EXEC/DYN，od 读偏移 16 判型）过 llvm-strip --strip-all；
+  ET_REL（.ko）跳过——strip-all 毁 modinfo 段（strip-debug 是 ko
+  正解，另立微刀）。���具=llvm@21 版本化 Cellar 安装（无裸名软链，
+  command -v 摸不到，glob 兜底）；Linux 上 binutils strip 同参等价。
+- **干烤收据**：136 件剥过；内容 **86M→51M**（bin/ 30M→4M，dropbear
+  2.8M→0.55M；usr/ 18M→11M——Rust 件 `file` 报 stripped 仍可再剥
+  7M）；ext4 used **187.8M→152.6M**；树 239 文件；烤线 23s；
+  check.sh 全绿。
+- **真机热验**：剥后 dropbear adb 推 /data/local/tmp 跑 `--help`——
+  Dropbear server v2026.94 usage 正常打出（563152 字节与 host 相符）。
+- **下一刀主食浮现**：几何 101M 已占 used 三分之二——刀B = mke2fs
+  `-N`（L0 才 239 文件，131072 inode 是 500 倍冗余）+ journal 尺寸
+  答辩；刀C = system/ 死件考古（update_engine_sideload 2.5M/
+  recovery 2.0M/fastbootd 1.4M/init.android 2.1M/f2fs 工具 ~1.5M
+  候选，逐个过引用）。
+- 镜像收据（fresh boot + 裸 bar 尺）= bake #23 刷机日。
+
