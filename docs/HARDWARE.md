@@ -3188,3 +3188,41 @@ linker64/sh 三真身）、system/lib64 19→**16** 件（三连坐 0 残留）�
 （不与刀C 的 bake #25 叠刀；届时 checkout 刀D commit 重烤落戳——
 out/rootfs.img 现为 3e819eb 干烤像）。下一刀候选=刀E ko strip-debug /
 Rust opt-level=z（ko 堆 ~5.5M、Rust bins ~8.6M 待剥）。
+
+## 2026-09-12 — L0 精简循环⑤：Rust opt-level=z（刀E）——used 46.3M→45.25M（host 干烤+真机冒烟；镜像收据留 bake #27）
+
+提交 6f45726。刀形：`CARGO_PROFILE_RELEASE_OPT_LEVEL=z` inline env 挂在
+build-rootfs.sh 三连 zigbuild 调用上——**只动镜像线**（build-pkg.sh 包构建
+不吃 env：包 sha 与 manifest/pkgs.aginx.net 镜像源耦合，改包 codegen=断
+opt-in 门；故不用 Cargo.toml profile）。
+
+**十件剥后收据（staging 对账逐件相符）**：download 1,904,520→1,486,840 /
+qr 1,036,224→886,632 / pkg 955,400→772,568 / update 896,232→747,864 /
+svcd 481,032→431,192 / pair 433,616→401,984 / done 421,176→364,600 /
+secret 410,392→358,320 / boot-ok 362,856→335,392 / svc 331,160→314,000；
+合计 7,227,608→**6,099,392 B（−1,128,216 B ≈ 1.08 MiB）**。
+
+**ko 半边负结果（刀A「另立刀」承诺就此退役）**：`llvm-strip --strip-debug`
+对 23 件 lib/modules .ko（5,700,344 B）+ modules.aginx cam_sensor_vsync_dev.ko
+（26,232 B）**零字节收益——无一 debug 段**。msm_drm.ko 653 段解剖：大头
+是 .rela.* LTO 重定位 1,625,448 B、.text* 1,177,545、.rodata 307,276、
+.symtab+.strtab 474,750（模块加载按名解析，承重）、__versions 43,584——
+没有可剥的肉。
+
+**LTO+cg1 试过弃**：再压只 −68,264 B 且 qr/update 反涨（特性折叠件对
+跨模块优化敏感），复杂度不值。
+
+**真机冒烟（在役 ae033ab L0 上推 z 件）**：qr 解码 round-trip rc=0
+（133 chars 载荷逐字回）；与在役件 50 连发墙钟平手（2s vs 2s，解码正确率
+同）；update status 出全 boot-control 表；svc rc=2 行为逐位同（预期路径）。
+
+**干烤收据（check.sh 全绿）**：zigbuild 三连缓存秒过（0.26/0.07/0.03s
+——z 件命中 target 缓存）、strip gate 60 不变、`aginx check: 18 commands
+OK`、mke2fs 几何同 bake #26；超块直读 used **11858→11583 块 =
+46.3→45.25 MiB（−275 块 ≈ 1.07 MiB）**，与十件账自洽（−276 块取整零头 1）；
+du 40M。
+
+镜像收据（fresh boot + 裸 bar：启动 + codex 装上真跑）= bake #27 刷机日
+（不与刀D 的 bake #26 叠刀；届时 checkout 6f45726 落戳重烤——版本戳必须
+名代码血统）。下一刀候选=刀F：qr/pair/update 出镜像走包（用户 09-12
+裁决：现在是 Linux，不需要生成二维码——agent 形态能力以依赖身份随装）。
