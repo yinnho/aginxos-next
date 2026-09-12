@@ -3353,3 +3353,54 @@ usbconf→steady 回终点：**裸 L0 + 恰 {codex}**，屏幕回无头黑屏。
 
 设备在役=bake #28 镜像（0d8ed39 l0 + codex）；vendor_boot=测试件
 （HOLD/USBADB/ROOTFS），恢复点=stock-vendor_boot.img。
+
+## 2026-09-12 — aginx 上机（#329–#331）：产品仓路由器 ssh 部署 + agc 连通 + codex 真活——运维模型=nginx
+
+**架构裁决（用户同日）**：AginxOS 完成，裸 L0 即完整产品；此后手机=一台
+服务器，管理员 ssh 进来装软件、写配置、重启、生效——**同 nginx 模型**。
+路由层直接用 aginx 产品仓（yinnho/aginx：aginx=路由器、agc=curl、
+relay=CDN、agent://），不走本仓母体/化身/网关内链；**一切皆 CLI + ACP
+协议**。全程零代码改动（纯运维部署）。
+
+**A1 构建（#329）**：产品仓 git 盘点 clean、origin=github 同步（b62a6f2）；
+`cargo zigbuild --release --target aarch64-unknown-linux-musl` 一次成
+（4,856,352B 全静态）。配置真源：`~/.aginx/config.toml`（[relay]
+id/domain/port/use_tls/**relay_secret**——register 令牌取的是
+relay_secret 不是 token）+ `~/.aginx/agents/<id>/aginx.toml` 自动扫描
+（depth 5）。spawn 契约：prompt 走 **stdin**（args 尾的 `-`）、
+per-agent timeout 默认 120s、断连杀子、方言 raw/claude-stream-json。
+
+**A2 部署（#330，全走 sftp/scp 标准通道）**：`/root/.aginx/aginx`（755，
+md5 638cc902e78caea6ee39efdb66f55548 双端对账）+ `config.toml`（600，
+relay id=cf49973e、relay.aginx.net:8443 TLS、secret 经
+`$(cat /tmp/agc-relay.secret)` host 侧注入零回显）+ 接入包
+`agents/codex/aginx.toml` + svc.d 单元 `/etc/aginx/svc.d/aginx-router.toml`
+（unit 名=aginx，envs HOME=/root、PATH 含 /var/bin）。
+`aginx-svc reload` 即活；`/proc/net/tcp :20FB 01` = relay ESTABLISHED。
+`/root/workspace` 建为 codex 锚目录。
+
+**A3 配对+连通（#331）**：`aginx pair` 铸 bYCG43（300s）→ Mac
+`agc --bind` 成（sophie-mac，token 落 ~/.aginx/agc/tokens.json），
+listAgents=[codex]。四坑收讫：①agc 的 L0 connect 也要 relay secret
+（`AGC_RELAY_SECRET` env，否则 Invalid or missing relay token）；
+②codex `-s` 与 `--approve-for-me` 互斥（首个失败回执恰好证明全链通）；
+③sed 删参形态是 `"--approve-for-me", `——引号开头不是空格；
+④**沙箱后端**：redfin 4.19 内核无 landlock（5.13 才并入）→ codex 回落
+bubblewrap → 设备无 bwrap → workspace-write 必败（codex 真答「缺少
+bwrap」）。v1 裁决 `-s danger-full-access`：单管理员设备、codex 本就
+root 在跑，沙箱无实义；加固项=静态 bwrap 上机（另约）。
+
+**收据活**：Mac `AGC_RELAY_SECRET=… agc agent://cf49973e.relay.aginx.net/codex
+'创建 hello-from-agc.txt…'` → codex 落盘 `/root/workspace/hello-from-agc.txt`
+（内容 `hello from mac via agc.`，24B）→ **ssh 独立通道 cat 对账同文**。
+全链=Mac agc → relay:8443 TLS → 手机 aginx → codex spawn → 真活 → ssh 复核。
+
+**接入包终态**（无秘密，全文可复刻）：args = `["exec",
+"--skip-git-repo-check", "-s", "danger-full-access", "-C",
+"/root/workspace", "-"]`，timeout=900，env HOME=/root。挂账：raw 方言无
+session harvest → 多轮 resume 未接（codex `exec resume --last` 在册为
+后续精修）。
+
+设备在役=bake #28 镜像 + codex + **aginx 路由器（unit aginx，cf49973e，
+relay 常连）**；vendor_boot=测试件（HOLD/USBADB/ROOTFS），恢复点=
+stock-vendor_boot.img。
