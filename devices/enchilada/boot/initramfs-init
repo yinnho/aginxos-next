@@ -1,0 +1,137 @@
+#!/bin/sh
+# AginxOS enchilada (OnePlus 6) initramfs init — #335 节点机 bring-up
+# 内核: 6.11.0-sdm845-6.11 tag + pmOS 生产 config (gadget 栈/UFS/ext4/DWC3 全内建;
+#       2026-09-12 弃 7.1-rc1: pmOS 生产不用它, OP6 上无人验过, 且要打 ftrace 补丁才编得过)
+# 职责: 基础挂载 → 上靴 pstore 遗骸抄录 → USB NCM 救援网 + dropbear
+#       → 找 PARTNAME=userdata 根 → 有 ext4 根就 switch_root 进 L0；没有就常驻救援态
+# 救援地址: ssh root@10.9.8.1 (Mac 侧 DHCP 自动取 10.9.8.2, NCM 接口)
+export PATH=/bin:/sbin:/usr/bin:/usr/sbin
+
+klog() { echo "agx-init: $*" > /dev/kmsg 2>/dev/null || echo "agx-init: $*"; }
+
+# busybox applets 必须最先就位 — mount/mkdir 等全靠它
+# (2026-09-12 QEMU 隔离实验抓到: install 放挂载之后 = "mount: not found" 全灭)
+/bin/busybox --install -s /bin 2>/dev/null
+
+mount -t proc proc /proc 2>/dev/null
+mount -t sysfs sysfs /sys 2>/dev/null
+mount -t devtmpfs devtmpfs /dev 2>/dev/null || mount -t tmpfs tmpfs /dev
+mkdir -p /dev/pts /tmp /sysroot /etc/dropbear /root/.ssh /sys/kernel/config
+mount -t devpts devpts /dev/pts 2>/dev/null
+klog "mounts done (kernel $(uname -r))"
+
+# ---------- 看门狗: qcom APSS wdt 无人喂养 ~3-4min 咬 (历靴实测回 fastboot) ----------
+[ -e /dev/watchdog ] && watchdog -t 10 /dev/watchdog 2>/dev/null && klog "watchdog petting armed"
+
+# ---------- 上靴遗骸: ramoops@0xac300000 暖复位存活 (PANIC_TIMEOUT=0 = panic 挂死) ----------
+# 取证顺序: 先把遗骸抄到 /tmp (ssh 可取) + 摘要回灌 kmsg, 再干任何可能弄死自己的事
+if ls /sys/fs/pstore/* >/dev/null 2>&1; then
+  mkdir -p /tmp/pstore-prev
+  cp /sys/fs/pstore/* /tmp/pstore-prev/ 2>/dev/null
+  for f in /sys/fs/pstore/dmesg-ramoops* /sys/fs/pstore/console-ramoops*; do
+    [ -f "$f" ] || continue
+    klog "=== PREV-BOOT PSTORE: $f (head) ==="
+    head -c 4000 "$f" > /dev/kmsg 2>/dev/null
+  done
+  klog "pstore prev-boot captured -> /tmp/pstore-prev/"
+fi
+
+# ---------- 救援通道: USB gadget NCM ----------
+gadget_up() {
+  mount | grep -q configfs || mount -t configfs none /sys/kernel/config 2>/dev/null || return 1
+  lsmod 2>/dev/null | grep -q u_ether || insmod /modules/u_ether.ko 2>/dev/null
+  lsmod 2>/dev/null | grep -q libcomposite || insmod /modules/libcomposite.ko 2>/dev/null
+  lsmod 2>/dev/null | grep -q usb_f_ncm || insmod /modules/usb_f_ncm.ko 2>/dev/null
+  local G=/sys/kernel/config/usb_gadget/agx
+  [ -d "$G" ] || mkdir -p "$G" || return 1
+  echo 0x18d1 > "$G/idVendor"        # Google
+  echo 0x4ee7 > "$G/idProduct"       # NCM
+  echo 0x0200 > "$G/bcdUSB"
+  echo 0x0100 > "$G/bcdDevice"
+  mkdir -p "$G/strings/0x409" "$G/configs/b.1/strings/0x409" "$G/functions/ncm.usb0"
+  echo AginxOS > "$G/strings/0x409/manufacturer"
+  echo "enchilada rescue" > "$G/strings/0x409/product"
+  echo enchilada > "$G/strings/0x409/serialnumber"
+  echo NCM > "$G/configs/b.1/strings/0x409/configuration"
+  (cd "$G" && ln -snf functions/ncm.usb0 configs/b.1/ncm.usb0)
+  local udc
+  udc=$(ls /sys/class/udc 2>/dev/null | head -1)
+  [ -n "$udc" ] || return 1
+  echo "$udc" > "$G/UDC" 2>/dev/null || return 1
+  return 0
+}
+
+net_up() {
+  local i
+  for i in 1 2 3 4 5 6 7 8 9 10; do
+    ifconfig usb0 10.9.8.1 netmask 255.255.255.0 up 2>/dev/null && break
+    sleep 1
+  done
+  ifconfig usb0 2>/dev/null | grep -q 10.9.8.1 || return 1
+  cat > /etc/udhcpd.conf <<EOF
+interface usb0
+start 10.9.8.2
+end 10.9.8.2
+opt subnet 255.255.255.0
+opt router 10.9.8.1
+opt dns 10.9.8.1
+lease_file /tmp/udhcpd.leases
+EOF
+  touch /tmp/udhcpd.leases
+  udhcpd /etc/udhcpd.conf 2>/dev/null
+  return 0
+}
+
+ssh_up() {
+  # dropbear checkfileperm: authorized_keys 链必须属主 root/本人且无组、世写
+  # (macOS cpio 落地 uid=501 会全拒 — 打包已 -R 0:0, 此处运行时兜底)
+  chown 0:0 /root /root/.ssh /root/.ssh/authorized_keys 2>/dev/null
+  chmod 700 /root/.ssh 2>/dev/null; chmod 600 /root/.ssh/authorized_keys 2>/dev/null
+  [ -f /etc/dropbear/dropbear_ed25519_host_key ] || \
+    dropbearkey -t ed25519 -f /etc/dropbear/dropbear_ed25519_host_key >/dev/null 2>&1
+  dropbear -E -s -R -r /etc/dropbear/dropbear_ed25519_host_key 2>/tmp/dropbear.log
+}
+
+rescue_loop() {
+  klog "RESCUE mode — trying gadget every 10s; ssh root@10.9.8.1"
+  while :; do
+    ifconfig usb0 >/dev/null 2>&1 || { gadget_up && net_up && ssh_up && klog "rescue net up"; }
+    sleep 10
+  done
+}
+
+# ---------- 主流程 ----------
+gadget_up && net_up && ssh_up && klog "rescue channel up (ssh root@10.9.8.1)" \
+  || klog "WARN: rescue channel FAILED on first try (will retry)"
+
+# 找 userdata: GPT PARTNAME 在 /sys/class/block/*/uevent
+ROOTDEV=""
+for u in /sys/class/block/sda*/uevent; do
+  [ -f "$u" ] || continue
+  grep -q "PARTNAME=userdata" "$u" 2>/dev/null || continue
+  ROOTDEV="/dev/$(basename "$(dirname "$u")")"
+  break
+done
+
+if [ -n "$ROOTDEV" ]; then
+  klog "userdata at $ROOTDEV, trying ext4 mount"
+  # 等 UFS 就绪 + 试挂 (E3 首启 userdata 还是 f2fs → 失败进救援)
+  i=0
+  while [ $i -lt 15 ]; do
+    mount -t ext4 "$ROOTDEV" /sysroot 2>/dev/null && break
+    sleep 1; i=$((i+1))
+  done
+  if mount | grep -q " /sysroot "; then
+    if [ -x /sysroot/sbin/init ]; then
+      klog "L0 root found — switch_root"
+      exec switch_root /sysroot /sbin/init
+    fi
+    klog "ext4 root but no /sbin/init — staying in rescue"
+  else
+    klog "$ROOTDEV not ext4-mountable (LOS f2fs? E4 未灌?) — rescue"
+  fi
+else
+  klog "no PARTNAME=userdata found — rescue"
+fi
+
+rescue_loop
