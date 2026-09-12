@@ -134,22 +134,26 @@ mkdir -p "${TREE}"/var/lib/aginx/{skills,units,stamps,pkgfiles,done,secret,voice
 # property/SELinux files adbd reads at startup.
 cp -R "${RAMDISK}/system" "${TREE}/system"
 # 刀C system/ 死件考古（2026-09-12，L0 精简循环第3刀）：system/ 的活消费者
-# 只有四个——init.d/adbd 的 `exec /system/bin/adbd`（树内唯一活引用）、
+# 有五个——init.d/adbd 的 `exec /system/bin/adbd`（树内唯一活引用）、
 # adb shell 的 sh+toybox（219 条目 = 24 常规 + 195 个 applet symlink 农场，
 # adbd 的 PATH 把 /system/bin 放在最前）、radio-bringup 的 /bin/rmt_storage
 # （qmi 三库走 /vendor_a/lib64 分区解析；活体 /proc maps 还映射 libutils——
-# 静态 NEEDED 漏报的运行时依赖）。其余全死：冻结 trampoline 只 exec busybox
+# 静态 NEEDED 漏报的运行时依赖）、radio-bringup 的 /vendor/bin/cnss-daemon
+# （WLFW 用户态半边：vendor 的 libperipheral_client.so 反吃 system 的
+# libbinder.so——bake #25 首刷 wlan0 不生、netup 红，热推一库+重启全绿
+# 的活体收据；vendor 件吃 system 库，闭包得跨 /vendor 算，教训）。其余全死：冻结 trampoline 只 exec busybox
 # /sbin/init；fake-sm 顶 servicemanager；aginx-svcd 持狗；busybox+aginx-reboot
 # 持重启；f2fs/erofs 工具无处跑（rootfs 是 ext4，mkfs 在 host）。keep 岛 =
-# 4 bin + ld.config.txt + lib64 白名单 18 件（闭包 17 = 根并集 13 + 传递 4，
-# 另 libutils 走 maps 证据）。死件 ~20M。镜像收据 = bake #25（不与刀B 叠刀）。
+# 4 bin + ld.config.txt + lib64 白名单 19 件（闭包 17 = 根并集 13 + 传递 4，
+# 另 libutils 走 maps 证据、libbinder 走 cnss-daemon 链）。死件 ~19M。
+# 镜像收据 = bake #25（不与刀B 叠刀）。
 # die 闸：keep 岛任一缺失 = vendor 资产漂移，大声死、绝不静默剪残。
 SYSTEM_KEEP_BIN="adbd linker64 sh toybox"
 SYSTEM_KEEP_LIB="libadbd_auth.so libadbd_fs.so libbase.so libc++.so libc.so"
 SYSTEM_KEEP_LIB="${SYSTEM_KEEP_LIB} libcutils.so libcgrouprc.so libcrypto.so libdl.so"
 SYSTEM_KEEP_LIB="${SYSTEM_KEEP_LIB} liblog.so libm.so libpackagelistparser.so libpcre2.so"
 SYSTEM_KEEP_LIB="${SYSTEM_KEEP_LIB} libprocessgroup.so libselinux.so libutils.so libz.so"
-SYSTEM_KEEP_LIB="${SYSTEM_KEEP_LIB} ld-android.so"
+SYSTEM_KEEP_LIB="${SYSTEM_KEEP_LIB} ld-android.so libbinder.so"
 for f in ${SYSTEM_KEEP_BIN}; do
   test -f "${TREE}/system/bin/${f}" \
     || { echo "FATAL: system keep bin ${f} missing — vendor asset drift" >&2; exit 1; }
