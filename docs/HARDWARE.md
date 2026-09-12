@@ -2936,3 +2936,36 @@ net-watch 独苗、/etc 带 wifi.conf+env（brain 键+网关 id）、authorized_
 3 行（套件一次性键缓涨——运维注意）、密码锁 root:!、/root/.codex 配置
 在位。裸 bar 两判据全收：①AginxOS 启动 ②codex 装上真跑。下一刀=刀B
 （mke2fs -N + journal 答辩，#324）。
+
+## 2026-09-12 — L0 精简循环②：mke2fs 几何（刀B）——used 152.6M→66.6M（host 干烤；镜像收据留 bake #24）
+
+提交 dd704d8。两刀主食进 build-rootfs.sh 的 mke2fs 行：
+`-N 8192` + `-J size=8`（-m 不动——预留块是水位线不占 used，root 恒
+可用，零镜像收益）。
+
+**预飞验证（刀前，承重假设全部实锤）**：
+- resize2fs 按比例长 inode：bake #23 活体设备 sda19 超块直读
+  `od -An -tu4 -j1024 -N16 /dev/sda19` → inodes **7,151,616** =
+  131072 × 54.56，与块比 28602363/524288 严格整——扩容后 inode 数
+  = 初始数 × 块比。故 -N 8192 扩容后 ≈ **447k inode**；disk-grow 在
+  rcS 内先于 provision 跑，装包全落扩容后，永不受初始数卡。扩容前
+  窗口内仅镜像 239 文件 + state-restore 十来件，8192 = 34 倍余量。
+- resize2fs 1.47.0 源码只读（out/e2fsprogs tarball）：resize/ 全目录
+  journal 只有一处 `fix_sb_journal_backup`（搬家记账），**无重长逻辑**。
+  即 8M journal 扩到 109G 后仍是 8M——功能无损：journal 尺寸界定批
+  处理/检查点频率，不界定崩溃原子性（断电滚回语义任何尺寸相同）；
+  机上无 e2fsck，无「journal 太小」校验面。
+- 套件面干净：accept 全目录零 inode/used 断言（n7 steady 的 df ≥100G
+  读总块数，与 used 无关）。
+
+**干烤收据**：strip gate 136 件（刀A 门不变）；mke2fs 1.46.6 出
+`524288 4k blocks and 8192 inodes`（512/组 × 16 组）+ journal 2048 块
+（8M）+ 超块备份 5 处；超块直读 **used 17061 块 = 66.6 MiB**
+（bake #23 39077 块 = 152.6 MiB → **−86.0 MiB / −56%**）；账目自洽
+（内容 ~51 + journal 8 + itable 2 + 位图/备份超块 ~5.6）；du 62M；
+check.sh 全绿。
+
+镜像收据（fresh boot + 裸 bar 尺）= bake #24 刷机日（out/rootfs.img
+已是刀B 像，待刷）。下一刀候选=刀C system/ 死件考古
+（update_engine_sideload 2.5M / recovery 2.0M / init.android 2.1M /
+fastbootd 1.4M / f2fs 工具，逐个过引用）。
