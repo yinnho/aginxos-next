@@ -62,36 +62,21 @@ done
 # build-pkg.sh 打包，再生路径 devices/${DEVICE}/boot/assets.md）。
 
 echo "==> zigbuild 新仓 musl 件（缓存则秒过）"
-# 刀E（2026-09-12）：镜像 Rust 件 opt-level=z，env 挂在三连 zigbuild 上。
+# 刀E（2026-09-12）：镜像 Rust 件 opt-level=z，env 挂在 zigbuild 调用上
+# （刀F 后单次调用）。
 # - 只动镜像线：build-pkg.sh 的包构建不吃这个 env（包 sha 与 manifest/
 #   镜像源耦���，改包的 codegen = 断 opt-in 门），故不用 Cargo.toml profile。
 # - 收据：十件剥后 7,227,608→6,099,392 B（−1,128,216B）；LTO+cg1 只再多
 #   68KB 且 qr/update 反涨，弃。设备冒烟：qr 解码 round-trip + 与在役件
 #   50 连发墙钟平手、update status 出全 boot 表、svc 行为逐位同。
-# L0 六件：pkg/svc/download/update/done/secret（刀4：router/server/
-# runtime/voice/term/gateway 出镜像走包——build-pkg.sh 烤，不在此列。
+# L0 五件：pkg/svc/download/done/secret（刀4：router/server/runtime/
+# voice/term/gateway 出镜像走包；刀F：qr/pair/update 同律出镜像——
+# build-pkg.sh 烤，依赖身份进 opt-in 闭包）。
 # aginx-secret crate 双 bin，secretd 产物本线不装、由 aginx-secretd 包走）。
 (cd "${ROOT}" && CARGO_PROFILE_RELEASE_OPT_LEVEL=z cargo zigbuild --release --target aarch64-unknown-linux-musl \
   -p aginx-pkg -p aginx-svc \
-  -p aginx-download -p aginx-update -p aginx-done -p aginx-secret)
+  -p aginx-download -p aginx-done -p aginx-secret)
 
-# aginx-qr 是第二次独立调用（--features aginx-qr/jpeg）：特性选择是调用
-# 级旗标——并进共享调用会把 quircs+aginx-img 织进任何依赖 aginx-qr 的
-# crate（N5② 特性陷阱的出生地，当年受害者 aginx-voice）。L0 名单里没有
-# 它的依赖者，但独立调用法保持：解码器必须是自己一个进程。
-(cd "${ROOT}" && CARGO_PROFILE_RELEASE_OPT_LEVEL=z cargo zigbuild --release --target aarch64-unknown-linux-musl \
-  -p aginx-qr --features aginx-qr/jpeg)
-
-# 蛋案 C3/C10：设备面 aginx-pair 走第三次独立调用（--no-default-features
-# 是调用级旗标——并进上面任一次调用都会把 mint 的 qrcodegen/jpeg-encoder
-# 连带 aginx-qr/jpeg 的 quircs+aginx-img 织进其它包）。设备只要 apply 面
-# （stdin payload，C4 voice 依赖）；铸码在 host 跑 default 特性。两档都装。
-# <2MB 绊网同律：尺寸变化=feature 折叠事故。
-(cd "${ROOT}" && CARGO_PROFILE_RELEASE_OPT_LEVEL=z cargo zigbuild --release --target aarch64-unknown-linux-musl \
-  -p aginx-pair --no-default-features)
-PAIR_SZ="$(stat -f%z "${TARGET}/aginx-pair")"
-[ "${PAIR_SZ}" -lt 2097152 ] \
-  || { echo "FATAL: aginx-pair is ${PAIR_SZ}B (≥2MiB) — mint feature leaked into the device build" >&2; exit 1; }
 
 # Package manifest rides SIGNED: the on-device default path requires a
 # detached sig or every `aginx-pkg sync` refuses (fail-closed). Content-
@@ -434,7 +419,7 @@ install -m 755 "${ROOT}/out/resize2fs" "${TREE}/usr/bin/resize2fs"
 L0_SVC_COUNT="$(ls "${TREE}/etc/aginx/svc.d/" | wc -l | tr -d ' ')"
 [ "${L0_SVC_COUNT}" = "2" ] \
   || { echo "FATAL: L0 svc.d has ${L0_SVC_COUNT} units (want 2: net-watch + aginxbrowser) — engine units ride packages, not the image" >&2; exit 1; }
-# 基础 manifest（全 opt 目录）+ 8 行 opt 附加（aginx 家族包）。sha 取
+# 基础 manifest（全 opt 目录）+ 11 行 opt 附加（aginx 家族包）。sha 取
 # out/pkgs 产物（不手维护）；url/version/deps 取 pkgs/<name>/pkg.toml——
 # 配方 bump 了 version 没重跑 build-pkg → sha 文件名对不上 → die（宁死
 # 不烤错清单）。组装进树后签名（.sig 是构建产物，不回写配方；签的是树里
@@ -442,7 +427,8 @@ L0_SVC_COUNT="$(ls "${TREE}/etc/aginx/svc.d/" | wc -l | tr -d ' ')"
 OPT_ADD="${TMPDIR:-/tmp}/agpkg-opt-add.$$"
 : > "${OPT_ADD}"
 for p in aginx aginx-term aginx-gateway aginx-secretd \
-         aginx-asr aginx-tts aginx-ocr aginx-voice; do
+         aginx-asr aginx-tts aginx-ocr aginx-voice \
+         aginx-qr aginx-pair aginx-update; do
   R="pkgs/${p}"
   p_ver="$(sed -n 's/^version *= *"\([^"]*\)"/\1/p' "${R}/pkg.toml" | sed -n '1p')"
   p_url="$(sed -n 's/^url *= *"\([^"]*\)"/\1/p' "${R}/pkg.toml" | sed -n '1p')"
@@ -468,13 +454,14 @@ rm -f "${OPT_ADD}"
 (cd "${ROOT}" && cargo run -q -p aginx-sign -- sign .local/keys/aginx.key "${TREE}/etc/agpkg.manifest")
 (cd "${ROOT}" && cargo run -q -p aginx-sign -- verify .local/keys/aginx.pub "${TREE}/etc/agpkg.manifest") \
   || { echo "FATAL: L0 manifest sig does not verify" >&2; exit 1; }
-echo "==> L0 manifest: 基础清单（全 opt）+ 8 行 opt 附加已签名进树"
+echo "==> L0 manifest: 基础清单（全 opt）+ 11 行 opt 附加已签名进树"
 cp -R "${RECIPE}/usr/bin/." "${TREE}/usr/bin/"
 cp -R "${RECIPE}/libexec/aginx/." "${TREE}/usr/libexec/aginx/"
 # 批② C1（09-10）：包管件的 sidecar 一律由安装器从 pkg.toml 生成（安装
 # 即覆写）。L0 下 asr/tts/ocr/voice/term 不再烤镜像，usr/bin 里剩下的
-# .aginxmd 全属本线直装件（download/update/qr/done/secret）——无安装器
-# 接管，sidecar 由配方自带，`aginx commands` 摘要走这里。
+# .aginxmd 全属本线直装件（download/done/secret；刀F 起 qr/pair/update
+# 也走包）——无安装器接管，sidecar 由配方自带，`aginx commands` 摘要走
+# 这里。
 # version stamp (M14): what the running image is, for aginx-update
 # status/compare. N4: stamped from THIS repo's git; D14: the device rides
 # the stamp — 版本串自证出自哪台机的烤机线。行尾 ` l0`（刀4 起的无头
@@ -486,21 +473,23 @@ echo "${STAMP}" > "${TREE}/etc/aginx-version"
 # （bin/{aginx,aginx-server,aginx-runtime}，exec=bin/aginx → face
 # /var/bin/aginx，[service] 单元随包走——pkgs/aginx/pkg.toml）。
 # Platform CLIs (new-repo builds; N4③b 改姓四件)。
-# aginx-pair 留 L0（C4 起配网 apply 面；voice 包装上后 spawn /usr/bin/
-# aginx-pair apply）。term 不烤（aginx-term 包；rcS 的 aginx-term-handoff
+# 刀F（2026-09-12）：qr/pair/update 出镜像走包——L0 是 Linux，不预生成
+# 二维码；qr/pair 由 voice/term 的 depends 自动带装（face /var/bin），
+# update 由母体包 depends 锚（裸箱升级=重刷，装 aginx 后才有 apply 面）。
+# term 不烤（aginx-term 包；rcS 的 aginx-term-handoff
 # 缺席静默轮询 /var/bin/aginx-term，装包即亮屏）。批③ (09-10): wizard
 # 出烤——装机流程是扫码/语音，wizard 无入口。
-install -m 755 "${TARGET}/aginx-pkg" "${TARGET}/aginx-pair" "${TREE}/usr/bin/"
+install -m 755 "${TARGET}/aginx-pkg" "${TREE}/usr/bin/"
 install -m 755 "${TARGET}/aginx-svc" "${TARGET}/aginx-boot-ok" "${TREE}/usr/bin/"
 install -m 755 "${TARGET}/aginx-svcd" "${TREE}/usr/libexec/aginx/"
 # N5① 吸收件：updater/download 改由本仓重编（修了三死路径的活版本），
-# 落位与老资产同名同位（sidecar 已在 usr/bin）。
-install -m 755 "${TARGET}/aginx-download" "${TARGET}/aginx-update" "${TREE}/usr/bin/"
-# N5② 吸收件：qr/done/secret 全由本仓重编。aginx-qr 是第二次 zigbuild
-# 的产物（feature 陷阱，见上）；L0 只装 /usr/bin 的人面 aginx-secret
-# ——secretd 引擎走 aginx-secretd 包（[service] 单元随包）。
-install -m 755 "${TARGET}/aginx-qr" "${TARGET}/aginx-done" "${TARGET}/aginx-secret" \
-  "${TREE}/usr/bin/"
+# 落位与老资产同名同位。刀F：update 出镜像走包；download 留——pkg 的
+# TLS 取件腿（裸 bar 的 codex 拉取走它），update 包的 DOWNLOAD_BIN 零改。
+install -m 755 "${TARGET}/aginx-download" "${TREE}/usr/bin/"
+# N5② 吸收件：done/secret 全由本仓重编。刀F：qr 出镜像走包；L0 只装
+# /usr/bin 的人面 aginx-secret——secretd 引擎走 aginx-secretd 包
+# （[service] 单元随包）。
+install -m 755 "${TARGET}/aginx-done" "${TARGET}/aginx-secret" "${TREE}/usr/bin/"
 # N5⑨ QR fixture（n5-qr.jpg）出镜像（刀4：n5 套件随 L0 退役，设备面
 # 不再读；配方文件保留——host 侧 qr 测试仍以它为真源）。
 # N5⑥ 网关不烤（刀4）：aginx-gateway 包（[service] 随包，depends=

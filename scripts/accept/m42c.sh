@@ -91,7 +91,7 @@ printf '%s' "$MINT_OUT" | grep -Eq 'fixture-psk|sk-fixture|fixture0deadbeef|fixt
   && { echo "FAIL - 铸码 stdout 回显了身份字段（秘密卫生破律）"; FAIL=$((FAIL+1)); } \
   || { echo "ok   - 铸码 stdout 零回显五件套"; PASS=$((PASS+1)); }
 adbx push "$WORK/pair.jpg" /tmp/m42c-pair.jpg >/dev/null
-drv "/usr/bin/aginx-qr /tmp/m42c-pair.jpg"
+drv "/var/bin/aginx-qr /tmp/m42c-pair.jpg"
 expect_rc  "设备 aginx-qr 解配对码 rc=0"
 expect_out "payload 五段 AGINXPAIR1 round-trip" \
   '^AGINXPAIR1\|aginx-m42c-fixture\|fixture-psk-0123456789\|sk-fixture-0000000000000000000000000000\|fixture0deadbeef\|fixture-relay-secret$'

@@ -70,8 +70,18 @@ capture_state() {
   adb devices 2>/dev/null | grep -q "${ADB_SERIAL}" || { say "no adb device '${ADB_SERIAL}' — cannot capture now"; return 1; }
   say "==> state pre-arm: aginx-update capture on ${ADB_SERIAL}"
   # absolute path: the adb shell PATH does not include /usr/bin (rc=127
-  # observed 2026-09-09 with the bare name)
-  if ! adb -s "${ADB_SERIAL}" shell /usr/bin/aginx-update capture; then
+  # observed 2026-09-09 with the bare name). 刀F: update is a package —
+  # /var/bin face when the aginx family is opted in; /usr/bin only on
+  # pre-刀F images. Bare L0 has neither — fail-open (nothing to capture).
+  UPD=""
+  for p in /var/bin/aginx-update /usr/bin/aginx-update; do
+    if adb -s "${ADB_SERIAL}" shell "test -x $p" >/dev/null 2>&1; then UPD="$p"; break; fi
+  done
+  if [ -z "${UPD}" ]; then
+    say "no on-device aginx-update (bare L0 or not opted in) — state not captured"
+    return 1
+  fi
+  if ! adb -s "${ADB_SERIAL}" shell "${UPD} capture"; then
     say "WARNING: on-device aginx-update capture failed (binary predates the verb?)" >&2
     say "  after flashing, re-arm manually — HARDWARE.md bake #20 receipt" >&2
     return 1

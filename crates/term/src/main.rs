@@ -1716,7 +1716,7 @@ struct PairJob {
 }
 
 fn spawn_pair_apply(payload: &str) -> Option<PairJob> {
-    let mut child = match std::process::Command::new("/usr/bin/aginx-pair")
+    let mut child = match std::process::Command::new("/var/bin/aginx-pair")
         .arg("apply")
         .stdin(std::process::Stdio::piped())
         .stdout(std::process::Stdio::piped())
@@ -3105,7 +3105,7 @@ fn main() {
                                 te.mtime_seen = Instant::now();
                                 if te.last_qr.elapsed() >= TEYE_QR_EVERY && te.dec.is_none() {
                                     te.last_qr = Instant::now();
-                                    match std::process::Command::new("/usr/bin/aginx-qr")
+                                    match std::process::Command::new("/var/bin/aginx-qr")
                                         .arg(VOICE_EYE)
                                         .stdout(std::process::Stdio::piped())
                                         .stderr(std::process::Stdio::null())

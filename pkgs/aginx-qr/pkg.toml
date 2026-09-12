@@ -1,0 +1,12 @@
+# aginx-qr — QR 解码器的包形态（刀F，2026-09-12：出镜像走包）。
+# jpeg 特性独立构建（特性是调用级旗标——并进共享调用会把 quircs+
+# aginx-img 织进依赖者，N5② 特性陷阱的出生地）。voice/term 的 depends
+# 自动带装（face /var/bin/aginx-qr）。hwd 消费者：device.toml 加键=
+# 重打本包。
+name = "aginx-qr"
+version = "0.1.0"
+summary = "QR 解码器：jpeg 解码+quirc 定位+AGINXPAIR1 配对码解析（face /var/bin/aginx-qr）"
+group = "cam"
+url = "https://pkgs.aginx.net/aginx-qr/v0.1.0/aginx-qr-v0.1.0-4pc.tar"
+
+exec = "bin/aginx-qr"

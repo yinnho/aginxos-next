@@ -1,0 +1,12 @@
+# aginx-pair — 配网 apply 面的包形态（刀F，2026-09-12：出镜像走包）。
+# 设备面只要 apply（payload 一行进 stdin——argv 恒两词，psk/三键永不进
+# /proc/*/cmdline；铸码 mint 是 host-only 面，设备构建
+# --no-default-features，<2MB 绊网在 build-pkg.sh）。voice/term 的
+# depends 自动带装。
+name = "aginx-pair"
+version = "0.1.0"
+summary = "配网 apply：join+IP+env 三键+校时+internet+单元 restart-ready（face /var/bin/aginx-pair）"
+group = "net"
+url = "https://pkgs.aginx.net/aginx-pair/v0.1.0/aginx-pair-v0.1.0-4pc.tar"
+
+exec = "bin/aginx-pair"

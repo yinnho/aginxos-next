@@ -1,13 +1,14 @@
 # aginx-voice — 语音对话守护的包形态（C8 蛋案 → L0 刀3：单元入包）。
 # 嘴耳三件是硬依赖：缺 aginx-asr/tts/ocr 时落 brain 云（离线即产品，
-# 所以 depends 声明全三——刀1 起 opt-in 自动带装）。
+# 所以 depends 声明全三——刀1 起 opt-in 自动带装）。刀F 起 qr/pair
+# 同列（出镜像走包——扫码/配网 spawn /var/bin/aginx-{qr,pair}）。
 # VOICED_FRONT 指 /var/bin/aginx（母体包 face）：L0 镜像不烤路由器，
 # 自由文本走包面。env_file 与 server 同读（brain key）。
 name = "aginx-voice"
 version = "0.2.1"
 summary = "语音对话守护：PTT 嘴耳 + 眼取景，脸写 /run/aginx-voice/face"
 group = "snd"
-depends = "aginx-asr,aginx-tts,aginx-ocr"
+depends = "aginx-asr,aginx-tts,aginx-ocr,aginx-qr,aginx-pair"
 url = "https://pkgs.aginx.net/aginx-voice/v0.2.1/aginx-voice-v0.2.1-4pc.tar"
 
 [service]
