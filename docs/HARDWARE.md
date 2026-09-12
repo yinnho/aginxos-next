@@ -3404,3 +3404,30 @@ session harvest → 多轮 resume 未接（codex `exec resume --last` 在册为
 设备在役=bake #28 镜像 + codex + **aginx 路由器（unit aginx，cf49973e，
 relay 常连）**；vendor_boot=测试件（HOLD/USBADB/ROOTFS），恢复点=
 stock-vendor_boot.img。
+
+## 2026-09-12 — aginx 产物回流上机（#332）：接入包 output_dir → 终帧 files → agc --files-dir
+
+**需求**：干活后把结果直接回传——Mac agc 派活给手机 codex，产物文件
+（不只文本）随终帧回到 Mac 落盘。
+
+**实现**（aginx 仓 83b1dc7，已推 github yinnho/aginx）：接入包 toml
+顶层 `output_dir` 声明产物目录；轮成功后网关按**新鲜度线**（mtime ≥
+本轮 spawn 时刻）收集该目录新写/改的文件，base64 附普通轮终帧
+`files`（与借用轮 §4.2 同形同预算：单文件 16MiB / 总 64MiB 超限跳过
+告警；symlink 不追链；无产物不附键；未声明行为不变）。ACP.md 立法
+§2.10 + §2.5/§4.2 联动。产物语义属接入包声明，网关核心零 CLI 知识。
+agc 侧 `--files-dir`（已有）解 base64 落盘。
+
+**部署**（换在跑 binary 三律）：zigbuild musl（md5 4189bff3…）→ scp
+`/root/.aginx/aginx.new` → rename 换装 → 两端 md5 对账 → `aginx-svc
+restart aginx` → ready + relay :20FB 01。codex 接入包加
+`output_dir = "/root/workspace"`（daemon 启动载配置，改 toml 必重启）。
+
+**收据**：Mac `AGC_RELAY_SECRET=… agc --files-dir /tmp/agc-files
+agent://cf49973e.relay.aginx.net/codex '在 /root/workspace 创建
+result-report.md…'` → 设备落盘 → 终帧 files → Mac
+`/tmp/agc-files/result-report.md` 落地，**md5 两端一致**
+（c40d4f50…，30B，内容=产物回流测试/2026-09-12）。新鲜度线实证：
+上轮旧文件 hello-from-agc.txt 未回流（/tmp/agc-files 仅 1 文件）。
+
+教训：仓从未整体 rustfmt（fmt --check 全仓红），不跑 fmt 免污染提交。
