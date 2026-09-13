@@ -3809,3 +3809,53 @@ origin/master（sha 直推，链检通过）。**2026-09-13 事故在案**：本
 
 Enchilada L0 **在役**。E4 完结。E5（wifi ath10k WCN3990 → aginx →
 agc 真答；时钟同步搭车）未启。
+
+## 2026-09-13 — enchilada MPSS（modem）收口：crash-loop 自止 + QRTR 服务表验证门通过
+
+背景：E4b 后顺手起 modem 线。sdm845 MPSS = remoteproc3
+（`4080000.remoteproc`，固件 `qcom/sdm845/oneplus6/mba.mbn`）。
+
+**Crash-loop 实测**：开机后 MPSS 反复 `crash detected ... type fatal
+error` 自愈重启，共 **115 次**；最后一次在 t=9970s，此后冻结（t=11805s
+复查仍 115）。自止时点与 modem 经 rmtfs 写 blank-EFS 格式化
+（设备钟 02:46）吻合——即崩溃循环根因=EFS 无家可归，格式化出空 EFS
+后自愈。根因推断（未单独复证）：LOS 出厂 NV 在 modemst 分区，裸
+mainline 无人伺服 EFS → modem 拿不到文件系统反复 fatal。
+
+**服务三件套部署（用户态，/var/bin）**：pd-mapper + tqftpserv +
+rmtfs，Mac `/tmp/e5-svc` 从上游树 zig cc aarch64-linux-musl 全静态
+构建（libqrtr.a 79,366B 随附）。运行形态：rmtfs `-r /var/lib/rmtfs`
+文件模式；日志 /var/*.log。观测：
+- tqftpserv **真在干活**（log 26,733B，modem 拉固件文件）；
+- pd-mapper 0B = 设计性沉默（handle_get_domain_list 无日志）；
+- rmtfs 25,520B：早期 `failed to open /var/lib/rmtfs/modem_fs1`
+  （目录未建）→ mkdir 后 modem 完成格式化。落盘形状：
+  modem_fs1/fs2 各 **2,097,152B**（fs2 末写 03:15 后安静），
+  fsc/fsg/study/tunning/oem_{sta,dyc}nvbk 全 0B。
+
+**EFS 分区真图（GPT host 解析，dd 拉回 base64）**：sdf = modem EFS
+LUN——modemst1=**sdf2**(lba32)、modemst2=**sdf3**(lba544)、
+fsg=**sdf4**(lba1056)、fsc=**sdf5**(lba1568, 128KiB)；与
+/proc/partitions 全对齐。sdd=cdt+ddr 与 modem 无关。mdev 不铺
+by-partlabel → rmtfs -P 不可用；真 NV 路线备选=符号链接目录喂
+/dev/sdfN（**未做，等裁决**——会把 blank EFS 换回 LOS 出厂 NV 含
+IMEI）。
+
+**QRTR 服务表（验证门）**：上游 qrtr 仓库（HEAD 27d2c9df, 2026-08）
+已删 qrtr-ns.c——6.x 名字服务在内核，**无需用户态 daemon**；直接用
+仓库自带 `qrtr-lookup`（src/lookup.c）+ libqrtr.a 构建（zig cc 静态
+1.5MB）推 /tmp 运行，rc=0 出 **60 条注册**：
+- **node 0 = MPSS，37 服务**：DMS(2)/NAS(3)/UIM(11)/WMS(5)/WDS(1)/
+  WDA(26)/DPM(47)/EFS(21)/PDC(36)/IPA(49)/voice(9)/CAT(10)/PBM(12)/
+  AT(8)/auth(7)/QoS(4)/DSD(42)/SAR(17)/coex(34)/DFS(48)/loc(16)/
+  IMS(71,77)/thermal(23,24)/time(22)/coresight(51)/subsys-ctrl(43)/
+  registry-notif(66)/test(15)/54/74/228/68/4098 等；
+- **node 1 = 我们的用户态三件套**：SERVREG locator(64)=pd-mapper、
+  TFTP(4096)=tqftpserv、Remote FS(14)=rmtfs——modem 看得见 rmtfs；
+- node 5/9/10 = ADSP/CDSP/SLPI 各自服务集（remoteproc 全家在跑）。
+
+**裁决：modem 真活**（DMS/NAS/UIM 等全注册=验证门通过）。
+UIM(11)+WMS(5) 在表 → M44 SIM/SMS 有真通路（QRTR over SMD，无
+/dev/qcqmi*）。`/proc/net/qrtr` 在本内核不存在，不影响 lookup 应答。
+会话末设备态：L0 + 三 daemon 在役；探针在 /tmp（tmpfs，重启即失）；
+EFS=blank 格式化态（未恢复 LOS NV）。
