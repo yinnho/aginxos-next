@@ -3960,3 +3960,59 @@ online 不再崩 → NAS 自动注网。三件缺一不可：无 provision=会�
 NV/IMEI 恢复仍待用户裁决——**本收据证明注网不依赖真 NV**，IMEI 显示
 为空/占位是下一层问题）。持久化（模块入 rootfs + 开机自动
 provision/online）立案 M44 下一刀。
+
+## 2026-09-14 — 持久化收官：modem-up 按需制 + 冷启四 bug（首真冷启暴露）
+
+**HWP 断言 + online 粘性（补昨日欠账）**：开机自动 online 竞态实测——
+rcS 钩子 insmod ipa 后 50ms 即发 online，modem 固件新断言
+`ipa_hwp_init.c:386: didnt rx any ind frm HWP`（HWP 握手 ~1.7s 超时）。
+且 **online 意图跨 remoteproc 复活粘着**：每个复活实例出生即自走
+online、自爆，4.4s 一轮自毁循环；驱动早于出生也救不了（带驱动的
+复活实例照样崩）——分水岭是**实例年龄**：短命实例（~10s）必崩，
+长闲置实例（实测 90min/1h 两例）接受 online。粘性只由干净
+remoteproc stop+start（或重启）清除。
+
+**rmmod/remoteproc 互锁**：循环中 `rmmod ipa` 卡死
+（/proc/modules 显 `- Unloading` 永驻；glink 引用钉住 module_exit），
+随后 `echo stop > remoteproc3/state` 也卡（crashed limbo 中 rproc
+mutex 被恢复线程持有）——mutual wedge，sysfs 全堵。**唯一解 =
+sysrq-b 硬重启**（`reboot -f` 两度无效；`echo b >
+/proc/sysrq-trigger` 一击落账）。铁律：modem crash-loop / crashed
+limbo 中勿 rmmod ipa、勿写 sysfs state。
+
+**冷启四 bug（sysrq-b 后首个无人值守 boot 暴露；此前每次 modem
+会话皆手推链，rcS 自动路从未真跑通过，`2>/dev/null` 吞光证据）**：
+1. 循环缺 **qcom_glink_smem**——qcom_common 依赖
+   `qcom_glink_smem_register/unregister`，恒 `Unknown symbol` →
+   pas/mss 连坐全崩（今日 kmsg 现行犯）。
+2. `qrtr_smd` 文件名错——实际文件 `qrtr-smd.ko`（连字符），insmod
+   恒打空气。
+3. 循环缺 **reset-qcom-pdc**——mss probe 恒
+   `failed to acquire pdc reset` → probe 失败，remoteproc3 根本不
+   注册（PAS 三件 adsp/cdsp/slpi 不需要，仅 modem 要）。
+4. **6.11 mss probe 不自启**（PAS probe 即自举，mss 不会）——probe
+   后 rproc3 停在 `offline`，须显式 `echo start > state`。原注释
+   "装载即自举" 对 pas 成立、对 mss 是错觉。
+
+**修后 rcS（modem-bringup）**：循环序
+`qcom_glink_smem qcom_common qcom_pil_info qcom_sysmon qcom_q6v5
+reset-qcom-pdc qrtr qrtr-smd`，三 daemon 照旧先行，尾接 rproc3
+class-dir 等待（20s）+ 显式 start。
+
+**持久化形态定案**：开机 modem 自动起、稳态 persistent mode 5
+（不在线、零功耗风险）；蜂窝上网 = 按需跑
+`/var/bin/modem-up`（ipa 检查→DMS 等待→settle 60s→provision→
+online→自检；三经验律写在脚本头注）。**不开机自动 online**（竞态
+即粘性死循环，见上）。
+
+**modem-up 首跑收据（本 boot，冷启后按需）**：全程 77s，零新
+fatal。serving `reg=1 REGISTERED (home) / ps=1 ATTACHED / radio 8
+LTE`；sig **-65 dBm**；rproc3 `running`。60s settle 一次过（此前
+成功例皆 ~1h 长闲置，本例 ~2min 实例年龄成立——下界大概率在
+分钟级，非小时级）。
+
+会话末设备态：L0 + 全链在役；ipa.ko/qmi-ask/modem-up 均在盘
+（/lib/modules、/var/bin）；modem online 在网；EFS 仍 blank（真
+NV 裁决挂起不变）。bake 折叠欠账：build-rootfs enchilada 段需
+折 ipa.ko + qmi-ask + modem-up + 修后 modem-bringup，重刷才真
+持久。
