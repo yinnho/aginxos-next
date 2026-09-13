@@ -2,4 +2,5 @@
 docs/ARCH.md
 /out
 /.local
+/dist
 .DS_Store

@@ -337,12 +337,9 @@ install -m 755 "${ROOT}/out/sftp-server" "${TREE}/usr/libexec/sftp-server"
   -o "${TREE}/bin/snd-mixer" "${RECIPE}/src/snd-mixer.c"
 "${ZIG}" cc -target aarch64-linux-musl -static -O2 \
   -o "${TREE}/bin/i2c-reg" "${RECIPE}/src/i2c-reg.c"
-# Boot card (v4⑤): DRM boot console — paints the AginxOS wordmark only
-# (checklist retired 09-08) and exits on the net-verdict ladder. Holds DRM
-# master for its whole life (it replaces the M3 green splash). Same zig
-# static build; host-side check via `bootcard --ppm out.ppm`.
-"${ZIG}" cc -target aarch64-linux-musl -static -O2 \
-  -o "${TREE}/bin/bootcard" "${RECIPE}/src/bootcard.c"
+# bootcard retired from the image 2026-09-13 (server edition is headless).
+# Returns as the aginx-bootcard opt-in package; rcS spawns /bin/bootcard
+# when present. Source stays at rootfs/src/bootcard.c.
 # Patched vendor ko override (boot-wedge defense, #228): camera-bringup
 # prefers /lib/modules.aginx over vendor. Blob stays out of git (.local) —
 # regenerate with scripts/patch-vsync-ko.sh.

@@ -47,8 +47,10 @@
 不进镜像：老 `ag` 路由器、全部 `ag-*` 壳、carrier daemon、老 relay/ag-backup（继任者
 已由本仓烤入：aginx-gateway N5⑤⑥、aginx-backup N5④）。/bin 内部件（splash、
 binder-init、qrtr-lookup、qmi-req、
-raw2jpg、snd-*、i2c-reg、bootcard、httpget、wdt、rtcal、fake-sm、dropbear、
+raw2jpg、snd-*、i2c-reg、httpget、wdt、rtcal、fake-sm、dropbear、
 rmt_storage、busybox）**保原名**，照抄老仓脚本落 /bin。
+（bootcard 2026-09-13 退役出镜像——服务器版无屏；源码留 rootfs/src/，
+回归走 aginx-bootcard opt-in 包，rcS 有 [ -x ] 门。）
 
 ## 设备资产（.local/device/redfin/，gitignored）
 
