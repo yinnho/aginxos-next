@@ -3685,3 +3685,32 @@ dropbear 在听 0.0.0.0:22——隔离在 AP 层，Legrand 对 agent 运维
 **已知缺口（v0.1.1 候选）**：无头版无人灭背光——DSI connected、
 dpms=On、brightness=511、bl_power=0、无 DRM master → 全背光黑屏
 （用户误判"还在 Google logo"）。修法=rcS 在无 bootcard 时关背光。
+
+## 2026-09-13 — 无头灭屏烤入（aa7663c）：smooth-takeover 陷阱 + 所有权夺取序列（fresh-boot 全绿）
+
+上节"已知缺口"的修法预判（rcS 关背光）**被证伪**，真链三死一通，
+全部有当机收据：
+
+- `bl_power=1`/`brightness=0`：读回 0 但 logo 继续亮——这块 OLED
+  上背光节点是亮度命令，不是电源开关。
+- `fb0/blank`：no-op（atomic-only 驱动无 legacy DPMS，08-31 已探）。
+- 裸 null SETCRTC：**no-op——smooth-takeover 陷阱**。bootloader 画的
+  Google splash 被内核接管后 DRM 对象读作 enabled=disabled，
+  disable 路径 early-exit，硬件照旧扫描，splash 永远亮。
+- **正路（M15 路径+所有权夺取）**：等 DSI connector 注册 →
+  CREATE_DUMB 黑 fb → **真 SETCRTC 夺管线**（不夺=上面那条死路）→
+  sleep 1 → null SETCRTC → DSI off / panel unprepare / touch
+  suspend 全落。off-and-exit 即持久（无 fbdev restore 重亮），
+  --hold 备而未用。
+
+实现=rootfs/src/paneloff.c → /usr/bin/aginx-panel-off（zig cc 静态，
+6.7K），rcS 在 /bin/bootcard 缺席时后台 spawn；隐藏 sidecar 过
+路由器门（16 commands OK）。
+
+**fresh-boot 收据（出厂形态、零手工）**：flash-redfin.sh GO=1
+（userdata 45s + vendor_boot_b 2.3s）→ boot 1：kmsg
+"panel-off: pipeline down" @36.5s，**用户目检：全黑** → adb 推
+wifi.conf（华为，自 state-20260913.tar.gz 回填）+ 一次性 ssh 公钥 →
+boot 2：done ok、wlan ok、192.168.3.93、panel-off 再落 @36.2s →
+**ssh 公钥往返通**。面板上电到灭 ~36s（bootloader logo 段不可删，
+此前已立）。
