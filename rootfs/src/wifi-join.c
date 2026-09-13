@@ -457,7 +457,8 @@ static int join_group(const char *name)
 
 struct target { const char *ssid; unsigned ifindex; unsigned char bssid[6];
 		__u32 freq; int found; __s32 sig;
-		__u32 grpcipher; int grp_known; int bss_sae; };
+		__u32 grpcipher; int grp_known; int bss_sae;
+		unsigned char ap_rsne[256]; int ap_rsne_len; };
 
 /* RSN IE: CCMP/CCMP/PSK, MFPC. Body is exactly 20 bytes:
  * ver(2)+grp(4)+pcnt(2)+pair(4)+acnt(2)+akm(4)+caps(2) */
@@ -573,6 +574,14 @@ static void parse_bss(struct nlattr *bss, struct target *t)
 			t->sig = sig;
 			t->found = 1;
 			t->bss_sae = sae;
+			/* ath10k forwards assoc IEs verbatim (qcacld rebuilt
+			 * them from the cipher attrs) — mirror the AP's own
+			 * RSNE so assoc request and M2 key data are strictly
+			 * self-consistent with what it advertises */
+			if (rsn && rsn_len >= 2 && rsn_len <= (int)sizeof(t->ap_rsne)) {
+				memcpy(t->ap_rsne, rsn, rsn_len);
+				t->ap_rsne_len = rsn_len;
+			}
 			if (rsn && rsn_len >= 6) {
 				t->grpcipher = (__u32)rsn[2] << 24 | rsn[3] << 16 |
 					       rsn[4] << 8 | rsn[5];
@@ -755,8 +764,8 @@ static int parse_eapol(const unsigned char *frame, size_t flen, struct eapol_key
 
 int main(int argc, char **argv)
 {
-	if (argc != 4) {
-		fprintf(stderr, "usage: wifi-join <ifname> <ssid> <passphrase>\n");
+	if (argc != 4 && !(argc == 5 && !strcmp(argv[4], "split"))) {
+		fprintf(stderr, "usage: wifi-join <ifname> <ssid> <passphrase> [split]\n");
 		return 2;
 	}
 	const char *ifname = argv[1];
@@ -826,12 +835,24 @@ int main(int argc, char **argv)
 	 * cipher with CCMP pairwise, and the SME scan filter rejects the
 	 * cache entry if our profile's multicast cipher differs. */
 	__u32 grpc = t.grp_known ? t.grpcipher : ccmp;
-	unsigned char rsne_tx[22];
-	memcpy(rsne_tx, rsne, sizeof(rsne_tx));
-	rsne_tx[4] = grpc >> 24; rsne_tx[5] = grpc >> 16;
-	rsne_tx[6] = grpc >> 8;  rsne_tx[7] = grpc;
-	fprintf(stderr, "group cipher %08x (%s)\n", grpc,
-		grpc == 0x000fac04 ? "CCMP" : grpc == 0x000fac02 ? "TKIP" : "?");
+	unsigned char rsne_tx[256];
+	int rsne_len;
+	if (t.ap_rsne_len >= 2) {
+		/* stored body only — re-add the RSN IE header (0x30, len) */
+		rsne_tx[0] = 0x30;
+		rsne_tx[1] = (unsigned char)t.ap_rsne_len;
+		memcpy(rsne_tx + 2, t.ap_rsne, t.ap_rsne_len);
+		rsne_len = t.ap_rsne_len + 2;
+	} else {
+		/* fallback: hand-built template with the AP's group cipher */
+		memcpy(rsne_tx, rsne, sizeof(rsne));
+		rsne_len = sizeof(rsne);
+		rsne_tx[4] = grpc >> 24; rsne_tx[5] = grpc >> 16;
+		rsne_tx[6] = grpc >> 8;  rsne_tx[7] = grpc;
+	}
+	fprintf(stderr, "group cipher %08x (%s) rsne %d bytes\n", grpc,
+		grpc == 0x000fac04 ? "CCMP" : grpc == 0x000fac02 ? "TKIP" : "?",
+		rsne_len);
 
 	/* tear down any existing association first — CONNECT returns
 	 * EALREADY on qcacld while associated (observed on device) */
@@ -844,6 +865,41 @@ int main(int argc, char **argv)
 		wait_event(NL80211_CMD_DISCONNECT, 3000, &dst);
 	}
 
+	int st;
+	if (argc == 5 && !strcmp(argv[4], "split")) {
+		/* split auth+assoc (mainline mac80211 SME path) */
+		n = mkmsg(NL80211_CMD_AUTHENTICATE, 0, 210);
+		nla_put(n, BUF, NL80211_ATTR_IFINDEX, &t.ifindex, 4);
+		nla_put(n, BUF, NL80211_ATTR_MAC, t.bssid, 6);
+		nla_put(n, BUF, NL80211_ATTR_SSID, t.ssid, strlen(t.ssid));
+		nla_put(n, BUF, NL80211_ATTR_AUTH_TYPE, &authtype, 4);
+		nla_put(n, BUF, NL80211_ATTR_WIPHY_FREQ, &t.freq, 4);
+		if (nl_send(n, nl80211_fam) < 0) { perror("auth send"); return 1; }
+		if (wait_event(NL80211_CMD_AUTHENTICATE, 10000, &st) != 1) {
+			fprintf(stderr, "auth: no event\n");
+			return 3;
+		}
+		if (st) { fprintf(stderr, "auth status %d\n", st); return 4; }
+		printf("authenticated\n");
+
+		n = mkmsg(NL80211_CMD_ASSOCIATE, 0, 211);
+		nla_put(n, BUF, NL80211_ATTR_IFINDEX, &t.ifindex, 4);
+		nla_put(n, BUF, NL80211_ATTR_MAC, t.bssid, 6);
+		nla_put(n, BUF, NL80211_ATTR_SSID, t.ssid, strlen(t.ssid));
+		nla_put(n, BUF, NL80211_ATTR_WIPHY_FREQ, &t.freq, 4);
+		nla_put(n, BUF, NL80211_ATTR_IE, rsne_tx, rsne_len);
+		nla_put(n, BUF, NL80211_ATTR_CIPHER_SUITES_PAIRWISE, &ccmp, 4);
+		nla_put(n, BUF, NL80211_ATTR_CIPHER_SUITE_GROUP, &grpc, 4);
+		nla_put(n, BUF, NL80211_ATTR_AKM_SUITES, &psk, 4);
+		nla_put(n, BUF, NL80211_ATTR_WPA_VERSIONS, &wpaver, 4);
+		if (nl_send(n, nl80211_fam) < 0) { perror("assoc send"); return 1; }
+		if (wait_event(NL80211_CMD_ASSOCIATE, 10000, &st) != 1) {
+			fprintf(stderr, "assoc: no event\n");
+			return 3;
+		}
+		if (st) { fprintf(stderr, "assoc status %d\n", st); return 4; }
+		printf("associated\n");
+	} else {
 	n = mkmsg(NL80211_CMD_CONNECT, 0, 200);
 
 	nla_put(n, BUF, NL80211_ATTR_IFINDEX, &t.ifindex, 4);
@@ -851,7 +907,7 @@ int main(int argc, char **argv)
 	nla_put(n, BUF, NL80211_ATTR_SSID, t.ssid, strlen(t.ssid));
 	nla_put(n, BUF, NL80211_ATTR_AUTH_TYPE, &authtype, 4);
 	nla_put(n, BUF, NL80211_ATTR_WIPHY_FREQ, &t.freq, 4);
-	nla_put(n, BUF, NL80211_ATTR_IE, rsne_tx, sizeof(rsne_tx));
+	nla_put(n, BUF, NL80211_ATTR_IE, rsne_tx, rsne_len);
 	/* crypto profile: without these the roam profile stays "open" and
 	 * hdd_set_csr_auth_type / hdd_set_genie_to_csr never run (they are
 	 * gated on wpa_versions). NB: 4.19 wants FLAT u32 arrays here, not
@@ -864,13 +920,13 @@ int main(int argc, char **argv)
 	 * 802.11 auth type. */
 	nla_put(n, BUF, NL80211_ATTR_WPA_VERSIONS, &wpaver, 4);
 	if (nl_send(n, nl80211_fam) < 0) { perror("connect send"); return 1; }
-	int st;
 	if (wait_event(NL80211_CMD_CONNECT, 15000, &st) != 1) {
 		fprintf(stderr, "connect: no event\n");
 		return 3;
 	}
 	if (st) { fprintf(stderr, "connect status %d\n", st); return 4; }
 	printf("connected\n");
+	}
 
 	/* --- PMK --- */
 	unsigned char pmk[32];
@@ -936,7 +992,7 @@ int main(int argc, char **argv)
 			 * compares it against the assoc-request RSNE and
 			 * deauths on mismatch. */
 			fl = build_key(frame, &m2, rsne_tx,
-				       sizeof(rsne_tx), kck, buf[14]);
+				       rsne_len, kck, buf[14]);
 			int rc = send_frame(t.bssid, mymac, frame, fl);
 			fprintf(stderr, "M2 sent #%d (rc %d)\n", ++m2_count, rc);
 		} else if (pairwise && (k.ki & 0x0080) && secure && k.kdlen > 0) {
