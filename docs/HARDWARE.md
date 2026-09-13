@@ -3601,3 +3601,28 @@ wakeup 竞态打回 EBUSY（relay TCP 数秒一跳）。**生产档实际未生�
 设备整夜醒着。修法方向（立案未动）：入睡前网络静默窗（停 relay 单元
 +wlan down → freeze → RTC 醒 → net-watch 重连），睡着本来就不收
 入站，功能零损失。SoC 卡死修法（定时戳 qgauge）另案。
+
+---
+
+## 2026-09-13 — USB 拔线后 adb 不枚举：UDC 拆绑无人重绑（收据）
+
+**现象**：redfin 拔线隔夜后重插 Mac，Mac 端零枚举
+（system_profiler/adb 均无），线材确认是长期可用的 adb 线。
+设备端 adbd(pid 421) 活着且重插瞬间 ffs 有事件（adbd.log
+03:54:11 destroy/reopen ep0），但 `/sys/class/udc/a600000.dwc3/state`
+= **not attached**。
+
+**根因**：UDC 在拔线时被拆，而 UDC 重绑只发生在
+`/etc/init.d/adbd` 脚本**启动时**（后台 sleep3 + bind 循环 ×5）。
+adbd 本体存活=永不重绑 → gadget 未接，主机端永远看不到设备。
+「老毛病」实证：**拔线 → UDC 拆 → 重插无人重绑**。
+
+**修法（已验）**：relay 通道 `kill <adbd pid>` → busybox init
+respawn `/etc/init.d/adbd` → 脚本重绑 UDC → state 变
+**configured** → Mac `adb devices` 立见 aginxosredfin，shell
+往返通。连带的 zombie 子进程一并收掉。
+
+**立案待办（重申 09-12 条目）**：adbd 进监督面/加重绑触发器
+（如 net-watch 同类轮询 UDC state==not attached 且有 ffs 事件时
+kill adbd 让 respawn 重绑）。当前手工配方=kill adbd pid。
+通道纪律重申：UDC 楔死时 relay(agc) 单边探活仍通，先用它分诊。
