@@ -3894,3 +3894,69 @@ tqftpserv/rmtfs 活。不影响 bring-up（q6v5_mss 载入即自举）与直接�
 候选：补 pd-map 文件（上游 pd-mapper 仓 sdmmagus.json 等）。
 
 设备态不变：L0 + daemon 在役，探针 /tmp（tmpfs）。
+
+## 2026-09-14 — SIM 注册上网全收：provision 配方 + IPA 断言根因 + 纠错（M44 首里程碑）
+
+上条（qmi-ask 四问）之后用户插入实体 SIM（无 PIN），继续追。本条含
+**对上条两处误标的纠错**与**注册成功全链收据**。
+
+**纠错（权威源=libqmi data/*.json，jsdelivr 镜像 aleksander0m/libqmi@master）**：
+- QMI 协议错误码是**全局表**，与服务无关：1=MALFORMED_MSG、
+  13=NO_NETWORK_FOUND、**17=MISSING_ARGUMENT**、26=NO_SESSION、
+  **37=UIM_UNINITIALIZED**、60=INVALID_TRANSITION。上条"err17
+  INVALID_CARD_STATE""err37 NO_NETWORK_FOUND"两处标名皆错（13 才是
+  NO_NETWORK_FOUND；当时读数实际语义：UIM 会话未建立/persistent mode 5
+  尸态）。**勿再引用 memory 旧表**。
+- msg id 定谳：UIM GET_CARD_STATUS=**0x002F**（memory 旧记 0x0022 错）；
+  NAS GET_SERVING_SYSTEM=**0x0024**（早前试过的 0x0028 根本不是 NAS
+  消息，modem 误答了）；NAS GET_SYSTEM_INFO=0x004D、UIM
+  CHANGE_PROVISIONING_SESSION=**0x0038**、GET_SLOT_STATUS=0x0047、
+  POWER_OFF/ON_SIM=0x0030/0x0031、DMS SET_OPERATING_MODE=0x002E。
+
+**卡在位收据（GET_SLOT_STATUS 0x0047，TLV 0x10）**：slot1
+card_state=present、slot_state=active；ICCID（BCD 半字节反序）
+`89861114090260766770`（8986 11=中国电信）。GET_CARD_STATUS 0x002F 出
+USIM AID `a0000000871002ff86ff0389ffffffff`（另有 CSIM/ISIM AID），
+app state=DETECTED、pin1_state=not-initialized（无 PIN，用户证词）。
+
+**配方一：pmOS msm-modem-uim-selection**（pmaports #2072=同机型同症状；
+apk 解包 /tmp 读源）。顺序：等卡 present → 先 `unprovision`（deactivate
+已存 Primary GW 会话）→ `provision`。**本固件 provision 必须带
+Application Info TLV 0x10 {slot=1, aid_len=16, USIM AID}**——裸
+TLV 0x01 {session_type=primary-gw, activate=1} 必答 err17
+MISSING_ARGUMENT；带上后 SUCCESS，GET_CARD_STATUS 各索引 ffff→0100
+（会话登记生效）。
+
+**配方二（真正的拦路虎）：AP 侧 IPA 驱动缺失 → modem online 即
+fatal 循环**。症状：DMS online SUCCESS 但 mode 恒 5（shutting-down）、
+RF 死、UIM 永未初始化。dmesg 实锤：每次 online 触发
+`4080000.remoteproc: fatal error received: ipa_dl_opt_lte.c:432:
+IPA Assert: new_free_space > 0 failed`——modem 固件把数据面卸载到 IPA，
+AP 侧无驱动应答即断言崩；remoteproc 自动复活新实例又落回 persistent
+mode 5，所有查询读到的都是崩后尸态（offline→online/lpm 皆
+INVALID_TRANSITION 也由此）。**修**：86quan 内核树
+`/home/ubuntu/op6/linux`（6.11.0-sdm845-g2fa43795f607，`make
+kernelrelease` 与设备 uname 全同）取 `drivers/net/ipa/ipa.ko`
+（依赖 qcom_common.ko，设备已在表）→ /tmp insmod →
+`IPA driver initialized / setup completed successfully`。
+（坑：`insmod qcom_common.ko && insmod ipa.ko` 短路——前者 File exists
+即跳过后者，须单独跑。）
+
+**终局收据（ipa.ko 在位后：provision → online → mode 0 稳定 30s+
+零新 fatal）**：
+- serving（0x0024）SUCCESS：TLV 0x01 `reg=1 REGISTERED (home)、
+  ps=1 ATTACHED、cs=2 detached、selected_net=2、radio 8 (LTE)`。
+- sysinfo（0x004D）：TLV 0x19 LTE System Info 含 PLMN **"46011"**
+  （中国电信 LTE，与 ICCID 对上）、cell id b5f38507、TAC。
+- sig（0x0020）：TLV 0x01 rssi=0xc1 → **-78 dBm LTE**（真测量值）。
+
+**因果链定谳**：blank-EFS modem 起在 persistent mode 5 →（IPA 驱动在
+位）→ UIM CHANGE_PROVISIONING_SESSION(slot+AID) 登记会话 → DMS
+online 不再崩 → NAS 自动注网。三件缺一不可：无 provision=会话未建，
+无 IPA=online 即崩，二者齐才见 46011。
+
+会话末设备态：L0 + 三 daemon 在役；**ipa.ko/qcom_common.ko/qmi-ask 仅
+在 /tmp（tmpfs，重启即失）**；modem online 在网；EFS 仍 blank（真
+NV/IMEI 恢复仍待用户裁决——**本收据证明注网不依赖真 NV**，IMEI 显示
+为空/占位是下一层问题）。持久化（模块入 rootfs + 开机自动
+provision/online）立案 M44 下一刀。
