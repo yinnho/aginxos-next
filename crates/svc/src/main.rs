@@ -436,15 +436,24 @@ impl Svc {
     fn tick(&mut self, now: Instant) {
         let names: Vec<String> = self.runs.keys().cloned().collect();
         for name in names {
-            // Absent→Backoff pre-pass: try_spawn only acts on Backoff, so
-            // a due absent-recheck must flip the state first or it spins
-            // forever without ever reaching spawn_unit (found on
-            // first-boot provisioning, 2026-08-31: units stayed absent
-            // 25 min after /var/bin filled).
+            // Absent recheck — probe quietly. try_spawn only acts on
+            // Backoff (without the flip it never reaches spawn_unit;
+            // found on first-boot provisioning, 2026-08-31: units stayed
+            // absent 25 min after /var/bin filled), but logging the
+            // mechanical Absent→Backoff→Absent pair every 30 s turned any
+            // bare L0's kmsg into a heartbeat (aginxbrowser lives in
+            // svc.d while its binary only arrives as a package). So: flip
+            // only when the binary actually appeared (spawn logs its own
+            // "starting"); a still-absent probe just reschedules.
             if let Some(r) = self.runs.get_mut(&name) {
                 if r.st == St::Absent && r.absent_check.map(|t| now >= t).unwrap_or(false) {
-                    r.set_st(St::Backoff);
-                    r.backoff_until = Some(now);
+                    if path_exists(&r.unit.cmd) {
+                        r.st = St::Backoff;
+                        r.backoff_until = Some(now);
+                    } else {
+                        r.absent_check =
+                            Some(now + Duration::from_millis(ABSENT_RECHECK_MS));
+                    }
                 }
             }
             enum Act {
