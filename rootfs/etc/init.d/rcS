@@ -2,6 +2,15 @@
 # AginxOS rcS - one-shot setup, runs before the respawns in inittab.
 export PATH=/sbin:/bin:/usr/sbin:/usr/bin:/system/bin
 
+# /proc, /sys, /dev, /tmp FIRST — on redfin the trampoline carries them in
+# (these lines no-op), on enchilada's raw-boot they are the real mounts
+# (E4b 2026-09-13 收据：挂晚了 disk-grow 读不到 mount 表，扩容哑退)。
+# mdev 扫 /sys，必须在 sysfs 之后。全部幂等。
+mount -t proc proc /proc 2>/dev/null
+mount -t sysfs sysfs /sys 2>/dev/null
+mount -t devtmpfs devtmpfs /dev 2>/dev/null
+mount -t tmpfs tmpfs /tmp 2>/dev/null
+
 # Fill in the full applet set (image ships only a curated symlink list),
 # then populate /dev from sysfs — nothing udevs in our world, so input event
 # nodes and friends only exist after mdev runs.
@@ -33,12 +42,8 @@ mdev -s 2>/dev/null
 chown -R 0:0 /bin /sbin /etc /aginxos /system /home /root /var /opt /srv /media 2>/dev/null
 chown 0:0 /default.prop /prop.default /*_contexts 2>/dev/null
 
-# /proc, /sys and /dev were carried in by aginxos-init before chroot;
-# these only run if something is missing (idempotent).
-mount -t proc proc /proc 2>/dev/null
-mount -t sysfs sysfs /sys 2>/dev/null
-mount -t devtmpfs devtmpfs /dev 2>/dev/null
-mount -t tmpfs tmpfs /tmp 2>/dev/null
+# （挂载段已上提到文件首——E4b：raw-boot 无机顶携带，自挂必须先于一切
+# 读 /proc 的步骤；trampoline 机型上这些 mount 全是幂等 no-op。）
 
 hostname aginxos
 ifconfig lo 127.0.0.1 netmask 255.0.0.0 up 2>/dev/null
