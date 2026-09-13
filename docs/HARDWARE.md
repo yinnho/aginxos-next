@@ -3763,3 +3763,49 @@ vendor_boot-test.img 15:56 pack，HOLD=1 USBADB=1 ROOTFS=1），
 `gh release create redfin-v0.1.1` 已发布：
 https://github.com/yinnho/aginxos-next/releases/tag/redfin-v0.1.1
 （前版 redfin-v0.1.0 同日 05:59Z）。
+
+## 2026-09-13 — E4b 刷机日：enchilada 真 L0 在役（raw-boot 挂载序根修 + 公钥注入 Bootstrap）
+
+三轮 fastboot（`fastboot -s b0d9f7fe`，每次手动 Power+VolUp+插线进 fastboot；
+`fastboot reboot` 返回 ~130s，sshd 上线 ~50-80s）。
+
+**轮1（2d84276 镜像）——L0 全链真通**：`flash userdata` 1.3s → 重启 →
+ssh 公钥登录 ✅、boot.state `usbnet ok 10.9.8.1 / done ok / pkg ok`、
+svcd 在役（net-watch ready、aginxbrowser absent 容忍=裸 L0 正确形态）、
+版本戳 `aginxos enchilada aeef0f5 l0`、device.toml 正确。
+**唯一暗伤：disk-grow 开机哑退**——`/var/disk-grow.log`：
+`mount: no /proc/mounts` → "root mount line not found"，fs 停在 2.0G。
+
+**根因（E4b 最值钱收据）**：redfin 的 trampoline（aginxos-init）在
+chroot 前把 /proc /sys /dev 带进新根，rcS 中段的挂载块是幂等 no-op；
+enchilada raw-boot **没人替内核挂**，而 rcS:29 的 disk-grow 排在 :38
+挂载块之前 → resize2fs 读不到 mount 表。手跑 `disk-grow` 当场修好
+（2G→109.9G，`The filesystem is now 28836027 (4k) blocks`），但镜像
+必须修根：**rcS 挂载四行（proc/sys/devtmpfs/tmp）上提到文件首**，
+先于 busybox --install/mdev（mdev 扫 /sys）。trampoline 机型全幂等。
+
+**轮2——fresh 镜像 ssh Bootstrap（缺 adb 的机器怎么进去）**：烤好的
+shadow 是 `root:*`（惰性）、无 authorized_keys、enchilada 无 adbd →
+裸刷必然 ssh 拒登（by design）。注入法=把 Mac 公钥拷进**树里**
+（`/tmp/aginxos-enchilada-tree/root/.ssh/authorized_keys`，700/600），
+手工按烤线同旗重跑 mke2fs
+（`mke2fs -t ext4 -b 4096 -N 8192 -J size=8 -F -d <tree> <img> 2g`，
+先 `rm -f` img——mke2fs 不截断）。rcS 的 `chown -R 0:0 /root` 开机
+自愈宿主 uid。**每刷一次 dropbear host key 重生**：ssh-keygen -R
++ `-o StrictHostKeyChecking=accept-new` 例行。
+
+**轮3（8d0dd27 rcS）——根修实证**：开机 4 秒（epoch 时钟 00:00:04）
+disk-grow 日志：mount 表正常读 → resize2fs 在线扩容 → `done rc=0`；
+`df -h /` **开机即 109.9G**（上轮的 no /proc/mounts 消失）；
+boot.state 三项全 ok；svcd 两单元形态正确；版本戳 `2d84276 l0`。
+
+**宿主账**：`/` = /dev/sda17（sda19 是 redfin 的事）；OP6 ABL 未探针，
+GPT 字节不写（boot-ok 双门：烤线 BOOT_STYLE 门 + rcS redfin 名门）；
+时钟停在 epoch（NCM 救援网无 ntpd）——E5 wifi 进网后校时。
+提交账：2d84276（烤线三闸+机型数据）+ 8d0dd27（rcS 挂载序）已推
+origin/master（sha 直推，链检通过）。**2026-09-13 事故在案**：本日
+一次 `git push origin master` 把本地收据 aeef0f5 带上公开仓，用户裁决
+留存（无秘密）；教训=推送永远 `git push origin <sha>:refs/heads/master`。
+
+Enchilada L0 **在役**。E4 完结。E5（wifi ath10k WCN3990 → aginx →
+agc 真答；时钟同步搭车）未启。
