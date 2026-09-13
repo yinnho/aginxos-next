@@ -18,7 +18,7 @@
 - `libexec/aginx/` — 守护的家（D13：libexec 不进路由器命令扫描）。net-watch/
   net-rejoin 两个 sh 在此；aginx-svcd/aginx-server/aginx-runtime/aginx-secretd/
   aginx-gateway 由脚本落位。
-- `usr/bin/` — **命令宇宙的元数据层**：15 个 `.aginxmd` sidecar（编译命令的
+- `usr/bin/` — **命令宇宙的元数据层**：16 个 `.aginxmd` sidecar（编译命令的
   门面说明，二进制由脚本落位改名后与 sidecar 同名相邻）+ 4 个 sh 面
   （aginx-web/file/mem = 桥到 provision 后的包二进制 aginx-web/agf/agmem，
   aginx-sys-status）。桥壳**不声明 aginx:exec**——目标 sync 后才存在是合法暂缺。
@@ -40,7 +40,7 @@
 | 本仓 target/musl | aginx-qr（第二次独立 zigbuild，feature 陷阱）, aginx-done, aginx-secret | /usr/bin（N5② 吸收重编） |
 | 本仓 target/musl | aginx-secretd | /usr/libexec/aginx/（N5② 吸收重编） |
 | 本仓 target/musl | aginx-gateway | /usr/libexec/aginx/（N5⑤ 远端通道守护；id/secret 不进镜像，刷机日灌注） |
-| 本仓 rootfs/src/*.c（zig cc） | nlscan→aginx-net-scan, wifi-join→aginx-net-join, reboot2→aginx-reboot | /usr/bin |
+| 本仓 rootfs/src/*.c（zig cc） | nlscan→aginx-net-scan, wifi-join→aginx-net-join, reboot2→aginx-reboot, paneloff→aginx-panel-off | /usr/bin |
 | devices/${DEVICE}/cam + 本仓 rootfs/src/jpegenc_tj.c | cam-shot→aginx-cam-shot（build-cam.sh 带机型 cam 目录；传感器源=机型数据 D14） | /usr/bin |
 | 老仓 out/voice, out/ocr | ag-asr→aginx-asr, ag-tts→aginx-tts, ag-ocr→aginx-ocr + 模型→/var/models | /var/bin |
 

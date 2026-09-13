@@ -279,6 +279,13 @@ echo "built preload helpers (trace_open.so, fake-props.so)"
 # for re-flashing.
 "${ZIG}" cc -target aarch64-linux-musl -static -O2 \
   -o "${TREE}/usr/bin/aginx-reboot" "${RECIPE}/src/reboot2.c"
+# aginx-panel-off (2026-09-13): headless panel powerdown — smooth-takeover
+# otherwise scans the bootloader splash forever. Black SETCRTC (ownership
+# grab; bare null SETCRTC no-ops because the DRM objects already read
+# disabled under takeover) then null SETCRTC. rcS spawns it backgrounded
+# when /bin/bootcard is absent.
+"${ZIG}" cc -target aarch64-linux-musl -static -O2 \
+  -o "${TREE}/usr/bin/aginx-panel-off" "${RECIPE}/src/paneloff.c"
 # wdt (M20c): watchdog probe/arm/starve for /dev/watchdog. The dog itself
 # is armed and petted by aginx-svcd (crates/svc); this is the diagnostics
 # tool that proved the platform story (softdog behind msm_watchdog,

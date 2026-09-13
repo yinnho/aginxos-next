@@ -1,0 +1,6 @@
+# aginx:summary=power off the headless panel (DRM pipeline down)
+# aginx:group=sys
+# aginx:hidden=true
+# aginx:requires-sudo=true
+# 系统内部件 — rcS 在 /bin/bootcard 缺席时后台 spawn。smooth-takeover
+# 陷阱下裸 null SETCRTC 是 no-op；必须先黑 fb 真 SETCRTC 夺权。
