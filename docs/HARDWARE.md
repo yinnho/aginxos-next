@@ -4016,3 +4016,72 @@ LTE`；sig **-65 dBm**；rproc3 `running`。60s settle 一次过（此前
 NV 裁决挂起不变）。bake 折叠欠账：build-rootfs enchilada 段需
 折 ipa.ko + qmi-ask + modem-up + 修后 modem-bringup，重刷才真
 持久。
+
+## 2026-09-14 — E5 完结：enchilada wifi（ath10k WCN3990）在网 + 校时 + agc 真答
+
+目标三关全过：wlan0 关联 → udhcpc 租约 → busybox ntpd 校时 →
+Mac agc 经 relay 打 enchilada 网关，brain 真答返回。
+
+**① wlan0 出生配方（本 boot 复证，三件缺一不可）**：
+
+1. `wlanmdsp.mbn` 落位 `/lib/firmware/qcom/sdm845/oneplus6/`
+   （从 `/lib/firmware/ath10k/WCN3990/hw1.0/` 拷入；userdata
+   持久）——modem 的 wlan_pd（modemuw.jsn，qmi_instance_id 180）
+   经 tqftpserv 拉 `wlanmdsp.mbn`，Android 路径
+   `/readonly/vendor/firmware_mnt/image/` 被 translate.c 映射到
+   固件目录。
+2. **pd-mapper 启动序**：remoteproc 注册前启动则
+   `no pd maps available` exit(1)（boot race）；必须在
+   remoteprocs 起来后（重）启，成功=静默存活（maps 已载）。
+   扫 `/sys/class/remoteproc/*/firmware` 找 .jsn。
+3. **触发式**：`echo stop > /sys/class/remoteproc/remoteproc3/state`
+   → offline → `echo start` → ~25s 后 wlan_pd 靴起 → WLFW
+   （svc 0x45，qr-lookup 见 node 0 port 99）宣告 → ath10k_snoc
+   （已 bind，passive QMI）握手 → **wlan0**。QMI 收据：chip_id
+   0x30214 / fw WLAN.HL.2.0.c8-00050（~1s 内完成于 "remoteproc3
+   is now up" 后）。曾见 `msa mem ready -32`（server 中途消失）/
+   `host capability rejected 90`（二次握手被拒）——皆此序乱的
+   症状，非独立病。
+
+**② 关联根因定谳（connect status 1 闭案）**：CMD_CONNECT 路径
+（cfg80211 全内建 SME）在 mainline 6.11 + ath10k 上**静默死**
+——NL80211_ATTR_STATUS_CODE=1，~5s 返回，dmesg 零 auth/assoc 帧
+零 mac80211 mgd 行（pr_info 无条件打，缺席=没跑）。累计 90+ 次
+失败皆此。**判别实验（wifi-join split 模式）**：拆成
+AUTHENTICATE（开式，无 IE）+ ASSOCIATE（镜像 AP RSNE + 密码档四
+attr）→ 一次过：authenticated → associated → M3 MIC verified
+（psk 正确）→ 4WHS → GTK idx 1 装 key。**OUI-MAC 假设证伪**：
+通用 MAC 关联照样死在本地（压根不上天），与 AP 无关。附带修：
+扫描时存 AP 自己的 RSNE，assoc request 与 M2 key data 镜像之
+（ath10k 转发 IE 不重建，与 qcacld 行为相反）——M3 MIC 过即证。
+
+**③ 入网+校时收据**：udhcpc（首跑 leasefail=接口 down 态，rejoin
+后过）租 192.168.3.95/24 gw 192.168.3.1，DNS 192.168.3.1；
+223.5.5.5 ping 19.9ms；`ntpd -q -n -d -p ntp.aliyun.com` 两轮
+offset ±4ms（-q 静默模式不动钟，-d 模式才落 set）。
+
+**④ 织物入网（L0 全包路径首证）**：env 三键（brain/gateway
+id/relay secret）stdin 管道并入 /etc/aginx/env（0600，全程零
+回显）；gateway id = **enchilada**；`aginx-pkg opt-in aginx`
+（带 dep aginx-update）→ `opt-in aginx-gateway`（依赖闭包带
+aginx-secretd）——pkgs.aginx.net 直下，manifest sha 全对。三
+单元 ready（gateway 首起 backoff 两拍即自愈）。Mac 侧：
+`AGC_RELAY_SECRET=… agc agent://enchilada.relay.aginx.net/me`
+→ 问 1+1，**真答「二。」**（全链 Mac→relay 8443→wlan0 网关→
+母体→brain）。
+
+**上游回流**：wifi-join.c split 模式 + RSNE 镜像已并入
+rootfs/src/wifi-join.c（additive：argv[4]=split 才走新路径，
+CMD_CONNECT 默认路径红线不动——redfin qcacld 无 split
+auth/assoc，靠 CONNECT）。zig cc musl 编译过，与设备验证产物
+同源。
+
+**折债（enchilada 段，重刷前须折）**：烤内 /usr/bin/aginx-net-join
+仍是 connect 路径（重启后 wifi 不会自动连，须手跑 split 二进制）；
+pd-mapper 启动序进 rcS；wifi 模块链自动 insmod；wlanmdsp.mbn 进
+烤线；mark-boot-successful（A/B 每启烧一命，见 in-memory 铁律）；
+exp2.sh 的 `dmesg -C`（busybox 无此开关）。
+
+会话末设备态：L0 RAM 靴在役，wlan0 关联在网（192.168.3.95），
+母体三单元 ready，modem offline-persistent（mode 5），modem-up
+按需不变；EFS blank、真 NV 裁决仍挂起。
