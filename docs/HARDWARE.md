@@ -3570,7 +3570,44 @@ gadget 栈/UFS/ext4/DWC3 全内建）。7.1-rc1 弃用（pmOS 不用、无人验
 ### 刷靴操作纪（可复用）
 
 中毒 ABL 协议：`fastboot boot` 快退后先 `fastboot reboot bootloader`
-清态再试（有时要两次）。手动入口：长按电源 ~10s 强关 → 电源+音量下。
+清态再试（有时要两次）。手动入口：长按电源 ~10s 强关 → 电源+音量上。
+
+### E4a：L0 种子骑乘 userdata + ssh 真通（2026-09-13 完结）
+
+- **键位纠错**：电源+音量下进的是 **Recovery 不是 fastboot**（上文 E3
+  操作纪已改）；fastboot = **音量上+电源**；EDL = 音量上下同按插线。
+  「关机就重启」根因 = 插着 USB 会自动上电 → 流程必须：拔线 →
+  强关 → 预按住音量上+电源 → 插线。
+- seed.img（64MiB ext4，`mke2fs -t ext4 -b 4096 -L agx-seed -d lab/seed`
+  @/opt/homebrew mke2fs 1.46.6）`fastboot flash userdata` 到 sda17；
+  initramfs-init 认 PARTNAME=userdata 的 ext4 + /sbin/init → switch_root。
+- **僵尸法（实测）**：busybox switch_root 删文件不杀进程——幸存
+  initramfs dropbear 占死 :22 但 /etc/passwd 已删 → 公钥全拒；新根
+  dropbear bind 撞车静默死；udhcpd 同理占 UDP 67。修法 = switch_root
+  前 `killall -q dropbear udhcpd; sleep 1`（initramfs-init 已入）。
+- **killall+sleep1 不保证端口已释放**：v2 带 killall 仍 :22 refused
+  （推测种子 dropbear 起跑时僵尸未死透，bind 失败一次即永死；其
+  /tmp/dropbear.log 随 v3 重刷灭失，死因未钉死）。**修法 = inittab
+  `::respawn:` 重试架构**——bind 失败被 init 自动再拉，僵尸死后下一
+  轮即成。此类「交权瞬间抢端口」故障被 respawn 整类消灭。
+- **fork 风暴铁律（实测）**：`::respawn:` 配自我守护化程序（无 -F/-f）
+  = 父进程拉起即退 → init 立刻再拉 → 每秒一个活尸（实测 **170 个活
+  udhcpd，S 态非僵尸**）。respawn 条目必须前台：dropbear `-F`、
+  udhcpd `-f`。
+- **switch_root 没把 /proc /sys 搬进新根**（只 /dev 活着）——新根
+  rcS 必须自挂 proc/sys/devpts + `mkdir /var/run`，否则 ps/netstat
+  全瞎（首验时 ps 哑、mount 无 /proc/mounts 的收据）。
+- **udhcpd 不得派 router/dns**（实测：派了 macOS 把 NCM 当高优先级
+  以太网，默认路由+DNS 灌进死上行，Mac 整机断网）——只发
+  IP+subnet，Mac 保自己 Wi-Fi 上行。initramfs 与 seed 两处 conf 同修。
+- busybox `netstat` 在 enchilada seed segfault（redfin awk 同类坑，
+  收据绕行）。
+- **端态**：seed v4（sha256 d0cf2d70…）在 userdata；boot_a 刷死
+  修复版（d98b97c1，含 killall）——**默认引导路径**（非 fastboot boot）
+  开机 ~20s 后 `ssh root@10.9.8.1` 公钥入魂（root=/dev/sda17 ext4，
+  56M/6.4M）；Mac 侧 10.9.8.2 实测由 udhcpd DHCP 派发
+  （getpacket server_identifier=10.9.8.1）。slot b = LOS 回退完好，
+  dtbo_b=零档。
 
 ---
 
