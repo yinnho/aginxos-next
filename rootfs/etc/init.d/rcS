@@ -87,6 +87,14 @@ mkdir -p /run 2>/dev/null
 if [ -x /bin/bootcard ]; then
   ( exec /bin/bootcard /run/boot.state ) >/var/bootcard.log 2>&1 &
   echo $! > /run/bootcard.pid
+elif [ -x /usr/bin/aginx-panel-off ]; then
+  # Headless: nobody owns the panel, and the kernel's smooth-takeover
+  # keeps the bootloader's Google splash scanning out forever (OLED
+  # burn + battery drain). panel-off waits for the DSI connector to
+  # register (~60s), grabs the pipeline with a black SETCRTC, then
+  # null-SETCRTCs it down (M15 path). Backgrounded; logs to kmsg.
+  # A later-installed bootcard/term simply takes master next boot.
+  /usr/bin/aginx-panel-off &
 fi
 
 # Touch bring-up (M3) — backgrounded: it waits out the ~60s panel
