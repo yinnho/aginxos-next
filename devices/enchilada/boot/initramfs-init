@@ -68,13 +68,14 @@ net_up() {
     sleep 1
   done
   ifconfig usb0 2>/dev/null | grep -q 10.9.8.1 || return 1
+  # 不派 router/dns (2026-09-13 实测: 派了 = macOS 把 NCM 口当高优先级以太网,
+  # 默认路由+DNS 全灌进无上行的手机, Mac 整机断网; 只给 IP+子网, Mac 保 on-link
+  # 10.9.8.0/24 可达 ssh, 上行走自己 Wi-Fi)
   cat > /etc/udhcpd.conf <<EOF
 interface usb0
 start 10.9.8.2
 end 10.9.8.2
 opt subnet 255.255.255.0
-opt router 10.9.8.1
-opt dns 10.9.8.1
 lease_file /tmp/udhcpd.leases
 EOF
   touch /tmp/udhcpd.leases
@@ -123,6 +124,11 @@ if [ -n "$ROOTDEV" ]; then
   done
   if mount | grep -q " /sysroot "; then
     if [ -x /sysroot/sbin/init ]; then
+      # 先杀救援件再交权 (2026-09-13 实测: switch_root 不杀进程只删文件,
+      # 幸存 dropbear 占死 :22 但 /etc/passwd 已删 → 全拒; 新根的 dropbear
+      # bind 撞车静默失败 → ssh 永远 Permission denied。udhcpd 同理占 67)
+      killall -q dropbear udhcpd 2>/dev/null
+      sleep 1
       klog "L0 root found — switch_root"
       exec switch_root /sysroot /sbin/init
     fi

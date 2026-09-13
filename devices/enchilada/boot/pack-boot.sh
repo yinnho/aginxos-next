@@ -25,9 +25,10 @@ OUT="${DEV}/boot-out"
 MKBOOT="${ROOT}/.local/boot-tools/mkbootimg.py"
 RAM="${OUT}/initramfs"
 
-# tty0 在前 = 屏显也是观察通道 (2026-09-13 实测: 8 企鹅 = 内核活了; klog 回灌
-# 上屏, 无头调试时真人眼即收据); ttyMSM0 保留串口位
-CMDLINE="console=tty0 console=ttyMSM0,115200"
+# tty0 在后 = /dev/console 指向屏 (2026-09-13 v3: 前两版 rcS 无声死, init 自白
+# 全去了串口不可见; 换序后 busybox init 的报错直接上屏)。printk 两口都出,
+# klog 回灌照旧上屏; ttyMSM0 保留串口位
+CMDLINE="console=ttyMSM0,115200 console=tty0"
 
 fail() { echo "pack-boot: $*" >&2; exit 1; }
 
