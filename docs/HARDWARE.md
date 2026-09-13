@@ -3626,3 +3626,62 @@ respawn `/etc/init.d/adbd` → 脚本重绑 UDC → state 变
 （如 net-watch 同类轮询 UDC state==not attached 且有 ffs 事件时
 kill adbd 让 respawn 重绑）。当前手工配方=kill adbd pid。
 通道纪律重申：UDC 楔死时 relay(agc) 单边探活仍通，先用它分诊。
+
+---
+
+## 2026-09-13 — 产品裁决：不睡+无屏；s2idle 全线退役；bootcard 出镜像；发布线开工
+
+**产品裁决（用户当日定调，覆盖 #334 的睡眠方向）**：有网络需求
+**立即响应**是硬需求 → redfin wlan FW 无 WoW（单播叫不醒、AP 20-30s
+踢关联）→ 睡眠制与产品不兼容，**心跳制定型：SoC 常醒，功耗走
+清醒时最小化**（wifi DTIM PS / 拔 USB / 大核停泊 / OLED 常亮件清零，
+分解测量另案）。周级续航的唯一真路=基带推送（M44��。
+
+**s2idle 第一刀（已部署后随裁决退役）**：入梦静默窗（停 relay 单元+
+wlan down → 限时 wakeup_count 协议 → RTC 臂 → freeze → net-rejoin
++起 aginx）修复了整夜 0 入睡的根因（relay TCP 打回 EBUSY）。
+**新陷阱收据**：wakeup 事件滞留时 `cat /sys/power/wakeup_count` 的
+**读会永久阻塞**（pipe_read 卡 26 分钟，busybox 无 `read -t`）——
+修法=后台 cat + 5s 看门狗 kill，超时=放弃协议直接冻。又及：
+busybox sh 非交互无 job control（`%1` 挂死会话），kill 一律用 pid。
+
+**s2idle 设备端退役**：`aginx-svc stop aginx-s2idle` → 单元文件
+移 `/etc/aginx/scripts/aginx-s2idle.toml.retired`（脚本留档）；
+svc.d 4→3（net-watch/router/aginxbrowser）。镜像本无此件
+（#334 是 dev-push 部署，未烤入）。
+
+**bootcard 无屏化（服务器版裁决）**：rcS 加 `[ -x /bin/bootcard ]`
+门 + build-rootfs.sh 不再编译安装——刷机后屏幕在 bootloader 交棒即
+全黑（bootloader 自己的 Google logo 段不可删）。回归路=aginx-bootcard
+opt-in 包（一切皆包同构；包未装��时门静默跳过）。boot.state 照写
+（机器可读收据，与面板无关）。定案①「刷机指示灯」角色由网络断言
+接管（n7 本来如此）。在役设备的残留帧随下次刷机消。
+
+**发布线（同日开工）**：docs/PACKAGING.md=发布物契约（agent 第一
+消费者、版本=安装态、manifest 机读、包内 SKILL.md 手册）；包内容=
+rootfs.img+补丁 vendor_boot+stock 恢复件+flash.sh+SKILL.md+manifest
++SHA256SUMS（DECISIONS §7  vendor 禁令已由用户删除，旧仓留
+superseding note）；scripts/dist.sh 组装器+消费方模拟全绿，
+试组装 zip=70.5MB。刷机脚本门=机型（getvar product）非序列号
+（对外包）/序列号（内部 flash-redfin.sh）双轨。
+
+**redfin-v0.1.0 发布+自测（同日收官）**：release 已上 GitHub
+（redfin-v0.1.0，asset=aginxos-redfin-0.1.0.zip 70.5MB，消费端下载
+md5 与本地一致）。自测=按包内 SKILL.md 真刷本机：SHA256SUMS 过 →
+门 ok（getvar product=redfin）→ userdata 45s + vendor_boot 2.3s →
+重启 adb ~30s 上线 → boot.state done ok ~60s → configure_after
+（adb 推 wifi.conf + 一次性 ed25519 公钥）→ 重启 wifi ok /
+internet ok ~105s → **ssh 公钥往返通**（自测全链闭环）。
+ssh 陷阱：重刷后 dropbear host key 重生，known_hosts 旧条目触发
+MITM 警告，需先清旧行（一次性测试钥应配 UserKnownHostsFile=/dev/null）。
+
+**Legrand AP 客户端隔离实锤**：手机与 Mac 同 SSID 同 /24
+（192.168.0.166 ↔ .190）时 ping 100% 丢包、ssh 超时，而手机侧
+dropbear 在听 0.0.0.0:22——隔离在 AP 层，Legrand 对 agent 运维
+通道判死（继"掐长传输"后第二宗罪）。华为 AP（HUAWEI-凌霄-N1CE7L，
+192.168.3.0/24）无隔离：手机 .93 ↔ Mac .26 ping/ssh 全通。
+设备 /etc/wifi.conf 已切华为。
+
+**已知缺口（v0.1.1 候选）**：无头版无人灭背光——DSI connected、
+dpms=On、brightness=511、bl_power=0、无 DRM master → 全背光黑屏
+（用户误判"还在 Google logo"）。修法=rcS 在无 bootcard 时关背光。
