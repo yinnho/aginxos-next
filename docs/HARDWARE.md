@@ -3859,3 +3859,38 @@ UIM(11)+WMS(5) 在表 → M44 SIM/SMS 有真通路（QRTR over SMD，无
 /dev/qcqmi*）。`/proc/net/qrtr` 在本内核不存在，不影响 lookup 应答。
 会话末设备态：L0 + 三 daemon 在役；探针在 /tmp（tmpfs，重启即失）；
 EFS=blank 格式化态（未恢复 LOS NV）。
+
+## 2026-09-14 — qmi-ask 首收：QMI 事务全链四问四答（M44 工具备齐）
+
+工具 `qmi-ask.c`（源码存 `.local/device/enchilada/`；构建=Mac /tmp/e5-svc
+`zig cc -target aarch64-linux-musl -static -O2 -Iqrtr/include` + out/libqrtr.a，
+`struct sockaddr_qrtr` 由 zig cc 自带 musl `linux/qrtr.h` 供给——qrtr 仓
+include 树里没有）。表驱动四查询，全部 7 字节无 TLV 请求；每查询新开
+`qrtr_open(0)`（不 bind——lookup.c 源码证实该流安全，避免查找突发与
+应答串台）；查找终止=内核全零 NEW_SERVER 哨兵；应答匹配
+flags==0x02 且 txn/msg_id 回声。
+
+**设备收据（/tmp/qmi-ask all，rc=0，四问四答）**：
+- **imei**（DMS GET_IDS，svc2 node0 **port66**）：result=0 SUCCESS；
+  TLV 0x01(ESN 槽) len5 `"20001"`，**无 0x10 IMEI TLV**——blank EFS 无
+  NV 可供，与真 NV 恢复待裁决一致。
+- **sim**（UIM GET_CARD_STATUS，svc11 node0 **port63**）：result=1
+  error=17 INVALID_CARD_STATE——卡不可读/无卡。
+- **sig**（NAS GET_SIGNAL_STRENGTH，svc3 node0 **port52**）：result=0
+  SUCCESS；TLV 0x01 len2 `8000`——rssi 0x80 出量程（无服务占位读数，
+  非 0..31/0xff 语义）。
+- **serving**（NAS GET_SERVING_SYSTEM，svc3 port52）：result=1 error=37
+  NO_NETWORK_FOUND——未注册。
+
+**裁决：QMI 事务层全通**。四个失败/占位全是语义层（无卡/无网/无 NV），
+四个响应帧全部良构（flags/txn/msg_id 回声、TLV 可走查、result TLV 在
+场）——lookup→request→response 整链零缺陷。M44（SIM/SMS）通路与工具
+就此备齐。
+
+**pd-mapper 观察案（立案）**：本靴开机即退 `no pd maps available`
+（21B 日志）——pd-mapper 需上游 pd-map JSON 载荷，三 daemon 实际只有
+tqftpserv/rmtfs 活。不影响 bring-up（q6v5_mss 载入即自举）与直接服务
+查询（服务表 60 条+本四问为证）；只影响子系统崩溃后的重启伺服。
+候选：补 pd-map 文件（上游 pd-mapper 仓 sdmmagus.json 等）。
+
+设备态不变：L0 + daemon 在役，探针 /tmp（tmpfs）。
