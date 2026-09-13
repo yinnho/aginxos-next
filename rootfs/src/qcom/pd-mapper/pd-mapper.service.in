@@ -1,0 +1,9 @@
+[Unit]
+Description=Qualcomm PD mapper service
+
+[Service]
+ExecStart=PD_MAPPER_PATH/pd-mapper
+Restart=always
+
+[Install]
+WantedBy=multi-user.target

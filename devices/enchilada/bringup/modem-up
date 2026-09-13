@@ -1,0 +1,28 @@
+#!/bin/sh
+# enchilada modem online — operator tool (M44, 2026-09-14). NOT wired at
+# boot: rcS keeps the modem in persistent mode 5 (idle, stable); cellular
+# is on-demand until the wifi line settles. Receipts: HARDWARE.md
+# 2026-09-14. Empirical laws baked in:
+#  - ipa.ko must be loaded before online, else the modem fatal-asserts
+#    ipa_dl_opt_lte.c:432 (AP-side IPA driver absent).
+#  - online sent to a young instance (seconds old) fatal-asserts
+#    ipa_hwp_init.c:386 (HWP handshake timeout), and the online mode is
+#    STICKY across remoteproc recovery -> every recovered instance
+#    self-destructs on its own init, ~4.4s loop. Only a clean remoteproc
+#    stop+start clears the stickiness (rmmod ipa also ends the loop:
+#    recovered instances fall back to mode 5).
+#  - a long-settled instance idling in mode 5 accepts online (proven).
+# So: load ipa, wait for DMS, let the instance settle, provision, online.
+# If it still crashes: stop+start remoteproc3 (or reboot), let it idle,
+# run this again.
+M=/lib/modules
+Q=/usr/bin/qmi-ask
+grep -q "^ipa " /proc/modules || { insmod $M/ipa.ko && sleep 2; }
+n=0
+while [ $n -lt 60 ] && ! $Q mode >/dev/null 2>&1; do sleep 2; n=$((n+1)); done
+sleep 60
+$Q provision >/dev/null 2>&1
+$Q online  >/dev/null 2>&1
+sleep 15
+echo "--- serving:"; $Q serving 2>&1 | tail -3
+echo "--- sig:"; $Q sig 2>&1 | tail -3

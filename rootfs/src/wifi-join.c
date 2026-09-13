@@ -764,6 +764,16 @@ static int parse_eapol(const unsigned char *frame, size_t flen, struct eapol_key
 
 int main(int argc, char **argv)
 {
+	/* NETJOIN_DEFAULT_SPLIT (enchilada/raw-boot bake): mainline mac80211
+	 * SME — CMD_CONNECT's cfg80211 built-in SME dies silently (E5: 90+
+	 * null-air failures), split auth/assoc is the only live path, so the
+	 * 4-arg call IS split there. redfin (qcacld) builds without the flag
+	 * and keeps the explicit-arg contract. */
+	int split = (argc == 5 && !strcmp(argv[4], "split"));
+#ifdef NETJOIN_DEFAULT_SPLIT
+	if (argc == 4)
+		split = 1;
+#endif
 	if (argc != 4 && !(argc == 5 && !strcmp(argv[4], "split"))) {
 		fprintf(stderr, "usage: wifi-join <ifname> <ssid> <passphrase> [split]\n");
 		return 2;
@@ -866,7 +876,7 @@ int main(int argc, char **argv)
 	}
 
 	int st;
-	if (argc == 5 && !strcmp(argv[4], "split")) {
+	if (split) {
 		/* split auth+assoc (mainline mac80211 SME path) */
 		n = mkmsg(NL80211_CMD_AUTHENTICATE, 0, 210);
 		nla_put(n, BUF, NL80211_ATTR_IFINDEX, &t.ifindex, 4);

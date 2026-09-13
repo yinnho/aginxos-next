@@ -235,6 +235,20 @@ mkdir -p "${TREE}/lib/modules"
 for m in ${MODULES}; do
   cp "${RAMDISK}/lib/modules/${m}.ko" "${TREE}/lib/modules/"
 done
+else
+# raw-boot（E5 折债 ③，2026-09-14）：没有 vendor ramdisk 可抄——模块本体
+# 是机型资产 .local/device/${DEVICE}/modules/（live 设备 /lib/modules 逐字
+# 拉回，§7 不进 git）。modules.txt 有条目而 .ko 缺席 = 烤出哑 modem/wifi，
+# 宁死不烤残。
+MODULES="$(grep -Ev '^[[:space:]]*(#|$)' "${DEVDIR}/modules.txt" || true)"
+if [ -n "${MODULES}" ]; then
+  mkdir -p "${TREE}/lib/modules"
+  for m in ${MODULES}; do
+    test -f "${ASSETS}/modules/${m}.ko" \
+      || { echo "FATAL: ${ASSETS}/modules/${m}.ko missing — pull from the live device (devices/${DEVICE}/boot/assets.md)" >&2; exit 1; }
+    cp "${ASSETS}/modules/${m}.ko" "${TREE}/lib/modules/"
+  done
+fi
 fi
 
 # DRM splash painter — the panel stays black without an explicit mode set
@@ -360,7 +374,13 @@ install -m 755 "${ROOT}/out/sftp-server" "${TREE}/usr/libexec/sftp-server"
 # CONNECT, EAPOL 4-way handshake over an AF_PACKET socket, NEW_KEY installs;
 # then udhcpc owns IP provisioning. wifi-trace flips QCA vendor dp-trace
 # levels for TX/RX logs (internal, /bin).
-"${ZIG}" cc -target aarch64-linux-musl -static -O2 \
+# E5 折债：raw-boot（mainline 6.11 + ath10k）上 split auth/assoc 是唯一
+# 活路（CMD_CONNECT 的 cfg80211 内建 SME 90+ 次空呼吸失败）——该形态下
+# 编译期默认 split，net-bringup 的 4 参调用即 split。vendor-boot 机型
+# （brcmfmac/wcnss 世界）不带此默认，保持显式第 5 参契约。
+NETJOIN_FLAGS=""
+[ "${BOOT_STYLE}" = "vendor-boot" ] || NETJOIN_FLAGS="-DNETJOIN_DEFAULT_SPLIT"
+"${ZIG}" cc -target aarch64-linux-musl -static -O2 ${NETJOIN_FLAGS} \
   -o "${TREE}/usr/bin/aginx-net-join" "${RECIPE}/src/wifi-join.c"
 "${ZIG}" cc -target aarch64-linux-musl -static -O2 \
   -o "${TREE}/bin/wifi-trace" "${RECIPE}/src/wifi-trace.c"
@@ -422,6 +442,52 @@ elif [ -f "${RADIO}/libnl.so" ] && [ -x "${RADIO}/rmt_storage" ] \
   echo "staged radio payload (libnl.so + patched rmt_storage + cdsp/modem loaders)"
 else
   echo "NOTE: ${RADIO} incomplete — radio-bringup will fail; see devices/${DEVICE}/boot/assets.md" >&2
+fi
+
+# raw-boot 的 modem/wifi 世界（E5 折债 ④⑦，2026-09-14）——radio payload
+# 段在本机的对价。三腿全硬门，缺任一 = 开机后 modem/wifi 永不生：
+#   固件树   wlanmdsp.mbn（wlan0 出生三件套之一）+ ath10k WCN3990 +
+#            qcom modem 全套，live 设备 /lib/firmware 逐字拉回（§7 不进 git）；
+#   EFS 种子 modem_fs1/fs2/fsc/fsg（出厂 NV 拷贝）——rmtfs 晚到 = modem
+#            拿不到 EFS crash-loop，种子必须随镜像；0600；
+#   qrtr 四件 pd-mapper/tqftpserv/rmtfs 守护 + qmi-ask 操作面，本机源码
+#            编译（rootfs/src/qcom + qmi-ask.c，配方=设备复验过的形态）。
+if [ "${BOOT_STYLE}" != "vendor-boot" ]; then
+  test -d "${ASSETS}/firmware/qcom" && test -d "${ASSETS}/firmware/ath10k" \
+    || { echo "FATAL: ${ASSETS}/firmware incomplete (want qcom/ + ath10k/) — pull from the live device (devices/${DEVICE}/boot/assets.md)" >&2; exit 1; }
+  test -e "${ASSETS}/firmware/ath10k/WCN3990/hw1.0/wlanmdsp.mbn" \
+    || { echo "FATAL: wlanmdsp.mbn missing — wlan0 will never be born" >&2; exit 1; }
+  mkdir -p "${TREE}/lib/firmware"
+  cp -R "${ASSETS}/firmware/." "${TREE}/lib/firmware/"
+  test -f "${ASSETS}/rmtfs/modem_fs1" \
+    || { echo "FATAL: ${ASSETS}/rmtfs/modem_fs1 missing — see devices/${DEVICE}/boot/assets.md" >&2; exit 1; }
+  mkdir -p "${TREE}/var/lib/rmtfs"
+  install -m 600 "${ASSETS}"/rmtfs/* "${TREE}/var/lib/rmtfs/"
+  # 编译形态铁律（设备上四件换装复验过，/tmp/qc-build.sh 即此配方）：
+  #   pd-mapper  无 -DANDROID（其 ANDROID 分支是死代码）、不编 lzma_decomp.c
+  #              （stub/lzma.h 是空壳，lzma_stub.c 供符号——.jsn 本不压缩）；
+  #   tqftpserv  无 HAVE_ZSTD（头文件自带 no-zstd 静态回退）；
+  #   rmtfs      带 -DANDROID（sysfs sharedmem 腿：/sys/class/rmtfs）；
+  #   qrtr 三 .c 直接当目标链接——macOS ar 静默丢 ELF 成员，绝不走 .a。
+  QSRC="${RECIPE}/src/qcom"
+  QOUT="${TMPDIR:-/tmp}/aginxos-qcom-build.$$"
+  mkdir -p "${QOUT}"
+  QCOMMON=(-target aarch64-linux-musl -static -O2 -I "${QSRC}/stub" -I "${QSRC}/qrtr/include")
+  for f in logging qmi qrtr; do
+    "${ZIG}" cc "${QCOMMON[@]}" -c "${QSRC}/qrtr/lib/$f.c" -o "${QOUT}/$f.o"
+  done
+  QOBJ=("${QOUT}/logging.o" "${QOUT}/qmi.o" "${QOUT}/qrtr.o")
+  "${ZIG}" cc "${QCOMMON[@]}" "${QSRC}/pd-mapper/pd-mapper.c" "${QSRC}/pd-mapper/assoc.c" \
+    "${QSRC}/pd-mapper/json.c" "${QSRC}/pd-mapper/servreg_loc.c" "${QSRC}/stub/lzma_stub.c" \
+    "${QOBJ[@]}" -o "${TREE}/usr/bin/pd-mapper"
+  "${ZIG}" cc "${QCOMMON[@]}" "${QSRC}/tqftpserv/tqftpserv.c" "${QSRC}/tqftpserv/translate.c" \
+    "${QOBJ[@]}" -o "${TREE}/usr/bin/tqftpserv"
+  "${ZIG}" cc "${QCOMMON[@]}" -DANDROID "${QSRC}/rmtfs/qmi_rmtfs.c" "${QSRC}/rmtfs/qmi_tlv.c" \
+    "${QSRC}/rmtfs/rmtfs.c" "${QSRC}/rmtfs/storage.c" "${QSRC}/rmtfs/sharedmem.c" \
+    "${QSRC}/rmtfs/rproc.c" "${QSRC}/rmtfs/util.c" "${QOBJ[@]}" -o "${TREE}/usr/bin/rmtfs"
+  "${ZIG}" cc "${QCOMMON[@]}" "${RECIPE}/src/qmi-ask.c" "${QOBJ[@]}" -o "${TREE}/usr/bin/qmi-ask"
+  rm -rf "${QOUT}"
+  echo "staged raw-boot modem/wifi world (firmware + EFS seed + qrtr daemons + qmi-ask)"
 fi
 
 # Recipe: etc (init.d/aginx/svc.d units/aginx conf/crontabs + manifest+sig),
@@ -647,7 +713,11 @@ while IFS= read -r -d '' f; do
     *) continue ;;
   esac
   "${STRIP_BIN}" --strip-all "${f}" && stripped=$((stripped + 1))
-done < <(find "${TREE}" -type f -print0)
+# lib/firmware 整树剪除（E5 折债补丁，2026-09-14）：.mbn 是 PIL 固件/
+# modem 配置的 ELF 皮——llvm-strip 对它们全部动刀（实测首烤：mcfg_sw
+# 几百档 md5 变脸、wlanmdsp/mba/ipa_fws 报段越界），外设引导只认原始
+# 字节，一个都不能 strip。.ko 是 ET_REL 本就跳过；EFS 种子不是 ELF。
+done < <(find "${TREE}" -path "${TREE}/lib/firmware" -prune -o -type f -print0)
 echo "strip gate: ${stripped} ELF binaries stripped"
 # rm first: mke2fs never truncates an existing output file, so a SIZE
 # change leaves stale bytes past the new fs end (a 2g image stayed 2 GiB
