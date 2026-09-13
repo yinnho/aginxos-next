@@ -1,0 +1,5 @@
+# enchilada 模块清单（D14：顺序即数据）。
+# 本机内核 6.11.0-sdm845 = pmOS 生产 config：UFS/ext4/DWC3/USB gadget 栈全
+# 内建（E3/E4a 收据），rootfs 侧无需从镜像 insmod 任何 .ko——本文件全注释
+# 即空集，build-rootfs.sh 的拷贝循环空转。
+# ath10k WCN3990（wifi，E5）若走模块再在此登记。

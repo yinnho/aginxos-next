@@ -28,6 +28,20 @@ test -f "${DEVDIR}/device.toml" \
 ASSETS="${ROOT}/.local/device/${DEVICE}"
 RAMDISK="${ASSETS}/vendor-ramdisk-root"
 TRAMP="${ASSETS}/trampoline"
+# E4b（2026-09-13，#335 enchilada 节点机）：boot_style 是烤线分流闸。
+#   vendor-boot = redfin 形：vendor ramdisk + system/(adbd) + 冻结
+#     trampoline + cnss/modem 世界（preload/fake-sm/qrtr/radio）。
+#   raw-boot    = enchilada 形：boot.img 直读 userdata ext4，无 vendor
+#     世界——上述段全部门掉（段内资产本机不存在，硬跑只会烤进垃圾）。
+# 读 device.toml 的既有字符串字段，schema 零变动（hwd deny_unknown_fields
+# 一代差铁律：加新键=在役老二进制硬退）。
+BOOT_STYLE="$(sed -n 's/^boot_style *= *"\([^"]*\)".*/\1/p' "${DEVDIR}/device.toml" | sed -n '1p')"
+[ -n "${BOOT_STYLE}" ] \
+  || { echo "FATAL: ${DEVDIR}/device.toml 缺 boot_style" >&2; exit 1; }
+# 冻结 trampoline 对只服务于 M22 换根更新流；device.toml 有 [update] 节
+# 才烤（enchilada 无此节：升级=重刷 userdata，aginxos-init 无对价）。
+HAS_UPDATE=0
+grep -qE '^\[update(\.|\])' "${DEVDIR}/device.toml" && HAS_UPDATE=1
 RECIPE="${ROOT}/rootfs"
 TARGET="${ROOT}/target/aarch64-unknown-linux-musl/release"
 TREE="${TREE:-/tmp/aginxos-n4-rootfs}"
@@ -40,7 +54,9 @@ SIZE="${SIZE:-2g}"
 # 在 etc 装配段组装+签名进树（全 opt：provision 默认什么都不装）。
 # 裸机=哑终端：显示/触摸/扫码/联网/ssh 在，装什么是用户的 opt-in。
 
-test -x "${RAMDISK}/system/bin/adbd" || { echo "missing ${RAMDISK} — see devices/${DEVICE}/boot/assets.md (run pack-vendor-boot.sh)" >&2; exit 1; }
+if [ "${BOOT_STYLE}" = "vendor-boot" ]; then
+  test -x "${RAMDISK}/system/bin/adbd" || { echo "missing ${RAMDISK} — see devices/${DEVICE}/boot/assets.md (run pack-vendor-boot.sh)" >&2; exit 1; }
+fi
 test -x "${RECIPE}/busybox" || { echo "missing ${RECIPE}/busybox recipe asset" >&2; exit 1; }
 MKE2FS="$(command -v mke2fs || true)"
 test -z "${MKE2FS}" && MKE2FS=/opt/homebrew/bin/mke2fs
@@ -52,10 +68,12 @@ test -x "${MKE2FS}" || { echo "mke2fs not found (android-platform-tools provides
 # pkg/sign wave) is rebuilt here instead; the trampoline stays frozen
 # deliberately (aginxos-init owns the userdata rootfs swap — swap the
 # swapper and the update flow has no rollback story).
-for b in aginxos-init aginxos-agent; do
-  test -x "${TRAMP}/${b}" \
-    || { echo "missing ${b} — see devices/${DEVICE}/boot/assets.md (frozen trampoline pair)" >&2; exit 1; }
-done
+if [ "${HAS_UPDATE}" = "1" ]; then
+  for b in aginxos-init aginxos-agent; do
+    test -x "${TRAMP}/${b}" \
+      || { echo "missing ${b} — see devices/${DEVICE}/boot/assets.md (frozen trampoline pair)" >&2; exit 1; }
+  done
+fi
 
 # L0（刀4）：voice/ocr 的 bionic 件与模型树不再烤镜像——aginx-asr/
 # tts/ocr 三树包随清单走（真源 .local/device/redfin/{voice,ocr}，由
@@ -123,6 +141,9 @@ mkdir -p "${TREE}"/var/lib/aginx/{skills,units,stamps,pkgfiles,done,secret,voice
 
 # Android pieces: /system (adbd + linker config + lib64) and the root-level
 # property/SELinux files adbd reads at startup.
+# raw-boot 无 vendor ramdisk 无 adbd——整段跳过（E4b 门；段内保持原缩进，
+# 让 redfin  diff 可读）。
+if [ "${BOOT_STYLE}" = "vendor-boot" ]; then
 cp -R "${RAMDISK}/system" "${TREE}/system"
 # 刀C system/ 死件考古（2026-09-12，L0 精简循环第3刀）：system/ 的活消费者
 # 有五个——init.d/adbd 的 `exec /system/bin/adbd`（树内唯一活引用）、
@@ -199,6 +220,7 @@ echo "==> system/ prune (刀C 死件+刀D toybox): bin $(ls "${TREE}/system/bin"
 for f in default.prop prop.default *_contexts; do
   cp "${RAMDISK}"/${f} "${TREE}/" 2>/dev/null || true
 done
+fi  # BOOT_STYLE=vendor-boot (system/ 段)
 
 # Kernel modules for the touch/display + battery chains (M3/M3c) — machine
 # data (D14): devices/<codename>/modules.txt holds the ordered list. The
@@ -207,11 +229,13 @@ done
 # burned), so the chains are loaded from the rootfs world by the device's
 # bringup scripts, in the order proven live. Same .ko files as the ramdisk
 # holds — copied from the local unpack (never committed, §7).
-MODULES="$(grep -Ev '^[[:space:]]*(#|$)' "${DEVDIR}/modules.txt")"
+if [ "${BOOT_STYLE}" = "vendor-boot" ]; then
+MODULES="$(grep -Ev '^[[:space:]]*(#|$)' "${DEVDIR}/modules.txt" || true)"
 mkdir -p "${TREE}/lib/modules"
 for m in ${MODULES}; do
   cp "${RAMDISK}/lib/modules/${m}.ko" "${TREE}/lib/modules/"
 done
+fi
 
 # DRM splash painter — the panel stays black without an explicit mode set
 # (the bootloader logo is cont-splash scanout, not KMS; connector sits at
@@ -227,6 +251,9 @@ test -x "${ZIG}" || { echo "zig not found (needed for splash2/binder-init)" >&2;
 mkdir -p "${TREE}/bin" "${TREE}/usr/bin"
 "${ZIG}" cc -target aarch64-linux-musl -static -O2 \
   -o "${TREE}/bin/splash" "${RECIPE}/src/splash2.c"
+# cnss/modem 世界四件（binder-init/qrtr-lookup/qmi-req/fake-sm）与 NDK
+# preload 两件同属 vendor-boot 门——raw-boot 机没有它们的消费者。
+if [ "${BOOT_STYLE}" = "vendor-boot" ]; then
 "${ZIG}" cc -target aarch64-linux-musl -static -O2 \
   -o "${TREE}/bin/binder-init" "${RECIPE}/src/binder-init.c"
 # QRTR observability (M3d): qrtr-lookup snapshots/watches the name service,
@@ -237,6 +264,7 @@ mkdir -p "${TREE}/bin" "${TREE}/usr/bin"
   -o "${TREE}/bin/qrtr-lookup" "${RECIPE}/src/qrtr-lookup.c"
 "${ZIG}" cc -target aarch64-linux-musl -static -O2 \
   -o "${TREE}/bin/qmi-req" "${RECIPE}/src/qmi-req.c"
+fi  # BOOT_STYLE=vendor-boot (binder/qrtr 件)
 # cam-shot (M19) — the IFE/RDI stills capture tool. Vendor sensor register
 # tables are decoded into the source; vendor module bins stay local and
 # gitignored. N4: the four brain-facing C tools take their D13 /usr/bin
@@ -249,11 +277,14 @@ mkdir -p "${TREE}/bin" "${TREE}/usr/bin"
 # data); the old-repo copies are frozen history.
 # M47⑤d: encoder = vendored libjpeg-turbo (NEON); the build command (and the
 # source lists it mirrors) lives in build-cam.sh — this script just runs it.
+# E4b 门：cam/ 目录在=相机线才构建（enchilada 节点机无相机，目录不存在）。
+if [ -d "${DEVDIR}/cam" ]; then
 "${ROOT}/scripts/build-cam.sh" "${DEVDIR}/cam"
 install -m 755 "${ROOT}/out/cam/aginx-cam-shot" "${TREE}/usr/bin/aginx-cam-shot"
 # raw2jpg (M19c) — RAW10 dump -> JPEG converter, companion to cam-shot's
 # native --jpeg (for converting already-captured dumps).
 install -m 755 "${ROOT}/out/cam/raw2jpg" "${TREE}/bin/raw2jpg"
+fi  # devices/${DEVICE}/cam 存在
 
 # Bionic LD_PRELOAD helpers (M3d). These load into vendor binaries, so they
 # must be NDK/bionic shared objects, not musl. trace_open.so mirrors file
@@ -261,6 +292,7 @@ install -m 755 "${ROOT}/out/cam/raw2jpg" "${TREE}/bin/raw2jpg"
 # our only window into cnss-daemon/pd-mapper, which log exclusively through
 # liblog and we run no logd. fake-props.so fakes the servicemanager
 # properties pm-service blocks on and logs every other property read.
+if [ "${BOOT_STYLE}" = "vendor-boot" ]; then
 NDK_CC="${HOME}/Library/Android/sdk/ndk/27.0.12077973/toolchains/llvm/prebuilt/darwin-x86_64/bin/aarch64-linux-android24-clang"
 test -x "${NDK_CC}" || { echo "NDK clang not found (needed for preload .so)" >&2; exit 1; }
 mkdir -p "${TREE}/lib"
@@ -273,6 +305,7 @@ echo "built preload helpers (trace_open.so, fake-props.so)"
 # object" before ever reaching their QMI work.
 "${ZIG}" cc -target aarch64-linux-musl -static -O2 \
   -o "${TREE}/bin/fake-sm" "${RECIPE}/src/fake-sm.c"
+fi  # BOOT_STYLE=vendor-boot (preload + fake-sm)
 # aginx-reboot (原 reboot2): raw reboot(LINUX_REBOOT_CMD_RESTART2) — toybox
 # reboot signals init (we run none) and adb reboot needs adbd's sys.powerctl
 # handling. With no args it plain-reboots; "bootloader" lands in fastboot
@@ -306,7 +339,7 @@ echo "built preload helpers (trace_open.so, fake-props.so)"
 # the host key under /root/.ssh.
 DROPBEAR="${ASSETS}/dropbear/bin"
 for b in dropbear dbclient dropbearkey; do
-  test -x "${DROPBEAR}/${b}" || { echo "missing ${b} — see devices/redfin/boot/assets.md" >&2; exit 1; }
+  test -x "${DROPBEAR}/${b}" || { echo "missing ${b} — see devices/${DEVICE}/boot/assets.md" >&2; exit 1; }
   cp "${DROPBEAR}/${b}" "${TREE}/bin/${b}"
   chmod 755 "${TREE}/bin/${b}"
 done
@@ -375,7 +408,9 @@ chmod 755 "${TREE}/usr/share/udhcpc/default.script"
 # copied in when present. The sealed first-gen repo's
 # scripts/build-radio-blobs.sh regenerates them.
 RADIO="${ASSETS}/radio"
-if [ -f "${RADIO}/libnl.so" ] && [ -x "${RADIO}/rmt_storage" ] \
+if [ "${BOOT_STYLE}" != "vendor-boot" ]; then
+  :  # raw-boot 无 cnss/modem 世界——radio payload 整段不适用（E4b）
+elif [ -f "${RADIO}/libnl.so" ] && [ -x "${RADIO}/rmt_storage" ] \
    && [ -f "${RADIO}/cdsp-cdsp-loader.ko" ] \
    && [ -f "${RADIO}/modem-npucc-loader.ko" ]; then
   mkdir -p "${TREE}/lib" "${TREE}/lib/modules"
@@ -392,12 +427,18 @@ fi
 # Recipe: etc (init.d/aginx/svc.d units/aginx conf/crontabs + manifest+sig),
 # usr/bin (bridge sh faces + .aginxmd sidecars), libexec/aginx
 # (net-watch/net-rejoin). All D13 knowledge lives here.
-mkdir -p "${TREE}/bin" "${TREE}/sbin" "${TREE}/aginxos" "${TREE}/usr/libexec/aginx" "${TREE}/var/bin"
+mkdir -p "${TREE}/bin" "${TREE}/sbin" "${TREE}/usr/libexec/aginx" "${TREE}/var/bin"
+if [ "${HAS_UPDATE}" = "1" ]; then mkdir -p "${TREE}/aginxos"; fi
 cp "${RECIPE}/busybox" "${TREE}/bin/busybox"
 cp -R "${RECIPE}/etc/." "${TREE}/etc/"
 # shadow is baked root-locked (* = inert until `passwd`); git carries no
 # file mode beyond the exec bit, so pin 0600 here — never world-readable
 chmod 600 "${TREE}/etc/shadow"
+# raw-boot 无 adbd（无 /system、无 ffs gadget）——摘掉它的 respawn 行，
+# 否则 busybox init 对一个不存在的脚本空转刷屏（E4b）。
+if [ "${BOOT_STYLE}" != "vendor-boot" ]; then
+  sed -i '' '/init\.d\/adbd/d' "${TREE}/etc/inittab"
+fi
 # 机型数据注入（D14）：bringup 脚本与 device.toml 都来自 devices/<codename>/。
 # bringup 内容 verbatim 搬运（211 行 mixer recipe 那种收据流不重排）；
 # device.toml 落 /etc/aginx/（hwd::load_or_exit 的读点——烤错档案=开机
@@ -484,7 +525,12 @@ echo "${STAMP}" > "${TREE}/etc/aginx-version"
 # 缺席静默轮询 /var/bin/aginx-term，装包即亮屏）。批③ (09-10): wizard
 # 出烤——装机流程是扫码/语音，wizard 无入口。
 install -m 755 "${TARGET}/aginx-pkg" "${TREE}/usr/bin/"
-install -m 755 "${TARGET}/aginx-svc" "${TARGET}/aginx-boot-ok" "${TREE}/usr/bin/"
+install -m 755 "${TARGET}/aginx-svc" "${TREE}/usr/bin/"
+# boot-ok 是 redfin ABL 的 GPT slot-retry 写手；raw-boot 不烤（未探针的
+# GPT 一个字节不写——rcS 同名门互保）。
+if [ "${BOOT_STYLE}" = "vendor-boot" ]; then
+  install -m 755 "${TARGET}/aginx-boot-ok" "${TREE}/usr/bin/"
+fi
 install -m 755 "${TARGET}/aginx-svcd" "${TREE}/usr/libexec/aginx/"
 # N5① 吸收件：updater/download 改由本仓重编（修了三死路径的活版本），
 # 落位与老资产同名同位。刀F：update 出镜像走包；download 留——pkg 的
@@ -514,7 +560,9 @@ ln -s /var/lib/aginx/pkgfiles/aginx-ocr/models/ocr "${TREE}/var/models/ocr"
 # pkgfiles 路径（老全量镜像的烤入路径优先级在其前，兼容在役机）。
 # Trampoline (M2/M22) — frozen first-gen pair (assets.md); aginxos-init
 # performs the userdata rootfs swap the update flow relies on.
-cp "${TRAMP}/aginxos-init" "${TRAMP}/aginxos-agent" "${TREE}/aginxos/"
+if [ "${HAS_UPDATE}" = "1" ]; then
+  cp "${TRAMP}/aginxos-init" "${TRAMP}/aginxos-agent" "${TREE}/aginxos/"
+fi
 
 # Exec bits: git may not carry them through cp for every recipe file, and a
 # non-executable init script or shim is invisible at boot. Sidecars (.aginxmd)

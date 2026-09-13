@@ -1,0 +1,62 @@
+#!/bin/sh
+# enchilada net bring-up (#335 E4b) — NCM 救援网是网络的全部（wifi 是 E5 的事）。
+#
+# 与 redfin 的 wifi 版完全不同形：本机无 wlan（ath10k 固件未上）、无
+# touch/battery/modem 兄弟裁决——相位1 的 LOCAL 裁决就是「usb0 起 +
+# udhcpd 在派」；救援网是带外通道，缺席不算坏靴（拔线挂机是正常态），
+# 所以 usb0 不上也写 done ok。
+#
+# gadget 与 usb0 的 IP 由 initramfs-init 配好并随 switch_root 幸存
+# （内核态，E4a 收据）；这里负责新根的一半：udhcpd 租约文件（rcS 把
+# /tmp 换成了 tmpfs，initramfs 的租约文件已随旧 /tmp 消失）+ udhcpd
+# 本体。udhcpd 自我守护化——本脚本是一次性 bring-up（inittab 不 respawn
+# 它），fork 风暴律（respawn+守护化）不适用。
+#
+# udhcpd 绝不派 router/dns（2026-09-13 E4a 实测：派了 = macOS 把 NCM
+# 当高优先级以太网，默认路由+DNS 灌进无上行的手机，Mac 整机断网）。
+# boot.state 行：
+#   usbnet ok|fail [detail]
+#   done ok              <- 无头节点：救援网缺席也 ok（与 redfin 的
+#                           touch/battery/modem 三键裁决不同，本机没有那些键）
+export PATH=/sbin:/bin:/usr/sbin:/usr/bin
+LOG=/var/net.log
+exec >>"$LOG" 2>&1
+echo "=== net bring-up (enchilada/ncm) $(date) ==="
+
+STATE=/run/boot.state
+say() { echo "$1 $2 $3" >>"$STATE"; echo "net: $1 $2 $3"; }
+
+n=0
+while [ ! -e /sys/class/net/usb0 ] && [ $n -lt 30 ]; do
+  sleep 2; n=$((n+1))
+done
+if [ ! -e /sys/class/net/usb0 ]; then
+  say usbnet fail "no netdev"
+  say done ok
+  echo "=== no usb0 (cable out?) — headless ok, rescue net absent $(date) ==="
+  exit 0
+fi
+
+# IP 确认（initramfs 已配；mdev/tmpfs 重启世界后确认一次，幂等）
+ifconfig usb0 10.9.8.1 netmask 255.255.255.0 up 2>/dev/null
+if ! ifconfig usb0 2>/dev/null | grep -q 10.9.8.1; then
+  say usbnet fail "no ip"
+  say done ok
+  exit 0
+fi
+
+cat > /etc/udhcpd.conf <<EOF
+interface usb0
+start 10.9.8.2
+end 10.9.8.2
+opt subnet 255.255.255.0
+lease_file /tmp/udhcpd.leases
+EOF
+touch /tmp/udhcpd.leases
+# 已在跑就不重拉（重启 net-bringup 的手工路径幂等）
+pidof udhcpd >/dev/null 2>&1 || udhcpd /etc/udhcpd.conf 2>/dev/null
+
+say usbnet ok "10.9.8.1"
+say done ok
+echo "=== usb0 up, udhcpd serving 10.9.8.2 (no router/dns) $(date) ==="
+exit 0

@@ -1,0 +1,71 @@
+# enchilada device profile — D14: 机型是数据，不是代码.
+# OnePlus 6 节点机（#335）：无头服务器形态，mainline 内核，无 vendor 世界。
+# 探针收据 2026-09-13（E4a seed v4, ssh 10.9.8.1 实读）：
+#   panel  = /sys/class/drm/card0-DSI-1 modes 首行 1080x2280
+#   input  = /proc/bus/input/devices: event0=pm8941_pwrkey event1=Alert slider
+#            event2=Hall event3=Volume keys（无触摸器件——mainline 未绑定）
+#   无     = /sys/class/power_supply 空（电池 psy 未上）、/dev/snd 仅 timer
+#            （声卡未起）、/dev/block/by-name 不存在
+# 标「未探针」的键是 schema 必填占位——hwd deny_unknown_fields 要全键；
+# 其消费者（voice/term/qr）在本机不装不跑，读到即哑。
+
+tz = "CST-8"
+
+[device]
+name = "enchilada"       # must equal the directory name (bake + update gate check it)
+model = "OnePlus 6"
+soc = "sdm845"           # grouping reference, drives nothing
+kernel = "6.11.0-sdm845" # 6.11.0-sdm845-g2fa43795f607, pmOS 生产 config
+boot_style = "raw-boot"  # boot.img + 直读 userdata ext4；无 vendor_boot/trampoline
+
+[panel]
+width = 1080             # probed 2026-09-13: card0-DSI-1 native
+height = 2280
+touch_max_x = 1080       # 未探针（触摸未绑定）——占位=panel 分辨率
+touch_max_y = 2280
+
+[input.ptt]              # voice/ptt.rs —— voice 在节点机不装；键值是 HID 标准码
+device = "/dev/input/event3"            # Volume keys (probed)
+volume_up_device = "/dev/input/event3"  # 同一器件（probed）
+key_volume_down = 114
+key_volume_up = 115
+key_power = 116          # registered, unused；电源键在 event0 (probed)
+
+[input.term]             # term/main.rs —— term 在节点机不装
+touch_device = ""        # 未探针：触摸器件不存在（mainline 未绑定）
+power_device = "/dev/input/event0"  # pm8941_pwrkey (probed)
+
+[audio]                  # voice/audio.rs —— 声卡未起（/dev/snd 仅 timer, probed）
+capture_pcm = ""         # 未探针：mainline 音频链是 E5+ 的事
+playback_pcm = ""
+rate = 48000
+channels = 1
+playback_channels = 2
+volume_min = 20
+
+[quirks]
+playback_dup_mono = false # redfin 的 QUIN_TDM 双声道律不适用于本机（其 device.toml 已注）
+eye_stream_args = []      # 无相机线（cam/ 不存在 = build-rootfs 不构建 cam-shot）
+qr_scan_args = []
+
+[affinity]
+cam_cores = [6, 7]       # sdm845: cpu0-3 little, cpu4-7 big (Kryo 385)
+ui_cores = [0, 1, 2, 3, 4, 5]
+big_cores = [4, 5, 6, 7]
+
+[camera]                 # 无相机线；schema 必填占位
+rear_sensor = "none"
+dark_gain = 16
+dark_dgain = 2
+
+[paths]
+power_supply = ""            # 未探针：/sys/class/power_supply 为空 (probed 2026-09-13)
+wlan = "wlan0"               # [v1] registered（ath10k WCN3990 是 E5 的事）
+drm_card = "/dev/dri/card0"  # [v1] registered (probed: card0 + renderD128)
+
+# [update]/[slots] 省略（hwd Option）：本机无 trampoline 换根更新流，
+# 升级=重刷 userdata；GPT slot attrs 未探针，aginx-boot-ok 由 rcS 机型门关掉。
+
+[adb]
+serial = "b0d9f7fe"          # adb 与 fastboot 同串号 (probed: androidboot.serialno)
+fastboot_serial = "b0d9f7fe"
