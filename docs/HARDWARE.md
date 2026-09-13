@@ -4085,3 +4085,66 @@ exp2.sh 的 `dmesg -C`（busybox 无此开关）。
 会话末设备态：L0 RAM 靴在役，wlan0 关联在网（192.168.3.95），
 母体三单元 ready，modem offline-persistent（mode 5），modem-up
 按需不变；EFS blank、真 NV 裁决仍挂起。
+
+## E5 折债收口（2026-09-14）——enchilada 烤线成形
+
+**① 四件套（pd-mapper/tqftpserv/rmtfs/qmi-ask）重编译上机复验**：
+编译形态矩阵定谳（/tmp/qc-build.sh 即配方，已折进 build-rootfs）——
+pd-mapper 无 -DANDROID（其 ANDROID 分支死代码）、不编 lzma_decomp.c
+（stub/lzma.h 空壳，lzma_stub.c 供符号，.jsn 本不压缩）；tqftpserv 无
+HAVE_ZSTD；rmtfs 带 -DANDROID（sysfs sharedmem 腿）；qrtr 三 .c 直接
+当目标链接（macOS ar 静默丢 ELF 成员）。四件换装 /var/bin →
+remoteproc3 stop→start 舞步 → wlan0 秒生 → split join → dhcp
+192.168.3.95 → ntpd ±11ms 全链 26s；/proc/PID/exe 证实在跑即新件；
+rmtfs 日见 mcfg_sw/mbn_sw.dig 真传输。
+
+**② 烤线折入（build-rootfs.sh raw-boot 段成形）**：modules 段
+raw-boot 分支（modules.txt 条目从 .local/device/enchilada/modules/
+硬拷贝，缺件即死）；firmware 树（ath10k+qcom 91.5M，wlanmdsp.mbn
+硬门）→ /lib/firmware；EFS 种子（modem_fs1/fs2/fsc/fsg 等 8 文件
+0600）→ /var/lib/rmtfs；qrtr 四件编译 → /usr/bin；wifi-join 以
+NETJOIN_DEFAULT_SPLIT 编译（argc==4 即 split——90+ CMD_CONNECT
+空呼吸的唯一活路成烤线默认；redfin 不带旗，显式第 5 参契约不动）。
+rcS 折入同步 modem-bringup 钩子（daemon 三件套先于 q6v5_mss 铁序
++remoteproc3 显式 start，6.11 mss 不自启）；net-bringup 加 wifi 相位
+（模块链幂等 insmod → 等 wlan0 → split join → udhcpc → httpget
+internet 判 → `ntpd -q -n -d` 校时——enchilada 上静默 -q 不动钟），
+词表与 redfin provision 对齐（wifi/dhcp/internet/time/done ok|fail）；
+modem-up 操作件改 /usr/bin/qmi-ask（休眠工具，不在 boot 路）。
+host 干跑烤机全绿：镜像 125M；树验电池——固件 113 文件逐字节
+cmp 全同、模块 18/18、四件+net-join aarch64 静态、svc.d=2、
+inittab adbd 行净（余两条死注释）、EFS 0600、版本戳
+`aginxos enchilada <sha> 2026-09-14 l0`。
+
+**③ 烤线事故一课：llvm-strip 咬固件**。首烤 strip 门对全树 ELF
+过 --strip-all，而 .mbn 是 PIL 固件/modem 配置的 ELF 皮——mcfg_sw
+几百档 md5 全变脸、"成功" strip；wlanmdsp/mba/ipa_fws 报
+program header 越界（4 实例=3 文件，wlanmdsp 两份拷贝）。外设引导
+只认原始字节。修复：strip 遍历剪除 ${TREE}/lib/firmware 整树
+（.ko 本就 ET_REL 跳过；EFS 非 ELF）。重烤 cmp 全同。铁律：**烤线
+strip 门与固件树互斥，永远 prune**。
+
+**④ GPT/devinfo 活体探针（全只读）**：devinfo 实体=GPT 槽位 117
+（attrs 0x1000000000000000），内核名 sde61（4096B，md5
+07c9eae7…），首 13 字节 magic `ANDROID-BOOT!`，稀疏布局
+（0x90: 01 00… / 0x998: 01,03）。**内核分区名=有效条目序数，
+≠GPT 槽位序**——内核 sde61 的 GPT 真名是 bluetooth_a（槽 61），
+按槽位序寻址块设备必错位。烧命计数=sde GPT attrs，AOSP 位法
+（bit48=successful、49-51=tries、52-55=priority）活体解码：
+cmdline slot_suffix=_a 在役；boot_a succ=1 tries=7 prio=3（E5
+救援 `fastboot set_active a` 残迹——**当前已标成功，不烧命**，
+且重刷 userdata 不动 sde GPT，标记跨刷机持久）；boot_b succ=0
+tries=5 prio=7（当年 7 命排水残迹）；a 槽全分区 succ=1
+（set_active 镜全槽）。ABL 对 prio 高但 succ=0 的 b 槽不选——
+OnePlus ABL 选槽序与教科书 AOSP 不全同，未深究。
+
+**⑤ 剩债**：mark-boot-successful（userspace GPT attrs 补写器，
+形=镜像 fastboot set_active：active 槽全分区 succ=1+tries=7，
+primary+backup 双写）未实现未上机——当前槽已标成功，ABL 不排水，
+不阻塞在役；ABL 一旦重新排水（未知触发），救援配方
+`fastboot set_active a` 兜底在册（E5 已证）。devinfo 与排水的
+关联未证实（不写未证实的分区）。真 NV/EFS 裁决仍挂起。
+
+会话末设备态：L0 靴在役（旧烤线），wifi 192.168.3.95 在网，
+四件套新件在 /var/bin 在役，slot a 已标成功不烧命；新烤线镜像
+out/rootfs.img（125M）host 侧就绪，上机重刷未做（须用户点头）。
