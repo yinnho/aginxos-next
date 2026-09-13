@@ -1,0 +1,39 @@
+#!/bin/sh
+# enchilada modem (MPSS/QRTR) bring-up — 2026-09-13, MPSS 收口线。
+# 模块平铺 /lib/modules（无 modules.dep），按依赖序手 insmod。
+# 铁序：daemon 三件套必须先于 q6v5_mss——mss 探测即自举 modem，
+# rmtfs 晚到 = modem 拿不到 EFS（crash-loop 根因，HARDWARE 2026-09-13）；
+# pd-mapper 晚到 = 子系统看门狗 65s 收命。EFS=出厂 NV 种子（/var/lib/rmtfs，
+# LOS 文件拷贝，build-rootfs 从 .local/device/enchilada/rmtfs 烤入）。
+# 2026-09-14 折债：脚本与设备在役版逐行对齐（全模块链 + qrtr-smd 连字符 +
+# 尾段 remoteproc3 显式 start）；路径 /var/bin → /usr/bin（烤线世界）。
+# 四件守护同款重编译已上机复验（remoteproc3 stop→start→wlan0→split join
+# 全链 26s，HARDWARE E5 折债段）。
+M=/lib/modules
+for m in qcom_glink_smem qcom_common qcom_pil_info qcom_sysmon qcom_q6v5 reset-qcom-pdc qrtr qrtr-smd; do
+  insmod $M/$m.ko 2>/dev/null
+done
+mkdir -p /var/lib/rmtfs
+if [ -x /usr/bin/pd-mapper ]; then
+  nohup /usr/bin/pd-mapper >>/var/pd-mapper.log 2>&1 &
+fi
+if [ -x /usr/bin/tqftpserv ]; then
+  nohup /usr/bin/tqftpserv >>/var/tqftpserv.log 2>&1 &
+fi
+if [ -x /usr/bin/rmtfs ]; then
+  nohup /usr/bin/rmtfs -o /var/lib/rmtfs -v >>/var/rmtfs.log 2>&1 &
+fi
+sleep 1
+# PAS（ADSP/CDSP/SLPI）与 MSS（modem）——装载即自举，此时服务栈已就位。
+insmod $M/qcom_q6v5_pas.ko 2>/dev/null
+insmod $M/qcom_q6v5_mss.ko 2>/dev/null
+echo "modem-bringup: qrtr stack + daemons + remoteprocs done" > /dev/kmsg
+# 6.11 mss does NOT auto-start on probe (PAS does) — explicit start required.
+n=0
+while [ $n -lt 20 ] && [ ! -e /sys/class/remoteproc/remoteproc3/state ]; do
+  sleep 1
+  n=$((n+1))
+done
+if [ -e /sys/class/remoteproc/remoteproc3/state ]; then
+  echo start > /sys/class/remoteproc/remoteproc3/state
+fi

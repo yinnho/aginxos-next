@@ -1,0 +1,50 @@
+cc_library {
+    name: "libqrtr",
+    vendor: true,
+    srcs: [
+        "lib/logging.c",
+        "lib/qmi.c",
+        "lib/qrtr.c",
+    ],
+    cflags: [
+        "-Wno-error",
+        "-fPIC",
+    ],
+    export_include_dirs: [
+        "include",
+        "lib",
+    ],
+    local_include_dirs: [
+        "include",
+        "src",
+    ],
+}
+
+cc_binary {
+    name: "qrtr-cfg",
+    vendor: true,
+    srcs: [
+        "lib/logging.c",
+        "src/addr.c",
+        "src/cfg.c",
+    ],
+    cflags: ["-Wno-error"],
+    local_include_dirs: [
+        "include",
+        "lib",
+    ],
+}
+
+cc_binary {
+    name: "qrtr-lookup",
+    vendor: true,
+    srcs: [
+        "lib/logging.c",
+        "src/lookup.c",
+    ],
+    cflags: ["-Wno-error"],
+    local_include_dirs: [
+        "include",
+        "lib",
+    ],
+}

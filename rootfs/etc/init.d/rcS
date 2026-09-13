@@ -17,6 +17,13 @@ mount -t tmpfs tmpfs /tmp 2>/dev/null
 /bin/busybox --install -s /bin 2>/dev/null
 mdev -s 2>/dev/null
 
+# enchilada modem bring-up (E5 折债) — synchronous, exactly the on-device
+# tested script: qrtr stack + daemon trio (pd-mapper/tqftpserv/rmtfs) BEFORE
+# q6v5_mss (rmtfs late = EFS homeless crash-loop; pd-mapper late = 65s
+# watchdog), then remoteproc3 explicit start (6.11 mss doesn't auto-start).
+# wlan0 is born here; net-bringup's wifi phase only waits and joins.
+[ -x /etc/init.d/modem-bringup ] && /etc/init.d/modem-bringup
+
 # M22: restore state captured before a rootfs swap (no-op on normal
 # boots; must run before chown and before any service needs /home,
 # /etc/wifi.conf or /var).
@@ -188,9 +195,16 @@ fi
 # through to slot b's stock bootloader, which would format our userdata).
 # Wait for boot.state's final verdict (net-bringup writes it), then flag
 # the active slot successful in every LUN's GPT.
-# E4b 机型门：attr 布局是 redfin ABL r3-0.6 的实测结论；enchilada 的
-# OP6 ABL 未探针，GPT 一个字节不写（该机默认引导也不靠 tries 排水——
-# E4a 多靴实测无回滚）。
+# E4b 机型门：attr 布局是 redfin ABL r3-0.6 的实测结论。enchilada 的
+# OP6 A/B 同样在排水——E5 实测未标记的每靴烧一命、7 命烧尽判死回退
+# slot b（2026-09-14）。烧命计数在 sde GPT attrs（AOSP 位法：bit48=
+# successful、49-51=tries、52-55=priority，E5 折债段活体解码收据：boot_a
+# succ=1 tries=7 在役不烧、boot_b succ=0 tries=5 是当年排水残迹）。不写
+# GPT 不是因为「无点可写」，而是补写器未实现未上机——E5 救援配方
+# `fastboot set_active a`（成功位+满 tries 灌回全 slot 分区）兜底在册；
+# devinfo 分区（GPT 槽位 117，内核名 sde61，4KB，ANDROID-BOOT! magic）
+# 与排水的关联未证实，mark-boot-successful 未实现——债务显式在册
+#（#346 收尾段）。切记：内核分区名是有效条目序数，≠GPT 槽位序。
 if grep -q '^name = "redfin"' /etc/aginx/device.toml 2>/dev/null; then
 ( n=0
   while [ $n -lt 150 ]; do

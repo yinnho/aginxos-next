@@ -1,10 +1,11 @@
 #!/bin/sh
-# enchilada net bring-up (#335 E4b) — NCM 救援网是网络的全部（wifi 是 E5 的事）。
+# enchilada net bring-up — NCM 救援网（E4b）+ wifi 相位（E5 折债，2026-09-14）。
 #
-# 与 redfin 的 wifi 版完全不同形：本机无 wlan（ath10k 固件未上）、无
-# touch/battery/modem 兄弟裁决——相位1 的 LOCAL 裁决就是「usb0 起 +
-# udhcpd 在派」；救援网是带外通道，缺席不算坏靴（拔线挂机是正常态），
-# 所以 usb0 不上也写 done ok。
+# 与 redfin 的 wifi 版完全不同形：本机是 mainline 6.11 + ath10k WCN3990，
+# CMD_CONNECT 的 cfg80211 内建 SME 静默死——split auth/assoc（E5 90+ 失败的
+# 唯一活路）是烤线默认（aginx-net-join 以 NETJOIN_DEFAULT_SPLIT 编译，
+# argc==4 即 split）。wlan0 出生三件套（wlanmdsp.mbn + pd-mapper 启动序 +
+# remoteproc3 显式 start）在 modem-bringup 里，本脚本只等结果。
 #
 # gadget 与 usb0 的 IP 由 initramfs-init 配好并随 switch_root 幸存
 # （内核态，E4a 收据）；这里负责新根的一半：udhcpd 租约文件（rcS 把
@@ -15,48 +16,115 @@
 # udhcpd 绝不派 router/dns（2026-09-13 E4a 实测：派了 = macOS 把 NCM
 # 当高优先级以太网，默认路由+DNS 灌进无上行的手机，Mac 整机断网）。
 # boot.state 行：
+#   wifi ok|fail [detail]
+#   dhcp ok|fail
+#   internet ok|fail ...     <- provision 等这条（同 redfin 词表）
+#   time ok|fail             <- ntpd -q -n -d：enchilada 上静默 -q 不动钟（E5）
 #   usbnet ok|fail [detail]
-#   done ok              <- 无头节点：救援网缺席也 ok（与 redfin 的
-#                           touch/battery/modem 三键裁决不同，本机没有那些键）
+#   done ok                  <- 无头节点：网络缺席不判死靴（救援网/wifi
+#                               都不是生死线）
 export PATH=/sbin:/bin:/usr/sbin:/usr/bin
 LOG=/var/net.log
 exec >>"$LOG" 2>&1
-echo "=== net bring-up (enchilada/ncm) $(date) ==="
+echo "=== net bring-up (enchilada ncm+wifi) $(date) ==="
 
 STATE=/run/boot.state
 say() { echo "$1 $2 $3" >>"$STATE"; echo "net: $1 $2 $3"; }
 
+# --- wifi 相位（E5 折债）------------------------------------------------
+# ath10k 链按依赖序 insmod（幂等；wifi 链序与 modem 链无交叠）。
+M=/lib/modules
+for m in rfkill cfg80211 libarc4 mac80211 ath ath10k_core ath10k_snoc; do
+  insmod $M/$m.ko 2>/dev/null
+done
+if [ ! -f /etc/wifi.conf ]; then
+  say wifi fail "no /etc/wifi.conf"
+else
+  S=$(sed -n 's/^ssid=//p' /etc/wifi.conf)
+  P=$(sed -n 's/^psk=//p' /etc/wifi.conf)
+  if [ -z "$S" ] || [ -z "$P" ]; then
+    say wifi fail "wifi.conf incomplete"
+  else
+    # 等 wlan0（modem-bringup 的 remoteproc3 start 后典型数秒内出现）
+    n=0
+    while [ ! -e /sys/class/net/wlan0 ] && [ $n -lt 45 ]; do
+      sleep 2; n=$((n+1))
+    done
+    if [ ! -e /sys/class/net/wlan0 ]; then
+      say wifi fail "no netdev"
+    else
+      ip link set wlan0 up
+      ip addr flush dev wlan0
+      say wifi run
+      # psk 经 sed 管道从 wifi.conf 取值，只进 argv——永不入日志
+      /usr/bin/aginx-net-join wlan0 "$S" "$P" >/var/net-join.log 2>&1
+      rc=$?
+      if [ $rc -eq 0 ]; then
+        say wifi ok "$S"
+        udhcpc -i wlan0 -n -q -t 10 -T 3 >/tmp/udhcpc-wlan.log 2>&1
+        IP=$(ip addr show wlan0 2>/dev/null | sed -n 's/.*inet \([0-9.]*\).*/\1/p' | head -1)
+        if [ -z "$IP" ]; then
+          say dhcp fail "udhcpc"
+        else
+          say dhcp ok "$IP"
+          say internet run
+          rm -f /tmp/baidu.html
+          if HTTP=$(/bin/httpget http://www.baidu.com/ /tmp/baidu.html 2>&1); then
+            set -- $HTTP          # "HTTP <code> <n> bytes"
+            BYTES=$3
+            say internet ok "www.baidu.com ${BYTES}B"
+            # 校时：enchilada 实测形式（-d 必带——静默 -q 不动钟，E5 2026-09-14）
+            say time run
+            if ntpd -q -n -d -p ntp.aliyun.com >/dev/null 2>&1; then
+              say time ok "$(date +%Y-%m-%d)"
+              echo "clock synced: $(date)"
+            else
+              say time fail "ntpd"
+            fi
+            echo "=== net up: $IP via $S $(date) ==="
+          else
+            say internet fail "$HTTP"
+            echo "=== internet check failed: $HTTP $(date) ==="
+          fi
+        fi
+      else
+        say wifi fail "join rc=$rc"
+        tail -5 /var/net-join.log
+      fi
+    fi
+  fi
+fi
+
+# --- usbnet 相位（E4b NCM 救援网，原逻辑原样）---------------------------
+USB_OK=0
 n=0
-while [ ! -e /sys/class/net/usb0 ] && [ $n -lt 30 ]; do
+while [ ! -e /sys/class/net/usb0 ] && [ $n -lt 15 ]; do
   sleep 2; n=$((n+1))
 done
 if [ ! -e /sys/class/net/usb0 ]; then
   say usbnet fail "no netdev"
-  say done ok
   echo "=== no usb0 (cable out?) — headless ok, rescue net absent $(date) ==="
-  exit 0
-fi
-
-# IP 确认（initramfs 已配；mdev/tmpfs 重启世界后确认一次，幂等）
-ifconfig usb0 10.9.8.1 netmask 255.255.255.0 up 2>/dev/null
-if ! ifconfig usb0 2>/dev/null | grep -q 10.9.8.1; then
-  say usbnet fail "no ip"
-  say done ok
-  exit 0
-fi
-
-cat > /etc/udhcpd.conf <<EOF
+else
+  # IP 确认（initramfs 已配；mdev/tmpfs 重启世界后确认一次，幂等）
+  ifconfig usb0 10.9.8.1 netmask 255.255.255.0 up 2>/dev/null
+  if ifconfig usb0 2>/dev/null | grep -q 10.9.8.1; then
+    cat > /etc/udhcpd.conf <<EOF
 interface usb0
 start 10.9.8.2
 end 10.9.8.2
 opt subnet 255.255.255.0
 lease_file /tmp/udhcpd.leases
 EOF
-touch /tmp/udhcpd.leases
-# 已在跑就不重拉（重启 net-bringup 的手工路径幂等）
-pidof udhcpd >/dev/null 2>&1 || udhcpd /etc/udhcpd.conf 2>/dev/null
+    touch /tmp/udhcpd.leases
+    # 已在跑就不重拉（重启 net-bringup 的手工路径幂等）
+    pidof udhcpd >/dev/null 2>&1 || udhcpd /etc/udhcpd.conf 2>/dev/null
+    say usbnet ok "10.9.8.1"
+    echo "=== usb0 up, udhcpd serving 10.9.8.2 (no router/dns) $(date) ==="
+    USB_OK=1
+  else
+    say usbnet fail "no ip"
+  fi
+fi
 
-say usbnet ok "10.9.8.1"
 say done ok
-echo "=== usb0 up, udhcpd serving 10.9.8.2 (no router/dns) $(date) ==="
 exit 0
