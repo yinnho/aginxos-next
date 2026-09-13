@@ -3714,3 +3714,15 @@ wifi.conf（华为，自 state-20260913.tar.gz 回填）+ 一次性 ssh 公钥 �
 boot 2：done ok、wlan ok、192.168.3.93、panel-off 再落 @36.2s →
 **ssh 公钥往返通**。面板上电到灭 ~36s（bootloader logo 段不可删，
 此前已立）。
+
+## 2026-09-13 — redfin-v0.1.1 发布（panel-off 版）
+
+`DEVICE=redfin ./scripts/dist.sh 0.1.1`：dist/aginxos-redfin-0.1.1.zip
+（70.5MB；rootfs.img 2.0G sparse + vendor_boot.img 34.1M +
+vendor_boot.stock.img 96M + flash.sh/SKILL.md/manifest.json/SHA256SUMS）。
+payload 即上节 fresh-boot 验证的同两份镜像（rootfs.img 15:49 bake、
+vendor_boot-test.img 15:56 pack，HOLD=1 USBADB=1 ROOTFS=1），
+包内自测由该次刷机 receipts 顶替（同 tree 同比特）。
+`gh release create redfin-v0.1.1` 已发布：
+https://github.com/yinnho/aginxos-next/releases/tag/redfin-v0.1.1
+（前版 redfin-v0.1.0 同日 05:59Z）。
