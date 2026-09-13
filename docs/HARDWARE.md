@@ -3571,3 +3571,33 @@ gadget 栈/UFS/ext4/DWC3 全内建）。7.1-rc1 弃用（pmOS 不用、无人验
 
 中毒 ABL 协议：`fastboot boot` 快退后先 `fastboot reboot bootloader`
 清态再试（有时要两次）。手动入口：长按电源 ~10s 强关 → 电源+音量下。
+
+---
+
+## 2026-09-13 — redfin 电量计真伪判 + s2idle 整夜全中止（#334 尾款）
+
+**背景**：用户报告隔夜电量没怎么变（capacity 仍 100%），且确认整夜
+未插电。对账查实。
+
+**负载台阶实验（判读数死活）**：4×dd 满速 CPU，2s 采样——空载
+~-80mA/3.84V，加载瞬间 ~-880mA/3.75V，杀负载后回落。
+**ΔV/ΔI ≈ 0.11Ω = 正常电池内阻** → `current_now`/`voltage_now`
+是活数、物理自洽；`capacity`/`ssoc`/`voltage_ocv`(4.42V) 是
+**开机后冻结的死数**（Android 有 health HAL 周期戳，L0 无人驱动）。
+
+**真实状态对账（全部咬合）**：`ttf_stats` 剩 2680mAh/4187mAh ≈ 64%；
+开机 18.5h 无充电，平均 ~80–157mA → 掉 ~1.5Ah ≈ 37%（100→63%，
+与 ttf 吻合）；电压 3.86→3.84V（锂电中段平台，肉眼不可见）。
+**「隔夜没掉电」是 gauge 假象，真实掉 ~1/4。**
+
+**新真源纪律**：redfin 电量判定 = `voltage_now` + `ttf_stats`，
+`capacity`/`ssoc_details`/`voltage_ocv` 不可信（开机冻结）。
+
+**实测醒着功耗修正**：屏灭待机醒着 ≈ **80mA/0.31W**（此前 1.47W
+基线是当时高活动状态，不代表待机）→ 一直醒着 ≈ 2 天续航。
+
+**s2idle 整夜 0 次入睡**：23:36–03:12 每 11 分钟尝试，全部 0s 被
+wakeup 竞态打回 EBUSY（relay TCP 数秒一跳）。**生产档实际未生效**，
+设备整夜醒着。修法方向（立案未动）：入睡前网络静默窗（停 relay 单元
++wlan down → freeze → RTC 醒 → net-watch 重连），睡着本来就不收
+入站，功能零损失。SoC 卡死修法（定时戳 qgauge）另案。
