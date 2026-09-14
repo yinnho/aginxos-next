@@ -4686,3 +4686,55 @@ rmnet_ipa0 UP（易失，重启即清）；SIM NO_ATR 待人手插拔；/tmp/qmi
   UP 零流量）；/tmp 新增 d0.a/d0.b（down/up dmesg 对）、
   mm-port-qmi.c、dralpine-data-test.sh；/usr/bin/qmicli 临时污染
   待清。
+
+## 2026-09-15 下午 — #353 计划 E 全执行（E1–E4）+ 分叉 A 哈希判死（enchilada）
+
+承上午条。计划 E（用户批「开始」）四步全执行；随后核实分叉 A
+前提，**前提塌方**。
+
+- **E1 rmnet.ko 上机**：86quan 树产物
+  `drivers/net/ethernet/qualcomm/rmnet/rmnet.ko`（255200 字节，
+  md5 17a85003a7bf3027deb04c52119eb726，Mac/86quan/设备三方一致）
+  scp 至 /tmp 后 insmod **成功**——CONFIG_MODVERSIONS 未开，同树
+  产物 vermagic（6.11.0-sdm845-g2fa43795f607 SMP preempt
+  mod_unload aarch64）精确匹配零依赖直载。lsmod rmnet Live。
+- **E2 rmnet0 建链**：`/tmp/rmnet-add rmnet_ipa0 rmnet0 1`
+  （zig cc musl 静态，legacy 仓 rmnet-add.c 复用）输出
+  `created rmnet0 mux 1 over rmnet_ipa0`；rmnet0@rmnet_ipa0
+  （mtu 1496，ifindex 519）——**设备史上首条 rmnet mux 链**。
+- **E3 真 BIND_MUX(0x00A2) 探针**：qmi-ask wdsmux，TLV
+  0x10={ep_type=4 EMBEDDED, iface=1}+0x11={mux_id=1}（形状与
+  MM/libqmi 定谳逐字节一致；先前的「iface=4」读法系 PCIE 档魔数
+  误记）。**rmnet0 在位条件下重发仍 err3 INTERNAL**——AP 侧
+  mux 面缺席确为真缺口、但补上后不是那堵墙。
+- **E4 全链 START**：`wdschain 3 ims`（bind-mux→WDS BIND
+  0x00AF primary→IP family 0x004D ipv4→START 0x0020 apn=ims）：
+  err3 → SUCCESS → SUCCESS → **err70 handle 0**。E 计划判读：
+  请求形状非变量（再证），AP 侧就绪（再证），墙仍在 modem 拒绝。
+- **分叉 A 哈希判死（本段最重要）**：核实 pmOS 固件源
+  （gitlab sdm845-mainline/firmware-oneplus-sdm845 @3e31a0c3，
+  pkgver 18；pmOS 包只装 modem.mbn+modemr.jsn+modemuw.jsn，
+  **不带 modem_pr/mcfg**）——三件与本地在役副本
+  `.local/device/enchilada/firmware/qcom/sdm845/oneplus6/`
+  **sha256 逐字节相同**：
+  modem.mbn d7387fe1…84b5c（60346576 字节 Hexagon ELF）、
+  modemr.jsn 44ebb965…、modemuw.jsn e75d94b6…。
+  ⇒ **我们已在跑 pmOS 同款 modem 固件**；上午条「MPSS.AT=
+  CAF 档、pmOS 用户为 OOS/JA 档」的推测**推翻**——
+  DMS GET_REVISION 报的 MPSS.AT.4.0.c2.15 就是 pmOS 发行件
+  本身（LineageOS 与 pmOS 同源自 stock 提取）。换固件无件可换，
+  分叉 A 死。下载通道注记：GitLab `/-/raw/` 有 Cloudflare 闸，
+  `/api/v4/.../repository/files/<path>/raw` 端点直出可用。
+- **新嫌疑收窄**：pmOS 数据通 vs 我们不通，同 mainline 内核、
+  同 modem 固件件 ⇒ 差异集收敛到 {AP 侧 QMI 时序/形状（MM 全
+  序 vs qmi-ask 手搓）、EFS 状态}。**EFS 是唯一未对齐大项**：
+  pmOS 装机保留原厂 EFS（modemst1/2 含真 NV+mcfg selected），
+  我们 blank EFS（注册不依赖已证，数据呼叫未证）。mcfg 未选/
+  缺失可产生「注册活、数据呼叫 InvalidOperation」形状。**待
+  裁决探针**（动 EFS 领域，须用户点头）：PDC GET_CONFIG_INFO/
+  LIST 只读查明 modem 侧配置状态；再议 PDC 配置灌入。
+- **设备终态**：enchilada .104；modem ONLINE、LTE home 46011
+  PS ATTACHED、无呼叫；/tmp 性质新件（重启即清）：rmnet.ko
+  （已载）、rmnet0@rmnet_ipa0 mux1（在位）、qmi-ask/rmnet-add、
+  d0.a/d0.b、mm-port-qmi.c、dralpine-data-test.sh；EFS/NV 未动；
+  /usr/bin/qmicli 临时污染待清。
