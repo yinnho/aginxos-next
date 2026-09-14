@@ -114,6 +114,12 @@ static struct query QUERIES[] = {
 	 * modem reboot) undoes it; no NV/EFS writes, unlike SET_SSP. */
 	{ "wdsmux",  1,  0x00A2, "WDS BIND_MUX_DATA_PORT (QMAP mux bind)", 0x10, {4, 0, 0, 0, 1, 0, 0, 0}, 8,
 	  0x11, {1}, 1 },
+	/* Legacy bind per the redfin M7 receipt (devices/redfin/bringup/
+	 * cell-bringup:69): 0x2F sent BARE (no TLVs) when the WDS instance
+	 * answers err3 on the 0xA2 mux bind — bearer lands directly on
+	 * rmnet_ipa0.  Redfin needed the netmgrd shim's DPM port open
+	 * first or this bind was refused all boot. */
+	{ "wdsport", 1,  0x002F, "WDS BIND_DATA_PORT (legacy, bare)" },
 	{ "wdsbind", 1,  0x00AF, "WDS BIND_SUBSCRIPTION primary", 0x01, {1, 0, 0, 0}, 4 },
 	{ "wdsipfam", 1, 0x004D, "WDS SET_IP_FAMILY ipv4", 0x01, {4}, 1 },
 	/* START_NETWORK terminal form: apn=ims, ipv4, 3gpp profile 2,
@@ -126,6 +132,7 @@ static struct query QUERIES[] = {
 	  0x32, {0xFF}, 1,
 	  0x35, {1}, 1 },
 	{ "wdsstat", 1,  0x0022, "WDS GET_PACKET_SERVICE_STATUS" },
+	{ "wdsget",  1,  0x002D, "WDS GET_CURRENT_SETTINGS (bare)" },
 	/* Profile numbering is device-config dependent: this unit's 3GPP
 	 * table holds only idx 0/100/101 (ctnet/ctwap), so wdschain takes
 	 * pN to override 0x31, or "ims" to start by APN with no profile. */
@@ -194,6 +201,28 @@ static struct query QUERIES[] = {
 	  0x11, {2, 0, 0, 0}, 4,
 	  0x12, {0, 0, 0, 0}, 4,
 	  0x13, {0, 0, 0, 0}, 4 },
+	/* Capability self-report: which message ids each service supports.
+	 * If the port behind svc 0x1A answers 0x001E but its list omits
+	 * 0x0020/0x0021, the "WDA" we found is a stub and every GET/SET
+	 * rejection (48/70) is id-based, not state-based.  List TLV is
+	 * 0x02, payload = array of u8 msg ids (raw hexdump readable). */
+	{ "wdsmsgs",  1,    0x001E, "WDS GET_SUPPORTED_MESSAGES" },
+	{ "wdamsgs",  0x1A, 0x001E, "WDA GET_SUPPORTED_MESSAGES" },
+	{ "imsmsgs",  0x12, 0x001E, "IMS GET_SUPPORTED_MESSAGES" },
+	{ "imsamsgs", 0x21, 0x001E, "IMSA GET_SUPPORTED_MESSAGES" },
+	/* DPM (svc 0x2f): redfin's netmgrd shim does DPM port open before
+	 * WDS bind is accepted; these probes let the modem enumerate its
+	 * own DPM message ids before we craft OPEN_PORT by hand. */
+	{ "dpmmsgs", 0x2F, 0x001E, "DPM GET_SUPPORTED_MESSAGES" },
+	/* DPM OPEN_PORT (0x0020) per libqmi data/qmi-service-dpm.json: TLV
+	 * 0x10 = array of control ports {string name, u32 ep_type, u32
+	 * iface}.  One embedded (4) control port named after the IPA
+	 * netdev; tlv2 alone carries it (tlv1 stays empty).  dpmopen =
+	 * iface 0, dpmopen1 = iface 1 (redfin's mux bind used iface 1). */
+	{ "dpmopen",  0x2F, 0x0020, "DPM OPEN_PORT ctl rmnet_ipa0 emb iface0", 0, {0}, 0,
+	  0x10, {1, 10, 'r','m','n','e','t','_','i','p','a','0', 4,0,0,0, 0,0,0,0}, 20 },
+	{ "dpmopen1", 0x2F, 0x0020, "DPM OPEN_PORT ctl rmnet_ipa0 emb iface1", 0, {0}, 0,
+	  0x10, {1, 10, 'r','m','n','e','t','_','i','p','a','0', 4,0,0,0, 1,0,0,0}, 20 },
 };
 
 static void put16(uint8_t *p, uint16_t v) { memcpy(p, &v, 2); }
@@ -527,6 +556,64 @@ static int lookup_service(int sock, uint32_t svc, uint32_t ins,
  * only (lookup, no message sent) — presence/absence of the IPA host
  * (0x31 ins 1) and IPA modem (0x31 ins 2) instances tells us whether
  * the kernel↔modem IPA handshake can even run. */
+/* enumsvc: dump EVERY server registration visible on qrtr — one
+ * service (hex arg) or all services (no arg).  Unlike svcls this
+ * prints every matching NEW_SERVER, so multi-instance services show
+ * all their ports: the WDS err-70 hunt needs to know whether the
+ * first-announced server (what lookup_service's wildcard grabs) is a
+ * different instance from the one cell-bringup targets (svc 1 ins 1).
+ */
+static void enumsvc(uint32_t svc)
+{
+	uint8_t buf[512];
+	struct qrtr_packet pkt;
+	struct sockaddr_qrtr sq;
+	uint32_t n, p;
+	int len, timeouts = 0, hits = 0;
+	int sock = qrtr_open(0);
+
+	if (sock < 0) {
+		printf("  qrtr_open failed\n");
+		return;
+	}
+	if (qrtr_new_lookup(sock, svc, 0, 0) < 0) {
+		printf("  lookup send failed\n");
+		close(sock);
+		return;
+	}
+	for (;;) {
+		len = qrtr_recvfrom(sock, buf, sizeof(buf), &n, &p);
+		if (len < 0) {
+			if (++timeouts >= 3)
+				break;
+			continue;
+		}
+		timeouts = 0;
+		if (p != QRTR_PORT_CTRL)
+			continue;
+		memset(&sq, 0, sizeof(sq));
+		sq.sq_family = AF_QIPCRTR;
+		sq.sq_node = n;
+		sq.sq_port = p;
+		memset(&pkt, 0, sizeof(pkt));
+		if (qrtr_decode(&pkt, buf, len, &sq) != 0)
+			continue;
+		if (pkt.type != QRTR_TYPE_NEW_SERVER)
+			continue;
+		if (!pkt.service && !pkt.instance && !pkt.node && !pkt.port)
+			break;
+		printf("  svc %-4u (0x%02x) ins %-4u (0x%x) ver %u "
+		       "-> node %u port %u\n",
+		       pkt.service, pkt.service, pkt.instance,
+		       pkt.instance, pkt.version, pkt.node, pkt.port);
+		hits++;
+	}
+	qrtr_remove_lookup(sock, svc, 0, 0);
+	if (!hits)
+		printf("  (no servers%s)\n", svc ? "" : " at all");
+	close(sock);
+}
+
 static void svcls(void)
 {
 	static const struct {
@@ -732,10 +819,11 @@ static int ask(const struct query *q)
  * match or provision the PDN from the APN directly.
  */
 static int chain(const char *hold_arg, int use_mux, unsigned profile_idx,
-		 int apn_only, int no_call_type)
+		 int apn_only, int no_call_type, uint32_t wds_ins,
+		 int sub_first)
 {
-	struct query *mux = NULL, *bind = NULL, *ipfam = NULL,
-		     *start = NULL, *stat = NULL;
+	struct query *mux = NULL, *portb = NULL, *bind = NULL,
+		     *ipfam = NULL, *start = NULL, *stat = NULL;
 	uint32_t node, port, ins, handle = 0;
 	uint16_t txn = 1;
 	int sock, i, rc = 1;
@@ -746,6 +834,7 @@ static int chain(const char *hold_arg, int use_mux, unsigned profile_idx,
 		const char *c = QUERIES[i].cmd;
 
 		if (!strcmp(c, "wdsmux")) mux = &QUERIES[i];
+		else if (!strcmp(c, "wdsport")) portb = &QUERIES[i];
 		else if (!strcmp(c, "wdsbind")) bind = &QUERIES[i];
 		else if (!strcmp(c, "wdsipfam")) ipfam = &QUERIES[i];
 		else if (!strcmp(c, "wdsstart")) start = &QUERIES[i];
@@ -774,19 +863,27 @@ static int chain(const char *hold_arg, int use_mux, unsigned profile_idx,
 		printf("  qrtr_open failed\n");
 		return 1;
 	}
-	if (lookup_service(sock, 1, 0, &node, &port, &ins) < 0) {
-		printf("  no NEW_SERVER for WDS\n");
+	if (lookup_service(sock, 1, wds_ins, &node, &port, &ins) < 0) {
+		printf("  no NEW_SERVER for WDS ins %u\n", wds_ins);
 		close(sock);
 		return 1;
 	}
-	printf("  server: node %u port %u (single client, txn 1..)\n",
-	       node, port);
+	printf("  server: node %u port %u ins %u (single client, txn 1..)\n",
+	       node, port, ins);
 
 	/* QMI-level errors don't abort the chain — the printed receipts
-	 * carry the diagnosis; only transport failures do (ask_on rc=1). */
-	if (use_mux)
+	 * carry the diagnosis; only transport failures do (ask_on rc=1).
+	 * sub_first = MM order: BIND_SUBSCRIPTION before the data-port
+	 * bind (mm-broadband-modem-qmi binds the subscription when the WDS
+	 * client is set up, bind_mux only at connect). */
+	if (sub_first)
+		ask_on(sock, node, port, bind, txn++, NULL, NULL);
+	if (use_mux == 1)
 		ask_on(sock, node, port, mux, txn++, NULL, NULL);
-	ask_on(sock, node, port, bind, txn++, NULL, NULL);
+	else if (use_mux == 2)
+		ask_on(sock, node, port, portb, txn++, NULL, NULL);
+	if (!sub_first)
+		ask_on(sock, node, port, bind, txn++, NULL, NULL);
 	ask_on(sock, node, port, ipfam, txn++, NULL, NULL);
 	if (ask_on(sock, node, port, start, txn++, &handle, NULL)) {
 		printf("  start: no response\n");
@@ -1028,11 +1125,12 @@ int main(int argc, char **argv)
 	int rc = 0, matched = 0;
 
 	if (argc != 2 &&
-	    !(argc >= 3 && !strcmp(argv[1], "wdschain") && argc <= 6) &&
+	    !(argc >= 3 && !strcmp(argv[1], "wdschain") && argc <= 8) &&
+	    !(argc <= 3 && !strcmp(argv[1], "enumsvc")) &&
 	    !(argc == 3 && (!strcmp(argv[1], "wdsstop") ||
 			    !strcmp(argv[1], "wdsprof"))) &&
 	    !(argc >= 3 && argc <= 4 && !strcmp(argv[1], "ipa"))) {
-		fprintf(stderr, "usage: %s imei|mode|online|offline|lpm|uireset|sim|slots|simon|simoff|simon2|simoff2|provision|provision2|prov0|provp|switchslot|switchback|unprovision|events|sig|serving|sysinfo|ssp|sspcs|sspps|wdsmux|wdsbind|wdsipfam|wdsstart|wdsstat|wdsstop <handle>|wdschain <hold-seconds> [nomux|ims|nocall|pN]|wdfmt|wdfmtget|wdfmtraw|wdfmtqmap5|wdfmtqmap4|wdfmtqmap|wdfmtdis|wdfmtdisn|imsareg|imsasvc|ipa <main|hwstats|nossr|android> [R]|svcls|all\n", argv[0]);
+		fprintf(stderr, "usage: %s imei|mode|online|offline|lpm|uireset|sim|slots|simon|simoff|simon2|simoff2|provision|provision2|prov0|provp|switchslot|switchback|unprovision|events|sig|serving|sysinfo|ssp|sspcs|sspps|wdsmux|wdsbind|wdsipfam|wdsstart|wdsstat|wdsget|wdsstop <handle>|wdschain <hold-seconds> [nomux|port|sub1|ims|nocall|pN|insN]|wdfmt|wdfmtget|wdfmtraw|wdfmtqmap5|wdfmtqmap4|wdfmtqmap|wdfmtdis|wdfmtdisn|imsareg|imsasvc|dpmmsgs|dpmopen|dpmopen1|ipa <main|hwstats|nossr|android> [R]|svcls|enumsvc [svc]|all\n", argv[0]);
 		return 2;
 	}
 
@@ -1044,25 +1142,43 @@ int main(int argc, char **argv)
 		return 0;
 	}
 
+	if (!strcmp(argv[1], "enumsvc")) {
+		enumsvc(argc == 3 ? (uint32_t)strtoul(argv[2], NULL, 0) : 0);
+		return 0;
+	}
+
 	/* wdschain: whole IMS PDN bring-up on one client, then hold.
-	 * Extra tokens: "nomux" skips BIND_MUX_DATA_PORT, "pN" overrides
-	 * the START_NETWORK 3GPP profile index, "ims" drops profile TLVs
-	 * and starts by APN alone. */
+	 * Extra tokens: "port" swaps the 0xA2 mux bind for the bare
+	 * legacy 0x2F BIND_DATA_PORT (redfin M7 recipe for WDS
+	 * instances that answer err3 on 0xA2), "nomux" sends no
+	 * data-port bind at all, "pN" overrides the START_NETWORK 3GPP
+	 * profile index, "ims" drops profile TLVs and starts by APN
+	 * alone, "insN" pins the WDS server instance (default 0 =
+	 * first announced). */
 	if (!strcmp(argv[1], "wdschain") && argc >= 3) {
-		int use_mux = 1, apn_only = 0, no_call_type = 0;
+		int use_mux = 1, apn_only = 0, no_call_type = 0, sub_first = 0;
 		unsigned prof = 0, a;
+		uint32_t wds_ins = 0;
 
 		for (a = 3; a < (unsigned)argc; a++) {
 			if (!strcmp(argv[a], "nomux"))
 				use_mux = 0;
+			else if (!strcmp(argv[a], "port"))
+				use_mux = 2;
 			else if (!strcmp(argv[a], "ims"))
 				apn_only = 1;
+			else if (!strcmp(argv[a], "sub1"))
+				sub_first = 1;
 			else if (!strcmp(argv[a], "nocall"))
 				no_call_type = 1;
+			else if (!strncmp(argv[a], "ins", 3))
+				wds_ins = (uint32_t)strtoul(argv[a] + 3,
+							     NULL, 0);
 			else if (argv[a][0] == 'p')
 				prof = (unsigned)strtoul(argv[a] + 1, NULL, 0);
 		}
-		return chain(argv[2], use_mux, prof, apn_only, no_call_type);
+		return chain(argv[2], use_mux, prof, apn_only, no_call_type,
+			     wds_ins, sub_first);
 	}
 
 	/* argv[2] patches: wdsstop gets the packet handle (from
