@@ -4738,3 +4738,56 @@ rmnet_ipa0 UP（易失，重启即清）；SIM NO_ATR 待人手插拔；/tmp/qmi
   （已载）、rmnet0@rmnet_ipa0 mux1（在位）、qmi-ask/rmnet-add、
   d0.a/d0.b、mm-port-qmi.c、dralpine-data-test.sh；EFS/NV 未动；
   /usr/bin/qmicli 临时污染待清。
+
+## 2026-09-15 晚 — #353 F1 只读探针收口：PDC 判死 blank-mcfg + attach 参数突破 + err70 层位定位（enchilada）
+
+承下午条。F1（用户批「继续」）只读探针全执行；结论三项推翻
+两项坐实，墙的层位首次定位。
+
+- **①PDC 主嫌判死（最重要）**：PDC LIST_CONFIGURATIONS 只读探
+  针——store 25 个 sw 配置、active id
+  `616403b618cee2674e833456f9df4e00ba822eea`、description=
+  **`hVoLTE_OPNMKT_CT`**——**CT 本家运营商配置已被选中**，
+  blank-mcfg 假设死，PDC 灌配置无必要。pmOS vs 我们的差异集中
+  EFS/mcfg 一项**划掉**。
+- **②profile 两表真相**：family-1（selector type=1）表列得
+  {0, 100, 101}（0=ctnet/100=ctwap，wdsprof 0 回 TLV 0xa1=
+  "ctnet"）；type=0 表列得出 {1,2,3,4} 但 GET_PROFILE_SETTINGS
+  读不了（err81 + TLV 0xe0=`0500` INVALID_PROFILE_NUMBER，空槽
+  形态）。「idx 2 不存在」旧判读只对 family-1 表成立。
+- **③profile 假设判死**：START err70 在全形状下不变——M7 制胜
+  形 / profile2 纯形 / ims-only / nocall / noapn+idx2 /
+  q0（ctnet 经 TLV 0x32=0）/ q0+nocall。
+- **④attach 参数突破**：WDS GET_LTE_ATTACH_PARAMETERS(0x0085)
+  **SUCCESS**——APN=**ctnet**、IP support=2(IPv4v6)、OTA attach
+  performed=1、IPv4 **223.6.149.10**、IPv6
+  **240e:479:4a0:113d:18d5:3a12:1d13:fcb4/64**（240e::/20=中国
+  电信全球 IPv6）+ fe80 链路本地；GET_LTE_ATTACH_PDN_LIST(0x0094)
+  count=1、PDN profile id=1。⇒ **modem 侧持有带真 CT 网络地址
+  的 ctnet attach 会话状态**（EMM/默认承载层完全正常）。
+- **⑤err70 层位定位**：本 WDS 客户端 wdsstat=disconnected；
+  GET_CURRENT_SETTINGS(0x002D) **err15=eQMI_ERR_OUT_OF_CALL**
+  （gobi QMIEnum.h 定谳）⇒ 本客户端未绑任何呼叫；
+  GET_PACKET_STATISTICS(0x0024) 裸读也 err70。⇒ **err70 是
+  「客户端未绑数据口」层的拒绝，不是无线电/网络层**；kmsg 在
+  chain 前后零增量（无 IPA/GSI 内核活动，拒绝全在 modem 内）。
+- **⑥BIND_MUX 形状穷尽**：libqmi json 复核 TLV 0x10={guint32
+  ep_type, guint32 iface}+0x11 mux_id+**0x13 client_type（可
+  选 u32，QmiWdsClientType TETHERED=1/UNDEFINED=0xFF）**——
+  client_type 1/255 × iface 0/1 × mux 0/1/2 全试，**err3
+  INTERNAL 无条件**。bind-mux 形状空间关闭。
+- **qmi-ask 演进（工具账）**：修 idx-0 吞没 bug（`if
+  (profile_idx && …)` 把合法 0 当未设——p0/q0 首两跑无效根因；
+  改 int、-1=未设）；新增 wdsattp/wdsattn/wdsstatx 三探针 +
+  wdsmux client_type patch；wdsplist type patch。源已回迁仓
+  `.local/device/enchilada/qmi-ask.c`（md5 964474d4）；设备在
+  役二进制 md5 03901556（/tmp 重启即清）。
+- **判读**：EFS 划掉后，pmOS 反例与我们环境的差异集收敛到
+  **{MM 全序 vs qmi-ask 手搓}** 一项——但 DPM OPEN_PORT 双
+  SUCCESS + WDA 容忍已复刻 MM 的 IPA 前半，bind-mux 是 MM 序
+  中唯一 REQUIRED 且我们全形状被拒的步。下一步候选：分叉 B
+  （内核+MM 全栈重建，重工程）/ 分叉 C（CS 域 SIM，M44 立即推
+  进）/ 真_NV 恢复（写 EFS，须裁决）。F1 范围内只读探针已尽。
+- **设备终态**：同下午条（modem ONLINE、LTE home 46011 PS
+  ATTACHED、无呼叫、rmnet0@rmnet_ipa0 在位零流量）；EFS/NV
+  未动；/usr/bin/qmicli 临时污染待清。
