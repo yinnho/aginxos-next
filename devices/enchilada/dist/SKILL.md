@@ -77,7 +77,12 @@ would then be re-flash. Do not skip the pubkey.
    network. If the host interface does not come up after ~2 min, unplug
    and replug the cable once (the USB data plane occasionally wedges
    across a reboot; a replug always clears it).
-2. `ssh root@10.9.8.1` (works because of the pubkey you injected).
+2. `ssh root@10.9.8.1` (works because of the pubkey you injected). First
+   connect only: ssh will report the host key as unknown or **changed** —
+   expected, every fresh install generates new server keys; accept the new
+   fingerprint (this is a direct USB link, not a network you could be
+   spoofed on). If ssh offers no keys at all, the injection failed — the
+   flash script verifies it and would have refused to flash.
 3. `cat /run/boot.state` — wait until every line is an `ok` and the file
    contains `done ok`. First boot grows the filesystem to fill the phone
    and syncs the package index; this can take a few minutes.
