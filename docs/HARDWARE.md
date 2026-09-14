@@ -4148,3 +4148,28 @@ primary+backup 双写）未实现未上机——当前槽已标成功，ABL 不�
 会话末设备态：L0 靴在役（旧烤线），wifi 192.168.3.95 在网，
 四件套新件在 /var/bin 在役，slot a 已标成功不烧命；新烤线镜像
 out/rootfs.img（125M）host 侧就绪，上机重刷未做（须用户点头）。
+
+## svcd absent 重检消音（2026-09-14）——a8b189a 上机
+
+**现象**：enchilada kmsg 每 30.00s 整刷一对
+`aginx-svcd: aginxbrowser backoff` / `… absent`（基线收据 12007.7→
+12037.7→12067.7）。根因在源码：absent 重检必须先翻转 Absent→Backoff
+（try_spawn 只在 Backoff 态动手，2026-08-31 死锁修复），而 set_st 每次
+翻转落一条 kmsg——重检心跳=机械日志对。裸 L0 不装 aginxbrowser 包
+（svc.d 烤入的是缺席容忍单元），永续刷屏。
+
+**修**（a8b189a）：重检探针安静化——先 path_exists，真出现才翻转
+（spawn 自己打 starting），仍缺席原地重排 30s，零日志。
+
+**上机收据**：新件 md5 74a771db（host 编译=cargo zigbuild musl，与烤线
+同款命令）scp→/var/tmp（同 ext4 fs）→md5 验→换 /usr/libexec/aginx/
+aginx-svcd。**enchilada pkill -x 不杀 svcd 的坑**（pkill 在 /bin 存在、
+rc=0，但 325 原样不动；换 `kill $(pidof …)` 一发生效——此坑记档）。
+kill 重生后 /proc/PID/exe md5=新件坐实；母体链（aginx/gateway/
+secretd）+net-watch 全部重生回 ready。观察 12214→12301（87s，近 3 个
+重检周期）零新行——静音达成；svcd 启动时保留一次性 `absent` 行
+（状态文档，非心跳）。aginxbrowser 的 CLI absent 语义照旧
+（n6-egg 断言吃 CLI 不吃 kmsg，不受影响）。
+
+会话末设备态：enchilada L0 在役 + svcd 新件（pid 14236）在役，
+五单元 4 ready 1 absent（预期），wifi 192.168.3.95 在网。
