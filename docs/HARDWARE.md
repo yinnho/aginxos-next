@@ -4431,3 +4431,119 @@ opt-in 产品态（voice/term/browser/python3/git/codex 就绪，语音模型按
 **两包自测裁决**：enchilada v0.1.0 与 redfin v0.1.2 均经真实刷机端到端
 验证；自测二连的价值再次实锤（第一轮抓注入静默失败、本轮抓 agc 凭据
 真源错配——host 侧测试都测不出这类"真实输入类"缺口）。
+
+## 2026-09-14 — aginx-sms 工具在役 + WMS 传输层判死链：CT 卡 SMS 无承载（M44 刀2）
+
+### aginx-sms v1（enchilada 收短信工具，名字用户定）
+
+- host 金测 6/6（TS 23.040 解码：GSM7 septet unpack/UCS-2/多段 join/
+  号码解码/时间戳）；musl 交叉静态编（三 .o 配方同烤线）；部署
+  /usr/bin/aginx-sms 双端 md5 对账。子命令 status/list/fetch/delete/
+  selftest。
+- **List 缺参根修（本固件实证）**：WMS 0x0031 不带 TLV 0x11 Message
+  Tag → error=17 MISSING_ARGUMENT；三 TLV（0x01 storage + 0x11 tag +
+  0x12 mode=1 GSM_WCDMA）齐发才收。list 按 tag 0..3 循环扫；fetch
+  只取未读 MT（tag=0），读后置 read、删除带回查到的 tag。
+
+### WMS 传输层未就绪（52/47 同根，非工具缺陷）
+
+- `aginx-sms status`（WMS 0x004A Get Transport NW Reg）→ error=52
+  DEVICE_NOT_READY；list → error=47。诊断链闭合：
+  - SIM = **中国电信**（sysinfo TLV 0x19 ASCII "46011"）；LTE/VoLTE-only
+    运营商。
+  - serving：reg=1 home，ps=1 ATTACHED，**cs=2 detached（永久）**——
+    CS 域从未尝试 attach。
+  - 结论：短信唯一承载 = IMS（SMS over IP）；IMS 未注册 → WMS 无
+    传输层。
+
+### NAS SSP 域偏好实验矩阵（先读后写，qmi-ask 增 ssp/sspcs/sspps）
+
+- GET_SSP 0x0034：mode pref 0x003f（cdma/hdr/gsm/wcdma/lte/tds 全开），
+  **TLV 0x18 service domain = 2 (PS only)**——CS 不 attach 是 modem 自身
+  偏好，与网络无关。
+- SET_SSP 0x0033（TLV 形态：0x11 mode + 0x16 net selection 5 字节 + 
+  0x17 change duration=1 permanent + 0x18 domain）：
+  - 0x18=3 (CS+PS) 全形态 → **error=3 INTERNAL（固件拒绝 CS+PS）**；
+    裸 {0x11+0x18} 也 INTERNAL；0x16 只发 1 字节 → error=1
+    MALFORMED_MSG（此 TLV 是 5 字节序列 mode+mcc+mnc）。
+  - 0x18=0 (automatic) → SUCCESS，**但 modem 立即失服务**：reg=0、
+    -128dBm、全域 detached，60s+ 不恢复（automatic 要 CS，CT 网络给
+    不出，连 LTE 驻留都丢）。
+  - 0x18=2 (PS only) → SUCCESS，60s 内回 LTE home -64dBm ps attached
+    （还原路验证可用）。
+- **裁决：CS/SGs 路线对这张 CT 卡判死**——固件只收 automatic 和
+  ps-only 两个值，automatic 在 CT 上无服务。qmi-ask 顺手扩了
+  tlv3/tlv4 槽（SET_SSP 四 TLV 形态）。SSP 写入 change
+  duration=permanent，但读回确认还原已生效（0x18=2 在位）。
+
+### 待决（收短信的最后一步 = 承载）
+
+- 路 A：**换一张仍有 CS 域的 SIM**（如移动 GSM）——aginx-sms 工具链
+  已完备，插卡即通端到端收据。
+- 路 B：CT 卡走 IMS——依赖高通 IMS AP 侧栈（Android imsdatadaemon
+  世界），裸 L0 上是研究级工程，另立战场。
+
+**设备终态（known state）**：enchilada modem **online**（operator 手动
+跑 modem-up，偏离 rcS 默认 mode 5——此偏离未折入烤线，重启后需手动
+`qmi-ask online` 前先走 modem-up 序列；HWP 铁律不变）；ssp domain=
+ps-only（原值还原确认）；LTE home ps attached -64dBm；SIM PRESENT；
+WMS 52（无承载，预期）；aginx-sms + qmi-ask（ssp/sspcs/sspps）新版
+在役 /usr/bin。
+
+## 2026-09-14 — 探针批 C 收据 + SIM NO_ATR 全状态定谳 + WDA 判词撤回（#353）
+
+### 探针批 C（wdfmtdis/wdfmtdisn/nocall 上机，用户批"搞"）
+
+- qmi-ask 新增：`wdfmtdis`（raw-ip+noagg+ep）、`wdfmtdisn`（同款无
+  EP，即 M7 cell-bringup 的 legacy blob 逐字节同款）、`wdschain` 增
+  `nocall` token（START 去 call type TLV）、五参 chain 签名。
+- 收据：wdfmtdis → 70 INVALID_OPERATION；wdfmtdisn → 70；
+  `wdschain 8 nomux ims nocall` → bind SUCCESS + ipfam SUCCESS +
+  **START 70 handle 0**。call type TLV 排除；与 QMAP×3 阶梯同形。
+
+### 根因三级跳：全日探针打在未 online 的 modem 上
+
+- 侧写发现：sysinfo 全零 → serving reg=2 SEARCHING cs/ps 双 detached
+  RSSI -128 → `qmi-ask mode` = **5（非 online）**。M44 刀2 收据已写明
+  重启后 modem 不自动 online；今天 v0.1.0 刷机自测（#350）后两次重启
+  无人补 online。START 70 = 无 PS 服务的教科书错误，与 WDA/calltype/
+  bind 毒化无关。
+- 本 boot cell-bringup 从未运行（/var/cell-bringup.log 不存在——刷机
+  清了 /var，boot.state 只有 modem ok 无 cell 行）。
+
+### online 后复测：SIM 电学静默定谳（物理层）
+
+- `qmi-ask online` SUCCESS；+80s 射频活：**RSSI -63 dBm LTE**（射频
+  链路正常）、serving 仍 SEARCHING（无卡预期）。
+- SIM 在**在线态**下全部软件杠杆用尽仍 NO_ATR：
+  - `sim` card0 state=2 ERROR **error=3 NO_ATR_RECEIVED**（ICCID 全
+    ff；GET_SLOT_STATUS phys slot 1 present+active——卡在槽内、机械
+    检测正常）；
+  - simon ×2（在线态）+ simoff→5s→simon 完整断电周期 + uireset，
+    全 SUCCESS（指令层）但卡状态不变；
+  - 此前离线态：simon ×3 NO_ATR + 整机 aginx-reboot 冷启复验同形状。
+- **裁决：卡对 modem 电学静默（触点/卡体），软件侧无杠杆**。时间窗：
+  M44 刀2（今天早些）同卡同槽 SIM PRESENT + LTE home attached -64dBm
+  → v0.1.0 刷机自测 → 探针全日 NO_ATR。需人手重新插拔/检查卡托。
+
+### WDA「路线死」判词撤回 + cell-bringup M7 序列复跑
+
+- 在线态 WDA 阶梯复跑同形（GET 48 带/不带 EP 皆拒、SET 全 70）——
+  但 M7 老账：WDA SET 当年是在 netmgrd shim **DPM OPEN 之后**才 SUCCESS
+  的，全日探针（含批 B/C）都没做过 DPM OPEN，判据不成立。
+- 跑 `/etc/init.d/cell-bringup`（timeout 150 截断）收据：
+  - netmgrd shim 2s 完成（DPM open 先于其 WDS-bind 退出）；
+  - **WDS instance 探测 = legacy（0x2F only）→ rmnet_ipa0 raw-IP
+    no-agg 路线**；
+  - WDA SET_DATA_FORMAT（脚本手搓帧，20 TLV 字节）→ **error=1**（与
+    qmi-ask 的 70 不同码；M7 时代同脚本此步 OK）；
+  - 呼叫尝试 ×3 全 error=15（无网络——无 SIM 预期形状）；
+  - **rmnet_ipa0 接口 UP**（数据面内核侧成形）。
+- WDA/WDS 数据面在 SIM 复活前无法进一步定谳；所有 70/48/1 都是
+  「DPM/数据路径未配置 + 无 SIM」混淆态的症状。
+
+**设备终态（known state）**：enchilada wifi/internet/time 全绿
+192.168.3.93；modem **online**（本会话手动置位，重启即回 mode 5）；
+rmnet_ipa0 UP（易失，重启即清）；SIM NO_ATR 待人手插拔；/tmp/qmi-ask
+在位（md5 5347b981b2d588d0bc56f949cf5ad30c，重启即失须重推）；
+/usr/bin/qmi-ask 仍为镜像旧版（wdfmtdis 等新命令未入镜像）。
