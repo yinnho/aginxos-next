@@ -4639,3 +4639,50 @@ rmnet_ipa0 UP（易失，重启即清）；SIM NO_ATR 待人手插拔；/tmp/qmi
   PS ATTACHED、无活动呼叫；DPM open ×2 已灌注；rmnet_ipa0 UP 零流量；
   START err70 仍为最后阻塞；/tmp/qmi-ask（40cacac1…）、/tmp/q wrapper、
   /tmp/qrtr-lookup 在位；/usr/bin/qmicli 为临时污染待清。
+
+## 2026-09-15 上午 — #353 err70=InvalidOperation 定谳 + 固件档鉴别（MPSS.AT.4.0 CAF 档）+ 源码判读反转（enchilada）
+
+承接凌晨条。本段四件定谳，指向同一结论：**AP 侧全副武装，墙在 modem 拒绝**。
+
+- **err70 符号名定谳**：qmicli 原生输出（本日早段 chain 录）=
+  `QMI protocol error (70): 'InvalidOperation'`。语义=「操作在
+  当前状态下无效」而非参数错——与响应 TLV 0x02=01004600 吻合；
+  请求形状全形状排除（凌晨条）后，状态拒绝是唯一读法。
+- **modem 固件版本定谳（DMS GET_REVISION）**：
+  `MPSS.AT.4.0.c2.15-00007-SDM845_GEN_PACK-1.358880.1.399256.2
+  [May 09 2021 22:00:00]`，HW rev 20001，Manufacturer QUALCOMM
+  INCORPORATED。**MPSS.AT 系 = CAF/LineageOS 档**（pmOS 用户典型
+  保留 OOS 11 档 MPSS.JA 系）——pmOS wiki「数据通」反例大概率
+  不覆盖此固件档。
+- **mainline v6.11 源码判读（torvalds GitHub v6.11 tag 实读）**：
+  ① `IPA driver setup completed successfully` 印在 ipa_setup()
+  末尾、**ipa_qmi_setup() 返回之后** = 完整 QMI 握手走完才印；
+  ② rmnet_ipa0 在 **ipa_modem_start()**（握手完成回调）里
+  alloc+register——接口存在=回调跑过；
+  ③ **ipa_open（ndo_open）= enable AP_MODEM_TX/RX 端点**——
+  flags 0x1（IFF_UP）= 端点已启用；
+  ④ **mainline 全程不调 netif_carrier_on**——carrier=1/operstate
+  unknown 是 netdev 默认值，非数据面证据；
+  ⑤ 端点 enable 走 dev_dbg——dmesg 零 GSI 日志由此解释，
+  零日志≠未建。
+  ⇒ **凌晨条「AP 数据通道未建」理论推翻**：零计数=无呼叫自然
+  零包；AP 侧证据链齐整。
+- **down/up 实验（排序效应排除）**：rmnet_ipa0 down→up 循环，
+  dmesg delta **空**（/tmp/d0.a vs /tmp/d0.b 同内容）；循环后
+  mux err3、START err70 原样复现。
+- **旁证（在册）**：本机曾实测该固件 LTE 数据面对 AP peer 有
+  期待——`ipa_hwp_init.c:386 didnt rx any ind frm HWP` fatal
+  （online 过早时）+ `ipa_dl_opt_lte.c:432`（AP 无 IPA 驱动断言）。
+  mainline ipa.ko（0x31@1:16394）只完成握手前半，未见 HWP/RTR
+  类下游 peer 登记（AP 侧无 0x39）。
+- **新工作理论**：MPSS.AT.4.0（CAF 档）的 LTE 数据路径期待
+  AP 侧下游 peer（mainline 不提供；pmOS 反例疑基于 OOS 档固件）。
+- **分叉（待用户裁决，报告先行）**：A. 刷 OOS 11 modem 分区换
+  固件档（最直接判别；刷机日领域）；B. 重建内核树+rmnet.ko+MM
+  全栈（重工程，按现有证据可能仍被拒）；C. 换 CS 域 SIM（移动/
+  联通）走 CSFB 收短信——WMS 不依赖数据呼叫/IMS，M44 目标可
+  立即推进；CT 卡 IMS 墙并行上告。
+- **设备终态**：同凌晨条（modem ONLINE/SIM 活/无呼叫/rmnet_ipa0
+  UP 零流量）；/tmp 新增 d0.a/d0.b（down/up dmesg 对）、
+  mm-port-qmi.c、dralpine-data-test.sh；/usr/bin/qmicli 临时污染
+  待清。
