@@ -70,8 +70,20 @@ static struct query QUERIES[] = {
 	{ "slots",   11, 0x0047, "UIM GET_SLOT_STATUS" },
 	{ "simon",   11, 0x0031, "UIM POWER_ON_SIM slot 1", 0x01, {1}, 1 },
 	{ "simoff",  11, 0x0030, "UIM POWER_OFF_SIM slot 1", 0x01, {1}, 1 },
+	{ "simon2",  11, 0x0031, "UIM POWER_ON_SIM slot 2", 0x01, {2}, 1 },
+	{ "simoff2", 11, 0x0030, "UIM POWER_OFF_SIM slot 2", 0x01, {2}, 1 },
 	{ "provision", 11, 0x0038, "UIM CHANGE_PROVISIONING_SESSION activate gw slot1 usim", 0x01, {0, 1}, 2,
 	  0x10, {1, 16, 0xa0, 0x00, 0x00, 0x00, 0x87, 0x10, 0x02, 0xff, 0x86, 0xff, 0x03, 0x89, 0xff, 0xff, 0xff, 0xff}, 18 },
+	{ "provision2", 11, 0x0038, "UIM CHANGE_PROVISIONING_SESSION activate gw slot2 usim", 0x01, {0, 1}, 2,
+	  0x10, {2, 16, 0xa0, 0x00, 0x00, 0x00, 0x87, 0x10, 0x02, 0xff, 0x86, 0xff, 0x03, 0x89, 0xff, 0xff, 0xff, 0xff}, 18 },
+	{ "prov0",   11, 0x0038, "UIM CHANGE_PROVISIONING_SESSION activate gw slot1 empty-aid", 0x01, {0, 1}, 2,
+	  0x10, {1, 0}, 2 },
+	{ "provp",   11, 0x0038, "UIM CHANGE_PROVISIONING_SESSION activate gw slot1 short-aid", 0x01, {0, 1}, 2,
+	  0x10, {1, 7, 0xa0, 0x00, 0x00, 0x00, 0x87, 0x10, 0x02}, 9 },
+	{ "switchslot", 11, 0x0046, "UIM SWITCH_SLOT logical1->physical2", 0x01, {1}, 1,
+	  0x02, {2, 0, 0, 0}, 4 },
+	{ "switchback", 11, 0x0046, "UIM SWITCH_SLOT logical1->physical1 (restore)", 0x01, {1}, 1,
+	  0x02, {1, 0, 0, 0}, 4 },
 	{ "unprovision", 11, 0x0038, "UIM CHANGE_PROVISIONING_SESSION deactivate gw", 0x01, {0, 0}, 2 },
 	{ "events",  11, 0x002E, "UIM REGISTER_EVENTS mask 3", 0x01, {3, 0, 0, 0}, 4 },
 	{ "sig",     3,  0x0020, "NAS GET_SIGNAL_STRENGTH" },
@@ -1020,7 +1032,7 @@ int main(int argc, char **argv)
 	    !(argc == 3 && (!strcmp(argv[1], "wdsstop") ||
 			    !strcmp(argv[1], "wdsprof"))) &&
 	    !(argc >= 3 && argc <= 4 && !strcmp(argv[1], "ipa"))) {
-		fprintf(stderr, "usage: %s imei|mode|online|offline|lpm|uireset|sim|slots|simon|simoff|provision|unprovision|events|sig|serving|sysinfo|ssp|sspcs|sspps|wdsmux|wdsbind|wdsipfam|wdsstart|wdsstat|wdsstop <handle>|wdschain <hold-seconds> [nomux|ims|nocall|pN]|wdfmt|wdfmtget|wdfmtraw|wdfmtqmap5|wdfmtqmap4|wdfmtqmap|wdfmtdis|wdfmtdisn|imsareg|imsasvc|ipa <main|hwstats|nossr|android> [R]|svcls|all\n", argv[0]);
+		fprintf(stderr, "usage: %s imei|mode|online|offline|lpm|uireset|sim|slots|simon|simoff|simon2|simoff2|provision|provision2|prov0|provp|switchslot|switchback|unprovision|events|sig|serving|sysinfo|ssp|sspcs|sspps|wdsmux|wdsbind|wdsipfam|wdsstart|wdsstat|wdsstop <handle>|wdschain <hold-seconds> [nomux|ims|nocall|pN]|wdfmt|wdfmtget|wdfmtraw|wdfmtqmap5|wdfmtqmap4|wdfmtqmap|wdfmtdis|wdfmtdisn|imsareg|imsasvc|ipa <main|hwstats|nossr|android> [R]|svcls|all\n", argv[0]);
 		return 2;
 	}
 
