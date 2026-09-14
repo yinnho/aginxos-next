@@ -4412,7 +4412,7 @@ fastboot → `fastboot reboot` → 全自动链复活（boot.state 全绿，wifi
   AGC_RELAY_SECRET，真答直达——"Pixel 5 用的是高通骁龙 765G 处理器。"
   （问对答对，SM7250 说法也对。）
 
-### 全家桶复位（包内 opt-in 路径，非 dev push）
+### 全家桶复位（刷后 aginx-pkg opt-in 路径，非 dev push；zip 本体=裸 L0 零包）
 
 - codex 配置真源 = host `~/.codex`（HARDWARE.md 09-12 裁决）：scp 上行
   config.toml+auth.json → 600 落位 → md5 双端一致（值零回显）。
@@ -4423,10 +4423,10 @@ fastboot → `fastboot reboot` → 全自动链复活（boot.state 全绿，wifi
 - codex 真答 `pong`（ssh 非登录 shell PATH 不含 /var/bin——
   `HOME=/root /var/bin/codex` 全路径调用）。
 
-**设备终态（known state）**：redfin 在役 = 公共包 v0.1.2 + 全套包内
-产品态（voice/term/browser/python3/git/codex 就绪，语音模型按需下载）。
-**未复位**：~/Documents/aginx/aginx 路由器 dev-push（刷机清掉，属 dev
-通道非包内物）与旧化身 workspace 累积态；需要时走 A2 配方重推。
+**设备终态（known state）**：redfin 在役 = 公共包 v0.1.2（裸 L0）+ 刷后
+opt-in 产品态（voice/term/browser/python3/git/codex 就绪，语音模型按需
+下载）。**未复位**：~/Documents/aginx/aginx 路由器 dev-push（刷机清掉，
+属 dev 通道非包世界物）与旧化身 workspace 累积态；需要时走 A2 配方重推。
 
 **两包自测裁决**：enchilada v0.1.0 与 redfin v0.1.2 均经真实刷机端到端
 验证；自测二连的价值再次实锤（第一轮抓注入静默失败、本轮抓 agc 凭据
