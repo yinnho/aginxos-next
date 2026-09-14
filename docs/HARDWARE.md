@@ -4173,3 +4173,45 @@ secretd）+net-watch 全部重生回 ready。观察 12214→12301（87s，近 3 
 
 会话末设备态：enchilada L0 在役 + svcd 新件（pid 14236）在役，
 五单元 4 ready 1 absent（预期），wifi 192.168.3.95 在网。
+
+## svcd absent 重检消音——redfin 上机（2026-09-14）
+
+同一修复（a8b189a，enchilada 已收）换 redfin 落地。redfin 在役态 =
+redfin-v0.1.1 发布镜像（裸 L0），烤内两单元正是 aginxbrowser（缺席）+
+net-watch——用户报的 30s backoff/absent 心跳在这里同样在刷。
+
+**基线**：`aginxbrowser backoff/absent` 对子 30.00s 整一对
+（kmsg t=32.5/62.5/92.5/122.5s），`aginx-svc list` = aginxbrowser
+absent + net-watch ready。旧件 md5 c4b29e616bac5c5aedd9fa5429b593a9
+（与 enchilada 换前同源，v0.1.1 烤线产物）。
+
+**换装**（enchilada 同套流程）：adb push → /var/tmp（同 userdata
+ext4）→ 双侧 md5 74a771db13c5a88c0244a192e857bc55 对账 → 单条 shell
+`kill $(pidof aginx-svcd); mv /var/tmp/aginx-svcd.new
+/usr/libexec/aginx/aginx-svcd`（同 fs rename 无 ETXTBSY）→ pid
+415→2066，`/proc/2066/exe` md5 = 新件。
+
+**结果**：dmesg `aginxbrowser backoff` 计数 3 条全部来自旧 pid 415；
+新 pid 2066 自 t=131.5s 起 180s+ 零对子（≥3 个旧周期静默）。启动
+序列正常：一次性 "absent" 行（状态文档，非心跳）→ supervisor up →
+wdt armed 180s/15s → net-watch ready。CLI absent 语义不变
+（aginxbrowser absent + net-watch ready pid 2067）。
+
+**redfin 进场波折（两条通道收据）**：
+1. 无 USB 无 ssh 凭据（SKIP_STATE 重刷抹 authorized_keys，密码道
+   惰性）无 relay（裸 L0 无网关，cf49973e 永不注册）——裸 L0 三通道
+   全死，唯一进场 = 物理。relay secret 实际住
+   `~/.aginx/config.toml [relay] relay_secret`（AGC_RELAY_SECRET 同
+   值，鉴权验证过；值不入转录）。
+2. UDC 楔死复现（09-13 收据同款）：重插线 Mac 零枚举。强启组合键
+   （Power+VolUp 长按）落进 **fastboot** 而非重启——fastboot 下
+   `fastboot reboot` 带线起机，adbd 启动即绑 UDC，15s 内 adb 枚举
+   aginxosredfin。此配方成为裸 L0 无通道时的标准进场：**强启 →
+   fastboot → fastboot reboot（线不动）**。adb shell 探得太早会落在
+   trampoline 的 adbd（linker/property 噪音 + 无 /usr/libexec）——
+   等 `hostname=aginxos` / `/etc/.rcs-ran` 再操作。
+
+会话末设备态：redfin L0（v0.1.1）+ svcd 新件（pid 2066）在役，wifi
+192.168.3.93 在网，USB 连着 Mac（拔线重插会复现 UDC 楔死，重进场走
+上条配方）。boot/vendor_boot 未动，仍是发布态。下一版发布（v0.1.2+）
+烤线自动带上此修复（build-rootfs 吃 target 新件）。
