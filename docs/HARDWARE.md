@@ -4579,3 +4579,63 @@ rmnet_ipa0 UP（易失，重启即清）；SIM NO_ATR 待人手插拔；/tmp/qmi
 - **教训（升格铁律）**：多台设备同网段时，**每个会话第一发探针必须是
   uname/lsmod 身份验证**，DHCP 地址与设备无稳定绑定；两台手机共享
   一个家庭 NAT 出口，「relay 活着」不能证明「地址没变」。
+
+## 2026-09-15 凌晨 — #353 数据呼叫墙全形状排除 + IPA-QMI 握手实锤 + pmOS 反例定谳（enchilada）
+
+- **地址迁移**：enchilada 用户物理重启后离 .16，现居 **192.168.3.104**
+  （dropbear 活，ssh 全绿）。wifi 链路差：整段掉线 ~90s 自愈反复出现，
+  ssh 一律 ConnectTimeout=30–40 + ping 先行。
+- **START err70 全形状排除（请求形状定谳非变量）**：
+  M7 redfin 制胜形（qmicli `3gpp-profile=1,ip-type=4` 裸形）、profile2
+  纯形、apn=ims-only+nocall（chain）、apn+profile2+3gpp2FF+calltype1
+  （默认形）、WDA qmapv5 全量 SET 之后——全 err70。
+- **profile 表定谳（qmicli --wds-get-profile-list="3gpp"）**：
+  [1] ctnet(default/supl/hipri/fota/ut, ctx1, pap/chap)、
+  **[2] IMS(type ims, ctx2, auth none)**、[3] ctwap(mms, ctx3)、
+  [4] sos(emergency, ctx4)。先前「2=ctwap」为解析错位——
+  wdsstart 默认 profile2=IMS 本来就对。
+- **WDA 判死升级**：本固件 WDA 全拒——GET ep 枚举全组合
+  （embedded/hsusb/pcie × iface 0/1/2）= err48、bare GET=err48、
+  SET（raw-ip/noagg/qmapv5、字节级+qmicli 名字形、带/不带 EP）=err70、
+  GET_SUPPORTED_MESSAGES=err71。**但 MM 源码（mm-port-qmi.c:1555）
+  WDA SET 失败=硬退**，pmOS 上 MM 数据通 ⇒ pmOS 的 WDA 是应答的；
+  同时 redfin WDA 也拒而 M7 数据照通 ⇒ **WDA 拒绝单独不阻塞**。
+- **DPM OPEN_PORT 双灌注 SUCCESS**：iface1（hardware_data_ports=
+  {1,10,"rmnet_ipa0",ep_type,iface}，MM dpm_open_port 等价复刻）
+  + iface0 同形。响应仅 result TLV。
+- **BIND_DATA_PORT(0xA5)**：a2-mux-rmnet0/raw1/raw2 全 err25
+  DeviceUnsupported（bam-dmux 路线被 modem 亲口拒绝）；0=qmicli 拒收。
+- **BIND_MUX_DATA_PORT(0xA2)**：err3 INTERNAL 无条件全形状
+  （字节级 (4,1)、qmicli 名字形、iface 0/1；DPM open 成功后同样 err3；
+  chain 内同样）。先前「chain mux SUCCESS」为 tail 截断误读。
+- **IPA-QMI 握手完成实锤**：dmesg `315.952 ipa 1e40000.ipa: IPA
+  driver setup completed successfully`（mainline ipa_qmi.c 收官打印）+
+  315.958 uC `unexpected init_completed`（dev_warn 非致命）。
+  qrtr-lookup：modem=node0（WDS 0x1@0:57、WDA 0x1a@0:59、DPM@0:64、
+  modem 侧 IPA-HOST 0x31 inst=0x201@0:32）；AP=node1（IPA-HOST
+  0x31 inst=0x101@1:16394 = mainline ipa.ko）；**AP 侧无 0x39**。
+- **无僵尸呼叫**：独立 wdsstat（未绑客户端）SUCCESS，connection
+  status=1 disconnected。
+- **netdev 探针**：rmnet_ipa0 flags=0x1（IFF_UP 已置）、operstate
+  unknown、carrier=1、**tx/rx packets 全 0**；dmesg 零 GSI/endpoint
+  运行行（仅 reserved-mem 命名行）。无 /sys/kernel/debug/ipa。
+- **pmOS 裁决反例（WebSearch）**：pmOS OP6 移动数据在 mainline 内核 +
+  ModemManager 上就是通的（wiki「Mobile data / Voice calls fully
+  working」+ Neil's blog 2025-10「it Just Worked」）⇒ modem 固件不
+  要求 AP 侧下游栈；差异在我们环境某处。
+  Sources: https://wiki.postmarketos.org/wiki/OnePlus_6_(oneplus-enchilada) 、
+  https://neilzone.co.uk/2025/10/notes-on-running-postmarketos-on-a-oneplus-6/
+- **MM 数据流程判读（/tmp/mm-port-qmi.c 实读）**：data 客户端仅
+  wda+dpm；driver "ipa" 恒 MUX_RMNET（:1181）；WDA 协商循环
+  V5→V4→QMAP（:1630-1705）；mux 走内核 rmnet links；
+  dpm_open_port hardware_data_ports TLV（:1782-1861）已复刻。
+- **工作理论（下一步待验）**：mainline ipa 的 GSI 数据通道在 IPA-QMI
+  握手完成时由 ipa_setup() 分配（carrier_on 收尾）——AP 侧已就绪；
+  netdev UP 过但零流量零日志。剩鉴别探针=**modem 固件版本**
+  （DMS GET_REVISION；pmOS 用户多为 OOS 固件，本机 eOS 系 MPSS，
+  若版本怪异则「这颗 modem 数据栈残废」升主嫌疑）+ rmnet_ipa0
+  down/up 循环重跑 ipa_setup。
+- **设备终态**：enchilada .104；modem ONLINE、SIM 活 LTE home 46011
+  PS ATTACHED、无活动呼叫；DPM open ×2 已灌注；rmnet_ipa0 UP 零流量；
+  START err70 仍为最后阻塞；/tmp/qmi-ask（40cacac1…）、/tmp/q wrapper、
+  /tmp/qrtr-lookup 在位；/usr/bin/qmicli 为临时污染待清。
