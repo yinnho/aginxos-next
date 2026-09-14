@@ -4547,3 +4547,35 @@ WMS 52（无承载，预期）；aginx-sms + qmi-ask（ssp/sspcs/sspps）新版
 rmnet_ipa0 UP（易失，重启即清）；SIM NO_ATR 待人手插拔；/tmp/qmi-ask
 在位（md5 5347b981b2d588d0bc56f949cf5ad30c，重启即失须重推）；
 /usr/bin/qmi-ask 仍为镜像旧版（wdfmtdis 等新命令未入镜像）。
+
+## 2026-09-14 夜 — 对象错乱事故翻案：下午 SIM 实验全打在 redfin（无卡机）上（#353）
+
+- **事故**：13:45 redfin（#351 v0.1.2 刷机自测）重启后 DHCP 拿走
+  192.168.3.93；傍晚 SIM 线全部探针/实验（SWITCH_SLOT、provision
+  err3 ×5、uireset、offline）误认为 enchilada，实际全打在 redfin。
+  发现路径：想干净重启 modem 时 /sys/class/remoteproc 不存在 →
+  dmesg subsys-pil-tz → lsmod sm7250_bms + uname 4.19.278-g7b094
+  （Pixel 内核）→ /etc/init.d radio-bringup（M3d 头注）实锤。
+- **用户亲证（23:3x）：redfin 内根本没有 SIM 卡**。故 .93 上全部
+  「卡现象」均为伪读数：GET_SLOT_STATUS phys1=present+inactive、
+  phys2=card_state=2+active+10 字节全零 ICCID = **空槽形状**（双槽
+  都报 logical=1 是 redfin vendor 栈开机默认，非 remap）；「SWITCH_SLOT
+  后卡复活」叙事作废；无卡机上 provision err3 无解释价值。
+- **上午收据不受影响**（对象确系 enchilada）：ICCID 89861114090260766770
+  在槽、USIM AID 读出、注册配方、NO_ATR 定谳——但用户重插卡（SIM1）
+  后 enchilada 状态**未测**（见下条，等重启后首测）。
+- **redfin 归位收据**：switchback（0x0046 logical1→phys1）SUCCESS；
+  offline 态下 online 拒绝 err60 INVALID_TRANSITION（纠缠态，无解）；
+  aginx-reboot 整机重启 → 回网 .93（dropbear_2026.94）→ modem
+  **mode 5**（开机稳态，与 M3d 带法一致）→ slots 复验=开机默认形状
+  （双 logical=1 + phys2 card_state=2 空槽）→ **SWITCH_SLOT remap
+  易失性证实：重启即清**。设备回到已知态。
+- **enchilada 定位收据**：网关 20:08 起稳连 relay（hub 8443 两条家宽
+  121.229.66.151 长连 = 两台都在 wifi 网）；局域网指纹锁定
+  **192.168.3.16**（MAC 88:52:eb OnePlus 段 + Linux 无防火墙 RST +
+  22 端口关闭）——**dropbear 死亡**，ssh 不可达；relay 侧仅 `me`
+  化身（裸 L0 无全家桶）且无 shell，无法远程救。旧地址 .100 已失
+  （ping 100% loss）。已请用户物理重启 OP6。
+- **教训（升格铁律）**：多台设备同网段时，**每个会话第一发探针必须是
+  uname/lsmod 身份验证**，DHCP 地址与设备无稳定绑定；两台手机共享
+  一个家庭 NAT 出口，「relay 活着」不能证明「地址没变」。
