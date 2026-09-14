@@ -51,13 +51,19 @@ find_e2fstool() { # find_e2fstool <name> — PATH first, then homebrew e2fsprogs
   return 1
 }
 
-inject() { # inject <fs-image> <debugfs-script-text> <label>
-  local img="$1" script="$2" label="$3" df tmp
+inject() { # inject <fs-image> <debugfs-script-text> <verify-path> <label>
+  local img="$1" script="$2" vpath="$3" label="$4" df tmp
   df="$(find_e2fstool debugfs)" || { say "debugfs not found — install e2fsprogs (macOS: brew install e2fsprogs)" >&2; exit 1; }
   tmp="$(mktemp)"
   printf '%s\n' "$script" > "$tmp"
-  "$df" -w -f "$tmp" "$img" >/dev/null || { say "debugfs injection failed (${label})" >&2; rm -f "$tmp"; exit 1; }
+  # debugfs exits 0 even when individual commands fail (e.g. a write into a
+  # missing directory), so the result is verified, never the exit code
+  "$df" -w -f "$tmp" "$img" >/dev/null 2>&1
   rm -f "$tmp"
+  if ! "$df" -R "stat ${vpath}" "$img" 2>/dev/null | grep -q "Type: regular"; then
+    say "injection FAILED (${label}): ${vpath} missing after write" >&2
+    exit 1
+  fi
   say "injected ${label}"
 }
 
@@ -123,9 +129,13 @@ if [ -n "${PUBKEY}" ]; then
     exit 1
   fi
   PKABS="$(cd "$(dirname "${PUBKEY}")" && pwd)/$(basename "${PUBKEY}")"
-  inject "${ROOTFS}" "rm /root/.ssh/authorized_keys
+  # mkdir is needed: a pristine image has no /root/.ssh (both mkdir and rm
+  # error when redundant — debugfs continues past per-line errors)
+  inject "${ROOTFS}" "mkdir /root/.ssh
+sif /root/.ssh mode 040700
+rm /root/.ssh/authorized_keys
 write ${PKABS} /root/.ssh/authorized_keys
-sif /root/.ssh/authorized_keys mode 0100600" "ssh pubkey"
+sif /root/.ssh/authorized_keys mode 0100600" "/root/.ssh/authorized_keys" "ssh pubkey"
 fi
 
 if [ -n "${WIFI_CONF}" ]; then
@@ -133,7 +143,7 @@ if [ -n "${WIFI_CONF}" ]; then
   WCABS="$(cd "$(dirname "${WIFI_CONF}")" && pwd)/$(basename "${WIFI_CONF}")"
   inject "${ROOTFS}" "rm /etc/wifi.conf
 write ${WCABS} /etc/wifi.conf
-sif /etc/wifi.conf mode 0100600" "wifi.conf"
+sif /etc/wifi.conf mode 0100600" "/etc/wifi.conf" "wifi.conf"
 fi
 
 if [ -n "${PUBKEY}${WIFI_CONF}" ]; then
