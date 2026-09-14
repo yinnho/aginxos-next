@@ -4215,3 +4215,68 @@ wdt armed 180s/15s → net-watch ready。CLI absent 语义不变
 192.168.3.93 在网，USB 连着 Mac（拔线重插会复现 UDC 楔死，重进场走
 上条配方）。boot/vendor_boot 未动，仍是发布态。下一版发布（v0.1.2+）
 烤线自动带上此修复（build-rootfs 吃 target 新件）。
+
+## E6 — enchilada 折叠镜像刷机日（2026-09-14，镜像 HEAD=c9f639f + 三件手术）
+
+**镜像**：out/rootfs.img 2G sparse（实际 ~125M），07:39 出炉时 HEAD=c9f639f
+——a8b189a（svcd 消音件）不在镜像里（svcd 仍为旧件 c4b29e61），且烤线
+按设计不带 ssh 钥匙。刷前 debugfs 手术三件（host，`debugfs -w -f cmds`）：
+① svcd 换新（md5 74a771db…，0755 root:root）；② root/.ssh/authorized_keys
+（E4b 公钥复用，0600，目录 0700）；③ etc/aginx-version 戳
+`aginxos enchilada a8b189a 2026-09-14 l0`。dump-back md5 对账 + e2fsck
+-fn 干净。
+
+**刷机**：设备当时就坐在 ABL fastboot（"Android" 0x18D1:0xD002——adb/
+NCM 全盲，fastboot 工具可见）。`fastboot flash userdata` 发 sparse
+113304 KB / 2.8s → `fastboot reboot` ~140s 返回 → ~40s 进系统。首启全
+绿：done ok / usbnet ok / pkg ok；disk-grow 109.9G 复证；svcd 消音收据
+复现（~90s kmsg backoff/absent 计数=1，一次性启动声明）。
+
+**pd-mapper boot race——烤线首靴现形 + 修复（本日主收据）**：
+- 首靴 wlan0 不出生：ps 只有 tqftpserv/rmtfs，pd-mapper 缺席；dmesg
+  ath10k_snoc 停在 7.1s "Adding to iommu group 9"（MSA QMI 挂起）。
+  /var/pd-mapper.log 遗言 `no pd maps available`——烤序（pd-mapper 在
+  q6v5_mss 装载**之前**）正踩 E5 收据"早启=exit(1) boot race"。
+- **注册后补启 = 3s wlan0 出生，E5 dance（remoteproc3 stop→start）不
+  需要**：ath10k 挂起的 QMI 请求一直在等，pd-mapper 一到即通（fw 装载
+  398s、wcn3990 起来）。**mss 缺 pd-mapper 挂 6 分钟无恙**——旧头注
+  "pd-mapper 晚到=65s 看门狗收命"对 MSS 不成立。
+- 修复（设备端 /etc/init.d/modem-bringup，原版备份 /var/modem-bringup.bak）：
+  rmtfs/tqftpserv 先于 mss 不动（EFS 铁律），pd-mapper 挪到 remoteproc3
+  state 出现 + echo start **之后**（ath10k MSA 请求在固件起来后 ~2.6s
+  才发，时序余量足）。仓库版待同步（剩债）。
+- **两靴冷启收据**：重启① ssh `reboot`——pd-mapper 活着穿过启动（pid
+  序 tqftpserv→rmtfs→pd-mapper），wlan0 自动出生，零人工；收官重启②
+  同绿且 net-bringup wifi 相位全自动 join（见下）。
+
+**wifi 入网**：/etc/wifi.conf ← .local/wifi-huawei.conf（0600）；
+`aginx-net-join wlan0 <ssid> <psk>`（split 烤为默认，argc==4）一次过 →
+udhcpc 192.168.3.96 → 223.5.5.5 通 → `ntpd -q -n -d -p ntp.aliyun.com`
+校时 ok（04:18:56 UTC）。
+
+**织物入网（烤线 L0 全包路径第二证）**：/etc/aginx/env 追加三键
+（AGINXBRAIN_API_KEY ← .local/aginx-env；AGINX_GATEWAY_ID=enchilada；
+AGINX_RELAY_SECRET ← config.toml [relay]；0600，stdin 管道零回显）→
+`aginx-pkg opt-in aginx` + `opt-in aginx-gateway`（依赖闭包带
+aginx-secretd；镜像源 HTTP 200）→ 三单元 ready（gateway 首起 backoff
+两拍自愈，E5 同款）→ /proc/net/tcp :20FB 01 ESTABLISHED → Mac
+`agc agent://enchilada.relay.aginx.net/me '1+1 等于几？'` →
+**真答「1+1 等于 2。」**
+
+**收官重启（全自动链，零干预）**：boot 58s；boot.state 全相位绿：
+wifi run→ok（net-bringup 自动 join 华为 AP）→dhcp ok 192.168.3.97→
+internet ok www.baidu.com 476079B→time ok→usbnet ok→done ok；三单元
+ready + 8443 自动重连。**"wifi 自动连"折债正式了账。**
+
+**杂项收据**：
+- 重启后 NCM 数据面楔（Mac en11 inactive、USB gadget 枚举在、ping 死，
+  >6 分钟不回）——拔插 USB 即愈；uptime 显示设备彼时已在线，楔的是
+  Mac↔设备 USB 数据面而非系统。enchilada 重启后进场预案：先拔插线。
+- wlan0 MAC 每靴随机（ath10k "invalid MAC address; choosing random"，
+  mainline 无 maddr 的已知形）——对 relay 注册无影响（id=身份）。
+
+**会话末设备态**：enchilada 折叠镜像（a8b189a+手术）在役：wifi 在网
+（DHCP 池浮动 .95–.97）、四单元 ready、8443 在线、agc 可达；ssh 双通道
+（NCM 10.9.8.1 + wifi IP）。剩债：modem-bringup 仓库版同步（设备版已
+验证）；mark-boot-successful 仍未实现（boot_a succ=1 跨刷持久，暂不
+烧命，`fastboot set_active a` 兜底在册）。
