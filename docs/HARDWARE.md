@@ -4325,3 +4325,52 @@ fastboot → `fastboot reboot` → 全自动链复活（boot.state 全绿，wifi
 
 **杂项**：enchilada 的 busybox **awk 同样无条件 SIGSEGV**（与 redfin
 同烤一款 busybox）——设备侧禁 awk 用 sed/set-- 扩及两机。
+
+## 2026-09-14 · #350 刷机日自测①：enchilada 公共包 v0.1.0 真刷两轮（自测逮住注入静默失败）
+
+**目的**：按包内 SKILL.md 全流程真刷（fresh install + 配置重灌），验证公共
+发布包 `aginxos-enchilada-0.1.0.zip` 对真实消费者的可用性。设备 b0d9f7fe
+（在役机，重刷覆盖，无状态可保）。
+
+### 第一轮（原始包，35fa138）——逮住 bug
+
+- 机械面全绿：校验/门（单设备+product=sdm845）/slot a/userdata 3.3s/
+  boot_a 139s/set_active/reboot。
+- **§4 死在 ssh：`Permission denied (publickey,password)`**。验尸
+  （消费者侧解包的 rootfs.img 当证物）：无 /root/.ssh —— **公钥注入静默
+  没发生**。对照组 wifi.conf 正常落位（/etc/wifi.conf inode 487 0600）。
+- **根因**：flash.sh 注入脚本早前改造成 rm-first 时误删了
+  `mkdir /root/.ssh`；**新鲜烤机没有 /root/.ssh**，debugfs `write` 进
+  缺失目录**行级失败但进程退出码 0**。第一版 inject() 只信退出码 →
+  静默 no-op。干跑测试当初用陈旧镜像（旧 .ssh 目录已在）测不出此类缺口。
+- 设备成"无进入通道"态（公钥没上去、密码道 inert）→ 唯一恢复 = 重刷。
+
+### 修复（7b1681c，已推 master）
+
+- inject() 改签名 `<img> <script> <verify-path> <label>`：写后
+  `debugfs stat` 验 `Type: regular`，缺失即拒刷——**永不信 debugfs 退出码**。
+- 公钥脚本恢复 `mkdir /root/.ssh` + `sif mode 040700`（冗余 mkdir/rm 的
+  行级报错被容忍）。
+- SKILL.md §4 补：首连 host key 变更属预期（全新安装重生成服务器钥）。
+
+### 第二轮（修复包，7b1681c）——全绿收据
+
+- **§3 flash**：注入双双落位验证（"injected ssh pubkey / injected
+  wifi.conf"）→ e2fsck fp+fn 干净 → 门全过 → userdata+boot_a →
+  set_active a → reboot。
+- **§4 verify**：NCM 网 ~40s 就位（ping 10.9.8.1 ~1.1ms）；
+  `ssh root@10.9.8.1` 公钥直通（修复生效点）；`/run/boot.state` 全 ok +
+  `done ok`；wifi ok（HUAWEI AP，dhcp 192.168.3.100，internet ok，
+  time ok）——**首启自动 resize + 包索引 sync 都完成**。
+- **§5 configure**：备份 env 经 stdin 管道灌 `/etc/aginx/env`（值零回显）；
+  `aginx-pkg opt-in aginx`（自动拉 dep aginx-update）+ `opt-in
+  aginx-gateway`（自动拉 dep aginx-secretd）——四枚 stamp + 三单元与刷前
+  备份清单完全一致；三单元全 ready，首启 spawns=1 零崩。
+- **真答收据**：Mac `agc agent://enchilada.relay.aginx.net:8443` 派活 →
+  relay → 网关 → 母体 aginx-server → brain，真答返回
+  （"一加六搭载的是高通骁龙845处理器。"）。
+
+**裁决**：公共包 enchilada v0.1.0（7b1681c 重出版）对真实输入类（出厂
+新鲜烤机 + 消费者解包目录）**端到端可用**。自测的价值实锤：host 侧
+干跑全绿挡不住"真实输入类"缺口——第一轮要是没真刷，消费者第一天就会
+撞上无通道变砖态。设备终态：在役，v0.1.0 公共包 + 配置重灌完成。
