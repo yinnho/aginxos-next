@@ -53,13 +53,31 @@ for _ko in "${B}"/mod/*.ko; do
 done
 true
 
-# --- 救援公钥: 打包机 id_ed25519 (个人配置, .local 不入库) ---
-if [ -f "${HOME}/.ssh/id_ed25519.pub" ]; then
-  cp "${HOME}/.ssh/id_ed25519.pub" "${RAM}/root/.ssh/authorized_keys"
-  chmod 600 "${RAM}/root/.ssh/authorized_keys"
-else
-  echo "pack-boot: WARN 无 ~/.ssh/id_ed25519.pub — 救援 ssh 将不可登" >&2
-fi
+# --- 救援公钥 ---
+# 默认 (RESCUE_PUBKEY=1) 烤打包机 id_ed25519.pub 进 initramfs —— 开发机行为
+# 不变。公共发布包必须 RESCUE_PUBKEY=0：不烤任何钥，initramfs 救援 ssh
+# （dropbear -s -R）不认任何人；落 .rescue_pubkey_stripped 戳，dist.sh
+# 以此为闸拒绝把带个人钥的 boot.img 装进公共 zip。
+# 消费者的配网/鉴权走 flash.sh --pubkey/--wifi（debugfs 注入 rootfs.img）。
+RESCUE_PUBKEY="${RESCUE_PUBKEY:-1}"
+case "${RESCUE_PUBKEY}" in
+  0)
+    rm -f "${RAM}/root/.ssh/authorized_keys"
+    : > "${OUT}/.rescue_pubkey_stripped"
+    echo "pack-boot: RESCUE_PUBKEY=0 — 公共构建, initramfs 救援 ssh 无钥可认"
+    ;;
+  1)
+    if [ -f "${HOME}/.ssh/id_ed25519.pub" ]; then
+      cp "${HOME}/.ssh/id_ed25519.pub" "${RAM}/root/.ssh/authorized_keys"
+      chmod 600 "${RAM}/root/.ssh/authorized_keys"
+    else
+      echo "pack-boot: WARN 无 ~/.ssh/id_ed25519.pub — 救援 ssh 将不可登" >&2
+    fi
+    ;;
+  *)
+    fail "RESCUE_PUBKEY 只收 0|1 (got '${RESCUE_PUBKEY}')"
+    ;;
+esac
 
 # --- 用户数据库: dropbear 认证前 getpwnam("root") 必须成立 (2026-09-13 实测:
 #     无 /etc/passwd = 一律 Permission denied, 公钥对了也没用) ---
