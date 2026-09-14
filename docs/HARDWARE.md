@@ -4280,3 +4280,48 @@ ready + 8443 自动重连。**"wifi 自动连"折债正式了账。**
 （NCM 10.9.8.1 + wifi IP）。剩债：modem-bringup 仓库版同步（设备版已
 验证）；mark-boot-successful 仍未实现（boot_a succ=1 跨刷持久，暂不
 烧命，`fastboot set_active a` 兜底在册）。
+
+## Qualcomm CrashDump 死亡取证 + fastboot 闸门实测（2026-09-14，enchilada 在役）
+
+**事件**：E6 折叠镜像在役 22.7 min（靴起约 04:21）后硬死，停在
+Qualcomm CrashDump Mode 屏。userspace 无感知——heartbeat 每 5s 一记，
+干净停在 04:44:20（up=1364）。强制重启（Power+VolUp+VolDown）→
+fastboot → `fastboot reboot` → 全自动链复活（boot.state 全绿，wifi
+192.168.3.98，NCM ssh 未拔线即回），配置零损失。
+
+**取证（/var/kmsg-follow.old，本靴全量 kmsg；.log 已被新靴轮转）**：
+两次**同签名** MPSS fatal，均紧跟华为 AP 变带宽：
+
+- t=27s join AP（aid=8）→ **t=317.9s `AP changed bandwidth`（width 2）**
+  → **t=318.2s** `qcom-q6v5-mss: fatal error received:
+  err_qdi.c:456:EF:wlan_process:1:cmnos_thread.c:3921:Asserted in
+  wlan_vdev.c:_wlan_vdev_down:` → remoteproc3 crash#1 → SSR（port
+  failed halt → stop → MBA→mpss 重载 → 3s is now up）。ath10k
+  "firmware crashed!" 是连坐不是根因（固件死在被 mss 报出）。
+- 恢复路径震荡：WMI vdev -108 + 连环 **"Unbalanced enable for IRQ
+  164..175" WARNING**（ath10k_snoc_hif_start / kernel/irq/manage.c:793，
+  上游恢复路径的 enable_irq 不配对，纯 kernel WARN）。**t=385s 自愈
+  重连**（key -110 后 auth→associated，net-watch/重连路径起效）。
+- **t=788.5s AP 又变带宽（width 1）→ t=788.8s 同一 assert** → crash#2
+  → SSR + 同款 WARNING spam → **t=800.35s kmsg 撕裂**
+  （末行 `ret_from` 截断 + NUL 尾 = 写一半死）→ **printk 通道卡死
+  9.4 分钟，userspace 心跳一直活到 t=1364s** → 硬死（疑似最终锁死/
+  看门狗咬，带 dump cookie 进 CrashDump）。PSTORE 下一靴为空（ramoops
+  被 dump 模式吃掉）。
+
+**裁决**：上游 WCN3990 WLAN 固件 bug——AP 带宽变化（op-mode change）
+触发 vdev down 路径 assert。与烤线/bring-up 无关（两次都发生在
+普通在网态）。**缓解：华为 AP 侧钉死带宽/关 HT40 共存**；设备侧无快
+修。风险画像：此 AP 上约每 8 分钟一次变带宽 → 反复 SSR，任何一次恢复
+路径卡 printk 就 CrashDump 需人工。redfin（wcn3980）同 AP 多日在役无
+此 pattern。
+
+**fastboot 闸门实测（OP6，刷机包 gate 依据，v0.1.0 出包用）**：
+- `getvar product` → **`sdm845`**（不是 OnePlus6/enchilada——猜了会
+  拒刷所有消费者）
+- `getvar current-slot` → `a`（可用）
+- unlocked: yes；`flash boot_a` / `set_active a` 语义见 E5 收据
+  （succ=1+tries=7 跨分区镜像）。
+
+**杂项**：enchilada 的 busybox **awk 同样无条件 SIGSEGV**（与 redfin
+同烤一款 busybox）——设备侧禁 awk 用 sed/set-- 扩及两机。
