@@ -4374,3 +4374,60 @@ fastboot → `fastboot reboot` → 全自动链复活（boot.state 全绿，wifi
 新鲜烤机 + 消费者解包目录）**端到端可用**。自测的价值实锤：host 侧
 干跑全绿挡不住"真实输入类"缺口——第一轮要是没真刷，消费者第一天就会
 撞上无通道变砖态。设备终态：在役，v0.1.0 公共包 + 配置重灌完成。
+
+## 2026-09-14 · #351 刷机日自测②：redfin 公共包 v0.1.2 真刷（agc 凭据真源收口 + 全家桶复位）
+
+**目的**：与 #350 同尺——按包内 SKILL.md 全流程真刷公共发布包
+`aginxos-redfin-0.1.2.zip`（fresh install + 配置重灌）。设备 serial
+13201FDD4001N8 先对账 HARDWARE.md 再动手（刷机日铁律）。
+
+### §3 flash（35fa138 包，全程绿）
+
+- 门全过：单 fastboot 设备 + `product: redfin`；slot **b**。
+- 序：userdata 43s → vendor_boot_b（提交点）→ reboot。另一槽不碰。
+
+### §4 verify + §5 configure
+
+- adb 回归 → `/run/boot.state` 全 ok 阶梯 + `done ok`（首启 resize +
+  包索引 sync 完成）。wifi.conf 与公钥经 adb push（SKILL.md §5 路径），
+  重启后 wifi ok（HUAWEI AP，dhcp **192.168.3.93**，internet ok，
+  time ok）。
+- ssh 公钥通道直通；`/etc/aginx/env` 五键 stdin 管道重灌（值零回显，
+  含 AGINX_RELAY_SECRET——首灌曾踩 heredoc 在设备侧展开 sed 的坑，
+  已修：secret 一律 Mac 侧提取、管道上行）。
+- `aginx-pkg opt-in aginx`（自动拉 aginx-update）+ `opt-in
+  aginx-gateway`（自动拉 aginx-secretd）→ 网关重登记 `id=cf49973e`
+  与刷前一致。
+
+### agc 凭据真源（本日最有价值发现）
+
+- 首条真答报「钥匙串里的 token 已失效」——重刷后设备侧登记刷新，Mac
+  旧 token 作废（预期内）。
+- 按错误提示走 `--bind <配对码>` → **`method 'bindDevice' is not
+  implemented in aginx-gateway v1`**：aginxos-next 公共包网关**根本没有
+  设备配对**——鉴权是 relay_secret 单门（agent.rs `authenticated:false`）。
+  bindDevice 属于 ~/Documents/aginx/aginx 路由器项目的协议，钥匙串里
+  那枚 token 是路由器世界遗产。
+- **正解 = `agc --logout` 一条**：忘掉遗留 token 后 agc 落回
+  AGC_RELAY_SECRET，真答直达——"Pixel 5 用的是高通骁龙 765G 处理器。"
+  （问对答对，SM7250 说法也对。）
+
+### 全家桶复位（包内 opt-in 路径，非 dev push）
+
+- codex 配置真源 = host `~/.codex`（HARDWARE.md 09-12 裁决）：scp 上行
+  config.toml+auth.json → 600 落位 → md5 双端一致（值零回显）。
+- opt-in 六发（一发一名）：codex / aginx-voice / aginx-term /
+  aginxbrowser / python3 / git → 依赖闭包共 **15 包**。
+- 单元 6/6 ready：aginx、aginx-gateway、aginx-secretd、aginx-voice、
+  aginxbrowser（缺席容忍单元 opt-in 后自拾取）、net-watch（烤入）。
+- codex 真答 `pong`（ssh 非登录 shell PATH 不含 /var/bin——
+  `HOME=/root /var/bin/codex` 全路径调用）。
+
+**设备终态（known state）**：redfin 在役 = 公共包 v0.1.2 + 全套包内
+产品态（voice/term/browser/python3/git/codex 就绪，语音模型按需下载）。
+**未复位**：~/Documents/aginx/aginx 路由器 dev-push（刷机清掉，属 dev
+通道非包内物）与旧化身 workspace 累积态；需要时走 A2 配方重推。
+
+**两包自测裁决**：enchilada v0.1.0 与 redfin v0.1.2 均经真实刷机端到端
+验证；自测二连的价值再次实锤（第一轮抓注入静默失败、本轮抓 agc 凭据
+真源错配——host 侧测试都测不出这类"真实输入类"缺口）。
