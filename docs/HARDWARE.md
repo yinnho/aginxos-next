@@ -4791,3 +4791,58 @@ rmnet_ipa0 UP（易失，重启即清）；SIM NO_ATR 待人手插拔；/tmp/qmi
 - **设备终态**：同下午条（modem ONLINE、LTE home 46011 PS
   ATTACHED、无呼叫、rmnet0@rmnet_ipa0 在位零流量）；EFS/NV
   未动；/usr/bin/qmicli 临时污染待清。
+
+## 2026-09-15 深夜 — #353 B1 UIM READ_TRANSPARENT 收口：ICCID/IMSI 读出 + ISIM ADF 空壳定谳（enchilada）
+
+承 F1 条。B1（用户批「批」）：UIM READ_TRANSPARENT 只读
+EF_IMPI(6F02)，CARD_SLOT_1 会话 + ISIM AID；读后复跑
+sim/imsget/imsareg。承诺边界：不改卡内容、不动灌注、不动 EFS。
+
+- **READ_TRANSPARENT 布局定谳**（libqmi data/qmi-service-uim.json
+  line 209-283 + qmicli-uim.c:1836-1868 对账）：svc 0x0B msg
+  **0x0020**。Input：TLV 0x01 session（session_type u8 +
+  aid_len u8 + aid；len-1 裸 u8 → err1 MALFORMED_MSG）；0x02
+  file（file_id u16 LE + path_len u8 + path）；**0x03 read_
+  information（offset u16 + length u16，本固件必选**，缺 →
+  err17 MISSING_ARGUMENT；qmicli 恒发 (0,0)=整文件）；0x10
+  resp-ind-token / 0x11 encrypt 可选。Output：0x10 card result
+  （SW1 SW2，9000=OK）、0x11 content（u16 size 前缀）、0x18
+  （ASCII "MCC.MNC.MSIN" 串，libqmi 未建模）。
+- **path 字节序铁律（err3 根因）**：qmicli
+  get_sim_file_id_and_path_with_separator 把每个 DF 写成
+  **u16 小端字节对**（"3f00"→`00 3f`、"7fff"→`ff 7f`）；
+  file_id 同 LE（0x6F02→`02 6f`）。按大端发（`3f 00 7f ff`）
+  → modem 找垃圾 DF → err3 INTERNAL。修正后 ICCID/IMSI 立即
+  SUCCESS。
+- **读出收据**：EF_ICCID(2FE2, path `00 3f`, primary-gw 会话)
+  → SUCCESS SW9000，content 10 字节 nibble 交换 =
+  **8986 1114 9002 0676 6670**（中国电信段）；EF_IMSI(6F07,
+  path `00 3f ff 7f`) → SUCCESS，TLV 0x18 ASCII
+  "460.11.0404630489" + TLV 0x11 BCD ⇒ **IMSI
+  460110404630489**（MCC 460 / MNC 11）。
+- **ISIM 空壳定谳（判读翻转）**：CARD_SLOT_1(6)+ISIM AID 全
+  形状 err3（qmicli 复刻形 / ADF 相对路径无 3F00 / 换
+  EF_DOMAIN 6F03）；**NONPROVISIONING_SLOT_1(4)+ISIM AID →
+  SUCCESS**——host 能开 ISIM ADF 会话，「host 打不开 ISIM
+  会话」假设判死。EF_IMPI(6F02) 读出 75 字节 = `80 10` +
+  73×00 = **空占位，IMPI 从未灌注**。sim 复查 app2(isim)
+  state=1 detected（非 ready）与空 ADF 自洽；card1 slot
+  ERROR err=3（SIM2 空槽位旧态）。
+- **IMS 复查**：读卡后 imsget/imsareg 仍 err70，未受任何扰动。
+  B1 批准判据落定：state 未翻 ready、IMS 未醒。判读：卡内容
+  层无 IMS 凭据（IMPI 空）⇒ 本卡 IMS 注册即便走通也不能靠
+  ISIM ADF；IMSA err70 更可能是数据呼叫墙下游（IMS PDN 起不
+  来）。CT 卡 SMS 判据齐备，**分叉 C（CS 域 SIM）完整成立待
+  裁决**。
+- **枚举增补**：QmiUimSessionType PRIMARY_GW=0 /
+  NONPROVISIONING_SLOT_1=4 / CARD_SLOT_1=6 /
+  LOGICAL_CHANNEL_SLOT_1=8；app state detected=1 / ready=7；
+  app type csim=4 / usim=2 / isim=5。
+- **qmi-ask 演进（工具账）**：+iccread/usimread 系（BE 误版
+  3 只）、iccread5/usimread5（qmicli 复刻）、isimread5-7/
+  isimdom 探针 + argc==3 动态长度补丁 + usage 串扩充。源回迁
+  仓 `rootfs/src/qmi-ask.c`（md5 7c5be135）；设备在役
+  /tmp/qmi-askB md5 37c601a4（/tmp 重启即清）。
+- **设备终态**：全程只读；modem ONLINE、LTE home 46011 PS
+  ATTACHED 不变；EFS/NV 未动；新件均在 /tmp（重启即清）；
+  /usr/bin/qmicli 临时污染待清。
