@@ -142,6 +142,14 @@ static struct query QUERIES[] = {
 	/* wdsstop takes the packet handle printed by wdsstart as argv[2]
 	 * (decimal or 0x-hex). */
 	{ "wdsstop", 1,  0x0021, "WDS STOP_NETWORK handle=<argv2>", 0x01, {0, 0, 0, 0}, 4 },
+	/* LTE attach profile state (blank-EFS suspect): the default EPS
+	 * bearer is bound to a configured attach profile; if unset, EMM
+	 * attach lives but every START dies InvalidOperation. */
+	{ "wdsattp", 1,  0x0085, "WDS GET_LTE_ATTACH_PARAMETERS (bare)" },
+	{ "wdsattn", 1,  0x0094, "WDS GET_LTE_ATTACH_PDN_LIST (bare)" },
+	/* Byte counters on the default-bearer session the modem holds:
+	 * nonzero rx/tx = live traffic, zeros = cached attach state. */
+	{ "wdsstatx", 1, 0x0024, "WDS GET_PACKET_STATISTICS (bare)" },
 	/* WDA data-format pair = netmgrd's boot job on stock Android.  On
 	 * this bare L0 nobody ever configured the data EP: mux-bind INTERNAL
 	 * and START error 70 (even with existing profile 100) both match a
@@ -186,6 +194,104 @@ static struct query QUERIES[] = {
 	  0x17, {4, 0, 0, 0, 1, 0, 0, 0}, 8 },
 	{ "imsareg", 0x21, 0x0020, "IMSA GET_IMS_REGISTRATION_STATUS" },
 	{ "imsasvc", 0x21, 0x0021, "IMSA GET_IMS_SERVICES_STATUS" },
+	/* IMS service (0x12): the on-modem IMS client's switches and
+	 * APN/credential policy.  Stock Android's ims APK programs these
+	 * (SET 0x008f / 0x0047); nobody does on bare L0.  0x0090 output
+	 * TLVs are u8 booleans: 0x11 voice / 0x19 registration / 0x1b
+	 * SMS enabled.  0x0048: 0x15..0x18 priority (u32, ACS/ISIM/NV/
+	 * PCO per input json) + 0x1a APN list. */
+	{ "imsget", 0x12, 0x0090, "IMS GET_SERVICES_ENABLED_SETTING (bare)" },
+	{ "imspolicy", 0x12, 0x0048, "IMS GET_POLICY_MANAGER_SETTINGS (bare)" },
+	/* DSD tells which data systems are available for calls — the IMS
+	 * client consults it before attaching the ims PDN. */
+	{ "dsd", 0x2A, 0x0024, "DSD GET_SYSTEM_STATUS (bare)" },
+	/* The boot trigger stock Android's ims APK owns: enable voice+SMS
+	 * so the on-modem IMS client starts registering.  TLVs are u8
+	 * booleans per json (0x10 voice-over-LTE, 0x1a sms). */
+	{ "imsen", 0x12, 0x008f, "IMS SET_SERVICES_ENABLED voice+sms",
+	  0x10, {1}, 1,
+	  0x1A, {1}, 1 },
+	/* B1 (READ_TRANSPARENT 0x0020): EF_IMPI (6F02) through a card
+	 * session bound to the ISIM ADF.  Session TLV 0x01 = {u8 type
+	 * CARD_SLOT_1=6, u8 aid_len, aid}; binding this session is the
+	 * normal trigger that pulls an app from detected to ready.
+	 * File TLV 0x02 = {u16 file_id LE, u8 path_len, path}; 7FFF is
+	 * the QMI path notation for the session's ADF (MM reads USIM
+	 * ADF EFs at 3F00+7FFF the same way).  Strictly read-only. */
+	{ "isimread", 11, 0x0020, "UIM READ_TRANSPARENT EF_IMPI 6f02 via ISIM card-session",
+	  0x02, {0x02, 0x6f, 0x04, 0x3f, 0x00, 0x7f, 0xff}, 7,
+	  0x01, {6, 16, 0xa0, 0x00, 0x00, 0x00, 0x87, 0x10, 0x04, 0xff, 0x86, 0xff, 0x03, 0x89, 0xff, 0xff, 0xff, 0xff}, 18,
+	  0x03, {0, 0, 64, 0}, 4 },
+	/* Shape 2: path relative to the ADF only (no 3F00 MF prefix). */
+	{ "isimread2", 11, 0x0020, "UIM READ_TRANSPARENT EF_IMPI path=7fff only",
+	  0x02, {0x02, 0x6f, 0x02, 0x7f, 0xff}, 5,
+	  0x01, {6, 16, 0xa0, 0x00, 0x00, 0x00, 0x87, 0x10, 0x04, 0xff, 0x86, 0xff, 0x03, 0x89, 0xff, 0xff, 0xff, 0xff}, 18,
+	  0x03, {0, 0, 64, 0}, 4 },
+	/* Shape 3: NONPROVISIONING_SLOT_1 session (no provisioning binding,
+	 * AID selects the app). */
+	{ "isimread3", 11, 0x0020, "UIM READ_TRANSPARENT EF_IMPI session=nonprov-slot1",
+	  0x02, {0x02, 0x6f, 0x04, 0x3f, 0x00, 0x7f, 0xff}, 7,
+	  0x01, {4, 16, 0xa0, 0x00, 0x00, 0x00, 0x87, 0x10, 0x04, 0xff, 0x86, 0xff, 0x03, 0x89, 0xff, 0xff, 0xff, 0xff}, 18,
+	  0x03, {0, 0, 64, 0}, 4 },
+	/* Controls: same session machinery against the READY USIM app.
+	 * If these succeed while the ISIM shapes die INTERNAL, the
+	 * read path is fine and the wall is ISIM-select specific. */
+	{ "usimread", 11, 0x0020, "UIM READ_TRANSPARENT EF_IMSI 6f07 via USIM card-session (control)",
+	  0x02, {0x07, 0x6f, 0x04, 0x3f, 0x00, 0x7f, 0xff}, 7,
+	  0x01, {6, 16, 0xa0, 0x00, 0x00, 0x00, 0x87, 0x10, 0x02, 0xff, 0x86, 0xff, 0x03, 0x89, 0xff, 0xff, 0xff, 0xff}, 18,
+	  0x03, {0, 0, 16, 0}, 4 },
+	{ "usimread2", 11, 0x0020, "UIM READ_TRANSPARENT EF_IMSI 6f07 via primary-gw session (control)",
+	  0x02, {0x07, 0x6f, 0x04, 0x3f, 0x00, 0x7f, 0xff}, 7,
+	  0x01, {0, 0}, 2,
+	  0x03, {0, 0, 16, 0}, 4 },
+	/* Old-format session hypothesis: this MPSS.AT generation may
+	 * implement the pre-extended Session TLV = bare u8 provisioning
+	 * session, so our AID-carrying TLV poisons every read.  Three
+	 * discriminators: no session at all, ICCID at MF root (no ADF),
+	 * and a len-1 bare-u8 primary-gw session. */
+	{ "usimread3", 11, 0x0020, "UIM READ_TRANSPARENT EF_IMSI 6f07 no session TLV",
+	  0x02, {0x07, 0x6f, 0x04, 0x3f, 0x00, 0x7f, 0xff}, 7,
+	  0, {0}, 0,
+	  0x03, {0, 0, 16, 0}, 4 },
+	{ "iccread", 11, 0x0020, "UIM READ_TRANSPARENT EF_ICCID 2fe2 at MF root no session",
+	  0x02, {0xe2, 0x2f, 0x02, 0x3f, 0x00}, 5,
+	  0x01, {0, 0}, 2,
+	  0x03, {0, 0, 16, 0}, 4 },
+	/* qmicli replicas (the decisive reference shapes from
+	 * qmicli-uim.c read_transparent_build_input): path elements are
+	 * u16 LITTLE-ENDIAN byte pairs ("3f00" -> 00 3f, "7fff" -> ff 7f,
+	 * per get_sim_file_id_and_path_with_separator), Read Information
+	 * is always (offset 0, length 0) = whole file, and the session is
+	 * PRIMARY_GW with an empty ignored AID. */
+	{ "iccread5", 11, 0x0020, "UIM READ_TRANSPARENT EF_ICCID qmicli-shape",
+	  0x02, {0xe2, 0x2f, 0x02, 0x00, 0x3f}, 5,
+	  0x01, {0, 0}, 2,
+	  0x03, {0, 0, 0, 0}, 4 },
+	{ "usimread5", 11, 0x0020, "UIM READ_TRANSPARENT EF_IMSI qmicli-shape",
+	  0x02, {0x07, 0x6f, 0x04, 0x00, 0x3f, 0xff, 0x7f}, 7,
+	  0x01, {0, 0}, 2,
+	  0x03, {0, 0, 0, 0}, 4 },
+	{ "isimread5", 11, 0x0020, "UIM READ_TRANSPARENT EF_IMPI qmicli-shape isim card-session",
+	  0x02, {0x02, 0x6f, 0x04, 0x00, 0x3f, 0xff, 0x7f}, 7,
+	  0x01, {6, 16, 0xa0, 0x00, 0x00, 0x00, 0x87, 0x10, 0x04, 0xff, 0x86, 0xff, 0x03, 0x89, 0xff, 0xff, 0xff, 0xff}, 18,
+	  0x03, {0, 0, 0, 0}, 4 },
+	/* ISIM wall follow-ups: the qmicli shape works for ICCID/IMSI on
+	 * the provisioned USIM, so the remaining err3 is ISIM-session
+	 * specific.  Discriminate: nonprovisioning session vs card
+	 * session, ADF-relative path (no 3F00), and a second ISIM file
+	 * (EF_DOMAIN 6F03) in case IMPI itself is special. */
+	{ "isimread6", 11, 0x0020, "UIM READ_TRANSPARENT EF_IMPI session=nonprov-slot1",
+	  0x02, {0x02, 0x6f, 0x04, 0x00, 0x3f, 0xff, 0x7f}, 7,
+	  0x01, {4, 16, 0xa0, 0x00, 0x00, 0x00, 0x87, 0x10, 0x04, 0xff, 0x86, 0xff, 0x03, 0x89, 0xff, 0xff, 0xff, 0xff}, 18,
+	  0x03, {0, 0, 0, 0}, 4 },
+	{ "isimread7", 11, 0x0020, "UIM READ_TRANSPARENT EF_IMPI path=adf-relative",
+	  0x02, {0x02, 0x6f, 0x02, 0xff, 0x7f}, 5,
+	  0x01, {6, 16, 0xa0, 0x00, 0x00, 0x00, 0x87, 0x10, 0x04, 0xff, 0x86, 0xff, 0x03, 0x89, 0xff, 0xff, 0xff, 0xff}, 18,
+	  0x03, {0, 0, 0, 0}, 4 },
+	{ "isimdom", 11, 0x0020, "UIM READ_TRANSPARENT EF_DOMAIN 6f03 isim card-session",
+	  0x02, {0x03, 0x6f, 0x04, 0x00, 0x3f, 0xff, 0x7f}, 7,
+	  0x01, {6, 16, 0xa0, 0x00, 0x00, 0x00, 0x87, 0x10, 0x04, 0xff, 0x86, 0xff, 0x03, 0x89, 0xff, 0xff, 0xff, 0xff}, 18,
+	  0x03, {0, 0, 0, 0}, 4 },
 	/* MM combination row 6 (bam-dmux / any-driver shape): raw-ip, no
 	 * aggregation.  If the kernel ipa3 IPA-QMI contract is up WITHOUT
 	 * aggregation, this SET should MATCH the contract and succeed where
@@ -331,11 +437,40 @@ static void hint(const struct query *q, uint8_t key,
 		return;
 	}
 	if (!strcmp(q->cmd, "sim") && key == 0x10 && n >= 10) {
-		unsigned ncards = d[8];
+		unsigned ncards = d[8], off = 9, c, a, j;
+		static const char *ty[] = {"unknown", "sim", "usim", "ruim",
+					   "csim", "isim"};
+		static const char *st[] = {"unknown", "detected", "pin-req",
+					   "puk-req", "check-pers",
+					   "pin1-blocked", "illegal", "ready"};
 
-		printf("    [%u card(s); card0 state=%u (%s) error=%u]\n", ncards,
-		       d[9], d[9] == 0 ? "ABSENT" : d[9] == 1 ? "PRESENT" : d[9] == 2 ? "ERROR" : "?",
-		       d[13]);
+		printf("    [gw_primary_idx=%u 1x_primary_idx=%u ncards=%u]\n",
+		       get16(d), get16(d + 2), ncards);
+		for (c = 0; c < ncards && off + 6 <= n; c++) {
+			unsigned napps = d[off + 5];
+
+			printf("    [card%u state=%u (%s) upin=%u err=%u napps=%u]\n",
+			       c, d[off],
+			       d[off] == 0 ? "ABSENT" : d[off] == 1 ? "PRESENT" :
+			       d[off] == 2 ? "ERROR" : "?",
+			       d[off + 1], d[off + 4], napps);
+			off += 6;
+			for (a = 0; a < napps && off + 7 <= n; a++) {
+				unsigned alen = d[off + 6];
+
+				if (off + 7 + alen + 7 > n)
+					break;
+				printf("    [app%u type=%u (%s) state=%u (%s) pers=%u feat=%#x aid=",
+				       a, d[off], d[off] < 6 ? ty[d[off]] : "?",
+				       d[off + 1],
+				       d[off + 1] < 8 ? st[d[off + 1]] : "?",
+				       d[off + 2], d[off + 3]);
+				for (j = 0; j < alen; j++)
+					printf("%02x", d[off + 7 + j]);
+				printf("]\n");
+				off += 7 + alen + 7;
+			}
+		}
 		return;
 	}
 	/* slots: TLV 0x10 = array of {u32 card_state, u32 slot_state,
@@ -385,6 +520,41 @@ static void hint(const struct query *q, uint8_t key,
 
 		printf("    [service domain pref %u = %s]\n", v,
 		       v < 4 ? sd[v] : "?");
+		return;
+	}
+	/* ssp: TLV 0x20 voice domain preference (0 cs-only, 1 ps-only,
+	 * 2 cs-preferred/csfb, 3 ps-preferred/volte) */
+	if (!strcmp(q->cmd, "ssp") && key == 0x20 && n >= 4) {
+		uint32_t v = get16(d) | ((uint32_t)get16(d + 2) << 16);
+		const char *vd[] = {"cs only", "ps only (ims)",
+				    "cs preferred (csfb)", "ps preferred (volte)"};
+
+		printf("    [voice domain pref %u = %s]\n", v,
+		       v < 4 ? vd[v] : "?");
+		return;
+	}
+	/* dsd: TLV 0x10 = count u8, then {tech u32, rat u32, so_mask u64}
+	 * per available system.  tech: 0=3gpp 1=3gpp2 2=wlan; rat:
+	 * 1=wcdma 2=geran 3=lte 4=tds 6=5g 101=1x 102=hrpd 103=ehrpd */
+	if (!strcmp(q->cmd, "dsd") && key == 0x10 && n >= 1) {
+		unsigned i, cnt = d[0], off = 1;
+		const char *tt[] = {"3gpp", "3gpp2", "wlan"};
+
+		printf("    [%u available system(s)]\n", cnt);
+		for (i = 0; i < cnt && off + 16 <= n; i++) {
+			uint32_t tech = get16(d + off) |
+					((uint32_t)get16(d + off + 2) << 16);
+			uint32_t rat = get16(d + off + 4) |
+					((uint32_t)get16(d + off + 6) << 16);
+
+			printf("    [sys%u: tech=%u (%s) rat=%u (%s)]\n", i,
+			       tech, tech < 3 ? tt[tech] : "?", rat,
+			       rat == 1 ? "wcdma" : rat == 2 ? "geran" :
+			       rat == 3 ? "LTE" : rat == 4 ? "tdscdma" :
+			       rat == 6 ? "5g" : rat == 101 ? "1x" :
+			       rat == 102 ? "hrpd" : rat == 103 ? "ehrpd" : "?");
+			off += 16;
+		}
 		return;
 	}
 	/* imei: the printable digits inside TLV 0x10/0x11 are already
@@ -624,7 +794,8 @@ static void svcls(void)
 		{ 0x03, 0, "NAS" },   { 0x05, 0, "WMS" },
 		{ 0x09, 0, "VOICE" }, { 0x0b, 0, "UIM" },
 		{ 0x10, 0, "LOC" },   { 0x12, 0, "IMS" },
-		{ 0x13, 0, "ADS" },   { 0x15, 0, "PDC" },
+		{ 0x13, 0, "ADS" },   { 0x15, 0, "MFS" },
+		{ 0x24, 0, "PDC" },
 		{ 0x1a, 0, "WDA" },   { 0x1e, 0, "IMSP" },
 		{ 0x21, 0, "IMSA" },  { 0x31, 0, "IPA-any" },
 		{ 0x31, 1, "IPA-host" },
@@ -818,10 +989,11 @@ static int ask(const struct query *q)
  * answer error 81), so no profile index can point at IMS; some firmwares
  * match or provision the PDN from the APN directly.
  */
-static int chain(const char *hold_arg, int use_mux, unsigned profile_idx,
+static int chain(const char *hold_arg, int use_mux, int profile_idx,
 		 int apn_only, int no_call_type, uint32_t wds_ins,
-		 int sub_first)
+		 int sub_first, int prof2, int drop_apn)
 {
+	/* profile_idx/prof2: -1 = not set; 0 is a valid profile index */
 	struct query *mux = NULL, *portb = NULL, *bind = NULL,
 		     *ipfam = NULL, *start = NULL, *stat = NULL;
 	uint32_t node, port, ins, handle = 0;
@@ -840,10 +1012,9 @@ static int chain(const char *hold_arg, int use_mux, unsigned profile_idx,
 		else if (!strcmp(c, "wdsstart")) start = &QUERIES[i];
 		else if (!strcmp(c, "wdsstat")) stat = &QUERIES[i];
 	}
-	if (profile_idx && start) {
+	if (profile_idx >= 0 && start) {
 		start->tlv3_data[0] = (uint8_t)profile_idx;
-		printf("  [chain start profile idx overridden to %u]\n",
-		       profile_idx);
+		printf("  [chain start: 3gpp profile idx %u]\n", profile_idx);
 	}
 	if (apn_only && start) {
 		start->tlv3_key = 0;
@@ -851,6 +1022,25 @@ static int chain(const char *hold_arg, int use_mux, unsigned profile_idx,
 		start->tlv4_key = 0;
 		start->tlv4_len = 0;
 		printf("  [chain start: no profile TLVs, apn=ims only]\n");
+	}
+	/* qN: start on the OTHER profile family (TLV 0x32) — this unit's
+	 * readable table {0,100,101}=ctnet/ctwap answers selector type=1,
+	 * so its indices ride the 3gpp2-family TLV per libqmi naming.
+	 * With an explicit profile the apn=ims TLV must go (it would
+	 * override the profile's APN). */
+	if (prof2 >= 0 && start) {
+		start->tlv4_data[0] = (uint8_t)prof2;
+		start->tlv3_key = 0;
+		start->tlv3_len = 0;
+		start->tlv_key = 0;
+		start->tlv_len = 0;
+		printf("  [chain start: family-1 profile idx %u, 3gpp+apn "
+		       "TLVs dropped]\n", prof2);
+	}
+	if (drop_apn && start) {
+		start->tlv_key = 0;
+		start->tlv_len = 0;
+		printf("  [chain start: apn TLV dropped]\n");
 	}
 	if (no_call_type && start) {
 		start->tlv5_key = 0;
@@ -1119,6 +1309,256 @@ static int ipa_init(int argc, char **argv)
 	return rc;
 }
 
+/*
+ * pdc — read-only PDC (svc 0x24) probes: GET_SELECTED_CONFIG (0x22)
+ * and LIST_CONFIGS (0x24), for both config types (0=platform/hw,
+ * 1=software/sw, libqmi qmi-enums-pdc.h).  Both messages answer with
+ * a bare result frame; the payload rides a separate indication
+ * (flags 0x04) keyed by token — so each request opens an 8x1s frame
+ * window.  READ ONLY: no Load/Set/Delete/Activate is sent here.
+ */
+static int pdc_run(void)
+{
+	static const struct { uint16_t msg; const char *name; } msgs[] = {
+		{ 0x22, "GET_SELECTED_CONFIG" },
+		{ 0x24, "LIST_CONFIGS" },
+	};
+	static const uint32_t ctypes[] = { 0, 1 };
+	static const char *ctnames[] = { "platform(hw)", "software(sw)" };
+	uint8_t req[64], buf[2048], active_id[24];
+	uint32_t node, port, ins, rn, rp;
+	uint16_t txn = 1;
+	unsigned active_id_len = 0;
+	int sock, len, m, c, any = 0;
+
+	sock = qrtr_open(0);
+	if (sock < 0) {
+		printf("  qrtr_open failed\n");
+		return 1;
+	}
+	if (lookup_service(sock, 0x24, 0, &node, &port, &ins) < 0) {
+		printf("  no NEW_SERVER for service 0x24 (PDC) — modem "
+		       "PDC task absent\n");
+		close(sock);
+		return 1;
+	}
+	printf("  PDC server: node %u port %u (ins 0x%x)\n", node, port, ins);
+
+	for (m = 0; m < 2; m++) {
+		for (c = 0; c < 2; c++) {
+			unsigned off, end, got = 0;
+			int i;
+
+			printf("== PDC %s ctype=%u (%s) token=%u ==\n",
+			       msgs[m].name, ctypes[c], ctnames[c], txn);
+			req[0] = QMI_REQUEST;
+			put16(req + 1, txn);
+			put16(req + 3, msgs[m].msg);
+			if (msgs[m].msg == 0x22) {
+				/* TLV 0x01 config type, TLV 0x10 token */
+				req[7] = 0x01; put16(req + 8, 4);
+				put32(req + 10, ctypes[c]);
+				req[14] = 0x10; put16(req + 15, 4);
+				put32(req + 17, txn);
+			} else {
+				/* TLV 0x10 token, TLV 0x11 config type */
+				req[7] = 0x10; put16(req + 8, 4);
+				put32(req + 10, txn);
+				req[14] = 0x11; put16(req + 15, 4);
+				put32(req + 17, ctypes[c]);
+			}
+			put16(req + 5, 14);
+			if (qrtr_sendto(sock, node, port, req, 21) < 0) {
+				printf("  sendto failed\n");
+				close(sock);
+				return 1;
+			}
+			for (i = 0; i < 8; i++) {
+				uint8_t flags;
+				uint16_t rtxn, mid, mlen;
+
+				len = qrtr_recvfrom(sock, buf, sizeof(buf),
+						    &rn, &rp);
+				if (len < 0)
+					continue;
+				if (rp == QRTR_PORT_CTRL || len < 7)
+					continue;
+				flags = buf[0];
+				rtxn = get16(buf + 1);
+				mid = get16(buf + 3);
+				mlen = get16(buf + 5);
+				if (rn != node ||
+				    (flags != QMI_RESPONSE &&
+				     flags != QMI_INDICATION) ||
+				    mid != msgs[m].msg || rtxn != txn)
+					continue;
+				printf("  %s: flags 0x%02x txn %u msg "
+				       "0x%04x msg_len %u\n",
+				       flags == QMI_RESPONSE ? "resp" : "ind",
+				       flags, rtxn, mid, mlen);
+				end = 7 + mlen;
+				if (end > (unsigned)len)
+					end = (unsigned)len;
+				off = 7;
+				while (off + 3 <= end) {
+					uint8_t key = buf[off];
+					uint16_t tl = get16(buf + off + 1);
+
+					off += 3;
+					if (off + tl > end) {
+						printf("  TLV 0x%02x len %u "
+						       "TRUNCATED\n", key, tl);
+						break;
+					}
+					printf("  TLV 0x%02x len %u: ", key, tl);
+					dump_tlv(buf + off, tl);
+					putchar('\n');
+					if (key == 0x02)
+						note_result(buf + off, tl);
+					/* 0x11 active id / 0x12 pending id:
+					 * u8 length + raw id bytes */
+					if ((key == 0x11 || key == 0x12) &&
+					    tl >= 1 && flags == QMI_INDICATION &&
+					    msgs[m].msg == 0x22) {
+						unsigned idl = buf[off];
+
+						printf("    [%s id len %u:",
+						       key == 0x11 ? "active"
+								   : "pending", idl);
+						if (off + 1 + idl <= off + tl) {
+							printf(" ");
+							dump_tlv(buf + off + 1,
+								 idl);
+							if (key == 0x11 &&
+							    msgs[m].msg == 0x22 &&
+							    ctypes[c] == 1 &&
+							    idl <= sizeof(active_id)) {
+								memcpy(active_id,
+								       buf + off + 1,
+								       idl);
+								active_id_len = idl;
+							}
+						}
+						printf("]\n");
+					}
+					/* LIST_CONFIGS ind 0x11 = u8 count +
+					 * {u32 type, u8-len id[]} elements */
+					if (key == 0x11 && tl >= 1 &&
+					    flags == QMI_INDICATION &&
+					    msgs[m].msg == 0x24) {
+						unsigned cnt = buf[off], o2 = off + 1, k;
+
+						printf("    [%u config(s)]\n", cnt);
+						for (k = 0; k < cnt &&
+							     o2 + 5 <= off + tl;
+						     k++) {
+							uint32_t t =
+								get16(buf + o2) |
+								((uint32_t)get16(buf + o2 + 2) << 16);
+							uint8_t idl = buf[o2 + 4];
+
+							printf("    [cfg type %u "
+							       "id_len %u id ",
+							       t, idl);
+							if (o2 + 5 + idl <=
+							    off + tl)
+								dump_tlv(buf + o2 + 5, idl);
+							printf("]\n");
+							o2 += 5 + idl;
+						}
+					}
+					off += tl;
+				}
+				if (flags == QMI_RESPONSE) {
+					got = 1;
+					any = 1;
+				}
+			}
+			if (!got)
+				printf("  TIMEOUT: no response frame\n");
+			txn++;
+		}
+	}
+
+	/* GET_CONFIG_INFO (0x28) on the active software config — read-only;
+	 * description string tells us WHICH mcfg the modem picked. */
+	if (active_id_len) {
+		unsigned off, end;
+		int i;
+
+		printf("== PDC GET_CONFIG_INFO ctype=1 id=<active> token=%u "
+		       "==\n", txn);
+		req[0] = QMI_REQUEST;
+		put16(req + 1, txn);
+		put16(req + 3, 0x28);
+		req[7] = 0x01; put16(req + 8, 5 + active_id_len);
+		put32(req + 10, 1);
+		req[14] = active_id_len;
+		memcpy(req + 15, active_id, active_id_len);
+		req[15 + active_id_len] = 0x10;
+		put16(req + 16 + active_id_len, 4);
+		put32(req + 18 + active_id_len, txn);
+		put16(req + 5, 15 + active_id_len);
+		if (qrtr_sendto(sock, node, port, req,
+				22 + active_id_len) == 0) {
+			for (i = 0; i < 8; i++) {
+				uint8_t flags;
+				uint16_t rtxn, mid, mlen;
+
+				len = qrtr_recvfrom(sock, buf, sizeof(buf),
+						    &rn, &rp);
+				if (len < 0)
+					continue;
+				if (rp == QRTR_PORT_CTRL || len < 7)
+					continue;
+				flags = buf[0];
+				rtxn = get16(buf + 1);
+				mid = get16(buf + 3);
+				mlen = get16(buf + 5);
+				if (rn != node ||
+				    (flags != QMI_RESPONSE &&
+				     flags != QMI_INDICATION) ||
+				    mid != 0x28 || rtxn != txn)
+					continue;
+				printf("  %s: flags 0x%02x txn %u msg "
+				       "0x%04x msg_len %u\n",
+				       flags == QMI_RESPONSE ? "resp" : "ind",
+				       flags, rtxn, mid, mlen);
+				end = 7 + mlen;
+				if (end > (unsigned)len)
+					end = (unsigned)len;
+				off = 7;
+				while (off + 3 <= end) {
+					uint8_t key = buf[off];
+					uint16_t tl = get16(buf + off + 1);
+
+					off += 3;
+					if (off + tl > end)
+						break;
+					printf("  TLV 0x%02x len %u: ", key, tl);
+					dump_tlv(buf + off, tl);
+					putchar('\n');
+					if (key == 0x02)
+						note_result(buf + off, tl);
+					/* 0x12 description: u8-len string */
+					if (key == 0x12 && tl >= 1 &&
+					    buf[off] <= tl - 1)
+						printf("    [description: "
+						       "%.*s]\n", buf[off],
+						       (char *)buf + off + 1);
+					off += tl;
+				}
+				if (flags == QMI_RESPONSE)
+					any = 1;
+			}
+		}
+		txn++;
+	}
+
+	close(sock);
+	return any ? 0 : 1;
+}
+
 int main(int argc, char **argv)
 {
 	unsigned i;
@@ -1128,14 +1568,21 @@ int main(int argc, char **argv)
 	    !(argc >= 3 && !strcmp(argv[1], "wdschain") && argc <= 8) &&
 	    !(argc <= 3 && !strcmp(argv[1], "enumsvc")) &&
 	    !(argc == 3 && (!strcmp(argv[1], "wdsstop") ||
-			    !strcmp(argv[1], "wdsprof"))) &&
+			    !strcmp(argv[1], "wdsprof") ||
+			    !strcmp(argv[1], "wdsplist") ||
+			    !strcmp(argv[1], "iccread"))) &&
+	    !(argc == 4 && !strcmp(argv[1], "wdsprof")) &&
+	    !((argc >= 3 && argc <= 5) && !strcmp(argv[1], "wdsmux")) &&
 	    !(argc >= 3 && argc <= 4 && !strcmp(argv[1], "ipa"))) {
-		fprintf(stderr, "usage: %s imei|mode|online|offline|lpm|uireset|sim|slots|simon|simoff|simon2|simoff2|provision|provision2|prov0|provp|switchslot|switchback|unprovision|events|sig|serving|sysinfo|ssp|sspcs|sspps|wdsmux|wdsbind|wdsipfam|wdsstart|wdsstat|wdsget|wdsstop <handle>|wdschain <hold-seconds> [nomux|port|sub1|ims|nocall|pN|insN]|wdfmt|wdfmtget|wdfmtraw|wdfmtqmap5|wdfmtqmap4|wdfmtqmap|wdfmtdis|wdfmtdisn|imsareg|imsasvc|dpmmsgs|dpmopen|dpmopen1|ipa <main|hwstats|nossr|android> [R]|svcls|enumsvc [svc]|all\n", argv[0]);
+		fprintf(stderr, "usage: %s imei|mode|online|offline|lpm|uireset|sim|slots|simon|simoff|simon2|simoff2|provision|provision2|prov0|provp|switchslot|switchback|unprovision|events|sig|serving|sysinfo|ssp|sspcs|sspps|wdsmux|wdsbind|wdsipfam|wdsstart|wdsstat|wdsget|wdsstop <handle>|wdsprof <idx> [type]|wdsplist <type>|wdsattp|wdsattn|wdsstatx|wdsmux <mux> [iface]|wdschain <hold-seconds> [nomux|port|sub1|ims|nocall|noapn|pN|qN|insN]|wdfmt|wdfmtget|wdfmtraw|wdfmtqmap5|wdfmtqmap4|wdfmtqmap|wdfmtdis|wdfmtdisn|imsareg|imsasvc|imsget|imspolicy|imsen|isimread|isimread2|isimread3|usimread|usimread2|usimread3|iccread|iccread5|usimread5|isimread5|isimread6|isimread7|isimdom|dsd|dpmmsgs|dpmopen|dpmopen1|ipa <main|hwstats|nossr|android> [R]|pdc|svcls|enumsvc [svc]|all\n", argv[0]);
 		return 2;
 	}
 
 	if (!strcmp(argv[1], "ipa"))
 		return ipa_init(argc, argv);
+
+	if (!strcmp(argv[1], "pdc"))
+		return pdc_run();
 
 	if (!strcmp(argv[1], "svcls")) {
 		svcls();
@@ -1157,7 +1604,8 @@ int main(int argc, char **argv)
 	 * first announced). */
 	if (!strcmp(argv[1], "wdschain") && argc >= 3) {
 		int use_mux = 1, apn_only = 0, no_call_type = 0, sub_first = 0;
-		unsigned prof = 0, a;
+		int prof = -1, prof2 = -1, drop_apn = 0;
+		unsigned a;
 		uint32_t wds_ins = 0;
 
 		for (a = 3; a < (unsigned)argc; a++) {
@@ -1171,18 +1619,23 @@ int main(int argc, char **argv)
 				sub_first = 1;
 			else if (!strcmp(argv[a], "nocall"))
 				no_call_type = 1;
+			else if (!strcmp(argv[a], "noapn"))
+				drop_apn = 1;
 			else if (!strncmp(argv[a], "ins", 3))
 				wds_ins = (uint32_t)strtoul(argv[a] + 3,
 							     NULL, 0);
-			else if (argv[a][0] == 'p')
-				prof = (unsigned)strtoul(argv[a] + 1, NULL, 0);
+			else if (argv[a][0] == 'q' && argv[a][1])
+				prof2 = (int)strtoul(argv[a] + 1, NULL, 0);
+			else if (argv[a][0] == 'p' && argv[a][1])
+				prof = (int)strtoul(argv[a] + 1, NULL, 0);
 		}
 		return chain(argv[2], use_mux, prof, apn_only, no_call_type,
-			     wds_ins, sub_first);
+			     wds_ins, sub_first, prof2, drop_apn);
 	}
 
 	/* argv[2] patches: wdsstop gets the packet handle (from
-	 * wdsstart's reply); wdsprof gets the profile index. */
+	 * wdsstart's reply); wdsprof gets the profile index;
+	 * wdsplist gets the profile table type (0 = 3GPP). */
 	if (argc == 3 && !strcmp(argv[1], "wdsprof")) {
 		unsigned long idx = strtoul(argv[2], NULL, 0);
 
@@ -1190,6 +1643,15 @@ int main(int argc, char **argv)
 			if (strcmp(QUERIES[i].cmd, "wdsprof"))
 				continue;
 			QUERIES[i].tlv_data[1] = (uint8_t)idx;
+		}
+	}
+	if (argc == 4 && !strcmp(argv[1], "wdsprof")) {
+		unsigned long t = strtoul(argv[3], NULL, 0);
+
+		for (i = 0; i < sizeof(QUERIES) / sizeof(QUERIES[0]); i++) {
+			if (strcmp(QUERIES[i].cmd, "wdsprof"))
+				continue;
+			QUERIES[i].tlv_data[0] = (uint8_t)t;
 		}
 	}
 	if (argc == 3 && !strcmp(argv[1], "wdsstop")) {
@@ -1202,6 +1664,48 @@ int main(int argc, char **argv)
 			QUERIES[i].tlv_data[1] = (h >> 8) & 0xff;
 			QUERIES[i].tlv_data[2] = (h >> 16) & 0xff;
 			QUERIES[i].tlv_data[3] = (h >> 24) & 0xff;
+		}
+	}
+	if (argc == 3 && !strcmp(argv[1], "wdsplist")) {
+		unsigned long t = strtoul(argv[2], NULL, 0);
+
+		for (i = 0; i < sizeof(QUERIES) / sizeof(QUERIES[0]); i++) {
+			if (strcmp(QUERIES[i].cmd, "wdsplist"))
+				continue;
+			QUERIES[i].tlv_data[0] = (uint8_t)t;
+		}
+	}
+	/* iccread <len>: over-read probe — vary the Read Information
+	 * length (argv[2]) to test whether strict-length reads pass
+	 * where over-reads die INTERNAL. */
+	if (argc == 3 && !strcmp(argv[1], "iccread")) {
+		unsigned long l = strtoul(argv[2], NULL, 0);
+
+		for (i = 0; i < sizeof(QUERIES) / sizeof(QUERIES[0]); i++) {
+			if (strcmp(QUERIES[i].cmd, "iccread"))
+				continue;
+			QUERIES[i].tlv3_data[2] = l & 0xff;
+			QUERIES[i].tlv3_data[3] = (l >> 8) & 0xff;
+		}
+	}
+	/* wdsmux <mux_id> [iface] [client_type]: probe bind-mux shapes
+	 * beyond {4,1}+1; client_type emits optional TLV 0x13 (u32). */
+	if ((argc == 3 || argc == 4 || argc == 5) &&
+	    !strcmp(argv[1], "wdsmux")) {
+		unsigned long muxid = strtoul(argv[2], NULL, 0);
+		unsigned long iface = argc >= 4 ? strtoul(argv[3], NULL, 0) : 1;
+		unsigned long ctype = argc == 5 ? strtoul(argv[4], NULL, 0) : 0;
+
+		for (i = 0; i < sizeof(QUERIES) / sizeof(QUERIES[0]); i++) {
+			if (strcmp(QUERIES[i].cmd, "wdsmux"))
+				continue;
+			QUERIES[i].tlv2_data[0] = (uint8_t)muxid;
+			QUERIES[i].tlv_data[4] = (uint8_t)iface;
+			if (argc == 5) {
+				QUERIES[i].tlv3_key = 0x13;
+				QUERIES[i].tlv3_data[0] = (uint8_t)ctype;
+				QUERIES[i].tlv3_len = 4;
+			}
 		}
 	}
 
