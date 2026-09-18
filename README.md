@@ -93,16 +93,21 @@ XBL (fused, signed) → AginxOS bootloader → Linux 4.19 stock kernel + vendor 
 
 ## What it looks like
 
+<p align="center">
+<img src="docs/images/home.png" width="280" alt="Home on a OnePlus 6 — clock, signal bars, camera / photos / talk / settings" />
+</p>
+
+Live dump from the panel (OnePlus 6, 1080×2280): time and signal in the
+status bar, four apps at the bottom.
+
 <table>
 <tr>
-<td><img src="docs/images/boot-rain.png" width="240" alt="Boot: Matrix rain while bring-up reports" /></td>
-<td><img src="docs/images/boot-wordmark.png" width="240" alt="Boot: every stage green, wordmark typed" /></td>
+<td><img src="docs/images/boot-wordmark.png" width="240" alt="Boot: AginxOS wordmark" /></td>
 <td><img src="docs/images/screen-html.png" width="240" alt="Panel: an agent-written brief rendered as HTML" /></td>
 </tr>
 </table>
 
-Left/middle: the boot card on the panel — rain while bring-up reports in,
-wordmark when every stage is green. Right: a markdown brief the agent wrote,
+Boot wordmark, then the home face. Right: a markdown brief the agent wrote,
 rendered as HTML on the same panel.
 
 ## Machines are data (D14)
@@ -159,7 +164,7 @@ flowchart TB
 | `crates/hwd` | — | device profile reader — the single legal source of machine facts (D14) |
 | `crates/voice` | `aginx-voice` | voice dialog daemon — PTT input, closed-vocab protocol, face writer |
 | `crates/wizard` | `aginx-net-wizard` | first-boot Wi-Fi setup TUI |
-| `crates/term` | `aginx-term` | on-device terminal UI (launcher + pty shell on the panel) |
+| `crates/term` | `aginx-term` | panel home (clock + apps) and the on-device terminal |
 | `crates/pkg` | `aginx-pkg` | package manager — signed manifest, 四件套 tars |
 | `crates/svc` | `aginx-svcd`/`aginx-svc`/`aginx-boot-ok` | supervisor, control client, A/B slot marker |
 | `crates/sign` | `aginx-sign` | host-side ed25519 signer/verifier |
