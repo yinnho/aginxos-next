@@ -12,6 +12,8 @@
 # 2026-09-14 折债：脚本与设备在役版逐行对齐（全模块链 + qrtr-smd 连字符 +
 # 尾段 remoteproc3 显式 start）；路径 /var/bin → /usr/bin（烤线世界）。
 M=/lib/modules
+# IMS PDN on this carrier is IPv6-only; CONFIG_IPV6=m.
+insmod $M/ipv6.ko 2>/dev/null
 for m in qcom_glink_smem qcom_common qcom_pil_info qcom_sysmon qcom_q6v5 reset-qcom-pdc qrtr qrtr-smd; do
   insmod $M/$m.ko 2>/dev/null
 done

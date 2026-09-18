@@ -17,6 +17,7 @@
 # run this again.
 M=/lib/modules
 Q=/usr/bin/qmi-ask
+grep -q "^ipv6 " /proc/modules || insmod $M/ipv6.ko
 grep -q "^ipa " /proc/modules || { insmod $M/ipa.ko && sleep 2; }
 n=0
 while [ $n -lt 60 ] && ! $Q mode >/dev/null 2>&1; do sleep 2; n=$((n+1)); done

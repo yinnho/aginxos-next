@@ -486,8 +486,13 @@ if [ "${BOOT_STYLE}" != "vendor-boot" ]; then
     "${QSRC}/rmtfs/rmtfs.c" "${QSRC}/rmtfs/storage.c" "${QSRC}/rmtfs/sharedmem.c" \
     "${QSRC}/rmtfs/rproc.c" "${QSRC}/rmtfs/util.c" "${QOBJ[@]}" -o "${TREE}/usr/bin/rmtfs"
   "${ZIG}" cc "${QCOMMON[@]}" "${RECIPE}/src/qmi-ask.c" "${QOBJ[@]}" -o "${TREE}/usr/bin/qmi-ask"
+  # 81voltd: IMS Data QMI server (svc 770). Protocol files are GPL-2.0-or-later
+  # from upstream 81voltd; 81voltd.c is the libqrtr port (no glib/MM).
+  "${ZIG}" cc "${QCOMMON[@]}" -I "${QSRC}/81voltd" \
+    "${QSRC}/81voltd/81voltd.c" "${QSRC}/81voltd/qmi_imsd.c" \
+    "${QOBJ[@]}" -o "${TREE}/usr/bin/81voltd"
   rm -rf "${QOUT}"
-  echo "staged raw-boot modem/wifi world (firmware + EFS seed + qrtr daemons + qmi-ask)"
+  echo "staged raw-boot modem/wifi world (firmware + EFS seed + qrtr daemons + qmi-ask + 81voltd)"
 fi
 
 # Recipe: etc (init.d/aginx/svc.d units/aginx conf/crontabs + manifest+sig),

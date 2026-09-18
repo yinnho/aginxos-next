@@ -85,6 +85,10 @@ scan_secrets() { # scan_secrets <target-file> <label>
       case "${line}" in *=*) ;; *) continue ;; esac
       k="${line%%=*}"; v="${line#*=}"
       [ -n "${v}" ] || continue
+      # generic non-secret keys: HOME is a path, *_KIND are model enums —
+      # their values appear all over any image (false positives); every
+      # other key defaults to scanned
+      case "${k}" in HOME|*_KIND) continue ;; esac
       if LC_ALL=C grep -a -qF -- "${v}" "${target}"; then
         echo "LEAK: ${k} value found in ${label} — refusing to package" >&2
         bad=1

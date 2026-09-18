@@ -1,0 +1,66 @@
+# SPDX-License-Identifier: GPL-2.0-or-later
+#
+# Copyright (c) 2024, Richard Acayan. All rights reserved.
+#
+
+package imsd;
+
+struct wds_spec {
+	string apn;
+	u32 unkfield_0_5;
+	u32 profiles_select;
+	u32 ip_family;
+	u16 profile_idx_3gpp;
+	u16 profile_idx_3gpp2;
+};
+
+struct address {
+	u32 family;
+	string addr;
+};
+
+struct op_res {
+	u16 err_status;
+	u16 err_code;
+};
+
+request start_connection_req {
+	required wds_spec conn_params = 0x1;
+	required u32 connection = 0x10;
+	optional u32 echo_sub = 0x12;
+	required u32 subscription = 0x13;
+} = 0x20;
+
+response start_connection_resp {
+	required op_res res = 0x2;
+	required u8 connection = 0x10;
+	required u32 orig_conn_id = 0x11;
+	required u32 subscription = 0x12;
+} = 0x20;
+
+indication connection_changed_ind {
+	required op_res res = 0x2;
+	required u8 connection = 0x1;
+	required u32 orig_conn_id = 0x10;
+	optional address ip_addr = 0x11;
+	required u32 subscription = 0x12;
+} = 0x20;
+
+request stop_connection_req {
+	required u8 connection = 0x1;
+	required u32 unkecho_01 = 0x10;
+} = 0x21;
+
+response stop_connection_resp {
+	required op_res res = 0x2;
+	required u8 unkfield_FA = 0x10;
+	required u32 unkecho_01 = 0x11;
+} = 0x21;
+
+request no_op_req {
+	optional u8 data[255] = 0x1;
+};
+
+response no_op_resp {
+	required op_res res = 0x2;
+};
