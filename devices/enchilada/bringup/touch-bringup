@@ -1,0 +1,27 @@
+#!/bin/sh
+# enchilada touch — Synaptics S3706B on i2c-12@20 (DT syna,rmi4-i2c).
+# 2026-09-16 live: rmi_core + rmi_i2c vermagic 6.11.0-sdm845-g2fa43795f607
+# bound 12-0020 → input "Synaptics S3706B" /dev/input/event4.
+# rcS already [ -x ] this script. Modules live in /lib/modules (modules.txt).
+export PATH=/sbin:/bin:/usr/sbin:/usr/bin
+LOG=/var/touch.log
+exec >>"$LOG" 2>&1
+echo "=== touch bring-up $(date) ==="
+M=/lib/modules
+for m in rmi_core rmi_i2c; do
+  grep -q "^${m} " /proc/modules && echo "$m already" && continue
+  insmod "$M/$m.ko" 2>/dev/null && echo "insmod $m ok" || echo "insmod $m fail"
+done
+n=0
+while [ $n -lt 20 ]; do
+  if grep -q "Synaptics S3706B" /proc/bus/input/devices 2>/dev/null; then
+    echo "touch ok event=$(sed -n '/Synaptics S3706B/,/Handlers/p' /proc/bus/input/devices | sed -n 's/.*Handlers=//p')"
+    echo "touch ok" >>/run/boot.state
+    exit 0
+  fi
+  sleep 1
+  n=$((n+1))
+done
+echo "touch fail no S3706B"
+echo "touch fail no S3706B" >>/run/boot.state
+exit 1

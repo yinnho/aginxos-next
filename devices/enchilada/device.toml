@@ -1,5 +1,6 @@
 # enchilada device profile — D14: 机型是数据，不是代码.
-# OnePlus 6 节点机（#335）：无头服务器形态，mainline 内核，无 vendor 世界。
+# OnePlus 6（#335）：人用智能体手机轨（2026-09-16）。mainline 内核，无 vendor 世界。
+# 节点机无头（panel-off）已让路：现场 /bin/bootcard + aginx-splash-hold。
 # 探针收据 2026-09-13（E4a seed v4, ssh 10.9.8.1 实读）：
 #   panel  = /sys/class/drm/card0-DSI-1 modes 首行 1080x2280
 #   input  = /proc/bus/input/devices: event0=pm8941_pwrkey event1=Alert slider
@@ -21,7 +22,7 @@ boot_style = "raw-boot"  # boot.img + 直读 userdata ext4；无 vendor_boot/tra
 [panel]
 width = 1080             # probed 2026-09-13: card0-DSI-1 native
 height = 2280
-touch_max_x = 1080       # 未探针（触摸未绑定）——占位=panel 分辨率
+touch_max_x = 1080       # panel native; S3706B ABS 未量程探针
 touch_max_y = 2280
 
 [input.ptt]              # voice/ptt.rs —— voice 在节点机不装；键值是 HID 标准码
@@ -32,7 +33,7 @@ key_volume_up = 115
 key_power = 116          # registered, unused；电源键在 event0 (probed)
 
 [input.term]             # term/main.rs —— term 在节点机不装
-touch_device = ""        # 未探针：触摸器件不存在（mainline 未绑定）
+touch_device = "/dev/input/event4"  # Synaptics S3706B (probed 2026-09-16)
 power_device = "/dev/input/event0"  # pm8941_pwrkey (probed)
 
 [audio]                  # voice/audio.rs —— 声卡未起（/dev/snd 仅 timer, probed）
@@ -53,8 +54,8 @@ cam_cores = [6, 7]       # sdm845: cpu0-3 little, cpu4-7 big (Kryo 385)
 ui_cores = [0, 1, 2, 3, 4, 5]
 big_cores = [4, 5, 6, 7]
 
-[camera]                 # 无相机线；schema 必填占位
-rear_sensor = "none"
+[camera]                 # 2026-09-16 探针：IMX519 绑上 i2c-16@1a / v4l-subdev22
+rear_sensor = "imx519"
 dark_gain = 16
 dark_dgain = 2
 

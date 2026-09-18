@@ -1,0 +1,40 @@
+#!/bin/sh
+# enchilada camera — sdm845 CAMSS + CCI + Sony IMX519/376k/371 (DT from
+# sdm845-mainline 7.1, built against 6.11). Modules in /lib/modules.
+# rcS already [ -x ] this script.
+export PATH=/sbin:/bin:/usr/sbin:/usr/bin
+LOG=/var/camera.log
+exec >>"$LOG" 2>&1
+echo "=== camera bring-up $(date) ==="
+M=/lib/modules
+# camcc first: CCI/CAMSS/MCLK all consume TITAN_TOP_GDSC + CAM_CC_* .
+# videodev/mc/v4l2* before i2c sensors; camss last (needs endpoints).
+for m in \
+  mc videodev v4l2-async v4l2-fwnode v4l2-cci \
+  videobuf2-common videobuf2-memops videobuf2-v4l2 videobuf2-dma-sg \
+  camcc-sdm845 i2c-qcom-cci \
+  imx519 imx376 imx371 lc898217xc \
+  qcom-camss
+do
+  grep -q "^${m} " /proc/modules && echo "$m already" && continue
+  if [ -f "$M/$m.ko" ]; then
+    insmod "$M/$m.ko" 2>/dev/null && echo "insmod $m ok" || echo "insmod $m fail"
+  else
+    echo "missing $m.ko"
+  fi
+done
+n=0
+while [ $n -lt 25 ]; do
+  if ls /dev/video* >/dev/null 2>&1; then
+    echo "camera ok video=$(ls /dev/video* 2>/dev/null | tr '\n' ' ')"
+    echo "camera ok" >>/run/boot.state
+    exit 0
+  fi
+  sleep 1
+  n=$((n+1))
+done
+echo "camera fail no /dev/video"
+echo "camera fail no /dev/video" >>/run/boot.state
+# CCI adapters still useful for i2cdetect even without video.
+ls -l /sys/class/i2c-adapter/ 2>/dev/null
+exit 1

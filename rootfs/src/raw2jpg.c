@@ -19,6 +19,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <errno.h>
+#include <math.h>
 #include <time.h>
 #include "jpegenc.h"
 
@@ -42,6 +43,18 @@ static uint8_t *raw10_gray(const uint8_t *raw, int w, int h, int stride)
         }
     }
     return g;
+}
+
+/* Optical black: v<=bl → 0, else stretch onto 0..255. Same LUT as campix. */
+static void gray_black_level(uint8_t *g, size_t n, int bl)
+{
+    if (bl <= 0) return;
+    if (bl > 254) bl = 254;
+    int den = 255 - bl;
+    for (size_t i = 0; i < n; i++) {
+        int v = g[i];
+        g[i] = v <= bl ? 0 : (uint8_t)((v - bl) * 255 / den);
+    }
 }
 
 static uint8_t at(const uint8_t *g, int w, int h, int x, int y)
@@ -83,14 +96,20 @@ static uint8_t *debayer(const uint8_t *g, int w, int h)
                 B = g[(size_t)y * w + x];
                 G = (l + r + u + d) / 4;
                 R = (ul + ur + dl + dr) / 4;
-            } else if (!(y & 1)) {    /* G site on an R row: R left/right */
+            } else {
+                /* G site: horizontal chroma is the row primary.
+                 * RGGB/GRBG even rows are R-primary; BGGR/GBRG even rows
+                 * are B-primary (campix.h cp_px_lin, 2026-09-05). Using
+                 * y-parity alone swapped R/B on every G site for --cfa bggr. */
                 G = g[(size_t)y * w + x];
-                R = (l + r) / 2;
-                B = (u + d) / 2;
-            } else {                  /* G site on a B row: B left/right */
-                G = g[(size_t)y * w + x];
-                B = (l + r) / 2;
-                R = (u + d) / 2;
+                int rrow = (cfa == 1 || cfa == 2) ? !even : even;
+                if (rrow) {
+                    R = (l + r) / 2;
+                    B = (u + d) / 2;
+                } else {
+                    B = (l + r) / 2;
+                    R = (u + d) / 2;
+                }
             }
             uint8_t *p = rgb + ((size_t)y * w + x) * 3;
             p[0] = (uint8_t)R; p[1] = (uint8_t)G; p[2] = (uint8_t)B;
@@ -98,26 +117,125 @@ static uint8_t *debayer(const uint8_t *g, int w, int h)
     return rgb;
 }
 
+static void rgb_wb_gamma(uint8_t *rgb, int w, int h, int do_wb, double gamma)
+{
+    size_t n = (size_t)w * (size_t)h;
+    double kr = 1.0, kb = 1.0;
+    if (do_wb && n) {
+        unsigned long long sr = 0, sg = 0, sb = 0;
+        for (size_t i = 0; i < n; i++) {
+            sr += rgb[i * 3];
+            sg += rgb[i * 3 + 1];
+            sb += rgb[i * 3 + 2];
+        }
+        double mr = (double)sr / (double)n;
+        double mg = (double)sg / (double)n;
+        double mb = (double)sb / (double)n;
+        if (mr > 1.0) kr = mg / mr;
+        if (mb > 1.0) kb = mg / mb;
+        if (kr > 4.0) kr = 4.0;
+        if (kb > 4.0) kb = 4.0;
+    }
+    uint8_t lut[256];
+    if (gamma > 1.0) {
+        for (int v = 0; v < 256; v++) {
+            double y = 255.0 * pow((double)v / 255.0, 1.0 / gamma);
+            int iv = (int)(y + 0.5);
+            lut[v] = (uint8_t)(iv < 0 ? 0 : iv > 255 ? 255 : iv);
+        }
+    } else {
+        for (int v = 0; v < 256; v++) lut[v] = (uint8_t)v;
+    }
+    for (size_t i = 0; i < n; i++) {
+        int r = (int)(rgb[i * 3] * kr);
+        int b = (int)(rgb[i * 3 + 2] * kb);
+        if (r > 255) r = 255;
+        if (b > 255) b = 255;
+        rgb[i * 3] = lut[r];
+        rgb[i * 3 + 1] = lut[rgb[i * 3 + 1]];
+        rgb[i * 3 + 2] = lut[b];
+    }
+}
+
+/* deg is clockwise, same sense as DT `rotation`. */
+static uint8_t *rgb_rotate_cw(const uint8_t *in, int w, int h, int deg,
+                             int *ow, int *oh)
+{
+    uint8_t *out;
+    size_t n = (size_t)w * (size_t)h;
+    if (deg == 0) {
+        out = malloc(n * 3);
+        if (!out) return NULL;
+        memcpy(out, in, n * 3);
+        *ow = w;
+        *oh = h;
+        return out;
+    }
+    if (deg == 180) {
+        out = malloc(n * 3);
+        if (!out) return NULL;
+        for (int y = 0; y < h; y++)
+            for (int x = 0; x < w; x++) {
+                const uint8_t *s = in + ((size_t)y * w + x) * 3;
+                uint8_t *d = out + ((size_t)(h - 1 - y) * w + (w - 1 - x)) * 3;
+                d[0] = s[0]; d[1] = s[1]; d[2] = s[2];
+            }
+        *ow = w;
+        *oh = h;
+        return out;
+    }
+    out = malloc(n * 3);
+    if (!out) return NULL;
+    *ow = h;
+    *oh = w;
+    for (int y = 0; y < h; y++)
+        for (int x = 0; x < w; x++) {
+            const uint8_t *s = in + ((size_t)y * w + x) * 3;
+            int nx, ny;
+            if (deg == 90) {
+                nx = h - 1 - y;
+                ny = x;
+            } else { /* 270 */
+                nx = y;
+                ny = w - 1 - x;
+            }
+            uint8_t *d = out + ((size_t)ny * (*ow) + nx) * 3;
+            d[0] = s[0]; d[1] = s[1]; d[2] = s[2];
+        }
+    return out;
+}
+
 int main(int argc, char **argv)
 {
     if (argc < 5) {
         fprintf(stderr, "usage: %s <raw> <w> <h> <stride> [q] "
-                "[--gray|--color] [--cfa rggb|bggr|gbrg|grbg] [--out p]\n",
+                "[--gray|--color] [--cfa rggb|bggr|gbrg|grbg] "
+                "[--rotate 90|180|270] [--wb] [--gamma g] [--bl n] [--out p]\n",
                 argv[0]);
         return 2;
     }
     const char *path = argv[1];
     int w = atoi(argv[2]), h = atoi(argv[3]), stride = atoi(argv[4]);
-    int q = 85, color = 0;
+    int q = 85, color = 0, rotate = 0, do_wb = 0, bl = 0;
+    double gamma = 0;
     const char *out = NULL;
     for (int i = 5; i < argc; i++) {
         if (!strcmp(argv[i], "--color")) color = 1;
         else if (!strcmp(argv[i], "--gray")) color = 0;
+        else if (!strcmp(argv[i], "--wb")) do_wb = 1;
         else if (!strcmp(argv[i], "--cfa") && i + 1 < argc) {
             const char *c = argv[++i];
             cfa = !strcmp(c, "bggr") ? 1 : !strcmp(c, "gbrg") ? 2 :
                   !strcmp(c, "grbg") ? 3 : 0;
-        } else if (!strcmp(argv[i], "--out") && i + 1 < argc)
+        } else if (!strcmp(argv[i], "--rotate") && i + 1 < argc) {
+            rotate = atoi(argv[++i]);
+            if (rotate != 0 && rotate != 90 && rotate != 180 && rotate != 270)
+                rotate = 0;
+        } else if (!strcmp(argv[i], "--gamma") && i + 1 < argc)
+            gamma = atof(argv[++i]);
+        else if (!strcmp(argv[i], "--bl") && i + 1 < argc)
+            bl = atoi(argv[++i]);
+        else if (!strcmp(argv[i], "--out") && i + 1 < argc)
             out = argv[++i];
         else if (argv[i][0] != '-')
             q = atoi(argv[i]);
@@ -148,12 +266,20 @@ int main(int argc, char **argv)
     ssize_t n;
     if (color) {
         uint8_t *g = raw10_gray(raw, w, h, stride);
+        if (g) gray_black_level(g, (size_t)w * (size_t)h, bl);
         uint8_t *rgb = g ? debayer(g, w, h) : NULL;
         free(g);
         if (!rgb) { fprintf(stderr, "debayer oom\n"); return 1; }
-        n = jpeg_encode_rgb24(rgb, w, h, w * 3, q, outbuf,
-                              (size_t)w * h * 3 + 65536);
+        rgb_wb_gamma(rgb, w, h, do_wb, gamma);
+        int ow = w, oh = h;
+        uint8_t *rot = rgb_rotate_cw(rgb, w, h, rotate, &ow, &oh);
         free(rgb);
+        if (!rot) { fprintf(stderr, "rotate oom\n"); return 1; }
+        n = jpeg_encode_rgb24(rot, ow, oh, ow * 3, q, outbuf,
+                              (size_t)ow * oh * 3 + 65536);
+        w = ow;
+        h = oh;
+        free(rot);
     } else {
         uint8_t *g = raw10_gray(raw, w, h, stride);
         if (!g) { fprintf(stderr, "oom\n"); return 1; }
