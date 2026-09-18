@@ -2,6 +2,9 @@
 # 来源：live 设备 /lib/modules 逐字拉回（.local/device/enchilada/modules/，
 # 2026-09-14）——host 侧 6.11 构建树已不在，设备字节即权威。
 #
+# IPv6（CONFIG_IPV6=m；2026-09-15 镜像未烤此模块 = IMS IPv6 口
+# RTNETLINK Not supported。86quan linux 树 vermagic 与 uname 全同。）
+ipv6
 # wifi 链（net-bringup 按此序 insmod，E5 2026-09-14 收据）：
 rfkill
 cfg80211
@@ -24,3 +27,24 @@ qcom_q6v5_pas
 qcom_q6v5_mss
 # IPA（modem-up online 前置——不载 = ipa_dl_opt_lte.c:432 fatal，M44 债）：
 ipa
+# 触摸（人用轨 2026-09-16）：DT i2c-12@20 syna,rmi4-i2c → Synaptics S3706B
+rmi_core
+rmi_i2c
+# 相机（人用轨 2026-09-16）：CAMCC + CCI + CAMSS + IMX519/376/371
+# insmod 序在 camera-bringup，不是本文件顺序。
+videodev
+mc
+v4l2-async
+v4l2-fwnode
+v4l2-cci
+videobuf2-common
+videobuf2-memops
+videobuf2-v4l2
+videobuf2-dma-sg
+camcc-sdm845
+i2c-qcom-cci
+imx519
+imx376
+imx371
+lc898217xc
+qcom-camss

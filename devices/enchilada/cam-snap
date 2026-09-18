@@ -1,0 +1,33 @@
+#!/bin/sh
+# Still capture on enchilada: camss-shot RAW10 → raw2jpg → /home/photos.
+# usage: cam-snap [imx371|imx376|imx519] [out.jpg]
+set -euo pipefail
+export PATH=/usr/sbin:/usr/bin:/sbin:/bin
+sensor=${1:-imx371}
+out=${2:-}
+# rotation matches DT `rotation` (clockwise). --bl 16: IMX376 8-bit floor.
+# CFA: G_FMT is SBGGR10. Redfin campix.h (2026-09-05): RDI starts on a B
+# site = BGGR; wrong phase + gray-world WB swaps red↔blue (white invariant).
+# rggb on this buffer still produced that (git red bars → purple).
+case $sensor in
+  imx371) w=4656; h=3496; cfa=bggr; extra="--rotate 90 --bl 16 --wb --gamma 2.2" ;;
+  imx376) w=2592; h=1940; cfa=bggr; extra="--rotate 270 --bl 16 --wb --gamma 2.2" ;;
+  imx519) w=3840; h=2160; cfa=rggb; extra="--rotate 90 --bl 16 --wb --gamma 2.2" ;;
+  *) echo "cam-snap: sensor must be imx371, imx376 or imx519" >&2; exit 2 ;;
+esac
+mkdir -p /home/photos /tmp /run/aginx-voice
+raw=/tmp/snap.raw
+camss-shot "$sensor" "$raw" >/var/cam-snap.log 2>&1
+sz=$(wc -c < "$raw")
+stride=$((sz / h))
+ts=$(date +%Y%m%d-%H%M%S 2>/dev/null || echo now)
+archive=/home/photos/${ts}-${sensor}.jpg
+# extra is a fixed flag list (no spaces inside tokens)
+# shellcheck disable=SC2086
+raw2jpg "$raw" "$w" "$h" "$stride" 85 --color --cfa "$cfa" $extra --out "$archive"
+rm -f "$raw"
+if [ -n "$out" ]; then
+  mkdir -p "$(dirname "$out")"
+  cp "$archive" "$out"
+fi
+echo "$archive"
