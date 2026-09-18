@@ -121,6 +121,7 @@ static struct query QUERIES[] = {
 	 * first or this bind was refused all boot. */
 	{ "wdsport", 1,  0x002F, "WDS BIND_DATA_PORT (legacy, bare)" },
 	{ "wdsbind", 1,  0x00AF, "WDS BIND_SUBSCRIPTION primary", 0x01, {1, 0, 0, 0}, 4 },
+	{ "wdsgetsub", 1, 0x00B0, "WDS GET_BIND_SUBSCRIPTION" },
 	{ "wdsipfam", 1, 0x004D, "WDS SET_IP_FAMILY ipv4", 0x01, {4}, 1 },
 	/* START_NETWORK terminal form: apn=ims, ipv4, 3gpp profile 2,
 	 * 3gpp2 profile 0xFF (none), call type 1.  TLV ids/names per
@@ -138,7 +139,7 @@ static struct query QUERIES[] = {
 	 * pN to override 0x31, or "ims" to start by APN with no profile. */
 	{ "wdsplist", 1, 0x002A, "WDS GET_PROFILE_LIST 3gpp", 0x10, {1}, 1 },
 	/* wdsprof takes the profile index as argv[2] (see main). */
-	{ "wdsprof",  1, 0x002B, "WDS GET_PROFILE_SETTINGS idx=<argv2>", 0x01, {1, 0}, 2 },
+	{ "wdsprof",  1, 0x002B, "WDS GET_PROFILE_SETTINGS idx=<argv2>", 0x01, {0, 1}, 2 },
 	/* wdsstop takes the packet handle printed by wdsstart as argv[2]
 	 * (decimal or 0x-hex). */
 	{ "wdsstop", 1,  0x0021, "WDS STOP_NETWORK handle=<argv2>", 0x01, {0, 0, 0, 0}, 4 },
@@ -205,12 +206,38 @@ static struct query QUERIES[] = {
 	/* DSD tells which data systems are available for calls — the IMS
 	 * client consults it before attaching the ims PDN. */
 	{ "dsd", 0x2A, 0x0024, "DSD GET_SYSTEM_STATUS (bare)" },
+	{ "dsdapn0", 0x2A, 0x0033, "DSD GET_APN_INFO type=default", 0x01, {0, 0, 0, 0}, 4 },
+	{ "dsdapn1", 0x2A, 0x0033, "DSD GET_APN_INFO type=ims", 0x01, {1, 0, 0, 0}, 4 },
+	{ "dsdapn2", 0x2A, 0x0033, "DSD GET_APN_INFO type=mms", 0x01, {2, 0, 0, 0}, 4 },
+	{ "dsdapn8", 0x2A, 0x0033, "DSD GET_APN_INFO type=emergency", 0x01, {8, 0, 0, 0}, 4 },
+	/* OpenIMSd OP6T pcap #499: DSD 0x0034 TLV 0x12 = 4, SUCCESS,
+	 * between IMS 0x8f and IMS DCM START. */
+	{ "dsd34", 0x2A, 0x0034, "DSD 0x34 gold tlv 0x12=4",
+	  0x12, {4, 0, 0, 0}, 4 },
+	/* OpenIMSd pcap before 0x8f: VOICE 0x40 TLV 0x16=3; WMS 0x5c /
+	 * 0x45 / 0x4a / 0x48. */
+	{ "voice40", 9, 0x0040, "VOICE 0x40 gold tlv 0x16=3", 0x16, {3}, 1 },
+	{ "wms5c", 5, 0x005C, "WMS gold 0x5c bare" },
+	{ "wms45", 5, 0x0045, "WMS IND_REG gold tlv 0x01=1", 0x01, {1}, 1 },
+	{ "wms4a", 5, 0x004A, "WMS GET_TRANSPORT_NW_REG" },
+	{ "wms30", 5, 0x0030, "WMS GET_MESSAGE_PROTOCOL" },
+	{ "wms32", 5, 0x0032, "WMS GET_ROUTES" },
+	{ "wms48", 5, 0x0048, "WMS GET_TRANSPORT_LAYER" },
+	{ "wmsbind", 5, 0x004F, "WMS BIND_SUBSCRIPTION", 0x01, {2, 0, 0, 0}, 4 },
+	{ "wmsmsgs", 5, 0x001E, "WMS GET_SUPPORTED_MESSAGES" },
+	{ "dsdmsgs", 0x2A, 0x001E, "DSD GET_SUPPORTED_MESSAGES" },
+	{ "voicemsgs", 9, 0x001E, "VOICE GET_SUPPORTED_MESSAGES" },
 	/* The boot trigger stock Android's ims APK owns: enable voice+SMS
 	 * so the on-modem IMS client starts registering.  TLVs are u8
 	 * booleans per json (0x10 voice-over-LTE, 0x1a sms). */
 	{ "imsen", 0x12, 0x008f, "IMS SET_SERVICES_ENABLED voice+sms",
 	  0x10, {1}, 1,
 	  0x1A, {1}, 1 },
+	/* libqmi 1.36 --ims-bind: msg 0x0098 TLV 0x01 u32 subscription.
+	 * GET/SET 0x90/0x8f are InvalidOperation until this client is bound. */
+	{ "imsbind", 0x12, 0x0098, "IMS BIND subscription", 0x01, {1, 0, 0, 0}, 4 },
+	/* --imsa-bind: msg 0x0033 TLV 0x01 u32 subscription. */
+	{ "imsabind", 0x21, 0x0033, "IMSA BIND subscription", 0x01, {1, 0, 0, 0}, 4 },
 	/* B1 (READ_TRANSPARENT 0x0020): EF_IMPI (6F02) through a card
 	 * session bound to the ISIM ADF.  Session TLV 0x01 = {u8 type
 	 * CARD_SLOT_1=6, u8 aid_len, aid}; binding this session is the
@@ -284,6 +311,10 @@ static struct query QUERIES[] = {
 	  0x02, {0x02, 0x6f, 0x04, 0x00, 0x3f, 0xff, 0x7f}, 7,
 	  0x01, {4, 16, 0xa0, 0x00, 0x00, 0x00, 0x87, 0x10, 0x04, 0xff, 0x86, 0xff, 0x03, 0x89, 0xff, 0xff, 0xff, 0xff}, 18,
 	  0x03, {0, 0, 0, 0}, 4 },
+	{ "isimdom6", 11, 0x0020, "UIM READ_TRANSPARENT EF_DOMAIN 6f03 session=nonprov-slot1",
+	  0x02, {0x03, 0x6f, 0x04, 0x00, 0x3f, 0xff, 0x7f}, 7,
+	  0x01, {4, 16, 0xa0, 0x00, 0x00, 0x00, 0x87, 0x10, 0x04, 0xff, 0x86, 0xff, 0x03, 0x89, 0xff, 0xff, 0xff, 0xff}, 18,
+	  0x03, {0, 0, 0, 0}, 4 },
 	{ "isimread7", 11, 0x0020, "UIM READ_TRANSPARENT EF_IMPI path=adf-relative",
 	  0x02, {0x02, 0x6f, 0x02, 0xff, 0x7f}, 5,
 	  0x01, {6, 16, 0xa0, 0x00, 0x00, 0x00, 0x87, 0x10, 0x04, 0xff, 0x86, 0xff, 0x03, 0x89, 0xff, 0xff, 0xff, 0xff}, 18,
@@ -292,6 +323,48 @@ static struct query QUERIES[] = {
 	  0x02, {0x03, 0x6f, 0x04, 0x00, 0x3f, 0xff, 0x7f}, 7,
 	  0x01, {6, 16, 0xa0, 0x00, 0x00, 0x00, 0x87, 0x10, 0x04, 0xff, 0x86, 0xff, 0x03, 0x89, 0xff, 0xff, 0xff, 0xff}, 18,
 	  0x03, {0, 0, 0, 0}, 4 },
+	/* Physical slot 2 (this CT card): CARD_SLOT_2 = 7. */
+	{ "isim2", 11, 0x0020, "UIM READ EF_IMPI ISIM CARD_SLOT_2",
+	  0x02, {0x02, 0x6f, 0x04, 0x00, 0x3f, 0xff, 0x7f}, 7,
+	  0x01, {7, 16, 0xa0, 0x00, 0x00, 0x00, 0x87, 0x10, 0x04, 0xff, 0x86, 0xff, 0x03, 0x89, 0xff, 0xff, 0xff, 0xff}, 18,
+	  0x03, {0, 0, 0, 0}, 4 },
+	{ "isim2dom", 11, 0x0020, "UIM READ EF_DOMAIN ISIM CARD_SLOT_2",
+	  0x02, {0x03, 0x6f, 0x04, 0x00, 0x3f, 0xff, 0x7f}, 7,
+	  0x01, {7, 16, 0xa0, 0x00, 0x00, 0x00, 0x87, 0x10, 0x04, 0xff, 0x86, 0xff, 0x03, 0x89, 0xff, 0xff, 0xff, 0xff}, 18,
+	  0x03, {0, 0, 0, 0}, 4 },
+	{ "imspen", 0x1F, 0x0020, "IMSP GET_ENABLER_STATE" },
+	/* Gold qcrild before 0x8f: ISIM via NONPROVISIONING_SLOT_2 (5),
+	 * not CARD_SLOT_2 (7). AID = this card's ISIM. */
+	{ "isimnp2", 11, 0x0020, "UIM READ EF_IMPI nonprov-slot2 ISIM",
+	  0x02, {0x02, 0x6f, 0x04, 0x00, 0x3f, 0xff, 0x7f}, 7,
+	  0x01, {5, 16, 0xa0, 0x00, 0x00, 0x00, 0x87, 0x10, 0x04, 0xff, 0x86, 0xff, 0x03, 0x89, 0xff, 0xff, 0xff, 0xff}, 18,
+	  0x03, {0, 0, 0, 0}, 4 },
+	{ "isimnp2dom", 11, 0x0020, "UIM READ EF_DOMAIN nonprov-slot2 ISIM",
+	  0x02, {0x03, 0x6f, 0x04, 0x00, 0x3f, 0xff, 0x7f}, 7,
+	  0x01, {5, 16, 0xa0, 0x00, 0x00, 0x00, 0x87, 0x10, 0x04, 0xff, 0x86, 0xff, 0x03, 0x89, 0xff, 0xff, 0xff, 0xff}, 18,
+	  0x03, {0, 0, 0, 0}, 4 },
+	/* Gold #193: READ_RECORD 0x21 EF_IMPU 6F04 rec#1 on ISIM session. */
+	{ "uim36", 11, 0x0036, "UIM GET_SERVICE_STATUS gold",
+	  0x01, {0, 0}, 2,
+	  0x02, {1, 0, 0, 0}, 4 },
+	/* Gold first UIM: EVENT_REG 0x41 TLV 0x01=1; GET_CONFIGURATION 0x2A. */
+	{ "uim41", 11, 0x0041, "UIM EVENT_REG gold tlv 0x01=1", 0x01, {1}, 1 },
+	{ "uim2a", 11, 0x002A, "UIM REFRESH_REGISTER gold vote=0",
+	  0x01, {7, 0}, 2,
+	  0x02, {1, 0, 0, 0}, 4 },
+	/* Same 0x2A with Vote For Init = 1 (NAA init). */
+	{ "uim2avote", 11, 0x002A, "UIM REFRESH_REGISTER vote_for_init=1 slot2",
+	  0x01, {7, 0}, 2,
+	  0x02, {1, 1, 0, 0}, 4 },
+	{ "uim2e", 11, 0x002E, "UIM REGISTER_EVENTS mask=card+ext",
+	  0x01, {0x03, 0, 0, 0}, 4 },
+	{ "uim24isim", 11, 0x0024, "UIM GET_FILE_ATTRIBUTES EF_IMPI nonprov-slot2",
+	  0x02, {0x02, 0x6f, 0x04, 0x00, 0x3f, 0xff, 0x7f}, 7,
+	  0x01, {5, 16, 0xa0, 0x00, 0x00, 0x00, 0x87, 0x10, 0x04, 0xff, 0x86, 0xff, 0x03, 0x89, 0xff, 0xff, 0xff, 0xff}, 18 },
+	{ "isimnp2impu", 11, 0x0021, "UIM READ_RECORD EF_IMPU nonprov-slot2",
+	  0x02, {0x04, 0x6f, 0x04, 0x00, 0x3f, 0xff, 0x7f}, 7,
+	  0x01, {5, 16, 0xa0, 0x00, 0x00, 0x00, 0x87, 0x10, 0x04, 0xff, 0x86, 0xff, 0x03, 0x89, 0xff, 0xff, 0xff, 0xff}, 18,
+	  0x03, {1, 0, 0x64, 0}, 4 },
 	/* MM combination row 6 (bam-dmux / any-driver shape): raw-ip, no
 	 * aggregation.  If the kernel ipa3 IPA-QMI contract is up WITHOUT
 	 * aggregation, this SET should MATCH the contract and succeed where
@@ -413,6 +486,28 @@ static void hint(const struct query *q, uint8_t key,
 {
 	if (key == 0x02) {
 		note_result(d, n);
+		return;
+	}
+	/* GET_SUPPORTED_MESSAGES: TLV 0x10 = u16 byte-count + bitmap.
+	 * Opcode N is bit (N%8) of byte (N/8). HARDWARE 2026-09-16
+	 * IMS list prefix `9b 00` is this count. */
+	if (q->msg == 0x001E && key == 0x10 && n >= 2) {
+		uint16_t nbytes = get16(d);
+		unsigned lim = nbytes;
+		unsigned i, b, shown = 0;
+
+		if (lim > n - 2)
+			lim = n - 2;
+		printf("    [opcodes");
+		for (i = 0; i < lim; i++) {
+			for (b = 0; b < 8; b++) {
+				if (d[2 + i] & (1u << b)) {
+					printf(" 0x%02x", i * 8 + b);
+					shown++;
+				}
+			}
+		}
+		printf(" (%u)]\n", shown);
 		return;
 	}
 	if (!strcmp(q->cmd, "sig") && key == 0x01 && n >= 2) {
@@ -1559,6 +1654,53 @@ static int pdc_run(void)
 	return any ? 0 : 1;
 }
 
+/* One IMS/IMSA request on an already-open client. Prints the matching
+ * response and any indications that arrive first. */
+static int ims_send(int sock, uint32_t node, uint32_t port, uint16_t txn,
+		    uint16_t msg, const uint8_t *tlvs, uint16_t tlen,
+		    const char *tag)
+{
+	uint8_t req[280], buf[512];
+	uint32_t rn, rp;
+	int n, i;
+
+	req[0] = QMI_REQUEST;
+	put16(req + 1, txn);
+	put16(req + 3, msg);
+	put16(req + 5, tlen);
+	if (tlen)
+		memcpy(req + 7, tlvs, tlen);
+	printf("== %s msg 0x%04x txn %u (%u tlv bytes) ==\n",
+	       tag, msg, txn, tlen);
+	if (qrtr_sendto(sock, node, port, req, 7 + tlen) < 0) {
+		printf("  sendto failed\n");
+		return 1;
+	}
+	for (i = 0; i < 8; i++) {
+		n = qrtr_recvfrom(sock, buf, sizeof(buf), &rn, &rp);
+		if (n < 7)
+			continue;
+		if (rp == QRTR_PORT_CTRL)
+			continue;
+		if (buf[0] == QMI_INDICATION) {
+			printf("  ind  msg 0x%04x len %u\n",
+			       get16(buf + 3), get16(buf + 5));
+			continue;
+		}
+		if (buf[0] == QMI_RESPONSE && get16(buf + 1) == txn &&
+		    get16(buf + 3) == msg) {
+			printf("  resp msg_len %u  ", get16(buf + 5));
+			if (get16(buf + 5) >= 7)
+				note_result(buf + 10, 4);
+			else
+				putchar('\n');
+			return 0;
+		}
+	}
+	printf("  no response\n");
+	return 1;
+}
+
 int main(int argc, char **argv)
 {
 	unsigned i;
@@ -1570,12 +1712,1562 @@ int main(int argc, char **argv)
 	    !(argc == 3 && (!strcmp(argv[1], "wdsstop") ||
 			    !strcmp(argv[1], "wdsprof") ||
 			    !strcmp(argv[1], "wdsplist") ||
-			    !strcmp(argv[1], "iccread"))) &&
+			    !strcmp(argv[1], "iccread") ||
+			    !strcmp(argv[1], "wdfmt") ||
+			    !strcmp(argv[1], "wdfmtqmap4") ||
+			    !strcmp(argv[1], "wdfmtqmap5") ||
+			    !strcmp(argv[1], "wdfmtqmap"))) &&
 	    !(argc == 4 && !strcmp(argv[1], "wdsprof")) &&
 	    !((argc >= 3 && argc <= 5) && !strcmp(argv[1], "wdsmux")) &&
 	    !(argc >= 3 && argc <= 4 && !strcmp(argv[1], "ipa"))) {
 		fprintf(stderr, "usage: %s imei|mode|online|offline|lpm|uireset|sim|slots|simon|simoff|simon2|simoff2|provision|provision2|prov0|provp|switchslot|switchback|unprovision|events|sig|serving|sysinfo|ssp|sspcs|sspps|wdsmux|wdsbind|wdsipfam|wdsstart|wdsstat|wdsget|wdsstop <handle>|wdsprof <idx> [type]|wdsplist <type>|wdsattp|wdsattn|wdsstatx|wdsmux <mux> [iface]|wdschain <hold-seconds> [nomux|port|sub1|ims|nocall|noapn|pN|qN|insN]|wdfmt|wdfmtget|wdfmtraw|wdfmtqmap5|wdfmtqmap4|wdfmtqmap|wdfmtdis|wdfmtdisn|imsareg|imsasvc|imsget|imspolicy|imsen|isimread|isimread2|isimread3|usimread|usimread2|usimread3|iccread|iccread5|usimread5|isimread5|isimread6|isimread7|isimdom|dsd|dpmmsgs|dpmopen|dpmopen1|ipa <main|hwstats|nossr|android> [R]|pdc|svcls|enumsvc [svc]|all\n", argv[0]);
 		return 2;
+	}
+
+	if (!strcmp(argv[1], "uimpre")) {
+		struct query q41 = { .cmd = "uim41",
+			.desc = "UIM EVENT_REG", .svc = 11, .msg = 0x0041,
+			.tlv_key = 0x01, .tlv_data = {1}, .tlv_len = 1 };
+		struct query q2a = { .cmd = "uim2a",
+			.desc = "UIM GET_CONFIGURATION", .svc = 11, .msg = 0x002A,
+			.tlv_key = 0x01, .tlv_data = {7, 0}, .tlv_len = 2,
+			.tlv2_key = 0x02, .tlv2_data = {1, 0, 0, 0}, .tlv2_len = 4 };
+		struct query q24 = { .cmd = "uim24isim",
+			.desc = "GET_FILE_ATTRIBUTES IMPI nonprov-slot2",
+			.svc = 11, .msg = 0x0024,
+			.tlv_key = 0x02,
+			.tlv_data = {0x02, 0x6f, 0x04, 0x00, 0x3f, 0xff, 0x7f},
+			.tlv_len = 7,
+			.tlv2_key = 0x01,
+			.tlv2_data = {5, 16, 0xa0, 0x00, 0x00, 0x00, 0x87, 0x10, 0x04, 0xff, 0x86, 0xff, 0x03, 0x89, 0xff, 0xff, 0xff, 0xff},
+			.tlv2_len = 18 };
+		struct query q20 = { .cmd = "isimnp2",
+			.desc = "READ EF_IMPI after EVENT_REG",
+			.svc = 11, .msg = 0x0020,
+			.tlv_key = 0x02,
+			.tlv_data = {0x02, 0x6f, 0x04, 0x00, 0x3f, 0xff, 0x7f},
+			.tlv_len = 7,
+			.tlv2_key = 0x01,
+			.tlv2_data = {5, 16, 0xa0, 0x00, 0x00, 0x00, 0x87, 0x10, 0x04, 0xff, 0x86, 0xff, 0x03, 0x89, 0xff, 0xff, 0xff, 0xff},
+			.tlv2_len = 18,
+			.tlv3_key = 0x03, .tlv3_data = {0, 0, 0, 0}, .tlv3_len = 4 };
+		uint32_t node, port, ins;
+		uint16_t txn = 1;
+		int sock;
+
+		sock = qrtr_open(0);
+		if (sock < 0)
+			return 1;
+		if (lookup_service(sock, 11, 0, &node, &port, &ins) < 0) {
+			close(sock);
+			return 1;
+		}
+		printf("uimpre: EVENT_REG + GET_CONFIG + GET_ATTR + READ IMPI\n");
+		ask_on(sock, node, port, &q41, txn++, NULL, NULL);
+		ask_on(sock, node, port, &q2a, txn++, NULL, NULL);
+		ask_on(sock, node, port, &q24, txn++, NULL, NULL);
+		ask_on(sock, node, port, &q20, txn++, NULL, NULL);
+		close(sock);
+		return 0;
+	}
+
+	if (!strcmp(argv[1], "wms45a")) {
+		struct query q45 = { .cmd = "wms45",
+			.desc = "WMS IND_REG then 0x4a", .svc = 5, .msg = 0x0045,
+			.tlv_key = 0x01, .tlv_data = {1}, .tlv_len = 1 };
+		struct query q4a = { .cmd = "wms4a",
+			.desc = "WMS 0x4a same client after 0x45",
+			.svc = 5, .msg = 0x004A };
+		uint32_t node, port, ins;
+		uint16_t txn = 1;
+		int sock;
+
+		sock = qrtr_open(0);
+		if (sock < 0)
+			return 1;
+		if (lookup_service(sock, 5, 0, &node, &port, &ins) < 0) {
+			close(sock);
+			return 1;
+		}
+		ask_on(sock, node, port, &q45, txn++, NULL, NULL);
+		ask_on(sock, node, port, &q4a, txn++, NULL, NULL);
+		close(sock);
+		return 0;
+	}
+
+	if (!strcmp(argv[1], "wmsreg")) {
+		struct query qbind = { .cmd = "wmsbind2",
+			.desc = "WMS BIND sub=2", .svc = 5, .msg = 0x004F,
+			.tlv_key = 0x01, .tlv_data = {2, 0, 0, 0}, .tlv_len = 4 };
+		struct query q4a = { .cmd = "wms4a",
+			.desc = "WMS GET_TRANSPORT_NW_REG after bind",
+			.svc = 5, .msg = 0x004A };
+		struct query q48 = { .cmd = "wms48",
+			.desc = "WMS GET_TRANSPORT_LAYER after bind",
+			.svc = 5, .msg = 0x0048 };
+		uint32_t node, port, ins;
+		uint16_t txn = 1;
+		int sock;
+
+		sock = qrtr_open(0);
+		if (sock < 0)
+			return 1;
+		if (lookup_service(sock, 5, 0, &node, &port, &ins) < 0) {
+			printf("  no WMS\n");
+			close(sock);
+			return 1;
+		}
+		printf("  WMS %u:%u bind2 then 0x4a/0x48\n", node, port);
+		ask_on(sock, node, port, &qbind, txn++, NULL, NULL);
+		ask_on(sock, node, port, &q4a, txn++, NULL, NULL);
+		ask_on(sock, node, port, &q48, txn++, NULL, NULL);
+		close(sock);
+		return 0;
+	}
+
+	if (!strcmp(argv[1], "imsarich")) {
+		/* pmaports#1878 Richard Acayan: IMSA BIND 0x33 TLV 0x10
+		 * then GET_REG on the same client. We previously used
+		 * TLV 0x01. */
+		struct query qbind = { .cmd = "imsabind10",
+			.desc = "IMSA BIND tlv 0x10=2", .svc = 0x21, .msg = 0x0033,
+			.tlv_key = 0x10, .tlv_data = {2, 0, 0, 0}, .tlv_len = 4 };
+		struct query qbind0 = { .cmd = "imsabind10z",
+			.desc = "IMSA BIND tlv 0x10=0 (Richard hex)",
+			.svc = 0x21, .msg = 0x0033,
+			.tlv_key = 0x10, .tlv_data = {0, 0, 0, 0}, .tlv_len = 4 };
+		struct query qareg = { .cmd = "imsareg",
+			.desc = "IMSA GET_REG after tlv0x10 bind",
+			.svc = 0x21, .msg = 0x0020 };
+		uint32_t node, port, ins;
+		uint16_t txn = 1;
+		int sock;
+
+		sock = qrtr_open(0);
+		if (sock < 0)
+			return 1;
+		if (lookup_service(sock, 0x21, 0, &node, &port, &ins) < 0) {
+			close(sock);
+			return 1;
+		}
+		printf("imsarich: BIND 0x33 tlv 0x10 then GET_REG\n");
+		ask_on(sock, node, port, &qbind, txn++, NULL, NULL);
+		ask_on(sock, node, port, &qareg, txn++, NULL, NULL);
+		close(sock);
+		sock = qrtr_open(0);
+		if (sock < 0)
+			return 1;
+		if (lookup_service(sock, 0x21, 0, &node, &port, &ins) < 0) {
+			close(sock);
+			return 1;
+		}
+		txn = 1;
+		ask_on(sock, node, port, &qbind0, txn++, NULL, NULL);
+		ask_on(sock, node, port, &qareg, txn++, NULL, NULL);
+		close(sock);
+		return 0;
+	}
+
+	if (!strcmp(argv[1], "imsa0")) {
+		/* Read-only: IMSA on Binding 0 (tlv 0x10), after IMS
+		 * Settings bind 0 works. IND_REG then GET_REG/GET_SVC/
+		 * GET_BIND, then wait for 0x23/0x24. Not NV. */
+		static const uint8_t imsa_ind[] = {
+			0x10, 0x01, 0x00, 0x01,
+			0x11, 0x01, 0x00, 0x01,
+			0x12, 0x01, 0x00, 0x01,
+			0x18, 0x01, 0x00, 0x01,
+			0x19, 0x01, 0x00, 0x01,
+			0x1b, 0x01, 0x00, 0x01,
+		};
+		struct query qbind = { .cmd = "imsabind0",
+			.desc = "IMSA BIND tlv 0x10=0", .svc = 0x21, .msg = 0x0033,
+			.tlv_key = 0x10, .tlv_data = {0, 0, 0, 0}, .tlv_len = 4 };
+		struct query qgetb = { .cmd = "imsagetbind",
+			.desc = "IMSA GET_BIND 0x34", .svc = 0x21, .msg = 0x0034 };
+		struct query qareg = { .cmd = "imsareg",
+			.desc = "IMSA GET_REG", .svc = 0x21, .msg = 0x0020 };
+		struct query qasvc = { .cmd = "imsasvc",
+			.desc = "IMSA GET_SVC", .svc = 0x21, .msg = 0x0021 };
+		uint32_t node, port, ins, rn, rp;
+		uint16_t txn = 1;
+		uint8_t buf[512];
+		int sock, n, i, inds = 0;
+
+		printf("imsa0: BIND 0 + IND_REG + GET_REG/SVC/BIND, wait 8s\n");
+		sock = qrtr_open(0);
+		if (sock < 0)
+			return 1;
+		if (lookup_service(sock, 0x21, 0, &node, &port, &ins) < 0) {
+			printf("  no IMSA\n");
+			close(sock);
+			return 1;
+		}
+		printf("  IMSA %u:%u ins %u\n", node, port, ins);
+		ask_on(sock, node, port, &qbind, txn++, NULL, NULL);
+		ask_on(sock, node, port, &qgetb, txn++, NULL, NULL);
+		ims_send(sock, node, port, txn++, 0x0022, imsa_ind,
+			 (uint16_t)sizeof(imsa_ind), "IMSA IND_REG 0x22 gold");
+		ask_on(sock, node, port, &qareg, txn++, NULL, NULL);
+		ask_on(sock, node, port, &qasvc, txn++, NULL, NULL);
+		printf("imsa0: waiting 8s for 0x23/0x24 indications\n");
+		for (i = 0; i < 8; i++) {
+			n = qrtr_recvfrom(sock, buf, sizeof(buf), &rn, &rp);
+			if (n < 7)
+				continue;
+			if (rp == QRTR_PORT_CTRL)
+				continue;
+			if (buf[0] == QMI_INDICATION) {
+				inds++;
+				printf("  IND flags=0x%02x msg=0x%04x len=%u\n",
+				       buf[0], get16(buf + 3), get16(buf + 5));
+			}
+		}
+		printf("imsa0: indications during wait: %d\n", inds);
+		close(sock);
+		return 0;
+	}
+
+	if (!strcmp(argv[1], "imsscan")) {
+		/* 358880 IMS GET_SUPPORTED_MESSAGES bits; skip SET 0x8f / missing 0x2C. */
+		static const uint16_t gets[] = {
+			0x0023, 0x0056, 0x005d, 0x005e, 0x0063, 0x0064, 0x0066, 0x0067,
+			0x0068, 0x0069, 0x006a, 0x006c, 0x006d, 0x006f, 0x0070, 0x0072,
+			0x0073, 0x0074, 0x0075, 0x0077, 0x0078, 0x007a, 0x007b, 0x007d,
+			0x007e, 0x0080, 0x0081, 0x0083, 0x0084, 0x0086, 0x0087, 0x0089,
+			0x008a, 0x008c, 0x008d, 0x0090, 0x0096, 0x009a
+		};
+		struct query qbind = { .cmd = "imsbind0",
+			.desc = "IMS BIND sub=0", .svc = 0x12, .msg = 0x0098,
+			.tlv_key = 0x01, .tlv_data = {0, 0, 0, 0}, .tlv_len = 4 };
+		uint32_t node, port, ins;
+		uint16_t txn = 1;
+		int sock;
+		unsigned i;
+
+		sock = qrtr_open(0);
+		if (sock < 0)
+			return 1;
+		if (lookup_service(sock, 0x12, 0, &node, &port, &ins) < 0) {
+			close(sock);
+			return 1;
+		}
+		printf("imsscan: BIND 0 then GET every bitmap opcode except 0x8f/0x2C\n");
+		ask_on(sock, node, port, &qbind, txn++, NULL, NULL);
+		for (i = 0; i < sizeof(gets) / sizeof(gets[0]); i++) {
+			struct query q = { .cmd = "imsget",
+				.desc = "IMS GET (bitmap)",
+				.svc = 0x12, .msg = gets[i] };
+			printf("-- GET 0x%02x --\n", gets[i]);
+			ask_on(sock, node, port, &q, txn++, NULL, NULL);
+		}
+		close(sock);
+		return 0;
+	}
+
+	if (!strcmp(argv[1], "ims72a")) {
+		/* SET 0x72 variants after err1 on full GET-mirror.
+		 * A: only 0x12=ims  B: only 0x10=ims  C: 0x11=u32:1 + 0x12=ims
+		 * D: 0x12 with u16 length prefix  E: same A on 0x73 */
+		struct query qbind = { .cmd = "imsbind0",
+			.desc = "IMS BIND sub=0", .svc = 0x12, .msg = 0x0098,
+			.tlv_key = 0x01, .tlv_data = {0, 0, 0, 0}, .tlv_len = 4 };
+		struct query qa = { .cmd = "ims72a",
+			.desc = "IMS 0x72 TLV 0x12=ims",
+			.svc = 0x12, .msg = 0x0072,
+			.tlv_key = 0x12, .tlv_data = { 'i','m','s' }, .tlv_len = 3 };
+		struct query qb = { .cmd = "ims72b",
+			.desc = "IMS 0x72 TLV 0x10=ims",
+			.svc = 0x12, .msg = 0x0072,
+			.tlv_key = 0x10, .tlv_data = { 'i','m','s' }, .tlv_len = 3 };
+		struct query qc = { .cmd = "ims72c",
+			.desc = "IMS 0x72 0x11=1 0x12=ims",
+			.svc = 0x12, .msg = 0x0072,
+			.tlv_key = 0x11, .tlv_data = {1, 0, 0, 0}, .tlv_len = 4,
+			.tlv2_key = 0x12, .tlv2_data = { 'i','m','s' }, .tlv2_len = 3 };
+		struct query qd = { .cmd = "ims72d",
+			.desc = "IMS 0x72 0x12 u16len+ims",
+			.svc = 0x12, .msg = 0x0072,
+			.tlv_key = 0x12, .tlv_data = { 3, 0, 'i','m','s' }, .tlv_len = 5 };
+		struct query qe = { .cmd = "ims73e",
+			.desc = "IMS 0x73 TLV 0x12=ims",
+			.svc = 0x12, .msg = 0x0073,
+			.tlv_key = 0x12, .tlv_data = { 'i','m','s' }, .tlv_len = 3 };
+		struct query qget = { .cmd = "ims73get",
+			.desc = "IMS GET 0x73",
+			.svc = 0x12, .msg = 0x0073 };
+		uint32_t node, port, ins;
+		uint16_t txn = 1;
+		int sock;
+
+		sock = qrtr_open(0);
+		if (sock < 0)
+			return 1;
+		if (lookup_service(sock, 0x12, 0, &node, &port, &ins) < 0) {
+			close(sock);
+			return 1;
+		}
+		printf("ims72a: BIND 0 then 0x72/0x73 SET variants, GET 0x73\n");
+		ask_on(sock, node, port, &qbind, txn++, NULL, NULL);
+		ask_on(sock, node, port, &qa, txn++, NULL, NULL);
+		ask_on(sock, node, port, &qb, txn++, NULL, NULL);
+		ask_on(sock, node, port, &qc, txn++, NULL, NULL);
+		ask_on(sock, node, port, &qd, txn++, NULL, NULL);
+		ask_on(sock, node, port, &qe, txn++, NULL, NULL);
+		ask_on(sock, node, port, &qget, txn++, NULL, NULL);
+		close(sock);
+		return 0;
+	}
+
+	if (!strcmp(argv[1], "imspriv")) {
+		/* IMS-related QRTR services besides 0x12/0x21: libqmi
+		 * IMSVT=0x20 IMSRTP=0x28 IMSP=0x1F; cnss2 IMSPRIVATE=0x4D
+		 * (WFC 0x3E/0x40). DSD/VOICE 0x1E check OpenIMSd extras
+		 * still in bitmap. GET 0x1E only — no SET. */
+		static const uint32_t svcs[] = { 0x20, 0x28, 0x4d, 0x1f, 0x2a, 9 };
+		static const char *names[] = {
+			"IMSVT", "IMSRTP", "IMSPRIV", "IMSP", "DSD", "VOICE"
+		};
+		uint16_t txn = 1;
+		int sock;
+		unsigned i;
+
+		sock = qrtr_open(0);
+		if (sock < 0)
+			return 1;
+		printf("imspriv: GET_SUPPORTED_MESSAGES 0x1E on IMSVT/RTP/PRIV/IMSP/DSD/VOICE\n");
+		for (i = 0; i < sizeof(svcs) / sizeof(svcs[0]); i++) {
+			struct query q = { .cmd = "ims1e",
+				.desc = "GET_SUPPORTED_MESSAGES",
+				.svc = svcs[i], .msg = 0x001E };
+			uint32_t node, port, ins;
+
+			if (lookup_service(sock, svcs[i], 0, &node, &port, &ins) < 0) {
+				printf("  %s svc 0x%02x ABSENT\n", names[i], svcs[i]);
+				continue;
+			}
+			printf("  %s svc 0x%02x %u:%u ins %u\n",
+			       names[i], svcs[i], node, port, ins);
+			ask_on(sock, node, port, &q, txn++, NULL, NULL);
+		}
+		close(sock);
+		return 0;
+	}
+
+	if (!strcmp(argv[1], "imspcscf")) {
+		/* CafeTele gate: no P-CSCF => no SIP. libqmi mask with
+		 * PCSCF bits = 0x4FF30 (HARDWARE 2026-09-15). Same client
+		 * BIND_MUX then GET 0x2D. mux 2 = qmapmux0.0, 3 = 0.1. */
+		static const uint8_t mask[4] = { 0x30, 0xff, 0x04, 0x00 };
+		struct query qbindsub = { .cmd = "wdsbind",
+			.desc = "WDS BIND_SUB primary", .svc = 1, .msg = 0x00AF,
+			.tlv_key = 0x01, .tlv_data = {1, 0, 0, 0}, .tlv_len = 4 };
+		struct query qget = { .cmd = "wdsget",
+			.desc = "WDS GET_CURRENT_SETTINGS pcscf mask",
+			.svc = 1, .msg = 0x002D,
+			.tlv_key = 0x10, .tlv_data = { 0x30, 0xff, 0x04, 0x00 },
+			.tlv_len = 4 };
+		uint32_t node, port, ins;
+		uint16_t txn = 1;
+		int sock, mux;
+
+		(void)mask;
+		sock = qrtr_open(0);
+		if (sock < 0)
+			return 1;
+		if (lookup_service(sock, 1, 0, &node, &port, &ins) < 0) {
+			close(sock);
+			return 1;
+		}
+		printf("imspcscf: BIND_SUB + BIND_MUX 2/3 + GET 0x2D mask 0x4FF30\n");
+		ask_on(sock, node, port, &qbindsub, txn++, NULL, NULL);
+		for (mux = 2; mux <= 3; mux++) {
+			struct query qmux = { .cmd = "wdsmux",
+				.desc = "WDS BIND_MUX",
+				.svc = 1, .msg = 0x00A2,
+				.tlv_key = 0x10,
+				.tlv_data = {4, 0, 0, 0, 1, 0, 0, 0},
+				.tlv_len = 8,
+				.tlv2_key = 0x11,
+				.tlv2_data = { (uint8_t)mux },
+				.tlv2_len = 1 };
+			printf("-- mux %d --\n", mux);
+			ask_on(sock, node, port, &qmux, txn++, NULL, NULL);
+			ask_on(sock, node, port, &qget, txn++, NULL, NULL);
+		}
+		close(sock);
+		return 0;
+	}
+
+	if (!strcmp(argv[1], "imsarg6")) {
+		struct query qbind = { .cmd = "imsbind0",
+			.desc = "IMS BIND sub=0", .svc = 0x12, .msg = 0x0098,
+			.tlv_key = 0x01, .tlv_data = {0, 0, 0, 0}, .tlv_len = 4 };
+		uint32_t node, port, ins;
+		uint16_t txn = 1;
+		int sock;
+
+		sock = qrtr_open(0);
+		if (sock < 0)
+			return 1;
+		if (lookup_service(sock, 0x12, 0, &node, &port, &ins) < 0) {
+			close(sock);
+			return 1;
+		}
+		printf("imsarg6: 0x96 0x01=0 plus 0x10; 0x10 empty; 0x01=0xff\n");
+		ask_on(sock, node, port, &qbind, txn++, NULL, NULL);
+		{
+			struct query a = { .cmd = "a", .desc = "0x96 0x01 u8=0 + 0x10 u32=0",
+				.svc = 0x12, .msg = 0x0096,
+				.tlv_key = 0x01, .tlv_data = {0}, .tlv_len = 1,
+				.tlv2_key = 0x10, .tlv2_data = {0, 0, 0, 0}, .tlv2_len = 4 };
+			struct query b = { .cmd = "b", .desc = "0x96 0x01 u8=0 + 0x10 u8=0",
+				.svc = 0x12, .msg = 0x0096,
+				.tlv_key = 0x01, .tlv_data = {0}, .tlv_len = 1,
+				.tlv2_key = 0x10, .tlv2_data = {0}, .tlv2_len = 1 };
+			struct query c = { .cmd = "c", .desc = "0x96 0x10 empty",
+				.svc = 0x12, .msg = 0x0096,
+				.tlv_key = 0x10, .tlv_len = 0 };
+			struct query d = { .cmd = "d", .desc = "0x96 0x01 u8=0xff",
+				.svc = 0x12, .msg = 0x0096,
+				.tlv_key = 0x01, .tlv_data = {0xff}, .tlv_len = 1 };
+			struct query e = { .cmd = "e", .desc = "0x96 0x01 empty",
+				.svc = 0x12, .msg = 0x0096,
+				.tlv_key = 0x01, .tlv_len = 0 };
+			printf("-- 0x01=0 + 0x10 u32=0 --\n");
+			ask_on(sock, node, port, &a, txn++, NULL, NULL);
+			printf("-- 0x01=0 + 0x10 u8=0 --\n");
+			ask_on(sock, node, port, &b, txn++, NULL, NULL);
+			printf("-- 0x10 empty --\n");
+			ask_on(sock, node, port, &c, txn++, NULL, NULL);
+			printf("-- 0x01=0xff --\n");
+			ask_on(sock, node, port, &d, txn++, NULL, NULL);
+			printf("-- 0x01 empty --\n");
+			ask_on(sock, node, port, &e, txn++, NULL, NULL);
+		}
+		close(sock);
+		return 0;
+	}
+
+	if (!strcmp(argv[1], "imsarg5")) {
+		/* 0x96: tags 0x10/0x11 are known (err1 on u8) — try u16/u32/u64.
+		 * 0x10-as-u32 is the WDS GET requested-settings pattern. */
+		struct query qbind = { .cmd = "imsbind0",
+			.desc = "IMS BIND sub=0", .svc = 0x12, .msg = 0x0098,
+			.tlv_key = 0x01, .tlv_data = {0, 0, 0, 0}, .tlv_len = 4 };
+		uint32_t node, port, ins;
+		uint16_t txn = 1;
+		int sock;
+
+		sock = qrtr_open(0);
+		if (sock < 0)
+			return 1;
+		if (lookup_service(sock, 0x12, 0, &node, &port, &ins) < 0) {
+			close(sock);
+			return 1;
+		}
+		printf("imsarg5: BIND 0, 0x96 0x10/0x11 width sweep\n");
+		ask_on(sock, node, port, &qbind, txn++, NULL, NULL);
+		{
+			struct query a = { .cmd = "a", .desc = "0x96 0x10 u16=0",
+				.svc = 0x12, .msg = 0x0096,
+				.tlv_key = 0x10, .tlv_data = {0, 0}, .tlv_len = 2 };
+			struct query b = { .cmd = "b", .desc = "0x96 0x10 u32=0",
+				.svc = 0x12, .msg = 0x0096,
+				.tlv_key = 0x10, .tlv_data = {0, 0, 0, 0}, .tlv_len = 4 };
+			struct query c = { .cmd = "c", .desc = "0x96 0x10 u32=1",
+				.svc = 0x12, .msg = 0x0096,
+				.tlv_key = 0x10, .tlv_data = {1, 0, 0, 0}, .tlv_len = 4 };
+			struct query d = { .cmd = "d", .desc = "0x96 0x10 u32=all1",
+				.svc = 0x12, .msg = 0x0096,
+				.tlv_key = 0x10,
+				.tlv_data = {0xff, 0xff, 0xff, 0xff}, .tlv_len = 4 };
+			struct query e = { .cmd = "e", .desc = "0x96 0x10 u64=0",
+				.svc = 0x12, .msg = 0x0096,
+				.tlv_key = 0x10,
+				.tlv_data = {0, 0, 0, 0, 0, 0, 0, 0}, .tlv_len = 8 };
+			struct query f = { .cmd = "f", .desc = "0x96 0x11 u16=0",
+				.svc = 0x12, .msg = 0x0096,
+				.tlv_key = 0x11, .tlv_data = {0, 0}, .tlv_len = 2 };
+			struct query g = { .cmd = "g", .desc = "0x96 0x11 u32=0",
+				.svc = 0x12, .msg = 0x0096,
+				.tlv_key = 0x11, .tlv_data = {0, 0, 0, 0}, .tlv_len = 4 };
+			struct query h = { .cmd = "h", .desc = "0x96 0x11 u8=1",
+				.svc = 0x12, .msg = 0x0096,
+				.tlv_key = 0x11, .tlv_data = {1}, .tlv_len = 1 };
+			struct query i = { .cmd = "i", .desc = "0x96 0x10 u32=0 + 0x11 u8=0",
+				.svc = 0x12, .msg = 0x0096,
+				.tlv_key = 0x10, .tlv_data = {0, 0, 0, 0}, .tlv_len = 4,
+				.tlv2_key = 0x11, .tlv2_data = {0}, .tlv2_len = 1 };
+			printf("-- 0x96 0x10 u16=0 --\n");
+			ask_on(sock, node, port, &a, txn++, NULL, NULL);
+			printf("-- 0x96 0x10 u32=0 --\n");
+			ask_on(sock, node, port, &b, txn++, NULL, NULL);
+			printf("-- 0x96 0x10 u32=1 --\n");
+			ask_on(sock, node, port, &c, txn++, NULL, NULL);
+			printf("-- 0x96 0x10 u32=ffffffff --\n");
+			ask_on(sock, node, port, &d, txn++, NULL, NULL);
+			printf("-- 0x96 0x10 u64=0 --\n");
+			ask_on(sock, node, port, &e, txn++, NULL, NULL);
+			printf("-- 0x96 0x11 u16=0 --\n");
+			ask_on(sock, node, port, &f, txn++, NULL, NULL);
+			printf("-- 0x96 0x11 u32=0 --\n");
+			ask_on(sock, node, port, &g, txn++, NULL, NULL);
+			printf("-- 0x96 0x11 u8=1 --\n");
+			ask_on(sock, node, port, &h, txn++, NULL, NULL);
+			printf("-- 0x96 0x10 u32=0 + 0x11 u8=0 --\n");
+			ask_on(sock, node, port, &i, txn++, NULL, NULL);
+		}
+		close(sock);
+		return 0;
+	}
+
+	if (!strcmp(argv[1], "imsarg4")) {
+		/* GET-side selectors: 0x67/0x8a already SUCCESS empty.
+		 * 0x96: scan TLV tags 0x02-0x16 as u8=0. No value SET on 0x66/0x89. */
+		struct query qbind = { .cmd = "imsbind0",
+			.desc = "IMS BIND sub=0", .svc = 0x12, .msg = 0x0098,
+			.tlv_key = 0x01, .tlv_data = {0, 0, 0, 0}, .tlv_len = 4 };
+		uint32_t node, port, ins;
+		uint16_t txn = 1;
+		int sock;
+		unsigned v, t;
+
+		sock = qrtr_open(0);
+		if (sock < 0)
+			return 1;
+		if (lookup_service(sock, 0x12, 0, &node, &port, &ins) < 0) {
+			close(sock);
+			return 1;
+		}
+		printf("imsarg4: BIND 0, GET 0x67/0x8a + 0x01, 0x96 tag scan\n");
+		ask_on(sock, node, port, &qbind, txn++, NULL, NULL);
+		for (v = 0; v <= 8; v++) {
+			struct query q = { .cmd = "ims67s",
+				.desc = "IMS GET 0x67 0x01 u8",
+				.svc = 0x12, .msg = 0x0067,
+				.tlv_key = 0x01,
+				.tlv_data = { (uint8_t)v }, .tlv_len = 1 };
+			printf("-- GET 0x67 tlv01-u8=%u --\n", v);
+			ask_on(sock, node, port, &q, txn++, NULL, NULL);
+		}
+		for (v = 0; v <= 2; v++) {
+			struct query q = { .cmd = "ims8as",
+				.desc = "IMS GET 0x8a 0x01 u8",
+				.svc = 0x12, .msg = 0x008a,
+				.tlv_key = 0x01,
+				.tlv_data = { (uint8_t)v }, .tlv_len = 1 };
+			printf("-- GET 0x8a tlv01-u8=%u --\n", v);
+			ask_on(sock, node, port, &q, txn++, NULL, NULL);
+		}
+		{
+			struct query q9 = { .cmd = "ims9as",
+				.desc = "IMS GET 0x9a 0x01 u8=0",
+				.svc = 0x12, .msg = 0x009a,
+				.tlv_key = 0x01, .tlv_data = {0}, .tlv_len = 1 };
+			printf("-- GET 0x9a tlv01-u8=0 --\n");
+			ask_on(sock, node, port, &q9, txn++, NULL, NULL);
+		}
+		for (t = 0x02; t <= 0x16; t++) {
+			struct query q = { .cmd = "ims96t",
+				.desc = "IMS 0x96 tag scan u8=0",
+				.svc = 0x12, .msg = 0x0096,
+				.tlv_key = (uint8_t)t,
+				.tlv_data = {0}, .tlv_len = 1 };
+			printf("-- 0x96 tlv%02x-u8=0 --\n", t);
+			ask_on(sock, node, port, &q, txn++, NULL, NULL);
+		}
+		close(sock);
+		return 0;
+	}
+
+	if (!strcmp(argv[1], "imsarg3")) {
+		/* Which TLV tag is required? 0x11 mirrors GET 0x8a/0x9a. */
+		struct query qbind = { .cmd = "imsbind0",
+			.desc = "IMS BIND sub=0", .svc = 0x12, .msg = 0x0098,
+			.tlv_key = 0x01, .tlv_data = {0, 0, 0, 0}, .tlv_len = 4 };
+		uint32_t node, port, ins;
+		uint16_t txn = 1;
+		int sock;
+		unsigned i;
+		static const uint16_t miss[] = { 0x0066, 0x0089, 0x0096 };
+
+		sock = qrtr_open(0);
+		if (sock < 0)
+			return 1;
+		if (lookup_service(sock, 0x12, 0, &node, &port, &ins) < 0) {
+			close(sock);
+			return 1;
+		}
+		printf("imsarg3: BIND 0, 0x11-only and 0x01-len0 on miss opcodes\n");
+		ask_on(sock, node, port, &qbind, txn++, NULL, NULL);
+		for (i = 0; i < sizeof(miss) / sizeof(miss[0]); i++) {
+			struct query q11 = { .cmd = "ims11",
+				.desc = "IMS tlv 0x11 u8=0",
+				.svc = 0x12, .msg = miss[i],
+				.tlv_key = 0x11, .tlv_data = {0}, .tlv_len = 1 };
+			struct query q11z = { .cmd = "ims11z",
+				.desc = "IMS tlv 0x11 empty",
+				.svc = 0x12, .msg = miss[i],
+				.tlv_key = 0x11, .tlv_len = 0 };
+			struct query q12 = { .cmd = "ims12",
+				.desc = "IMS tlv 0x12 u8=0",
+				.svc = 0x12, .msg = miss[i],
+				.tlv_key = 0x12, .tlv_data = {0}, .tlv_len = 1 };
+			printf("-- 0x%02x tlv11-u8=0 --\n", miss[i]);
+			ask_on(sock, node, port, &q11, txn++, NULL, NULL);
+			printf("-- 0x%02x tlv11-empty --\n", miss[i]);
+			ask_on(sock, node, port, &q11z, txn++, NULL, NULL);
+			printf("-- 0x%02x tlv12-u8=0 --\n", miss[i]);
+			ask_on(sock, node, port, &q12, txn++, NULL, NULL);
+		}
+		close(sock);
+		return 0;
+	}
+
+	if (!strcmp(argv[1], "imsarg2")) {
+		/* Follow-up: re-GET pair after 0x66/0x89 0x01-u8 SUCCESS;
+		 * widen 0x66/0x96 u8 range. No value TLVs. */
+		struct query qbind = { .cmd = "imsbind0",
+			.desc = "IMS BIND sub=0", .svc = 0x12, .msg = 0x0098,
+			.tlv_key = 0x01, .tlv_data = {0, 0, 0, 0}, .tlv_len = 4 };
+		static const uint16_t reget[] = {
+			0x0066, 0x0067, 0x0068, 0x0089, 0x008a, 0x008d, 0x0096, 0x009a
+		};
+		uint32_t node, port, ins;
+		uint16_t txn = 1;
+		int sock;
+		unsigned i, v;
+
+		sock = qrtr_open(0);
+		if (sock < 0)
+			return 1;
+		if (lookup_service(sock, 0x12, 0, &node, &port, &ins) < 0) {
+			close(sock);
+			return 1;
+		}
+		printf("imsarg2: BIND 0, re-GET pairs, 0x66/0x96 u8 0-8\n");
+		ask_on(sock, node, port, &qbind, txn++, NULL, NULL);
+		for (i = 0; i < sizeof(reget) / sizeof(reget[0]); i++) {
+			struct query q = { .cmd = "imsreget",
+				.desc = "IMS re-GET after selectors",
+				.svc = 0x12, .msg = reget[i] };
+			printf("-- reget 0x%02x --\n", reget[i]);
+			ask_on(sock, node, port, &q, txn++, NULL, NULL);
+		}
+		for (v = 0; v <= 8; v++) {
+			struct query q = { .cmd = "ims66c",
+				.desc = "IMS 0x66 0x01 u8 codec",
+				.svc = 0x12, .msg = 0x0066,
+				.tlv_key = 0x01,
+				.tlv_data = { (uint8_t)v }, .tlv_len = 1 };
+			printf("-- 0x66 tlv01-u8=%u --\n", v);
+			ask_on(sock, node, port, &q, txn++, NULL, NULL);
+		}
+		for (v = 0; v <= 8; v++) {
+			struct query q = { .cmd = "ims96c",
+				.desc = "IMS 0x96 0x01 u8",
+				.svc = 0x12, .msg = 0x0096,
+				.tlv_key = 0x01,
+				.tlv_data = { (uint8_t)v }, .tlv_len = 1 };
+			printf("-- 0x96 tlv01-u8=%u --\n", v);
+			ask_on(sock, node, port, &q, txn++, NULL, NULL);
+		}
+		close(sock);
+		return 0;
+	}
+
+	if (!strcmp(argv[1], "imsargp")) {
+		/* 0x66/0x89/0x96 were err17 empty. Probe GET_SUPPORTED_FIELDS
+		 * (0x1F + msg id) then selector-only TLVs. No enable bits. */
+		static const uint16_t miss[] = { 0x0066, 0x0089, 0x0096 };
+		static const uint16_t neigh[] = {
+			0x0065, 0x0067, 0x0068, 0x0088, 0x008a, 0x008c, 0x008d,
+			0x0095, 0x0097, 0x009a
+		};
+		struct query qbind = { .cmd = "imsbind0",
+			.desc = "IMS BIND sub=0", .svc = 0x12, .msg = 0x0098,
+			.tlv_key = 0x01, .tlv_data = {0, 0, 0, 0}, .tlv_len = 4 };
+		uint32_t node, port, ins;
+		uint16_t txn = 1;
+		int sock;
+		unsigned i, v;
+
+		sock = qrtr_open(0);
+		if (sock < 0)
+			return 1;
+		if (lookup_service(sock, 0x12, 0, &node, &port, &ins) < 0) {
+			close(sock);
+			return 1;
+		}
+		printf("imsargp: BIND 0, empty+0x1F+selector for 0x66/0x89/0x96\n");
+		ask_on(sock, node, port, &qbind, txn++, NULL, NULL);
+		for (i = 0; i < sizeof(miss) / sizeof(miss[0]); i++) {
+			struct query q = { .cmd = "imsempty",
+				.desc = "IMS empty (err17 confirm)",
+				.svc = 0x12, .msg = miss[i] };
+			printf("-- empty 0x%02x --\n", miss[i]);
+			ask_on(sock, node, port, &q, txn++, NULL, NULL);
+		}
+		for (i = 0; i < sizeof(miss) / sizeof(miss[0]); i++) {
+			struct query q = { .cmd = "ims1f",
+				.desc = "IMS GET_SUPPORTED_FIELDS",
+				.svc = 0x12, .msg = 0x001F,
+				.tlv_key = 0x01,
+				.tlv_data = { (uint8_t)miss[i],
+					      (uint8_t)(miss[i] >> 8) },
+				.tlv_len = 2 };
+			printf("-- 0x1F fields for 0x%02x --\n", miss[i]);
+			ask_on(sock, node, port, &q, txn++, NULL, NULL);
+		}
+		for (i = 0; i < sizeof(neigh) / sizeof(neigh[0]); i++) {
+			struct query q = { .cmd = "imsneigh",
+				.desc = "IMS neighbor empty",
+				.svc = 0x12, .msg = neigh[i] };
+			printf("-- neigh empty 0x%02x --\n", neigh[i]);
+			ask_on(sock, node, port, &q, txn++, NULL, NULL);
+		}
+		for (i = 0; i < sizeof(miss) / sizeof(miss[0]); i++) {
+			for (v = 0; v <= 2; v++) {
+				struct query q = { .cmd = "imssel",
+					.desc = "IMS 0x01 u8 selector",
+					.svc = 0x12, .msg = miss[i],
+					.tlv_key = 0x01,
+					.tlv_data = { (uint8_t)v },
+					.tlv_len = 1 };
+				printf("-- 0x%02x tlv01-u8=%u --\n",
+				       miss[i], v);
+				ask_on(sock, node, port, &q, txn++, NULL, NULL);
+			}
+			{
+				struct query q16 = { .cmd = "imssel16",
+					.desc = "IMS 0x01 u16=0",
+					.svc = 0x12, .msg = miss[i],
+					.tlv_key = 0x01,
+					.tlv_data = {0, 0}, .tlv_len = 2 };
+				struct query q32 = { .cmd = "imssel32",
+					.desc = "IMS 0x01 u32=0",
+					.svc = 0x12, .msg = miss[i],
+					.tlv_key = 0x01,
+					.tlv_data = {0, 0, 0, 0}, .tlv_len = 4 };
+				struct query q10 = { .cmd = "imssel10",
+					.desc = "IMS 0x10 u8=0",
+					.svc = 0x12, .msg = miss[i],
+					.tlv_key = 0x10,
+					.tlv_data = {0}, .tlv_len = 1 };
+				printf("-- 0x%02x tlv01-u16=0 --\n", miss[i]);
+				ask_on(sock, node, port, &q16, txn++, NULL, NULL);
+				printf("-- 0x%02x tlv01-u32=0 --\n", miss[i]);
+				ask_on(sock, node, port, &q32, txn++, NULL, NULL);
+				printf("-- 0x%02x tlv10-u8=0 --\n", miss[i]);
+				ask_on(sock, node, port, &q10, txn++, NULL, NULL);
+			}
+		}
+		close(sock);
+		return 0;
+	}
+
+	if (!strcmp(argv[1], "ims72s")) {
+		/* SET 0x72 mirroring GET 0x73 TLVs, APN CTNET -> ims.
+		 * Bitmap has 0x72; empty 0x72 is SUCCESS (SET no-op). */
+		struct query qbind = { .cmd = "imsbind0",
+			.desc = "IMS BIND sub=0", .svc = 0x12, .msg = 0x0098,
+			.tlv_key = 0x01, .tlv_data = {0, 0, 0, 0}, .tlv_len = 4 };
+		struct query qset = { .cmd = "ims72set",
+			.desc = "IMS SET 0x72 APN=ims (mirror 0x73)",
+			.svc = 0x12, .msg = 0x0072,
+			.tlv_key = 0x11, .tlv_data = {1, 0, 0, 0}, .tlv_len = 4,
+			.tlv2_key = 0x12, .tlv2_data = { 'i','m','s' }, .tlv2_len = 3,
+			.tlv3_key = 0x13, .tlv3_data = {0, 0, 0, 0}, .tlv3_len = 4,
+			.tlv4_key = 0x14, .tlv4_len = 0 };
+		struct query qget = { .cmd = "ims73get",
+			.desc = "IMS GET 0x73 after SET 0x72",
+			.svc = 0x12, .msg = 0x0073 };
+		uint32_t node, port, ins;
+		uint16_t txn = 1;
+		int sock;
+
+		sock = qrtr_open(0);
+		if (sock < 0)
+			return 1;
+		if (lookup_service(sock, 0x12, 0, &node, &port, &ins) < 0) {
+			close(sock);
+			return 1;
+		}
+		printf("ims72s: BIND 0, SET 0x72 APN=ims, GET 0x73\n");
+		ask_on(sock, node, port, &qbind, txn++, NULL, NULL);
+		ask_on(sock, node, port, &qset, txn++, NULL, NULL);
+		ask_on(sock, node, port, &qget, txn++, NULL, NULL);
+		close(sock);
+		return 0;
+	}
+
+	if (!strcmp(argv[1], "ims73p")) {
+		/* Pairing probe for GET 0x73 CTNET. Empty requests only:
+		 * odd/even SET vs GET is told by err17 (missing args) vs a
+		 * payload. Does not SET APN. */
+		static const uint16_t gets[] = {
+			0x0023, 0x006f, 0x0070, 0x0072, 0x0073, 0x0074, 0x0075
+		};
+		struct query qbind = { .cmd = "imsbind0",
+			.desc = "IMS BIND sub=0", .svc = 0x12, .msg = 0x0098,
+			.tlv_key = 0x01, .tlv_data = {0, 0, 0, 0}, .tlv_len = 4 };
+		uint32_t node, port, ins;
+		uint16_t txn = 1;
+		int sock;
+		unsigned i;
+
+		sock = qrtr_open(0);
+		if (sock < 0)
+			return 1;
+		if (lookup_service(sock, 0x12, 0, &node, &port, &ins) < 0) {
+			close(sock);
+			return 1;
+		}
+		printf("ims73p: BIND 0 then empty GET 0x23/0x6f/0x70/0x72-0x75\n");
+		ask_on(sock, node, port, &qbind, txn++, NULL, NULL);
+		for (i = 0; i < sizeof(gets) / sizeof(gets[0]); i++) {
+			struct query q = { .cmd = "imsget",
+				.desc = "IMS empty (pairing)",
+				.svc = 0x12, .msg = gets[i] };
+			printf("-- empty 0x%02x --\n", gets[i]);
+			ask_on(sock, node, port, &q, txn++, NULL, NULL);
+		}
+		close(sock);
+		return 0;
+	}
+
+	if (!strcmp(argv[1], "ims28p")) {
+		struct query qbind = { .cmd = "imsbind0",
+			.desc = "IMS BIND sub=0", .svc = 0x12, .msg = 0x0098,
+			.tlv_key = 0x01, .tlv_data = {0, 0, 0, 0}, .tlv_len = 4 };
+		struct query q28 = { .cmd = "ims28",
+			.desc = "IMS GET 0x28 after bind0",
+			.svc = 0x12, .msg = 0x0028 };
+		struct query q2a = { .cmd = "ims2a",
+			.desc = "IMS GET 0x2A after bind0",
+			.svc = 0x12, .msg = 0x002A };
+		uint32_t node, port, ins;
+		uint16_t txn = 1;
+		int sock;
+
+		sock = qrtr_open(0);
+		if (sock < 0)
+			return 1;
+		if (lookup_service(sock, 0x12, 0, &node, &port, &ins) < 0) {
+			close(sock);
+			return 1;
+		}
+		printf("ims28p: BIND 0 then GET 0x28 and 0x2A (bitmap bits, not 0x2C)\n");
+		ask_on(sock, node, port, &qbind, txn++, NULL, NULL);
+		ask_on(sock, node, port, &q28, txn++, NULL, NULL);
+		ask_on(sock, node, port, &q2a, txn++, NULL, NULL);
+		close(sock);
+		return 0;
+	}
+
+	if (!strcmp(argv[1], "ims48p")) {
+		struct query qbind = { .cmd = "imsbind0",
+			.desc = "IMS BIND sub=0", .svc = 0x12, .msg = 0x0098,
+			.tlv_key = 0x01, .tlv_data = {0, 0, 0, 0}, .tlv_len = 4 };
+		struct query qpolg = { .cmd = "imspolicy",
+			.desc = "IMS GET_POLICY 0x48 after bind0",
+			.svc = 0x12, .msg = 0x0048 };
+		uint32_t node, port, ins;
+		uint16_t txn = 1;
+		int sock;
+
+		sock = qrtr_open(0);
+		if (sock < 0)
+			return 1;
+		if (lookup_service(sock, 0x12, 0, &node, &port, &ins) < 0) {
+			close(sock);
+			return 1;
+		}
+		printf("ims48p: BIND 0 then GET 0x48\n");
+		ask_on(sock, node, port, &qbind, txn++, NULL, NULL);
+		ask_on(sock, node, port, &qpolg, txn++, NULL, NULL);
+		close(sock);
+		return 0;
+	}
+
+	if (!strcmp(argv[1], "imsgetpol")) {
+		struct query qbind = { .cmd = "imsbind2",
+			.desc = "IMS BIND sub=2", .svc = 0x12, .msg = 0x0098,
+			.tlv_key = 0x01, .tlv_data = {2, 0, 0, 0}, .tlv_len = 4 };
+		struct query qpolg = { .cmd = "imspolicy",
+			.desc = "IMS GET_POLICY 0x48 after bind2",
+			.svc = 0x12, .msg = 0x0048 };
+		uint32_t node, port, ins;
+		uint16_t txn = 1;
+		int sock;
+
+		sock = qrtr_open(0);
+		if (sock < 0)
+			return 1;
+		if (lookup_service(sock, 0x12, 0, &node, &port, &ins) < 0) {
+			close(sock);
+			return 1;
+		}
+		printf("imsgetpol: BIND 2 then GET 0x48\n");
+		ask_on(sock, node, port, &qbind, txn++, NULL, NULL);
+		ask_on(sock, node, port, &qpolg, txn++, NULL, NULL);
+		close(sock);
+		return 0;
+	}
+
+	if (!strcmp(argv[1], "ims8f1")) {
+		static const uint8_t tlv10[] = { 0x10, 0x01, 0x00, 0x01 };
+		struct query qbind = { .cmd = "imsbind1",
+			.desc = "IMS BIND sub=1", .svc = 0x12, .msg = 0x0098,
+			.tlv_key = 0x01, .tlv_data = {1, 0, 0, 0}, .tlv_len = 4 };
+		struct query qget = { .cmd = "imsget",
+			.desc = "IMS GET after bind1", .svc = 0x12, .msg = 0x0090 };
+		uint32_t node, port, ins;
+		uint16_t txn = 1;
+		int sock;
+
+		sock = qrtr_open(0);
+		if (sock < 0)
+			return 1;
+		if (lookup_service(sock, 0x12, 0, &node, &port, &ins) < 0) {
+			close(sock);
+			return 1;
+		}
+		printf("ims8f1: BIND sub=1 then SET 0x8f tlv 0x10=1\n");
+		ask_on(sock, node, port, &qbind, txn++, NULL, NULL);
+		ims_send(sock, node, port, txn++, 0x008f, tlv10, 4, "SET 0x8f voice bind1");
+		ask_on(sock, node, port, &qget, txn++, NULL, NULL);
+		close(sock);
+		return 0;
+	}
+
+	if (!strcmp(argv[1], "ims8f")) {
+		/* Replay qcrild IMS Settings 0x8f from the OpenIMSd
+		 * OnePlus 6T VoLTE registration pcap: one TLV per SET,
+		 * same client, BIND subscription 2 first (this SIM is
+		 * physical slot 2). Then IMSA bind+ind-register+GET. */
+		static const struct {
+			const char *tag;
+			uint8_t tlv[8];
+			uint16_t n;
+		} steps[] = {
+			{ "SET 0x8f tlv 0x15=2 (call-mode)", { 0x15, 0x04, 0x00, 0x02, 0x00, 0x00, 0x00 }, 7 },
+			{ "SET 0x8f tlv 0x23=0",             { 0x23, 0x01, 0x00, 0x00 }, 4 },
+			{ "SET 0x8f tlv 0x10=1 (voice)",     { 0x10, 0x01, 0x00, 0x01 }, 4 },
+			{ "SET 0x8f tlv 0x14=1",             { 0x14, 0x01, 0x00, 0x01 }, 4 },
+			{ "SET 0x8f tlv 0x11=1",             { 0x11, 0x01, 0x00, 0x01 }, 4 },
+			{ "SET 0x8f tlv 0x19=1",             { 0x19, 0x01, 0x00, 0x01 }, 4 },
+			{ "SET 0x8f tlv 0x18=1",             { 0x18, 0x01, 0x00, 0x01 }, 4 },
+		};
+		static const uint8_t imsa_ind[] = {
+			0x10, 0x01, 0x00, 0x01,
+			0x11, 0x01, 0x00, 0x01,
+			0x12, 0x01, 0x00, 0x01,
+			0x18, 0x01, 0x00, 0x01,
+			0x19, 0x01, 0x00, 0x01,
+			0x1b, 0x01, 0x00, 0x01,
+		};
+		struct query qbind = { .cmd = "imsbind2",
+			.desc = "IMS BIND sub=2", .svc = 0x12, .msg = 0x0098,
+			.tlv_key = 0x01, .tlv_data = {2, 0, 0, 0}, .tlv_len = 4 };
+		struct query qget = { .cmd = "imsget",
+			.desc = "IMS GET_SERVICES_ENABLED after 0x8f",
+			.svc = 0x12, .msg = 0x0090 };
+		struct query qabind = { .cmd = "imsabind2",
+			.desc = "IMSA BIND sub=2", .svc = 0x21, .msg = 0x0033,
+			.tlv_key = 0x01, .tlv_data = {2, 0, 0, 0}, .tlv_len = 4 };
+		struct query qareg = { .cmd = "imsareg",
+			.desc = "IMSA GET_REG after 0x8f", .svc = 0x21,
+			.msg = 0x0020 };
+		struct query qasvc = { .cmd = "imsasvc",
+			.desc = "IMSA GET_SVC after 0x8f", .svc = 0x21,
+			.msg = 0x0021 };
+		uint32_t node, port, ins;
+		uint16_t txn = 1;
+		int sock, s;
+
+		printf("ims8f: qcrild gold 0x8f sequence, bind sub=2\n");
+		sock = qrtr_open(0);
+		if (sock < 0)
+			return 1;
+		if (lookup_service(sock, 0x12, 0, &node, &port, &ins) < 0) {
+			printf("  no IMS server\n");
+			close(sock);
+			return 1;
+		}
+		printf("  IMS %u:%u\n", node, port);
+		ask_on(sock, node, port, &qbind, txn++, NULL, NULL);
+		for (s = 0; s < (int)(sizeof(steps) / sizeof(steps[0])); s++)
+			ims_send(sock, node, port, txn++, 0x008f,
+				 steps[s].tlv, steps[s].n, steps[s].tag);
+		ask_on(sock, node, port, &qget, txn++, NULL, NULL);
+		close(sock);
+
+		sock = qrtr_open(0);
+		if (sock < 0)
+			return 1;
+		if (lookup_service(sock, 0x21, 0, &node, &port, &ins) < 0) {
+			printf("  no IMSA\n");
+			close(sock);
+			return 1;
+		}
+		printf("  IMSA %u:%u\n", node, port);
+		txn = 1;
+		ask_on(sock, node, port, &qabind, txn++, NULL, NULL);
+		ims_send(sock, node, port, txn++, 0x0022, imsa_ind,
+			 (uint16_t)sizeof(imsa_ind), "IMSA IND_REG 0x22");
+		ask_on(sock, node, port, &qareg, txn++, NULL, NULL);
+		ask_on(sock, node, port, &qasvc, txn++, NULL, NULL);
+		close(sock);
+		return 0;
+	}
+
+	if (!strcmp(argv[1], "ims98")) {
+		/* Richard pmaports#1878: IMSA BIND is 0x33 TLV 0x10=0;
+		 * "corresponding" IMS Settings BIND is 0x98 with the same
+		 * TLV. libqmi 0x98 uses TLV 0x01 subscription (already
+		 * SUCCESS + 0x90 still 70). This command tries TLV 0x10
+		 * then gold one-TLV 0x8f on that client. Not NV. */
+		static const struct {
+			const char *tag;
+			uint8_t tlv[8];
+			uint16_t n;
+		} steps[] = {
+			{ "SET 0x8f tlv 0x15=2 (call-mode)", { 0x15, 0x04, 0x00, 0x02, 0x00, 0x00, 0x00 }, 7 },
+			{ "SET 0x8f tlv 0x23=0",             { 0x23, 0x01, 0x00, 0x00 }, 4 },
+			{ "SET 0x8f tlv 0x10=1 (voice)",     { 0x10, 0x01, 0x00, 0x01 }, 4 },
+			{ "SET 0x8f tlv 0x14=1",             { 0x14, 0x01, 0x00, 0x01 }, 4 },
+			{ "SET 0x8f tlv 0x11=1",             { 0x11, 0x01, 0x00, 0x01 }, 4 },
+			{ "SET 0x8f tlv 0x19=1",             { 0x19, 0x01, 0x00, 0x01 }, 4 },
+			{ "SET 0x8f tlv 0x18=1",             { 0x18, 0x01, 0x00, 0x01 }, 4 },
+			{ "SET 0x8f tlv 0x1A=1 (sms)",       { 0x1A, 0x01, 0x00, 0x01 }, 4 },
+		};
+		struct query qbind10 = { .cmd = "ims98t10",
+			.desc = "IMS BIND 0x98 tlv 0x10=0 (Richard corresponding)",
+			.svc = 0x12, .msg = 0x0098,
+			.tlv_key = 0x10, .tlv_data = {0, 0, 0, 0}, .tlv_len = 4 };
+		struct query qbind10b = { .cmd = "ims98t10b",
+			.desc = "IMS BIND 0x98 tlv 0x10=2",
+			.svc = 0x12, .msg = 0x0098,
+			.tlv_key = 0x10, .tlv_data = {2, 0, 0, 0}, .tlv_len = 4 };
+		struct query qget = { .cmd = "imsget",
+			.desc = "IMS GET 0x90", .svc = 0x12, .msg = 0x0090 };
+		struct query qabind = { .cmd = "imsabind10z",
+			.desc = "IMSA BIND tlv 0x10=0", .svc = 0x21, .msg = 0x0033,
+			.tlv_key = 0x10, .tlv_data = {0, 0, 0, 0}, .tlv_len = 4 };
+		struct query qareg = { .cmd = "imsareg",
+			.desc = "IMSA GET_REG", .svc = 0x21, .msg = 0x0020 };
+		struct query qasvc = { .cmd = "imsasvc",
+			.desc = "IMSA GET_SVC", .svc = 0x21, .msg = 0x0021 };
+		uint32_t node, port, ins;
+		uint16_t txn = 1;
+		int sock, s;
+
+		printf("ims98: 0x98 tlv 0x10=0 then 0x90 then gold 0x8f\n");
+		sock = qrtr_open(0);
+		if (sock < 0)
+			return 1;
+		if (lookup_service(sock, 0x12, 0, &node, &port, &ins) < 0) {
+			printf("  no IMS server\n");
+			close(sock);
+			return 1;
+		}
+		printf("  IMS %u:%u\n", node, port);
+		ask_on(sock, node, port, &qbind10, txn++, NULL, NULL);
+		ask_on(sock, node, port, &qget, txn++, NULL, NULL);
+		for (s = 0; s < (int)(sizeof(steps) / sizeof(steps[0])); s++)
+			ims_send(sock, node, port, txn++, 0x008f,
+				 steps[s].tlv, steps[s].n, steps[s].tag);
+		ask_on(sock, node, port, &qget, txn++, NULL, NULL);
+		close(sock);
+
+		printf("ims98: 0x98 tlv 0x10=2 then 0x90 (separate client)\n");
+		sock = qrtr_open(0);
+		if (sock < 0)
+			return 1;
+		if (lookup_service(sock, 0x12, 0, &node, &port, &ins) < 0) {
+			close(sock);
+			return 1;
+		}
+		txn = 1;
+		ask_on(sock, node, port, &qbind10b, txn++, NULL, NULL);
+		ask_on(sock, node, port, &qget, txn++, NULL, NULL);
+		close(sock);
+
+		sock = qrtr_open(0);
+		if (sock < 0)
+			return 1;
+		if (lookup_service(sock, 0x21, 0, &node, &port, &ins) < 0) {
+			printf("  no IMSA\n");
+			close(sock);
+			return 1;
+		}
+		printf("  IMSA %u:%u after 0x98/0x8f\n", node, port);
+		txn = 1;
+		ask_on(sock, node, port, &qabind, txn++, NULL, NULL);
+		ask_on(sock, node, port, &qareg, txn++, NULL, NULL);
+		ask_on(sock, node, port, &qasvc, txn++, NULL, NULL);
+		close(sock);
+		return 0;
+	}
+
+	if (!strcmp(argv[1], "ims90p")) {
+		/* Read-only: why 0x90 stays 70 after 0x98. No NV.
+		 * 1) GET_SUPPORTED_MESSAGES
+		 * 2) BIND 0x98 tlv 0x01 = 0/1/2 then GET 0x90 (new client each)
+		 * 3) IMSA 0x33 tlv 0x10=0 + 0x22 gold, then IMS BIND 2 + 0x90
+		 */
+		static const uint8_t imsa_ind[] = {
+			0x10, 0x01, 0x00, 0x01,
+			0x11, 0x01, 0x00, 0x01,
+			0x12, 0x01, 0x00, 0x01,
+			0x18, 0x01, 0x00, 0x01,
+			0x19, 0x01, 0x00, 0x01,
+			0x1b, 0x01, 0x00, 0x01,
+		};
+		struct query qmsgs = { .cmd = "imsmsgs",
+			.desc = "IMS GET_SUPPORTED_MESSAGES", .svc = 0x12, .msg = 0x001E };
+		struct query qget = { .cmd = "imsget",
+			.desc = "IMS GET 0x90", .svc = 0x12, .msg = 0x0090 };
+		struct query qpol = { .cmd = "imspolicy",
+			.desc = "IMS GET 0x48", .svc = 0x12, .msg = 0x0048 };
+		struct query qabind = { .cmd = "imsabind10z",
+			.desc = "IMSA BIND tlv 0x10=0", .svc = 0x21, .msg = 0x0033,
+			.tlv_key = 0x10, .tlv_data = {0, 0, 0, 0}, .tlv_len = 4 };
+		uint32_t node, port, ins;
+		uint16_t txn;
+		int sock, b;
+
+		printf("ims90p: supported-msgs then BIND 0/1/2 + GET 0x90\n");
+		sock = qrtr_open(0);
+		if (sock < 0)
+			return 1;
+		if (lookup_service(sock, 0x12, 0, &node, &port, &ins) < 0) {
+			printf("  no IMS\n");
+			close(sock);
+			return 1;
+		}
+		printf("  IMS %u:%u ins %u\n", node, port, ins);
+		txn = 1;
+		ask_on(sock, node, port, &qmsgs, txn++, NULL, NULL);
+		close(sock);
+
+		for (b = 0; b <= 2; b++) {
+			struct query qbind = { .cmd = "imsbindn",
+				.desc = "IMS BIND 0x98", .svc = 0x12, .msg = 0x0098,
+				.tlv_key = 0x01,
+				.tlv_data = { (uint8_t)b, 0, 0, 0 }, .tlv_len = 4 };
+
+			qbind.desc = (b == 0) ? "IMS BIND tlv0x01=0" :
+				     (b == 1) ? "IMS BIND tlv0x01=1" :
+						"IMS BIND tlv0x01=2";
+			sock = qrtr_open(0);
+			if (sock < 0)
+				return 1;
+			if (lookup_service(sock, 0x12, 0, &node, &port, &ins) < 0) {
+				close(sock);
+				return 1;
+			}
+			txn = 1;
+			printf("ims90p: bind=%u then 0x90/0x48\n", b);
+			ask_on(sock, node, port, &qbind, txn++, NULL, NULL);
+			ask_on(sock, node, port, &qget, txn++, NULL, NULL);
+			ask_on(sock, node, port, &qpol, txn++, NULL, NULL);
+			close(sock);
+		}
+
+		printf("ims90p: IMSA 0x33+0x22 then IMS bind2+0x90\n");
+		sock = qrtr_open(0);
+		if (sock < 0)
+			return 1;
+		if (lookup_service(sock, 0x21, 0, &node, &port, &ins) < 0) {
+			close(sock);
+			return 1;
+		}
+		txn = 1;
+		ask_on(sock, node, port, &qabind, txn++, NULL, NULL);
+		ims_send(sock, node, port, txn++, 0x0022, imsa_ind,
+			 (uint16_t)sizeof(imsa_ind), "IMSA IND_REG 0x22 gold");
+		close(sock);
+
+		sock = qrtr_open(0);
+		if (sock < 0)
+			return 1;
+		if (lookup_service(sock, 0x12, 0, &node, &port, &ins) < 0) {
+			close(sock);
+			return 1;
+		}
+		{
+			struct query qbind2 = { .cmd = "imsbind2",
+				.desc = "IMS BIND tlv0x01=2 after IMSA init",
+				.svc = 0x12, .msg = 0x0098,
+				.tlv_key = 0x01, .tlv_data = {2, 0, 0, 0},
+				.tlv_len = 4 };
+			txn = 1;
+			ask_on(sock, node, port, &qbind2, txn++, NULL, NULL);
+			ask_on(sock, node, port, &qget, txn++, NULL, NULL);
+		}
+		close(sock);
+		return 0;
+	}
+
+	if (!strcmp(argv[1], "ims8f0")) {
+		/* Read-only-ish: BIND 0x98 tlv 0x01=0 (the only bind
+		 * that makes GET 0x90 succeed), then SET 0x8f of bits
+		 * GET already showed as 1. Not NV. */
+		static const struct {
+			const char *tag;
+			uint8_t tlv[8];
+			uint16_t n;
+		} steps[] = {
+			{ "SET 0x8f tlv 0x10=1 (voice, already on)", { 0x10, 0x01, 0x00, 0x01 }, 4 },
+			{ "SET 0x8f tlv 0x1A=1 (sms, already on)",   { 0x1A, 0x01, 0x00, 0x01 }, 4 },
+			{ "SET 0x8f tlv 0x18=1 (ims, already on)",   { 0x18, 0x01, 0x00, 0x01 }, 4 },
+		};
+		struct query qbind = { .cmd = "imsbind0",
+			.desc = "IMS BIND tlv0x01=0", .svc = 0x12, .msg = 0x0098,
+			.tlv_key = 0x01, .tlv_data = {0, 0, 0, 0}, .tlv_len = 4 };
+		struct query qget = { .cmd = "imsget",
+			.desc = "IMS GET 0x90", .svc = 0x12, .msg = 0x0090 };
+		uint32_t node, port, ins;
+		uint16_t txn = 1;
+		int sock, s;
+
+		printf("ims8f0: BIND 0 then SET already-1 bits, no NV\n");
+		sock = qrtr_open(0);
+		if (sock < 0)
+			return 1;
+		if (lookup_service(sock, 0x12, 0, &node, &port, &ins) < 0) {
+			printf("  no IMS\n");
+			close(sock);
+			return 1;
+		}
+		printf("  IMS %u:%u\n", node, port);
+		ask_on(sock, node, port, &qbind, txn++, NULL, NULL);
+		ask_on(sock, node, port, &qget, txn++, NULL, NULL);
+		for (s = 0; s < (int)(sizeof(steps) / sizeof(steps[0])); s++)
+			ims_send(sock, node, port, txn++, 0x008f,
+				 steps[s].tlv, steps[s].n, steps[s].tag);
+		ask_on(sock, node, port, &qget, txn++, NULL, NULL);
+		close(sock);
+		return 0;
+	}
+
+	if (!strcmp(argv[1], "imscfg")) {
+		/* One-shot: bind 2, GET/SET policy 0x48/0x47, SET_USER_CONFIG
+		 * 0x2C with IMSI-derived IMPI, IMSA bind 2 + GET_REG.
+		 * Stop after this regardless of err70. */
+		static const char domain[] = "ims.mnc011.mcc460.3gppnetwork.org";
+		static const char impi[] =
+			"460110440364089@ims.mnc011.mcc460.3gppnetwork.org";
+		static const char impu[] =
+			"sip:460110440364089@ims.mnc011.mcc460.3gppnetwork.org";
+		uint8_t tlvs[256], req[280], buf[512];
+		uint16_t tlen, txn = 1;
+		uint32_t node, port, ins, rn, rp, prio;
+		int sock, i, n;
+		struct query qbind = { .cmd = "imsbind2",
+			.desc = "IMS BIND sub=2", .svc = 0x12, .msg = 0x0098,
+			.tlv_key = 0x01, .tlv_data = {2, 0, 0, 0}, .tlv_len = 4 };
+		struct query qpolg = { .cmd = "imspolicy",
+			.desc = "IMS GET_POLICY after bind2", .svc = 0x12,
+			.msg = 0x0048 };
+		struct query qabind = { .cmd = "imsabind2",
+			.desc = "IMSA BIND sub=2", .svc = 0x21, .msg = 0x0033,
+			.tlv_key = 0x01, .tlv_data = {2, 0, 0, 0}, .tlv_len = 4 };
+		struct query qareg = { .cmd = "imsareg",
+			.desc = "IMSA GET_REG after cfg", .svc = 0x21,
+			.msg = 0x0020 };
+		struct query qasvc = { .cmd = "imsasvc",
+			.desc = "IMSA GET_SVC after cfg", .svc = 0x21,
+			.msg = 0x0021 };
+
+		printf("imscfg: IMPI=%s\n", impi);
+		sock = qrtr_open(0);
+		if (sock < 0)
+			return 1;
+		if (lookup_service(sock, 0x12, 0, &node, &port, &ins) < 0) {
+			printf("  no IMS server\n");
+			close(sock);
+			return 1;
+		}
+		printf("  IMS %u:%u\n", node, port);
+		ask_on(sock, node, port, &qbind, txn++, NULL, NULL);
+		ask_on(sock, node, port, &qpolg, txn++, NULL, NULL);
+
+		/* SET 0x0047: ACS/ISIM/NV/PCO priorities + APN ims */
+		tlen = 0;
+		prio = 2; memcpy(tlvs + tlen, "\x15\x04\x00", 3); tlen += 3;
+		put32(tlvs + tlen, prio); tlen += 4;		/* ACS=2 */
+		prio = 0; memcpy(tlvs + tlen, "\x16\x04\x00", 3); tlen += 3;
+		put32(tlvs + tlen, prio); tlen += 4;		/* ISIM=0 */
+		prio = 1; memcpy(tlvs + tlen, "\x17\x04\x00", 3); tlen += 3;
+		put32(tlvs + tlen, prio); tlen += 4;		/* NV=1 */
+		prio = 3; memcpy(tlvs + tlen, "\x18\x04\x00", 3); tlen += 3;
+		put32(tlvs + tlen, prio); tlen += 4;		/* PCO=3 */
+		tlvs[tlen] = 0x1A; put16(tlvs + tlen + 1, 3);
+		memcpy(tlvs + tlen + 3, "ims", 3); tlen += 6;
+		req[0] = QMI_REQUEST;
+		put16(req + 1, txn);
+		put16(req + 3, 0x0047);
+		put16(req + 5, tlen);
+		memcpy(req + 7, tlvs, tlen);
+		printf("== SET_POL_MGR 0x0047 (%u tlv bytes) ==\n", tlen);
+		qrtr_sendto(sock, node, port, req, 7 + tlen);
+		for (i = 0; i < 6; i++) {
+			n = qrtr_recvfrom(sock, buf, sizeof(buf), &rn, &rp);
+			if (n >= 7 && buf[0] == QMI_RESPONSE &&
+			    get16(buf + 1) == txn && get16(buf + 3) == 0x0047) {
+				printf("  resp msg_len %u  ", get16(buf + 5));
+				note_result(buf + 10, 4);
+				break;
+			}
+		}
+		if (i == 6)
+			printf("  no SET_POL_MGR response\n");
+		txn++;
+
+		/* SET_USER_CONFIG 0x002C: domain, IMPI, IMPU */
+		tlen = 0;
+		tlvs[tlen] = 0x10; put16(tlvs + tlen + 1, (uint16_t)strlen(domain));
+		memcpy(tlvs + tlen + 3, domain, strlen(domain));
+		tlen += 3 + (uint16_t)strlen(domain);
+		tlvs[tlen] = 0x11; put16(tlvs + tlen + 1, (uint16_t)strlen(impi));
+		memcpy(tlvs + tlen + 3, impi, strlen(impi));
+		tlen += 3 + (uint16_t)strlen(impi);
+		tlvs[tlen] = 0x12; put16(tlvs + tlen + 1, (uint16_t)strlen(impu));
+		memcpy(tlvs + tlen + 3, impu, strlen(impu));
+		tlen += 3 + (uint16_t)strlen(impu);
+		req[0] = QMI_REQUEST;
+		put16(req + 1, txn);
+		put16(req + 3, 0x002C);
+		put16(req + 5, tlen);
+		memcpy(req + 7, tlvs, tlen);
+		printf("== SET_USER_CONFIG 0x002C domain+impi+impu ==\n");
+		qrtr_sendto(sock, node, port, req, 7 + tlen);
+		for (i = 0; i < 6; i++) {
+			uint32_t rn, rp;
+			n = qrtr_recvfrom(sock, buf, sizeof(buf), &rn, &rp);
+			if (n >= 7 && buf[0] == QMI_RESPONSE &&
+			    get16(buf + 1) == txn && get16(buf + 3) == 0x002C) {
+				printf("  resp msg_len %u  ", get16(buf + 5));
+				if (get16(buf + 5) >= 7)
+					note_result(buf + 10, 4);
+				break;
+			}
+		}
+		close(sock);
+
+		sock = qrtr_open(0);
+		if (sock < 0)
+			return 1;
+		if (lookup_service(sock, 0x21, 0, &node, &port, &ins) < 0) {
+			printf("  no IMSA\n");
+			close(sock);
+			return 1;
+		}
+		txn = 1;
+		ask_on(sock, node, port, &qabind, txn++, NULL, NULL);
+		ask_on(sock, node, port, &qareg, txn++, NULL, NULL);
+		ask_on(sock, node, port, &qasvc, txn++, NULL, NULL);
+		close(sock);
+		return 0;
+	}
+
+	if (!strcmp(argv[1], "submap")) {
+		/* Read-only numbering: WDS 0xAF/0xB0 and WMS 0x4F for
+		 * sub 0/1/2. Throwaway clients. Not NV. */
+		uint32_t node, port, ins;
+		uint16_t txn;
+		int sock, s;
+		struct query qget = { .cmd = "wdsgetsub",
+			.desc = "WDS GET_BIND_SUB 0xB0", .svc = 1, .msg = 0x00B0 };
+
+		printf("submap: WDS GET then BIND 0/1/2 + GET; WMS BIND 0/1/2\n");
+		for (s = 0; s <= 2; s++) {
+			struct query qbind = { .cmd = "wdsbindn",
+				.desc = "WDS BIND_SUB", .svc = 1, .msg = 0x00AF,
+				.tlv_key = 0x01,
+				.tlv_data = { (uint8_t)s, 0, 0, 0 }, .tlv_len = 4 };
+			sock = qrtr_open(0);
+			if (sock < 0)
+				return 1;
+			if (lookup_service(sock, 1, 0, &node, &port, &ins) < 0) {
+				close(sock);
+				return 1;
+			}
+			txn = 1;
+			printf("submap: WDS bind=%u\n", s);
+			if (s == 0)
+				ask_on(sock, node, port, &qget, txn++, NULL, NULL);
+			ask_on(sock, node, port, &qbind, txn++, NULL, NULL);
+			ask_on(sock, node, port, &qget, txn++, NULL, NULL);
+			close(sock);
+		}
+		for (s = 0; s <= 2; s++) {
+			struct query qwb = { .cmd = "wmsbindn",
+				.desc = "WMS BIND_SUB 0x4F", .svc = 5, .msg = 0x004F,
+				.tlv_key = 0x01,
+				.tlv_data = { (uint8_t)s, 0, 0, 0 }, .tlv_len = 4 };
+			struct query q4a = { .cmd = "wms4a",
+				.desc = "WMS GET_TRANSPORT_NW_REG", .svc = 5, .msg = 0x004A };
+			sock = qrtr_open(0);
+			if (sock < 0)
+				return 1;
+			if (lookup_service(sock, 5, 0, &node, &port, &ins) < 0) {
+				close(sock);
+				return 1;
+			}
+			txn = 1;
+			printf("submap: WMS bind=%u then 0x4A\n", s);
+			ask_on(sock, node, port, &qwb, txn++, NULL, NULL);
+			ask_on(sock, node, port, &q4a, txn++, NULL, NULL);
+			close(sock);
+		}
+		return 0;
+	}
+
+	if (!strcmp(argv[1], "isimdump")) {
+		/* Read-only ISIM ADF on NONPROV_SLOT_2. Not NV, not SIM write. */
+		static const uint8_t aid[16] = {
+			0xa0, 0x00, 0x00, 0x00, 0x87, 0x10, 0x04, 0xff,
+			0x86, 0xff, 0x03, 0x89, 0xff, 0xff, 0xff, 0xff
+		};
+		struct query qsim = { .cmd = "sim",
+			.desc = "UIM GET_CARD_STATUS", .svc = 11, .msg = 0x002F };
+		struct query qimsi = { .cmd = "usimread5",
+			.desc = "USIM EF_IMSI primary-gw", .svc = 11, .msg = 0x0020,
+			.tlv_key = 0x02,
+			.tlv_data = {0x07, 0x6f, 0x04, 0x00, 0x3f, 0xff, 0x7f},
+			.tlv_len = 7,
+			.tlv2_key = 0x01, .tlv2_data = {0, 0}, .tlv2_len = 2,
+			.tlv3_key = 0x03, .tlv3_data = {0, 0, 0, 0}, .tlv3_len = 4 };
+		uint32_t node, port, ins;
+		uint16_t txn = 1;
+		int sock, i;
+		static const struct {
+			const char *tag;
+			uint16_t fid;
+			int record; /* 0 = transparent */
+		} files[] = {
+			{ "GET_ATTR EF_IMPI 6F02",  0x6F02, -1 },
+			{ "READ EF_IMPI 6F02",      0x6F02, 0 },
+			{ "GET_ATTR EF_DOMAIN 6F03", 0x6F03, -1 },
+			{ "READ EF_DOMAIN 6F03",    0x6F03, 0 },
+			{ "GET_ATTR EF_IMPU 6F04",  0x6F04, -1 },
+			{ "READ_REC EF_IMPU 6F04#1", 0x6F04, 1 },
+			{ "READ_REC EF_IMPU 6F04#2", 0x6F04, 2 },
+			{ "GET_ATTR EF_IST 6F07",   0x6F07, -1 },
+			{ "READ EF_IST 6F07",       0x6F07, 0 },
+			{ "GET_ATTR EF_PCSCF 6F09", 0x6F09, -1 },
+			{ "READ_REC EF_PCSCF 6F09#1", 0x6F09, 1 },
+			{ "GET_ATTR EF_AD 6FAD",    0x6FAD, -1 },
+			{ "READ EF_AD 6FAD",        0x6FAD, 0 },
+		};
+
+		printf("isimdump: nonprov-slot2 ISIM, read-only\n");
+		sock = qrtr_open(0);
+		if (sock < 0)
+			return 1;
+		if (lookup_service(sock, 11, 0, &node, &port, &ins) < 0) {
+			printf("  no UIM\n");
+			close(sock);
+			return 1;
+		}
+		printf("  UIM %u:%u\n", node, port);
+		ask_on(sock, node, port, &qsim, txn++, NULL, NULL);
+		ask_on(sock, node, port, &qimsi, txn++, NULL, NULL);
+		for (i = 0; i < (int)(sizeof(files) / sizeof(files[0])); i++) {
+			struct query q = { 0 };
+			uint16_t fid = files[i].fid;
+
+			q.cmd = "isimf";
+			q.desc = files[i].tag;
+			q.svc = 11;
+			q.tlv_key = 0x02;
+			q.tlv_data[0] = (uint8_t)(fid & 0xff);
+			q.tlv_data[1] = (uint8_t)(fid >> 8);
+			q.tlv_data[2] = 0x04;
+			q.tlv_data[3] = 0x00;
+			q.tlv_data[4] = 0x3f;
+			q.tlv_data[5] = 0xff;
+			q.tlv_data[6] = 0x7f;
+			q.tlv_len = 7;
+			q.tlv2_key = 0x01;
+			q.tlv2_data[0] = 5;
+			q.tlv2_data[1] = 16;
+			memcpy(q.tlv2_data + 2, aid, 16);
+			q.tlv2_len = 18;
+			if (files[i].record < 0) {
+				q.msg = 0x0024;
+			} else if (files[i].record == 0) {
+				q.msg = 0x0020;
+				q.tlv3_key = 0x03;
+				q.tlv3_data[0] = 0;
+				q.tlv3_data[1] = 0;
+				q.tlv3_data[2] = 0;
+				q.tlv3_data[3] = 0;
+				q.tlv3_len = 4;
+			} else {
+				q.msg = 0x0021;
+				q.tlv3_key = 0x03;
+				q.tlv3_data[0] = (uint8_t)files[i].record;
+				q.tlv3_data[1] = 0;
+				q.tlv3_data[2] = 0x64;
+				q.tlv3_data[3] = 0;
+				q.tlv3_len = 4;
+			}
+			ask_on(sock, node, port, &q, txn++, NULL, NULL);
+		}
+		close(sock);
+		return 0;
+	}
+
+	if (!strcmp(argv[1], "imschain")) {
+		struct query *bind = NULL, *set = NULL, *get = NULL;
+		struct query *abind = NULL, *areg = NULL, *asvc = NULL;
+		uint32_t node, port, ins;
+		int sock, i;
+		uint16_t txn = 1;
+
+		for (i = 0; i < (int)(sizeof(QUERIES) / sizeof(QUERIES[0])); i++) {
+			if (!strcmp(QUERIES[i].cmd, "imsbind")) bind = &QUERIES[i];
+			else if (!strcmp(QUERIES[i].cmd, "imsen")) set = &QUERIES[i];
+			else if (!strcmp(QUERIES[i].cmd, "imsget")) get = &QUERIES[i];
+			else if (!strcmp(QUERIES[i].cmd, "imsabind")) abind = &QUERIES[i];
+			else if (!strcmp(QUERIES[i].cmd, "imsareg")) areg = &QUERIES[i];
+			else if (!strcmp(QUERIES[i].cmd, "imsasvc")) asvc = &QUERIES[i];
+		}
+		sock = qrtr_open(0);
+		if (sock < 0)
+			return 1;
+		if (lookup_service(sock, 0x12, 0, &node, &port, &ins) < 0) {
+			printf("  no IMS server\n");
+			close(sock);
+			return 1;
+		}
+		printf("  IMS server %u:%u — BIND then SET then GET\n", node, port);
+		if (bind) ask_on(sock, node, port, bind, txn++, NULL, NULL);
+		if (set) ask_on(sock, node, port, set, txn++, NULL, NULL);
+		if (get) ask_on(sock, node, port, get, txn++, NULL, NULL);
+		close(sock);
+
+		sock = qrtr_open(0);
+		if (sock < 0)
+			return 1;
+		if (lookup_service(sock, 0x21, 0, &node, &port, &ins) < 0) {
+			printf("  no IMSA server\n");
+			close(sock);
+			return 1;
+		}
+		printf("  IMSA server %u:%u — BIND then REG/SVC\n", node, port);
+		txn = 1;
+		if (abind) ask_on(sock, node, port, abind, txn++, NULL, NULL);
+		if (areg) ask_on(sock, node, port, areg, txn++, NULL, NULL);
+		if (asvc) ask_on(sock, node, port, asvc, txn++, NULL, NULL);
+		close(sock);
+		return 0;
 	}
 
 	if (!strcmp(argv[1], "ipa"))
@@ -1628,6 +3320,37 @@ int main(int argc, char **argv)
 				prof2 = (int)strtoul(argv[a] + 1, NULL, 0);
 			else if (argv[a][0] == 'p' && argv[a][1])
 				prof = (int)strtoul(argv[a] + 1, NULL, 0);
+			else if (!strncmp(argv[a], "if", 2) && argv[a][2] >= '0') {
+				unsigned long iface = strtoul(argv[a] + 2, NULL, 0);
+				unsigned qi;
+
+				for (qi = 0; qi < sizeof(QUERIES) / sizeof(QUERIES[0]); qi++) {
+					if (strcmp(QUERIES[qi].cmd, "wdsmux"))
+						continue;
+					put32(QUERIES[qi].tlv_data + 4, (uint32_t)iface);
+					printf("  [chain mux iface %lu]\n", iface);
+				}
+			} else if (!strcmp(argv[a], "slot2")) {
+				unsigned qi;
+
+				for (qi = 0; qi < sizeof(QUERIES) / sizeof(QUERIES[0]); qi++) {
+					if (strcmp(QUERIES[qi].cmd, "wdsbind"))
+						continue;
+					put32(QUERIES[qi].tlv_data, 2);
+					printf("  [chain BIND_SUB 2]\n");
+				}
+			} else if (!strcmp(argv[a], "ctnet")) {
+				unsigned qi;
+
+				for (qi = 0; qi < sizeof(QUERIES) / sizeof(QUERIES[0]); qi++) {
+					if (strcmp(QUERIES[qi].cmd, "wdsstart"))
+						continue;
+					memcpy(QUERIES[qi].tlv_data, "ctnet", 5);
+					QUERIES[qi].tlv_len = 5;
+					QUERIES[qi].tlv2_data[0] = 4;
+					printf("  [chain START apn=ctnet ipv4]\n");
+				}
+			}
 		}
 		return chain(argv[2], use_mux, prof, apn_only, no_call_type,
 			     wds_ins, sub_first, prof2, drop_apn);
@@ -1646,12 +3369,14 @@ int main(int argc, char **argv)
 		}
 	}
 	if (argc == 4 && !strcmp(argv[1], "wdsprof")) {
+		unsigned long idx = strtoul(argv[2], NULL, 0);
 		unsigned long t = strtoul(argv[3], NULL, 0);
 
 		for (i = 0; i < sizeof(QUERIES) / sizeof(QUERIES[0]); i++) {
 			if (strcmp(QUERIES[i].cmd, "wdsprof"))
 				continue;
 			QUERIES[i].tlv_data[0] = (uint8_t)t;
+			QUERIES[i].tlv_data[1] = (uint8_t)idx;
 		}
 	}
 	if (argc == 3 && !strcmp(argv[1], "wdsstop")) {
@@ -1688,6 +3413,25 @@ int main(int argc, char **argv)
 			QUERIES[i].tlv3_data[3] = (l >> 8) & 0xff;
 		}
 	}
+	/* wdfmt / wdfmtqmap4 / wdfmtqmap5 <iface>: IPA sysfs says
+	 * modem_rx=10 modem_tx=2, not the hardcoded iface 1. */
+	if (argc == 3 && (!strcmp(argv[1], "wdfmt") ||
+			  !strcmp(argv[1], "wdfmtqmap4") ||
+			  !strcmp(argv[1], "wdfmtqmap5") ||
+			  !strcmp(argv[1], "wdfmtqmap"))) {
+		unsigned long iface = strtoul(argv[2], NULL, 0);
+
+		for (i = 0; i < (int)(sizeof(QUERIES) / sizeof(QUERIES[0])); i++) {
+			if (strcmp(QUERIES[i].cmd, argv[1]))
+				continue;
+			if (!strcmp(argv[1], "wdfmt"))
+				put32(QUERIES[i].tlv_data + 4, (uint32_t)iface);
+			else
+				put32(QUERIES[i].tlv6_data + 4, (uint32_t)iface);
+			printf("  [wda ep iface %lu]\n", iface);
+		}
+	}
+
 	/* wdsmux <mux_id> [iface] [client_type]: probe bind-mux shapes
 	 * beyond {4,1}+1; client_type emits optional TLV 0x13 (u32). */
 	if ((argc == 3 || argc == 4 || argc == 5) &&
