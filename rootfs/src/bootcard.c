@@ -8,13 +8,11 @@
  * the bottom, transcript typing at the top). The story after the exit
  * belongs to term/voice, not here.
  *
- * Exit ladder (#282, 09-09 — 网络是最后一步): key on `done` ALONE.
- * Two-phase net-bringup (#246) lands phase 1's `done ok|fail` BEFORE
- * phase 2 joins wifi, so done is the earliest truthful exit and the
- * cursor never waits for the net — the boot/net story continues on the
- * cursor face (voice daemon's boot net watch). ok → hold 3 s; fail → 8 s
- * grace so the offline floor still boots to the prompt; 150 s hard
- * deadline from panel-light covers bringups that never write done.
+ * Exit ladder (home face 2026-09-18): do NOT wait for `done`. Paint the
+ * wordmark as soon as DSI is up, hold 2 s so the mark is readable, then
+ * drop master so aginx-term can SETCRTC the same wordmark and cut to
+ * Home. Net/packages keep running in the background. 150 s deadline
+ * still covers a panel that never lights.
  *
  * DRM path is the splash2 skeleton (probe connector -> mode[0] -> encoder ->
  * possible_crtcs -> dumb fb -> SETCRTC) with its msm_drm 4.19 quirks intact:
@@ -404,29 +402,20 @@ int main(int argc, char **argv) {
   pix = g_map[0];
   render();
   if (drm_modeset(fd, g_fb[0])) {
-    kmsg("bootcard: modeset failed; logging state only\n");
-    for (;;) {
-      log_done_once(statepath);
-      sleep(1);
-    }
+    /* enchilada 6.11: SETCRTC EACCES at t~10s if we keep master; term
+     * then wait_up's 10 min. Drop the fd so handoff can SET_MASTER. */
+    kmsg("bootcard: modeset failed; dropping master for term\n");
+    close(fd);
+    exit(0);
   }
   kmsgf("bootcard: panel up %ux%u conn=%u\n", fb_w, fb_h, g_conn_id);
-  /* #282 exit ladder — 网络是最后一步: two-phase net-bringup (#246)
-   * lands phase-1 `done` BEFORE phase 2 joins wifi, so done is the
-   * earliest truthful exit and the cursor never waits for the net —
-   * the boot/net story continues on the cursor face (voice daemon's
-   * boot net watch). done ok => hold 3 s so the last state is readable;
-   * done fail => 8 s grace so the offline floor still boots to the
-   * prompt. 150 s hard deadline from panel-light covers bringups that
-   * never write done. Dropping master blanks
-   * the panel via the dsi_backlight dpms hooks — that beat of black is
-   * the handoff (term fast-polls on any SET_MASTER failure at 250 ms —
-   * msm_drm 4.19 answers EINVAL, not EBUSY, when a master exists). */
+  /* Hold the wordmark 2 s then exit — term's first frame is the same
+   * mark, then Home. Do not wait for boot.state `done`. Dropping master
+   * blanks the panel via dsi_backlight dpms; term fast-polls SET_MASTER
+   * at 250 ms. 150 s covers a panel that never stays lit. */
   struct timespec t_panel;
   clock_gettime(CLOCK_MONOTONIC, &t_panel);
   g_cur = 0;
-  long resolve_at = -1;         /* CLOCK_MONOTONIC sec when verdict landed */
-  int hold = 3;
 
   /* Present path: re-SETCRTC relatch on EVERY frame — msm_drm 4.19 is
    * atomic-only and refuses legacy flips (errno 2, 2026-09-07); drm.rs
@@ -435,22 +424,11 @@ int main(int argc, char **argv) {
     struct timespec now;
     clock_gettime(CLOCK_MONOTONIC, &now);
     long t = now.tv_sec - t_panel.tv_sec;
-    if (t >= 150) {
-      kmsg("bootcard: 150s deadline — exiting (term takes the panel)\n");
+    if (t >= 2) {
+      kmsg("bootcard: wordmark held — exiting (term takes the panel)\n");
       exit(0);
     }
-    if (resolve_at < 0) {
-      if (done_seen) {
-        hold = done_ok ? 3 : 8;
-        resolve_at = t;
-        kmsgf("bootcard: local bring-up done (%s) — holding %ds\n",
-              done_ok ? "ok" : "fail", hold);
-      }
-    } else if (t - resolve_at >= hold) {
-      kmsg("bootcard: boot console done — exiting (term takes the panel)\n");
-      exit(0);
-    }
-    read_state(statepath);   /* feeds the ladder above on the next pass */
+    read_state(statepath);   /* still a machine-readable receipt, not a gate */
     int next = 1 - g_cur;
     pix = g_map[next];
     render();

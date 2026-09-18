@@ -1,15 +1,10 @@
 // aginx-term — AginxOS on-device terminal (M11 aterm; N4③b 改姓).
 //
-// bootcard's DRM path + 5x8 font, a vte-parsed cell grid (black bg, green /
-// white text — the fixed phosphor palette), an openpty child (sh; debug
-// sessions via AGINX_TERM_START), an evdev on-screen keyboard (tap = key,
-// drag = scrollback), and the 面法 faces: Idle 待命面 (breathing cursor /
-// transcript / result page), Eye 取景, Install 软件清单 (C7). Started by
-// rcS's aginx-term-handoff once boot finishes; bootcard is wordmark-only
-// now and self-exits (#246), so the handoff's kill is belt-and-braces.
-// 批③ (09-10): launcher/picker/photos faces demolished — the install list
-// face (pair bar → 软件清单) is the egg's install entry; the M39 photo
-// viewer retired with them (photos stay files in /home/photos).
+// bootcard paints the AginxOS wordmark then drops master; term's first
+// frame is the same wordmark, then Home (status + clock + 相机/相册/对话/设置).
+// 对话 is the old Idle prompt (breathing cursor / transcript / result page).
+// Eye 取景, Install 软件清单, Cam 圆快门, Photos /home/photos. Debug pty via
+// AGINX_TERM_START or 设置→终端. Started by rcS's aginx-term-handoff.
 //
 // M15 power management: the power key (node from [input.term]) blanks the
 // panel (connector DPMS off — the same path that darkened the screen when a
@@ -28,9 +23,11 @@ mod browser; // v4⑥ 活体结果面 CDP 面板客户端（接线于 main loop�
 mod cjk;
 mod drm;
 mod font;
+mod home;
 mod input;
 mod kb;
 mod launch;
+mod photos;
 mod pinyin;
 mod term;
 
@@ -237,6 +234,30 @@ fn fill_rect(pix: &mut [u32], pitch: usize, w: usize, h: usize, x: i32, y: i32, 
         for i in 0..rw as usize {
             pix[row + i] = c;
         }
+    }
+}
+
+fn fill_disk(
+    pix: &mut [u32],
+    pitch: usize,
+    w: usize,
+    h: usize,
+    cx: i32,
+    cy: i32,
+    r: i32,
+    c: u32,
+) {
+    if r <= 0 {
+        return;
+    }
+    let r2 = r * r;
+    for dy in -r..=r {
+        let rem = r2 - dy * dy;
+        if rem < 0 {
+            continue;
+        }
+        let span = (rem as f32).sqrt() as i32;
+        fill_rect(pix, pitch, w, h, cx - span, cy + dy, span * 2 + 1, 1, c);
     }
 }
 
@@ -515,21 +536,37 @@ fn inject(mode: &mut Mode, term: &mut Term, parser: &mut vte::Parser, ev: &Input
 
 enum Mode {
     Running(Child),
-    /// 待命面 (开机剧情 v4, 面法 09-07 终稿): the resting screen — pure
-    /// Matrix-cast near-black + the blinking block cursor at the prompt
-    /// origin. No wordmark, no targets, no theater: the console only says
-    /// what was actually said. Boot lands here; wake returns here.
-    Idle,
+    /// 桌面：顶栏时间 / 📶、大时钟、四个图标。开机 wordmark 之后落在这里。
+    Home,
+    /// 对话（旧待命面）：绿字 + 呼吸光标 + 语音稿 / 结果页。从图标进来。
+    Talk,
     /// 眼视图 (面法 09-07, promoted from the M42g voice-face sub-state):
     /// fullscreen viewfinder. Entered from ANY mode when the aginx-voice
     /// face opens the eye (eye false→true), left when it closes — the
     /// prior mode is boxed away and restored. Pure display; close keys
-    /// are physical (音量+ toggles, 音量下 closes).
+    /// are physical (音量+ toggles, 音量下 closes). 设置→连接网络 also
+    /// opens a term-owned eye for QR pairing.
     Eye,
-    /// 软件清单面 (C7, 蛋的安装入口): manifest×stamps×bindir 行集 + 翻页 +
-    /// 点击催装。job 槽在 main()（auto 触发与手动点击同一条单飞），面的
-    /// 状态行读 install_line（idle 面同源）。
+    /// 软件清单面 (C7): manifest×stamps×bindir 行集 + 翻页 + 点击催装。
+    /// 从设置进来；BACK 回设置。
     Install(InstallView),
+    /// 相机面：取景器铺满 + 圆快门 + 点画面对焦。从桌面「相机」进来。
+    Cam,
+    /// /home/photos 缩略图；点开全屏，再点回网格。
+    Photos(photos::Photos),
+    /// 设置：连接网络 / 软件清单 / 终端 / 关机。
+    Settings,
+}
+
+fn toolbar_mode(mode: &Mode) -> bool {
+    matches!(
+        mode,
+        Mode::Running(_) | Mode::Install(_) | Mode::Talk | Mode::Settings | Mode::Photos(_)
+    )
+}
+
+fn home_status(pair_line: &Option<String>, install_line: &Option<String>) -> Option<String> {
+    pair_line.clone().or_else(|| install_line.clone())
 }
 
 // ---------------- voice face ----------------
@@ -704,6 +741,10 @@ impl VoiceView {
         if ok.is_err() {
             return false;
         }
+        self.blit_eye_cached(pix, pitch, dw, dh)
+    }
+
+    fn blit_eye_cached(&self, pix: &mut [u32], pitch: usize, dw: usize, dh: usize) -> bool {
         let bytes = &self.raw_buf;
         if bytes.len() < 12 {
             return false;
@@ -718,7 +759,60 @@ impl VoiceView {
         if sw == 0 || sh == 0 || bytes.len() < 12 + sw * sh * 2 || dw == 0 || dh == 0 {
             return false;
         }
-        upscale565(pix, pitch, dw, dh, bytes, sw, sh);
+        upscale565(pix, pitch, 0, 0, dw, dh, bytes, sw, sh);
+        true
+    }
+
+    /// Same RGW1 frame, aspect-fit letterbox (the still JPEG path). The
+    /// fullscreen 565 blit stretches 4:3 onto 19:9 and the viewfinder
+    /// looked warped while the captured photo did not.
+    fn blit_eye_letterbox(&self, pix: &mut [u32], pitch: usize, dw: usize, dh: usize) -> bool {
+        let bytes = &self.raw_buf;
+        if bytes.len() < 12 {
+            return false;
+        }
+        let rd = |r: std::ops::Range<usize>| -> [u8; 4] { bytes[r].try_into().unwrap() };
+        let magic = u32::from_le_bytes(rd(0..4));
+        if magic != 0x31574752 {
+            return false;
+        }
+        let sw = u32::from_le_bytes(rd(4..8)) as usize;
+        let sh = u32::from_le_bytes(rd(8..12)) as usize;
+        if sw == 0 || sh == 0 || bytes.len() < 12 + sw * sh * 2 || dw == 0 || dh == 0 {
+            return false;
+        }
+        let (ox, oy, fw, fh) = fit_rect(sw, sh, dw, dh);
+        if fw == 0 || fh == 0 {
+            return false;
+        }
+        upscale565(pix, pitch, ox, oy, fw, fh, bytes, sw, sh);
+        true
+    }
+
+    /// Aspect-fill (crop) into a dest rect — phone viewfinder, not letterbox.
+    fn blit_eye_cover(
+        &self,
+        pix: &mut [u32],
+        pitch: usize,
+        ox: usize,
+        oy: usize,
+        dw: usize,
+        dh: usize,
+    ) -> bool {
+        let bytes = &self.raw_buf;
+        if bytes.len() < 12 || dw == 0 || dh == 0 {
+            return false;
+        }
+        let rd = |r: std::ops::Range<usize>| -> [u8; 4] { bytes[r].try_into().unwrap() };
+        if u32::from_le_bytes(rd(0..4)) != 0x31574752 {
+            return false;
+        }
+        let sw = u32::from_le_bytes(rd(4..8)) as usize;
+        let sh = u32::from_le_bytes(rd(8..12)) as usize;
+        if sw == 0 || sh == 0 || bytes.len() < 12 + sw * sh * 2 {
+            return false;
+        }
+        blit_565_cover(pix, pitch, ox, oy, dw, dh, bytes, sw, sh);
         true
     }
 
@@ -766,7 +860,53 @@ fn lut565() -> &'static [u32; 65536] {
 /// packed-RGB math never crosses a byte. The 4-px NEON store discipline is
 /// kept: the back buffer is write-combined scanout memory, store width is
 /// the present budget (M47⑤f device probe 2026-09-05).
-fn upscale565(pix: &mut [u32], pitch: usize, dw: usize, dh: usize, src: &[u8], sw: usize, sh: usize) {
+fn blit_565_cover(
+    pix: &mut [u32],
+    pitch: usize,
+    ox: usize,
+    oy: usize,
+    dw: usize,
+    dh: usize,
+    src: &[u8],
+    sw: usize,
+    sh: usize,
+) {
+    let lut = lut565();
+    let scale = (dw as f64 / sw as f64).max(dh as f64 / sh as f64);
+    let crop_x = (sw as f64 * scale - dw as f64) * 0.5;
+    let crop_y = (sh as f64 * scale - dh as f64) * 0.5;
+    for j in 0..dh {
+        let sy = ((j as f64 + 0.5 + crop_y) / scale).clamp(0.0, (sh - 1) as f64) as usize;
+        let row = 12 + sy * sw * 2;
+        let dst = (j + oy) * pitch + ox;
+        for i in 0..dw {
+            let sx = ((i as f64 + 0.5 + crop_x) / scale).clamp(0.0, (sw - 1) as f64) as usize;
+            let o = row + sx * 2;
+            pix[dst + i] = lut[u16::from_le_bytes([src[o], src[o + 1]]) as usize];
+        }
+    }
+}
+
+fn fit_rect(sw: usize, sh: usize, dw: usize, dh: usize) -> (usize, usize, usize, usize) {
+    let (fw, fh) = if sw * dh < sh * dw {
+        (sw * dh / sh, dh)
+    } else {
+        (dw, sh * dw / sw)
+    };
+    ((dw - fw) / 2, (dh - fh) / 2, fw, fh)
+}
+
+fn upscale565(
+    pix: &mut [u32],
+    pitch: usize,
+    ox: usize,
+    oy: usize,
+    dw: usize,
+    dh: usize,
+    src: &[u8],
+    sw: usize,
+    sh: usize,
+) {
     let lut = lut565();
     // per-dst-column taps: x0/x1 source columns and the Q8 weight on x1
     let mut x0 = vec![0usize; dw];
@@ -794,7 +934,7 @@ fn upscale565(pix: &mut [u32], pitch: usize, dw: usize, dh: usize, src: &[u8], s
         };
         let r0 = 12 + y0 * sw * 2;
         let r1 = 12 + y1 * sw * 2;
-        let dst = j * pitch;
+        let dst = (j + oy) * pitch + ox;
         let mut i = 0;
         #[cfg(target_arch = "aarch64")]
         // every aarch64 intrinsic is #[target_feature] = unsafe to call;
@@ -1027,6 +1167,7 @@ impl<'a> Render<'a> {
     /// C6 底部双目标条（未配对蛋面的入口）：y∈[h-200,h-60] 高 140，左=
     /// 扫码配网（GREEN，本面）、右=软件清单（GREEN，C7 Mode::Install）。
     /// 命中几何 `pair_bar_hit` 用同一套数字（测试钉住）。
+    #[allow(dead_code)]
     fn pair_bar(&self, pix: &mut [u32]) {
         let (w, h) = (self.w, self.h);
         let y0 = (h - 200) as i32;
@@ -1048,6 +1189,80 @@ impl<'a> Render<'a> {
         };
         cell(60, (w / 2 - 30) as i32, "扫码配网", GREEN);
         cell((w / 2 + 30) as i32, (w - 60) as i32, "软件清单", GREEN);
+    }
+
+    /// Idle 快门条：配对后 pair bar 隐退，原键盘带死区改画「拍照」。
+    /// 几何与 `shutter_hit` 同一套（y∈[h-200,h-60)）。
+    #[allow(dead_code)]
+    fn shutter_bar(&self, pix: &mut [u32], label: &str) {
+        let (w, h) = (self.w, self.h);
+        let y0 = (h - 200) as i32;
+        let bh = 140i32;
+        let x0 = 60i32;
+        let cw = (w as i32) - 120;
+        let bs = 4usize;
+        fill_rect(pix, self.pitch, w, h, x0, y0, cw, bh, KEYCAP);
+        fill_rect(pix, self.pitch, w, h, x0, y0, cw, 2, DIM);
+        fill_rect(pix, self.pitch, w, h, x0, y0 + bh - 2, cw, 2, DIM);
+        fill_rect(pix, self.pitch, w, h, x0, y0, 2, bh, DIM);
+        fill_rect(pix, self.pitch, w, h, x0 + cw - 2, y0, 2, bh, DIM);
+        let tw: usize = label
+            .chars()
+            .map(|ch| if cjk::char_width(ch) == 2 { 12 * bs } else { 6 * bs })
+            .sum();
+        let tx = x0 + (cw - tw as i32) / 2;
+        let ty = y0 + (bh - 8 * bs as i32) / 2;
+        draw_text(pix, self.pitch, w, h, self.font, tx, ty, label, bs, GREEN);
+    }
+
+    /// 相机面：预览铺满取景区，底栏圆快门，左上关闭。点画面对焦。
+    fn cam_chrome(&self, pix: &mut [u32], snapping: bool, af: Option<(i32, i32)>) {
+        let (w, h) = (self.w, self.h);
+        let dock = cam_dock_y(h) as i32;
+        fill_rect(pix, self.pitch, w, h, 0, dock, w as i32, h as i32 - dock, 0x00000000);
+        let (cx, cy) = cam_shutter_center(w, h);
+        fill_disk(pix, self.pitch, w, h, cx, cy, CAM_SHUTTER_R, CAM_WHITE);
+        fill_disk(pix, self.pitch, w, h, cx, cy, CAM_SHUTTER_R - 8, 0x00000000);
+        let inner = if snapping { DIM } else { CAM_WHITE };
+        fill_disk(pix, self.pitch, w, h, cx, cy, CAM_SHUTTER_R - 18, inner);
+        draw_text(pix, self.pitch, w, h, self.font, 36, 36, "x", 5, CAM_WHITE);
+        if let Some((ax, ay)) = af {
+            let s = 88i32;
+            let x0 = ax - s / 2;
+            let y0 = ay - s / 2;
+            fill_rect(pix, self.pitch, w, h, x0, y0, s, 4, CAM_WHITE);
+            fill_rect(pix, self.pitch, w, h, x0, y0 + s - 4, s, 4, CAM_WHITE);
+            fill_rect(pix, self.pitch, w, h, x0, y0, 4, s, CAM_WHITE);
+            fill_rect(pix, self.pitch, w, h, x0 + s - 4, y0, 4, s, CAM_WHITE);
+        }
+    }
+
+    /// 快门拍完的 JPEG 全屏预览（等比留边，点一下回待命）。
+    fn snap_photo(&self, pix: &mut [u32], b: &aginx_img::Bitmap) {
+        fill_rect(pix, self.pitch, self.w, self.h, 0, 0, self.w as i32, self.h as i32, BG);
+        if b.w == 0 || b.h == 0 {
+            return;
+        }
+        let (dw, dh) = (self.w, self.h);
+        let (sw, sh) = (b.w as usize, b.h as usize);
+        let (fw, fh) = if sw * dh < sh * dw {
+            (sw * dh / sh, dh)
+        } else {
+            (dw, sh * dw / sw)
+        };
+        let ox = (dw - fw) / 2;
+        let oy = (dh - fh) / 2;
+        let mut sx = vec![0usize; fw];
+        for (i, s) in sx.iter_mut().enumerate() {
+            *s = i * sw / fw;
+        }
+        for j in 0..fh {
+            let row = (j * sh / fh) * sw;
+            let dst = (j + oy) * self.pitch + ox;
+            for i in 0..fw {
+                pix[dst + i] = b.pix[row + sx[i]];
+            }
+        }
     }
 
     /// C7 软件清单面：picker 同款行几何，行 = 名 + v版本 + 右对齐状态标
@@ -1563,6 +1778,7 @@ const PAIR_JOB_BUDGET: Duration = Duration::from_secs(300);
 /// 清单（C7 开 Mode::Install——蛋的安装入口）。几何与 `Render::pair_bar` /
 /// `pair_bar_hit` 同一套数字（测试钉住）。条画在键盘带——idle 面 kb 恒
 /// 隐藏，那里本是死区，不与任何既有触摸目标重叠。
+#[cfg(test)]
 enum PairBar {
     Scan,
     Install,
@@ -1570,12 +1786,14 @@ enum PairBar {
 
 /// 条的可见门（纯函数）：voice 不在（整机态配网面归 voice）且未配对
 /// （无 wifi.conf——配上即隐退，入口不恋战）。
+#[cfg(test)]
 fn pair_bar_visible(voice_alive: bool, wifi_conf: bool) -> bool {
     !voice_alive && !wifi_conf
 }
 
 /// 条的命中几何：y∈[h-200, h-60]（下含上不含），左半=扫码配网、右半=
 /// 软件清单。
+#[cfg(test)]
 fn pair_bar_hit(x: usize, y: usize, w: usize, h: usize) -> Option<PairBar> {
     if y >= h.saturating_sub(200) && y < h.saturating_sub(60) {
         if x < w / 2 {
@@ -1585,6 +1803,141 @@ fn pair_bar_hit(x: usize, y: usize, w: usize, h: usize) -> Option<PairBar> {
         }
     } else {
         None
+    }
+}
+
+/// 快门条可见：cam-snap 在、voice 不在（相机归 term）、已配对（pair
+/// bar 已隐退，底部死区空出来）。未配对蛋面那条带仍是扫码配网。
+#[cfg(test)]
+fn shutter_visible(voice_alive: bool, wifi_conf: bool, cam_snap: bool) -> bool {
+    cam_snap && !voice_alive && wifi_conf
+}
+
+/// 快门命中：与 pair bar 同一 y 带，全宽（pair bar 隐退时独占）。
+#[cfg(test)]
+fn shutter_hit(y: usize, h: usize) -> bool {
+    y >= h.saturating_sub(200) && y < h.saturating_sub(60)
+}
+
+const CAM_FOCUS_PATH: &str = "/run/aginx-cam/focus";
+const CAM_CMD_PATH: &str = "/run/aginx-cam/cmd";
+const CAM_VIEW_BIN: &str = "/usr/bin/camss-shot";
+const CAM_DOCK_H: usize = 320;
+const CAM_SHUTTER_R: i32 = 72;
+const CAM_WHITE: u32 = 0x00F5F5F5;
+const CAM_AF_MS: u64 = 800;
+
+fn cam_dock_y(h: usize) -> usize {
+    h.saturating_sub(CAM_DOCK_H)
+}
+
+fn cam_shutter_center(w: usize, h: usize) -> (i32, i32) {
+    (w as i32 / 2, (cam_dock_y(h) as i32 + h as i32) / 2)
+}
+
+fn cam_shutter_hit(x: usize, y: usize, w: usize, h: usize) -> bool {
+    let (cx, cy) = cam_shutter_center(w, h);
+    let dx = x as i32 - cx;
+    let dy = y as i32 - cy;
+    let r = CAM_SHUTTER_R + 28;
+    dx * dx + dy * dy <= r * r
+}
+
+fn cam_close_hit(x: usize, y: usize) -> bool {
+    x < 140 && y < 120
+}
+
+fn cam_preview_hit(x: usize, y: usize, w: usize, h: usize) -> bool {
+    y < cam_dock_y(h) && !cam_close_hit(x, y) && x < w
+}
+
+fn write_cam_focus(v: i32) {
+    let _ = std::fs::create_dir_all("/run/aginx-cam");
+    let tmp = "/run/aginx-cam/focus.tmp";
+    if std::fs::write(tmp, format!("{v}\n")).is_ok() {
+        let _ = std::fs::rename(tmp, CAM_FOCUS_PATH);
+    }
+}
+
+fn write_cam_cmd(cmd: &str) {
+    let _ = std::fs::create_dir_all("/run/aginx-cam");
+    let tmp = "/run/aginx-cam/cmd.tmp";
+    if std::fs::write(tmp, cmd).is_ok() {
+        let _ = std::fs::rename(tmp, CAM_CMD_PATH);
+    }
+}
+
+const SNAP_JOB_BUDGET: Duration = Duration::from_secs(20);
+#[allow(dead_code)]
+const SNAP_BIN: &str = "/usr/bin/cam-snap";
+const SNAP_JPG: &str = "/run/aginx-voice/eye.jpg";
+/// 后置主摄 IMX519 是 CPHY、本机 6.11 抓不到帧；广角 IMX376 是能出片的朝外镜头。
+const SNAP_SENSOR: &str = "imx519";
+
+struct SnapJob {
+    child: std::process::Child,
+    since: Instant,
+}
+
+#[allow(dead_code)]
+fn cam_snap_present() -> bool {
+    std::path::Path::new(SNAP_BIN).exists()
+}
+
+#[allow(dead_code)]
+fn spawn_snap() -> Option<SnapJob> {
+    let _ = std::fs::create_dir_all("/run/aginx-voice");
+    let _ = std::fs::create_dir_all("/home/photos");
+    let log = std::fs::File::create("/var/cam-snap.log").ok();
+    let mut cmd = std::process::Command::new(SNAP_BIN);
+    cmd.args([SNAP_SENSOR, SNAP_JPG]);
+    cmd.stdout(std::process::Stdio::null());
+    cmd.stderr(log.map(std::process::Stdio::from).unwrap_or_else(std::process::Stdio::null));
+    match cmd.spawn() {
+        Ok(child) => Some(SnapJob { child, since: Instant::now() }),
+        Err(e) => {
+            eprintln!("aginx-term: cam-snap spawn: {e}");
+            None
+        }
+    }
+}
+
+struct CamSession {
+    child: std::process::Child,
+    snap_at: Option<std::time::SystemTime>,
+    af_box: Option<(i32, i32, Instant)>,
+    since: Instant,
+}
+
+fn spawn_cam_view() -> Option<CamSession> {
+    let _ = std::fs::create_dir_all("/run/aginx-voice");
+    let _ = std::fs::create_dir_all("/run/aginx-cam");
+    let _ = std::fs::remove_file(SNAP_JPG);
+    let _ = std::fs::remove_file(VOICE_EYE_RAW);
+    write_cam_focus(0);
+    let log = std::fs::File::create("/var/cam-view.log").ok();
+    let mut cmd = std::process::Command::new(CAM_VIEW_BIN);
+    cmd.args(["--view", SNAP_SENSOR]);
+    cmd.stdout(std::process::Stdio::null());
+    cmd.stderr(log.map(std::process::Stdio::from).unwrap_or_else(std::process::Stdio::null));
+    match cmd.spawn() {
+        Ok(child) => Some(CamSession {
+            child,
+            snap_at: None,
+            af_box: None,
+            since: Instant::now(),
+        }),
+        Err(e) => {
+            eprintln!("aginx-term: cam-view spawn: {e}");
+            None
+        }
+    }
+}
+
+fn cam_view_stop(cam: &mut Option<CamSession>) {
+    if let Some(mut c) = cam.take() {
+        let _ = c.child.kill();
+        let _ = c.child.wait();
     }
 }
 
@@ -1932,10 +2285,6 @@ fn render_prompt(
     if !warns.is_empty() {
         r.warn(pix, warns);
     }
-    // C6 未配对蛋面：底部双目标条（扫码配网 / 软件清单）
-    if pair_bar_visible(voice.alive, std::path::Path::new(WIFI_CONF_PATH).exists()) {
-        r.pair_bar(pix);
-    }
 }
 
 /// v4⑥: fullscreen 1:1 row-copy of a live-panel screencast frame straight
@@ -2129,6 +2478,23 @@ fn host_ppm(out: &str) {
         println!("wrote {ime_path}");
     }
     println!("wrote {out} and {out}-term");
+    {
+        let mut pixw = vec![0u32; pitch * h];
+        home::paint_wordmark(&mut pixw, pitch, w, h, &font);
+        let path = format!("{}-wordmark", out);
+        if let Err(e) = ppm_dump(&path, &pixw, w, h, pitch) {
+            eprintln!("ppm: {e}");
+        }
+        println!("wrote {path}");
+        let mut pixh = vec![0u32; pitch * h];
+        let clock = home::clock_from_parts(9, 41, 9, 18, 5);
+        home::paint(&mut pixh, pitch, w, h, &font, &clock, true, true, None);
+        let path = format!("{}-home", out);
+        if let Err(e) = ppm_dump(&path, &pixh, w, h, pitch) {
+            eprintln!("ppm: {e}");
+        }
+        println!("wrote {path}");
+    }
 }
 
 // ---------------- M47⑤f frame-arrival watch ----------------
@@ -2279,18 +2645,27 @@ fn main() {
 
     let mut term = Term::new(term_cols, rows_for(kb_visible, scale));
     let mut parser = vte::Parser::new();
-    // 开机剧情 v4: boot lands on the prompt face (纯黑+光标). The eye race
-    // still gets one face poll first — the eye open wins if voice already
-    // flagged it.
+    // Boot lands on Home (wordmark first frame, then the clock+icons).
+    // The eye race still wins if voice already flagged it.
     let mut voice = VoiceView::default();
     let mut mode = {
         voice.poll();
         if voice.alive && voice.doc.eye {
             Mode::Eye
         } else {
-            Mode::Idle
+            Mode::Home
         }
     };
+    let tz = hwd::load_or_exit().tz.clone();
+    let mut clock = home::read_clock(&tz);
+    let mut clock_at = Instant::now();
+    let mut boot_logo_until = if matches!(mode, Mode::Home) {
+        Some(Instant::now() + Duration::from_millis(1500))
+    } else {
+        None
+    };
+    let sg = launch::Geom::new(w, h, kg.extra_y, home::SETTINGS.len());
+    let mut eye_from_settings = false;
     // 面法: the eye flag drives Mode::Eye transitions in the loop — this
     // mirrors the loop's edge detector (voice.poll() already ran above).
     let mut eye_on_prev = voice.alive && voice.doc.eye;
@@ -2308,12 +2683,15 @@ fn main() {
     } else {
         SelfNet::idle()
     };
-    // C6 自持扫码配网三件套：未配对（无 wifi.conf）且 voice 不在 → Idle 面
-    // 底部双目标条（扫码配网 / 软件清单）。取景会话 term_eye、配网 job
-    // （单飞）、状态行 pair_line（idle 面显示层所有权见 idle_status）。
+    // C6 自持扫码配网：设置→连接网络 开 term 眼。取景会话 term_eye、配网
+    // job（单飞）、状态行 pair_line（桌面时钟下 / 设置脚注）。
     let mut term_eye: Option<TermEye> = None;
     let mut pair_line: Option<String> = None;
     let mut pair_job: Option<PairJob> = None;
+    // 快门：cam-snap 子进程 + 拍完的 JPEG 全屏预览。
+    let mut snap_job: Option<SnapJob> = None;
+    let mut snap_review: Option<aginx_img::Bitmap> = None;
+    let mut cam: Option<CamSession> = None;
     // C7 装软件 job 槽（单飞）：auto 触发与清单面点击共用同一条引擎。
     // install_line 是 idle 面与清单面共用的状态行；install_auto 只点火一次
     // ——把 provision resync 在配网当靴补跑（蛋首启 provision 早退在
@@ -2322,7 +2700,7 @@ fn main() {
     let mut install_line: Option<String> = None;
     let mut install_auto = false;
     // 面法: mode boxed away while Mode::Eye has the screen — restored on
-    // eye close; None (boot straight into the eye) → Idle.
+    // eye close; None (boot straight into the eye) → Home.
     let mut mode_before_eye: Option<Box<Mode>> = None;
     // M47⑤t: last affinity decision from the eye flag (see the main-loop
     // watcher) — keeps sched_setaffinity off the no-change path.
@@ -2337,7 +2715,10 @@ fn main() {
         term_cols = cols_for(scale);
         term = Term::new(term_cols, rows_for(kb_visible, scale));
         match spawn_shell(term_cols as u16, rows_for(kb_visible, scale) as u16, &[prog]) {
-            Ok(c) => mode = Mode::Running(c),
+            Ok(c) => {
+                mode = Mode::Running(c);
+                boot_logo_until = None;
+            }
             Err(e) => eprintln!("aginx-term: AGINX_TERM_START spawn: {e}"),
         }
     }
@@ -2363,18 +2744,24 @@ fn main() {
     // double-buffer semantics survive partial redraws.
     let mut canvas = vec![0u32; pitch * h];
     // First frame BEFORE the mode set (panel snapshots at SETCRTC).
+    // Home starts as the boot wordmark so dropping bootcard does not flash
+    // a different face.
     {
         let r = Render { font: &font, w, h, pitch };
         let buf = &mut canvas[..];
-        match &mode {
-            Mode::Idle => render_prompt(
-                &r,
-                buf,
-                &voice,
-                16,
-                &warns,
-                idle_status(voice.alive, &pair_line, &install_line, selfnet.line.as_deref()).as_deref(),
-            ),
+        match &mut mode {
+            Mode::Home => home::paint_wordmark(buf, pitch, w, h, &font),
+            Mode::Talk => {
+                render_prompt(
+                    &r,
+                    buf,
+                    &voice,
+                    16,
+                    &warns,
+                    idle_status(voice.alive, &pair_line, &install_line, selfnet.line.as_deref()).as_deref(),
+                );
+                r.toolbar(buf, lg.m, lg.toolbar_h);
+            }
             Mode::Eye => r.eye(buf, &voice, &lg),
             Mode::Install(v) => {
                 r.install_list(buf, v, install_line.as_deref(), boot_state_has_internet(), &lg)
@@ -2383,6 +2770,27 @@ fn main() {
                 fill_rect(buf, pitch, w, h, 0, 0, w as i32, h as i32, BG);
                 r.toolbar(buf, lg.m, lg.toolbar_h);
                 r.terminal(buf, &term, area_top, scale, true, lg.m);
+            }
+            Mode::Cam => {
+                fill_rect(buf, pitch, w, h, 0, 0, w as i32, h as i32, BG);
+                r.cam_chrome(buf, false, None);
+            }
+            Mode::Photos(p) => {
+                p.paint(buf, pitch, w, h, &font, &lg);
+                r.toolbar(buf, lg.m, lg.toolbar_h);
+            }
+            Mode::Settings => {
+                home::paint_settings(
+                    buf,
+                    pitch,
+                    w,
+                    h,
+                    &font,
+                    &sg,
+                    !std::path::Path::new(WIFI_CONF_PATH).exists(),
+                    home_status(&pair_line, &install_line).as_deref(),
+                );
+                r.toolbar(buf, lg.m, lg.toolbar_h);
             }
         }
         if kb_visible {
@@ -2444,9 +2852,7 @@ fn main() {
                 }
             }
             if child_exited(child.pid) {
-                // 批③: the launcher is gone — a finished session returns to
-                // the 待命面 (the resting face).
-                mode = Mode::Idle;
+                mode = Mode::Home;
                 kb_visible = false;
                 scale = 5;
                 term_cols = cols_for(scale);
@@ -2480,7 +2886,7 @@ fn main() {
         // the result face shows (face / result.html publishes wake the loop).
         if ino_wd >= 0
             && (matches!(mode, Mode::Eye)
-                || (matches!(mode, Mode::Idle) && voice.doc.result))
+                || (matches!(mode, Mode::Talk) && voice.doc.result))
         {
             fds[nfds].fd = ino_fd;
             nfds += 1;
@@ -2509,7 +2915,7 @@ fn main() {
             // via POLLIN; this timer only carries the 0.3 s heartbeat and
             // the Setup op pacing.
             60
-        } else if matches!(mode, Mode::Eye) {
+        } else if matches!(mode, Mode::Eye | Mode::Cam) {
             // M47⑤b: the eye polls files on this cadence — 400 ms capped
             // the viewfinder display at 2.5 fps even with cam-shot
             // publishing ~8 fps (user receipt 2026-09-05 「看起来很卡」).
@@ -2520,12 +2926,18 @@ fn main() {
             // idle.
             if ino_wd >= 0 {
                 200
-            } else if voice.doc.eye { 12 } else { 30 }
-        } else if matches!(mode, Mode::Idle) && voice.typing() {
+            } else if voice.doc.eye || matches!(mode, Mode::Cam) { 12 } else { 30 }
+        } else if boot_logo_until.is_some() {
+            50
+        } else if matches!(mode, Mode::Home) {
+            1000
+        } else if matches!(mode, Mode::Talk) && voice.typing() {
             // 开机剧情 v4: the transcript typewriter animates at ~90 ms/char —
             // poll the face file on that cadence while the reveal is live
             90
-        } else if matches!(mode, Mode::Idle) && !voice.doc.result {
+        } else if snap_job.is_some() {
+            50
+        } else if matches!(mode, Mode::Talk) && !voice.doc.result {
             // v4⑤: the breathing cursor cadence (16 levels × 125 ms ≈ 4 s
             // period); a result on the panel is static — keep the idle 400 ms
             125
@@ -2545,16 +2957,7 @@ fn main() {
                         // scroll.
                         blanked = false;
                         d.dpms(true);
-                        // 面法 09-07: waking from blank lands on the 待机面
-                        // (eye open → 眼视图). A Running session restores
-                        // in place.
-                        if matches!(mode, Mode::Idle | Mode::Eye) {
-                            mode = if (voice.alive && voice.doc.eye) || term_eye.is_some() {
-                                Mode::Eye
-                            } else {
-                                Mode::Idle
-                            };
-                        }
+                        // wake keeps the face you were on
                         redraw = true;
                     } else {
                     match ev {
@@ -2563,20 +2966,29 @@ fn main() {
                         // keystroke — the main source of "typing lag".
                         Touch::Down(x, y) => {
                             down_y = y;
+                            let mut consumed = false;
                             if std::env::var("AGINX_TERM_DEBUG").is_ok() {
                                 eprintln!("aginx-term: touch down {x},{y} kbvis={kb_visible} mode={}", matches!(mode, Mode::Running(_)));
                             }
                             if y < lg.toolbar_h {
                                 // BACK fires on press, same as keys
-                                if lg.toolbar_hit(x, y, matches!(mode, Mode::Running(_) | Mode::Install(_)))
+                                if lg.toolbar_hit(x, y, toolbar_mode(&mode))
                                     == Some(launch::Toolbar::Back)
                                 {
                                     if let Mode::Running(c) = &mode {
                                         unsafe { libc::kill(c.pid, libc::SIGHUP) };
                                     } else if matches!(mode, Mode::Install(_)) {
-                                        // C7 清单面：BACK 回待机面
-                                        mode = Mode::Idle;
+                                        mode = Mode::Settings;
+                                    } else if matches!(mode, Mode::Talk | Mode::Settings) {
+                                        mode = Mode::Home;
+                                    } else if let Mode::Photos(p) = &mut mode {
+                                        if p.view.is_some() {
+                                            p.close_view();
+                                        } else {
+                                            mode = Mode::Home;
+                                        }
                                     }
+                                    consumed = true;
                                     redraw = true;
                                 }
                             } else if y < kg.extra_y {
@@ -2604,6 +3016,58 @@ fn main() {
                                         }
                                     }
                                     redraw = true;
+                                } else if matches!(mode, Mode::Settings) {
+                                    match home::settings_hit(&sg, x, y) {
+                                        Some(home::Setting::Pair) => {
+                                            if pair_job.is_none() && term_eye.is_none() {
+                                                {
+                                                    let r = Render { font: &font, w, h, pitch };
+                                                    r.eye(&mut canvas[..], &voice, &lg);
+                                                    d.back_buf().copy_from_slice(&canvas);
+                                                    d.present();
+                                                }
+                                                match term_eye_spawn() {
+                                                    Ok(te) => {
+                                                        term_eye = Some(te);
+                                                        eye_from_settings = true;
+                                                        mode = Mode::Eye;
+                                                        redraw = true;
+                                                    }
+                                                    Err(e) => {
+                                                        eprintln!("aginx-term: eye spawn {e}");
+                                                        pair_line = Some("相机没起来，再试一次。".into());
+                                                        redraw = true;
+                                                    }
+                                                }
+                                            }
+                                        }
+                                        Some(home::Setting::Install) => {
+                                            mode = Mode::Install(InstallView::new());
+                                            redraw = true;
+                                        }
+                                        Some(home::Setting::Shell) => {
+                                            scale = 5;
+                                            term_cols = cols_for(scale);
+                                            term = Term::new(term_cols, rows_for(kb_visible, scale));
+                                            match spawn_shell(
+                                                term_cols as u16,
+                                                rows_for(kb_visible, scale) as u16,
+                                                &[launch::BIN_SH],
+                                            ) {
+                                                Ok(c) => mode = Mode::Running(c),
+                                                Err(e) => {
+                                                    eprintln!("aginx-term: sh spawn: {e}");
+                                                    pair_line = Some("终端没起来。".into());
+                                                }
+                                            }
+                                            redraw = true;
+                                        }
+                                        Some(home::Setting::PowerOff) => {
+                                            power_off(&mut d, &font, &mut canvas, blanked);
+                                        }
+                                        None => {}
+                                    }
+                                    consumed = true;
                                 } else if let Mode::Install(v) = &mut mode {
                                     // C7 清单面：翻页条优先（条在 kb_panel_y-150，
                                     // 与行区不重叠）；行点按按态分诊催装（单飞槽，
@@ -2640,6 +3104,7 @@ fn main() {
                                             }
                                         }
                                     }
+                                    consumed = true;
                                 }
                             }
                             if kb_visible && y >= kg.extra_y {
@@ -2688,53 +3153,82 @@ fn main() {
                                 kb_dirty = true;
                                 redraw = true;
                             }
-                            // C6 未配对蛋面入口：双目标条画在键盘带（idle
-                            // 面 kb 恒隐藏，那里本是死区）。左格=扫码配网；
-                            // 右格=软件清单（C7 开 Mode::Install）。
-                            if matches!(mode, Mode::Idle)
-                                && pair_bar_visible(
-                                    voice.alive,
-                                    std::path::Path::new(WIFI_CONF_PATH).exists(),
-                                )
-                            {
-                                match pair_bar_hit(x, y, w, h) {
-                                    Some(PairBar::Scan) => {
-                                        // 配网 job 在跑 → 单飞让路（「配网中…」
-                                        // 行已在陈述状态）
-                                        if pair_job.is_none() {
-                                            // paint-first：第一帧 ~2s 在路上，
-                                            // 「取景中…」先上屏再开相机
-                                            {
-                                                let r = Render { font: &font, w, h, pitch };
-                                                r.eye(&mut canvas[..], &voice, &lg);
-                                                d.back_buf().copy_from_slice(&canvas);
-                                                d.present();
-                                            }
-                                            match term_eye_spawn() {
-                                                Ok(te) => {
-                                                    term_eye = Some(te);
-                                                    mode = Mode::Eye;
-                                                    redraw = true;
-                                                }
-                                                Err(e) => {
-                                                    eprintln!("aginx-term: eye spawn {e}");
-                                                    pair_line = Some("相机没起来，再试一次。".into());
-                                                    redraw = true;
-                                                }
-                                            }
+                            // 快门预览：点一下收起。相机面回到取景。
+                            if consumed {
+                            } else if snap_review.take().is_some() {
+                                redraw = true;
+                            } else if matches!(mode, Mode::Cam) {
+                                if cam_close_hit(x, y) {
+                                    cam_view_stop(&mut cam);
+                                    snap_review = None;
+                                    mode = Mode::Home;
+                                    redraw = true;
+                                } else if cam_shutter_hit(x, y, w, h) {
+                                    if let Some(c) = cam.as_mut() {
+                                        if c.snap_at.is_none() {
+                                            let _ = std::fs::remove_file(SNAP_JPG);
+                                            write_cam_cmd("snap\n");
+                                            c.snap_at = Some(std::time::SystemTime::now());
+                                            redraw = true;
                                         }
                                     }
-                                    Some(PairBar::Install) => {
-                                        mode = Mode::Install(InstallView::new());
+                                } else if cam_preview_hit(x, y, w, h) {
+                                    if let Some(c) = cam.as_mut() {
+                                        write_cam_cmd("af\n");
+                                        c.af_box = Some((x as i32, y as i32, Instant::now()));
+                                        redraw = true;
+                                    }
+                                }
+                            } else if matches!(mode, Mode::Home) && boot_logo_until.is_none() {
+                                match home::hit(w, h, x, y) {
+                                    Some(home::App::Camera) => {
+                                        pair_line = None;
+                                        redraw = true;
+                                        match spawn_cam_view() {
+                                            Some(c) => {
+                                                cam = Some(c);
+                                                mode = Mode::Cam;
+                                                voice.eye_open = Some(std::time::SystemTime::now());
+                                                voice.raw_mtime = None;
+                                                voice.eye_mtime = None;
+                                                voice.raw_dirty = false;
+                                                voice.eye_img = None;
+                                            }
+                                            None => pair_line = Some("相机没起来，再试一次。".into()),
+                                        }
+                                    }
+                                    Some(home::App::Photos) => {
+                                        mode = Mode::Photos(photos::Photos::scan());
+                                        redraw = true;
+                                    }
+                                    Some(home::App::Talk) => {
+                                        mode = Mode::Talk;
+                                        redraw = true;
+                                    }
+                                    Some(home::App::Settings) => {
+                                        mode = Mode::Settings;
                                         redraw = true;
                                     }
                                     None => {}
+                                }
+                            } else if let Mode::Photos(p) = &mut mode {
+                                if p.view.is_some() {
+                                    p.close_view();
+                                    redraw = true;
+                                } else if let Some(i) = p.grid_hit(w, h, lg.toolbar_h, x, y) {
+                                    let _ = p.open(i, w as u32, h as u32);
+                                    redraw = true;
                                 }
                             } else if matches!(mode, Mode::Eye) && term_eye.is_some() {
                                 // C6 自持取景的点按退出（voice 的眼由音量键
                                 // 管，term 的眼触屏全权）
                                 term_eye_stop(&mut term_eye);
-                                mode = Mode::Idle;
+                                mode = if eye_from_settings {
+                                    eye_from_settings = false;
+                                    Mode::Settings
+                                } else {
+                                    Mode::Home
+                                };
                                 redraw = true;
                             }
                         }
@@ -2796,10 +3290,7 @@ fn main() {
                         }
                         Touch::Drag(dy) => {
                             held = None; // finger slid off the key
-                            // v4⑥: the result face is a fullscreen scroll
-                            // area — the live page scrolls directly, no
-                            // keyboard threshold involved.
-                            if matches!(mode, Mode::Idle) && voice.doc.result {
+                            if matches!(mode, Mode::Talk) && voice.doc.result {
                                 if let Some(b) = live.as_mut() {
                                     b.scroll_by(dy as isize);
                                 }
@@ -2838,16 +3329,6 @@ fn main() {
                                 if blanked {
                                     blanked = false;
                                     d.dpms(true);
-                                    // 面法 09-07: waking from blank lands on
-                                    // the 待机面 (eye open → 眼视图); debug
-                                    // modes restore in place
-                                    if matches!(mode, Mode::Idle | Mode::Eye) {
-                                        mode = if (voice.alive && voice.doc.eye) || term_eye.is_some() {
-                                            Mode::Eye
-                                        } else {
-                                            Mode::Idle
-                                        };
-                                    }
                                     redraw = true;
                                 } else {
                                     blanked = true;
@@ -2869,7 +3350,7 @@ fn main() {
             // below stats and renders if anything actually changed.
             if ino_wd >= 0
                 && (matches!(mode, Mode::Eye)
-                    || (matches!(mode, Mode::Idle) && voice.doc.result))
+                    || (matches!(mode, Mode::Talk) && voice.doc.result))
             {
                 let ij = i + if matches!(mode, Mode::Running(_)) { 1 } else { 0 };
                 if ij < nfds && fds[ij].revents & libc::POLLIN != 0 {
@@ -2915,8 +3396,26 @@ fn main() {
             term_eye_stop(&mut term_eye);
             pair_line = None;
             if matches!(mode, Mode::Eye) {
-                mode = Mode::Idle;
+                mode = Mode::Home;
             }
+            redraw = true;
+        }
+        if voice.alive && cam.is_some() {
+            eprintln!("aginx-term: voice revived — cam view yields");
+            cam_view_stop(&mut cam);
+            snap_review = None;
+            if matches!(mode, Mode::Cam) {
+                mode = Mode::Home;
+            }
+            redraw = true;
+        }
+        if voice.alive && (snap_job.is_some() || snap_review.is_some()) {
+            if let Some(mut j) = snap_job.take() {
+                let _ = j.child.kill();
+                let _ = j.child.wait();
+            }
+            snap_review = None;
+            pair_line = None;
             redraw = true;
         }
         // 面法 09-07: the eye FLAG drives Mode::Eye from ANY mode — open
@@ -2929,7 +3428,7 @@ fn main() {
             if eye_on {
                 mode_before_eye = Some(Box::new(std::mem::replace(&mut mode, Mode::Eye)));
             } else {
-                mode = mode_before_eye.take().map(|m| *m).unwrap_or(Mode::Idle);
+                mode = mode_before_eye.take().map(|m| *m).unwrap_or(Mode::Home);
             }
             redraw = true;
         }
@@ -2967,6 +3466,9 @@ fn main() {
                     live = Some(browser::Browser::start(&h));
                     result_frame = None;
                 }
+                if matches!(mode, Mode::Home) {
+                    mode = Mode::Talk;
+                }
             } else {
                 if let Some(b) = live.as_mut() {
                     b.teardown();
@@ -2983,7 +3485,7 @@ fn main() {
         // eye open or the panel blanked we still ack — the stream must not
         // stall — but skip the ~70 ms jpeg decode.
         if let Some(b) = live.as_mut() {
-            let can_present = matches!(mode, Mode::Idle) && voice.doc.result && !blanked;
+            let can_present = matches!(mode, Mode::Talk) && voice.doc.result && !blanked;
             if let Some(bm) = b.pump(Instant::now(), can_present) {
                 if bm.w as usize == w && bm.h as usize == h {
                     result_frame = Some(bm);
@@ -3017,6 +3519,15 @@ fn main() {
             }
             voice.line_seen = line_now;
             voice.type_at = Some(Instant::now());
+            if matches!(mode, Mode::Home)
+                && voice
+                    .doc
+                    .line
+                    .as_ref()
+                    .is_some_and(|s| !s.is_empty())
+            {
+                mode = Mode::Talk;
+            }
             redraw = true;
         }
         if let Some(l) = voice.doc.line.as_ref() {
@@ -3052,6 +3563,55 @@ fn main() {
                     d.dpms(true);
                 }
                 redraw = true;
+            }
+        }
+        if matches!(mode, Mode::Cam) {
+            let (_, _, eye_w, eye_h) = lg.eye_box();
+            let eye = voice.poll_eye(eye_w as u32, eye_h as u32, true);
+            if eye {
+                last_input = Instant::now();
+                if blanked {
+                    blanked = false;
+                    d.dpms(true);
+                }
+                redraw = true;
+            }
+            let cam_dead = cam.as_mut().and_then(|c| c.child.try_wait().ok().flatten()).is_some();
+            if cam_dead {
+                eprintln!("aginx-term: cam-view exited");
+                cam_view_stop(&mut cam);
+                mode = Mode::Home;
+                pair_line = Some("取景停了。".into());
+                redraw = true;
+            } else if let Some(c) = cam.as_mut() {
+                if let Some(t0) = c.snap_at {
+                    let fresh = std::fs::metadata(SNAP_JPG)
+                        .ok()
+                        .and_then(|m| m.modified().ok().map(|mt| (m.len(), mt)))
+                        .map(|(len, mt)| len > 20_000 && mt >= t0)
+                        .unwrap_or(false);
+                    if fresh {
+                        if let Ok(bytes) = std::fs::read(SNAP_JPG) {
+                            if let Some(b) = aginx_img::decode_scaled(&bytes, w as u32, h as u32) {
+                                snap_review = Some(b);
+                            } else {
+                                pair_line = Some("照片打不开。".into());
+                            }
+                        }
+                        c.snap_at = None;
+                        redraw = true;
+                    } else if t0.elapsed().unwrap_or_default() >= Duration::from_secs(25) {
+                        c.snap_at = None;
+                        pair_line = Some("没拍上，再试一次。".into());
+                        redraw = true;
+                    }
+                }
+                if let Some((_, _, t)) = c.af_box {
+                    if t.elapsed() >= Duration::from_millis(CAM_AF_MS) {
+                        c.af_box = None;
+                        redraw = true;
+                    }
+                }
             }
         }
         // ---- C6 自持取景生命周期（voice eye 同律：总窗/重生/卡帧/异步解码） ----
@@ -3156,7 +3716,12 @@ fn main() {
             }
             term_eye_stop(&mut term_eye);
             if matches!(mode, Mode::Eye) {
-                mode = Mode::Idle;
+                mode = if eye_from_settings {
+                    eye_from_settings = false;
+                    Mode::Settings
+                } else {
+                    Mode::Home
+                };
             }
             if let Some(payload) = hit_payload {
                 match spawn_pair_apply(&payload) {
@@ -3210,6 +3775,52 @@ fn main() {
                 }
                 redraw = true;
             }
+        }
+        // 快门：cam-snap 收割。成功则解码 JPEG 全屏预览。
+        if let Some(mut job) = snap_job.take() {
+            let mut done = false;
+            let mut ok = false;
+            match job.child.try_wait() {
+                Ok(Some(st)) => {
+                    done = true;
+                    ok = st.success();
+                }
+                Ok(None) => {
+                    if job.since.elapsed() >= SNAP_JOB_BUDGET {
+                        eprintln!("aginx-term: cam-snap budget over — kill");
+                        let _ = job.child.kill();
+                        let _ = job.child.wait();
+                        done = true;
+                    } else {
+                        snap_job = Some(job);
+                    }
+                }
+                Err(e) => {
+                    eprintln!("aginx-term: cam-snap wait {e}");
+                    done = true;
+                }
+            }
+            if done {
+                if ok {
+                    match std::fs::read(SNAP_JPG) {
+                        Ok(bytes) => {
+                            if let Some(b) = aginx_img::decode_scaled(&bytes, w as u32, h as u32) {
+                                snap_review = Some(b);
+                                pair_line = None;
+                            } else {
+                                pair_line = Some("照片打不开。".into());
+                            }
+                        }
+                        Err(_) => pair_line = Some("没拍上，再试一次。".into()),
+                    }
+                } else {
+                    pair_line = Some("没拍上，再试一次。".into());
+                }
+                redraw = true;
+            }
+        }
+        if snap_job.is_some() || snap_review.is_some() || matches!(mode, Mode::Cam) {
+            last_input = Instant::now();
         }
         // ---- C7 装软件 job：auto 触发 + 收割（同 pair_job 形状——每拍
         // try_wait，绝不阻塞等；预算尽才 kill）。auto 门：net ok 且有
@@ -3286,7 +3897,7 @@ fn main() {
         // stops — keyed on the FLAG, any mode (the voice daemon opens and
         // closes the eye with VolUp no matter which view is showing).
         // C6: term 自持会话同为流态（同为取景的分核收益方）。
-        let eye_streaming = voice.doc.eye || term_eye.is_some();
+        let eye_streaming = voice.doc.eye || term_eye.is_some() || matches!(mode, Mode::Cam);
         if eye_streaming != eye_parked {
             eye_parked = eye_streaming;
             set_eye_affinity(eye_parked);
@@ -3303,7 +3914,7 @@ fn main() {
         // v4⑤ breath tick — the prompt cursor's only animation: advance the
         // triangle phase, the next dispatch repaints the face. A result on
         // the panel holds the frame still (结果页不超时).
-        if matches!(mode, Mode::Idle)
+        if matches!(mode, Mode::Talk)
             && !voice.doc.result
             && last_breath.elapsed() >= Duration::from_millis(125)
         {
@@ -3313,7 +3924,7 @@ fn main() {
         }
         // 警告注册表 poll (2026-09-09): /run/aginx-warn/ 非空 → idle 面中屏
         // 红警。变化才重画；结果页持帧期间不抢（结果页不超时）。
-        if matches!(mode, Mode::Idle)
+        if matches!(mode, Mode::Talk)
             && !voice.doc.result
             && last_warn_poll.elapsed() >= Duration::from_secs(2)
         {
@@ -3340,6 +3951,25 @@ fn main() {
             }
         }
 
+        if let Some(t) = boot_logo_until {
+            if Instant::now() >= t {
+                boot_logo_until = None;
+                clock = home::read_clock(&tz);
+                clock_at = Instant::now();
+                redraw = true;
+            }
+        }
+        if matches!(mode, Mode::Home)
+            && boot_logo_until.is_none()
+            && clock_at.elapsed() >= Duration::from_secs(15)
+        {
+            let next = home::read_clock(&tz);
+            if next.time != clock.time || next.date != clock.date {
+                clock = next;
+                redraw = true;
+            }
+            clock_at = Instant::now();
+        }
         // while blanked the framebuffer is not scanned out — skip render
         // and present entirely (pty keeps draining above, output renders
         // at wake)
@@ -3350,13 +3980,26 @@ fn main() {
             // M47⑤f: true when the eye frame went straight into the back
             // buffer — the canvas copy below is then skipped
             let mut direct = false;
-            match &mode {
-                Mode::Idle => {
-                    // 开机剧情 v4 dispatch — prompt/result full-covers canvas.
-                    // v4⑥: a cached live-panel frame goes straight into the
-                    // back buffer (the eye raw path's direct sibling); only
-                    // the path between face flag and first frame shows the
-                    // prompt (cursor face).
+            match &mut mode {
+                Mode::Home => {
+                    if boot_logo_until.is_some() {
+                        home::paint_wordmark(buf, pitch, w, h, &font);
+                    } else {
+                        home::paint(
+                            buf,
+                            pitch,
+                            w,
+                            h,
+                            &font,
+                            &clock,
+                            boot_state_has_internet(),
+                            !std::path::Path::new(WIFI_CONF_PATH).exists(),
+                            home_status(&pair_line, &install_line).as_deref(),
+                        );
+                    }
+                }
+                Mode::Talk => {
+                    // 对话面 — prompt/result. Result frames blit direct.
                     if let Some(bm) = result_frame.as_ref() {
                         blit_result_direct(d.back_buf(), pitch, bm);
                         direct = true;
@@ -3371,6 +4014,7 @@ fn main() {
                             idle_status(voice.alive, &pair_line, &install_line, selfnet.line.as_deref())
                                 .as_deref(),
                         );
+                        r.toolbar(buf, lg.m, lg.toolbar_h);
                     }
                 }
                 Mode::Eye => {
@@ -3385,9 +4029,54 @@ fn main() {
                         r.eye(buf, &voice, &lg);
                     }
                 }
+                Mode::Cam => {
+                    if let Some(bm) = snap_review.as_ref() {
+                        r.snap_photo(buf, bm);
+                    } else {
+                        if voice.raw_dirty {
+                            voice.raw_dirty = false;
+                            voice.raw_buf.clear();
+                            if let Ok(mut f) = std::fs::File::open(VOICE_EYE_RAW) {
+                                let _ = std::io::Read::read_to_end(&mut f, &mut voice.raw_buf);
+                            }
+                        }
+                        fill_rect(buf, pitch, w, h, 0, 0, w as i32, h as i32, BG);
+                        let dock = cam_dock_y(h);
+                        if !voice.blit_eye_cover(buf, pitch, 0, 0, w, dock) {
+                            r.eye(buf, &voice, &lg);
+                        }
+                        let snapping = cam.as_ref().map(|c| c.snap_at.is_some()).unwrap_or(false);
+                        let af = cam.as_ref().and_then(|c| {
+                            c.af_box.and_then(|(x, y, t)| {
+                                (t.elapsed() < Duration::from_millis(CAM_AF_MS)).then_some((x, y))
+                            })
+                        });
+                        r.cam_chrome(buf, snapping, af);
+                    }
+                }
                 Mode::Install(v) => {
-                    // install_list() full-covers the canvas
                     r.install_list(buf, v, install_line.as_deref(), boot_state_has_internet(), &lg);
+                }
+                Mode::Photos(p) => {
+                    if let Some(bm) = p.view.as_ref() {
+                        r.snap_photo(buf, bm);
+                    } else {
+                        p.paint(buf, pitch, w, h, &font, &lg);
+                        r.toolbar(buf, lg.m, lg.toolbar_h);
+                    }
+                }
+                Mode::Settings => {
+                    home::paint_settings(
+                        buf,
+                        pitch,
+                        w,
+                        h,
+                        &font,
+                        &sg,
+                        !std::path::Path::new(WIFI_CONF_PATH).exists(),
+                        home_status(&pair_line, &install_line).as_deref(),
+                    );
+                    r.toolbar(buf, lg.m, lg.toolbar_h);
                 }
                 Mode::Running(_) => {
                     r.terminal(buf, &term, area_top, scale, blink_on, lg.m);
@@ -3416,6 +4105,14 @@ fn main() {
                 eprintln!("aginx-term: slow present {}ms", el.as_millis());
             }
         }
+        // live panel dump: `touch /run/aginx-term.dump` → /run/aginx-term.ppm
+        if std::path::Path::new("/run/aginx-term.dump").exists() {
+            let _ = std::fs::remove_file("/run/aginx-term.dump");
+            match ppm_dump("/run/aginx-term.ppm", &canvas, w, h, pitch) {
+                Ok(()) => eprintln!("aginx-term: dumped /run/aginx-term.ppm"),
+                Err(e) => eprintln!("aginx-term: dump: {e}"),
+            }
+        }
     }
 }
 
@@ -3440,7 +4137,7 @@ mod tests {
             src.extend_from_slice(&p);
         }
         let mut pix = [0xDEADBEEFu32; 5 * 4];
-        upscale565(&mut pix, 5, 4, 4, &src, 2, 2);
+        upscale565(&mut pix, 5, 0, 0, 4, 4, &src, 2, 2);
         let at = |x: usize, y: usize| pix[y * 5 + x];
         assert_eq!(at(0, 0), 0xFF0000, "red (edge tap = exact source pixel)");
         assert_eq!(at(0, 3), 0x0000FF, "blue (row edge tap)");
@@ -3458,7 +4155,7 @@ mod tests {
         src2.extend_from_slice(&px(31, 0, 0));
         src2.extend_from_slice(&px(0, 0, 31));
         let mut pix2 = [0u32; 4];
-        upscale565(&mut pix2, 4, 4, 1, &src2, 2, 1);
+        upscale565(&mut pix2, 4, 0, 0, 4, 1, &src2, 2, 1);
         assert_eq!(
             pix2,
             [0xFF0000, 0x00BF0040, 0x004000BF, 0x0000FF],
@@ -3469,7 +4166,7 @@ mod tests {
         src3.extend_from_slice(&[0u8; 12]);
         src3.extend_from_slice(&px(0, 32, 0));
         let mut pix3 = [0u32; 1];
-        upscale565(&mut pix3, 1, 1, 1, &src3, 1, 1);
+        upscale565(&mut pix3, 1, 0, 0, 1, 1, &src3, 1, 1);
         assert_eq!(pix3[0], 0x008200, "g6=32 replicates to 130");
         // the LUT path and the formula agree at the corners
         let lut = lut565();
@@ -3840,6 +4537,64 @@ mod tests {
         assert!(!pair_bar_visible(false, true), "paired — entry retires");
         assert!(!pair_bar_visible(true, false), "voice alive — its face");
         assert!(!pair_bar_visible(true, true));
+    }
+
+    #[test]
+    fn shutter_visible_truth_table() {
+        assert!(
+            shutter_visible(false, true, true),
+            "paired + cam-snap: shutter owns the retired pair-bar band"
+        );
+        assert!(!shutter_visible(false, false, true), "unpaired egg keeps pair bar");
+        assert!(!shutter_visible(true, true, true), "voice owns the camera");
+        assert!(!shutter_visible(false, true, false), "no cam-snap → no shutter");
+    }
+
+    #[test]
+    fn shutter_hit_geometry() {
+        let h = 2280usize;
+        assert!(shutter_hit(h - 200, h), "top edge inclusive");
+        assert!(!shutter_hit(h - 201, h), "above the bar");
+        assert!(shutter_hit(h - 61, h), "just inside bottom");
+        assert!(!shutter_hit(h - 60, h), "bottom exclusive");
+        assert!(!shutter_hit(h - 1, h), "below");
+    }
+
+    #[test]
+    fn cam_preview_letterbox_matches_still() {
+        // IMX376 after 270: 1940×2592 ≈ 4:3. Panel 1080×2280 ≈ 9:19. // D14-exempt: fixture
+        // Stretch-to-fill was the viewfinder warp; stills already letterbox.
+        let (ox, oy, fw, fh) = fit_rect(485, 648, 1080, 2280); // D14-exempt: fixture panel
+        assert_eq!(fw, 1080); // D14-exempt: fixture panel
+        assert_eq!(fh, 648 * 1080 / 485); // D14-exempt: fixture panel
+        assert_eq!(ox, 0);
+        assert_eq!(oy, (2280 - fh) / 2);
+        assert!(fh < 2280, "must not stretch to panel height");
+        let (ox2, oy2, fw2, fh2) = fit_rect(1940, 2592, 1080, 2280); // D14-exempt: fixture panel
+        assert_eq!((fw2 * 1000 / fh2), (fw * 1000 / fh));
+        assert_eq!(ox2, 0);
+        let _ = (oy2, ox);
+    }
+
+    #[test]
+    fn cam_phone_chrome_geometry() {
+        let (w, h) = (1080usize, 2280usize); // D14-exempt: fixture panel
+        let dock = cam_dock_y(h);
+        assert_eq!(dock, h - CAM_DOCK_H);
+        let (cx, cy) = cam_shutter_center(w, h);
+        assert_eq!(cx, 540);
+        assert!(cy > dock as i32 && cy < h as i32);
+        assert!(cam_shutter_hit(540, cy as usize, w, h));
+        assert!(!cam_shutter_hit(540, 200, w, h));
+        assert!(cam_close_hit(40, 40));
+        assert!(!cam_close_hit(400, 40));
+        assert!(cam_preview_hit(540, 400, w, h));
+        assert!(!cam_preview_hit(540, dock + 10, w, h));
+        // cover into the preview box crops 4:3 onto a taller window
+        let box_h = dock;
+        let scale = (w as f64 / 485.0).max(box_h as f64 / 648.0);
+        assert!(scale * 485.0 >= w as f64 - 1.0);
+        assert!(scale * 648.0 >= box_h as f64 - 1.0);
     }
 
     /// C6 命中分诊：AGINXPAIR1 超集 / WIFI: 连网码 → Some（原样，喂

@@ -23,6 +23,15 @@ export AGINX_TERM_INJECT=1
 
 ( while :; do
     if [ -x /var/bin/aginx-term ]; then
+      # enchilada: rmi4 insmod is async; term opens touch once at start.
+      TOUCH=$(sed -n 's/^touch_device *= *"\([^"]*\)".*/\1/p' /etc/aginx/device.toml 2>/dev/null | sed -n '1p')
+      if [ -n "$TOUCH" ]; then
+        n=0
+        while [ ! -e "$TOUCH" ] && [ $n -lt 30 ]; do
+          sleep 1
+          n=$((n+1))
+        done
+      fi
       echo "=== aginx-term start $(date) ===" >> /var/aginx-term.log
       /var/bin/aginx-term >> /var/aginx-term.log 2>&1
       sleep 2
