@@ -4846,3 +4846,3026 @@ sim/imsget/imsareg。承诺边界：不改卡内容、不动灌注、不动 EFS�
 - **设备终态**：全程只读；modem ONLINE、LTE home 46011 PS
   ATTACHED 不变；EFS/NV 未动；新件均在 /tmp（重启即清）；
   /usr/bin/qmicli 临时污染待清。
+
+## 2026-09-15 — M44 电信卡收短信路径闭合：imsen 也 err70，CS/IMS 双死（enchilada）
+
+承刀2（WMS 52/47）+ B1（ISIM ADF 空壳）。用户命题「短信一直没搞定」：
+在役设备上把刀2 之后唯一没打过的便宜探针补上——on-modem IMS
+`SET_SERVICES_ENABLED voice+sms`（imsen），看能否用已经存在的
+ctnet attach 会话把 IMS 客户端叫醒，从而给 WMS 一条 SMS-over-IP
+承载。不动 EFS、不写 NV、不 START_NETWORK。
+
+**身份闸（本会话第一发）**：NCM `10.9.8.1` = wifi `192.168.3.104`
+= MAC `ba:c7:65:b0:a5:42`，`uname -r` 6.11.0-sdm845-g2fa43795f607，
+model OnePlus 6，版本戳 `aginxos enchilada 35fa138 2026-09-14 l0`。
+同网段 `.93` 是 redfin（4.19.278 / Redfin PVT），未碰。
+
+**基线（imsen 前，与刀2/B1 同形）**：
+- DMS mode 0 online；NAS serving `reg=1 home / cs=2 detached /
+  ps=1 ATTACHED / radio 8 LTE`；sysinfo PLMN ASCII **46011**；
+  ssp domain pref **2 = PS only**；sig **-64 dBm**。
+- `aginx-sms status` rc=1（WMS 0x004A error **52 DEVICE_NOT_READY**）；
+  `list` UIM/NV 皆 error **47 NETWORK_NOT_READY**。
+- IMSA GET_IMS_REGISTRATION_STATUS / GET_IMS_SERVICES_STATUS 皆
+  error **70 InvalidOperation**。IMS GET_SERVICES_ENABLED_SETTING
+  (0x0090) / GET_POLICY_MANAGER_SETTINGS (0x0048) 同 70。
+- rmnet_ipa0 + rmnet0 在位，tx/rx packets **全 0**（数据面未通，
+  与 #353 一致）。uptime ~9.8h，本靴 modem 一直 online。
+
+**imsen（IMS svc 0x12 msg 0x008f，TLV 0x10 voice=1 + 0x1A sms=1）**：
+新编 musl 静态 `/tmp/qmi-ask-imsen`（host md5 `1e90c416…`，
+`rootfs/src/qmi-ask.c` 现树；/usr/bin/qmi-ask 仍是 09-14 镜像旧件，
+不含 imsen，故不换装）。**响应 error 70 InvalidOperation**——连
+「打开 on-modem IMS 开关」都被拒。5s 后 imsget/imsareg/imsasvc
+仍 70；aginx-sms status 仍 rc=1；serving 未扰动（reg=1 / ps
+attached / cs detached 原样）。
+
+**闭合判读（三路全死，不是工具缺）**：
+1. **CS/SGs**：刀2 已证。固件拒 CS+PS（SET_SSP err3）；automatic
+   在 CT 上丢 LTE；cs=2 永久 detached。电信 LTE-only，无电路域
+   短信。
+2. **SMS over IMS**：本条补刀。on-modem IMS 客户端拒绝 enable
+   （imsen 70）；B1 已证本卡 EF_IMPI 空壳，即便 IMS 栈醒了也没
+   凭据；#353 START/BIND_MUX 墙挡住专用 IMS PDN。裸 L0 没有
+   Android imsdatadaemon。
+3. **WMS 存储**：list 47 是传输层未就绪，连 SIM 上旧短信都读
+   不到——不是收件箱空。
+
+aginx-sms 工具链（status/list/fetch/decode）09-14 已在役，
+host 金测 6/6。挡在承载，不在解码。
+
+**M44 下一步 = 换一张仍有 CS 域的 SIM**（消费级移动/联通，不要
+物联网/纯数据卡）。OP6 双槽：slot 1 电信在役；slot 2 空槽形状
+（GET_SLOT_STATUS phys2 card_state=2）。插槽 2 即可，不必拔电信
+卡。插卡后配方：modem 已 online 则 `qmi-ask provision2`（或槽 1
+换卡则 `unprovision`→`provision`）→ serving 见 cs attached →
+`aginx-sms status` 期望从 52 翻到 transport=4 full → 对端发一条
+测试短信 → `aginx-sms fetch`。
+
+**设备终态**：enchilada 35fa138，modem ONLINE / LTE 46011 PS
+ATTACHED / -64 dBm 未变；imsen 被拒、WMS 仍 52；`/tmp/qmi-ask-imsen`
+在位（tmpfs，重启即清）；/usr/bin/{qmi-ask,aginx-sms} 未换装；
+EFS/NV 未动。redfin .93 未碰。
+
+## 2026-09-15 — 81voltd 接上：modem 立刻来问 IMS Data（svc 770），START apn=IMS IPv6；WDS 仍 err70（enchilada）
+
+用户拍板「把 81voltd 接上」。上游 81voltd（Richard Acayan, GPL-2.0-or-later）
+依赖 glib + ModemManager D-Bus，L0 都没有。落地形态=协议文件原样
+vendor（`rootfs/src/qcom/81voltd/{imsd.qmi,qmi_imsd.c,h,LICENSE}`）+
+`81voltd.c` libqrtr 移植 `qvd-server.c`（无 glib）：`qrtr_publish(770,1,0)`，
+START/STOP 按 81voltd 的 ei 编解码，其余 no-op；数据口后端=第二只
+socket 上的 WDS 客户端（BIND_SUB → BIND_MUX → IPFAM → START，APN
+用 modem 请求里的）。musl 静态 md5 `61c3de70…`。
+
+**身份闸**：NCM `10.9.8.1`，uname 6.11.0-sdm845-…，OnePlus 6，
+`aginxos enchilada 35fa138 2026-09-14 l0`。redfin 未碰。
+
+**发布即来问（本条主收据）**：`/tmp/81voltd` 起来 2 ms 内 modem
+（node 1 port 16398）连发三帧，与 imsdatadaemon strace 红色入站
+逐字节同族：
+
+- msg **0x23** TLV 含 ASCII `fe80::dd0a:d76a:5dee:25a2`（链路本地
+  IPv6；strace 同消息是另一条 fe80::）
+- msg **0x2e**、**0x34**（81voltd 当 no-op SUCCESS，上游同样）
+- 2.4 s 后 **START CONNECTION 0x20** 解码成功：
+  `conn=100 sub=1 af=1(IPv6) apn=IMS profiles=2 3gpp=2 3gpp2=0xffff`
+
+START 响应 32 B 与 81voltd/strace 同形（result ok + local_id 0 +
+orig 100 + sub 1）。然后 WDS：BIND_SUB ok、BIND_MUX **err3**、
+IPFAM ok、START **err70 / handle 0**（#353 同墙）。
+CONNECTION_CHANGED err=13（无地址）；modem DEL_CLIENT。
+imsen 随后仍 err70；WMS status 仍 rc=1；serving 未扰动。
+
+**新线索（下次 WDS 形状）**：modem 要的是 **IPv6 + APN `IMS` +
+3gpp profile 2**，不是我们一直打的 IPv4/apn=ims 小写。profile 2
+此前 GET_PROFILE_LIST family-1 读成空槽——可能只在 IMS Data 会话
+里才合法。BIND_MUX err3 仍是数据面闸。
+
+**持久化（本镜像，不等烤）**：`/usr/bin/81voltd` 同 md5；
+`/etc/init.d/modem-bringup` 尾加 pidof 守卫启动（log `/var/81voltd.log`）；
+仓 bake 已折进 `build-rootfs.sh` + `devices/enchilada/bringup/modem-bringup`。
+在役 pid 5810 仍绑 `/tmp/81voltd`（本靴不杀，避免拆掉刚通的 770）。
+
+**设备终态**：81voltd 在役、svc 770 已发布且被 modem 用过；LTE
+46011 PS attached 不变；IMS 未注册；EFS/NV 未动。
+
+## 2026-09-15 — WDS 按 IMS Data START 原样再打：IPv6 + APN IMS + p2、无 mux，仍 err70（enchilada）
+
+承上条「下次 WDS 形状」。81voltd WDS 后端改成吃 modem START 里的
+字段：APN 原文、ipfam 6（af=1）、TLV 0x31=profile 2、0x32=0xFF；
+**不再发 BIND_MUX**（上条 err3 毒化嫌疑先拿掉）；不发 call-type
+0x35（IMS Data START 里没有，MM 也不发）。成功则持住 WDS 客户端。
+新件 md5 `68d87b6c…` → `/usr/bin/81voltd`，杀旧 pid 5810 拉起 6416。
+
+**身份闸**：同机 OnePlus 6 / 6.11.0-sdm845 / 35fa138，NCM 10.9.8.1。
+
+**收据（发布后 3.15 s modem 再来问）**：START 同形
+`conn=101 sub=1 af=1 apn=IMS profiles=2 3gpp=2 3gpp2=65535`。
+WDS 线：BIND_SUB ok、IPFAM 6 ok、START 请求逐字节
+
+`00 03 00 20 00 12 00 14 03 00 49 4d 53 19 01 00 06 31 01 00 02 32 01 00 ff`
+
+即 APN=`IMS` + ipfam=6 + 3gpp=2 + 3gpp2=0xff。响应
+`result=1 error=70 handle=0`。CONNECTION_CHANGED err=13，
+DEL_CLIENT。serving 未扰动（reg=1 home / ps attached）。
+
+**判读**：APN/family/profile 不是 err70 的变量——按 modem 亲口
+规格打仍 InvalidOperation；BIND_MUX 也不是充分条件（这次没发
+照样 70）。墙仍在数据面（WDA/IPA/MM 全序），不在 81voltd 翻译层。
+
+**设备终态**：81voltd pid 6416 /usr/bin 在役；WMS/IMS 未醒；
+EFS/NV 未动。
+
+## 2026-09-15 — 81voltd 内 MM 序：WDA 全阶梯 err70 + DPM OPEN 双成功 + rmnet0 UP，START 仍 70（enchilada）
+
+用户拍板「接着打 WDA / IPA」。先前 WDA/DPM 是 qmi-ask 另进程散打；
+本条把 MM 数据序接到 81voltd 的 IMS START 回调里，WDA/DPM 客户端
+持住（MM 也是持住的），再打这次的 IMS WDS 形状。
+
+序：netdev UP → WDA SET 阶梯（qmapv5→v4→qmap→raw-noagg，EP
+embedded iface1，TLV 0x17）→ DPM OPEN_PORT iface1+0 → WDS
+BIND_SUB / IPFAM / START（IMS / IPv6 / p2）。WDA 若成功才发
+BIND_MUX。新件 md5 `1a2ea9d1…`，pid 7631。
+
+**身份闸**：OnePlus 6 / 6.11.0-sdm845 / 35fa138，NCM 10.9.8.1。
+
+**IPA**：`rmnet_ipa0` ioctl flags 已是 0x41（UP+RUNNING）；
+`rmnet0` **0x0 → 0x41**（mux 链从 down 拉起，E2 建链后一直没 UP）。
+tx/rx 仍全 0。ipa.ko 握手仍是靴时那次（dmesg t=315s
+`IPA driver setup completed successfully`），本条未重发 IPA
+INIT_DRIVER（内核持有）。
+
+**WDA**（svc 0x1A @ 0:59，持住客户端）：四档 SET 全部
+`result=1 error=70`，14 字节响应无附加 TLV。持住客户端没有比
+qmi-ask 散打多出任何成功。wda_ok=0 ⇒ 本轮不发 BIND_MUX。
+
+**DPM**（svc 0x2F @ 0:64）：OPEN_PORT `rmnet_ipa0` iface 1 **ok**、
+iface 0 **ok**——与 #353 双灌注同形。
+
+**WDS START**：同 IMS 形状
+`14 03 00 49 4d 53 19 01 00 06 31 01 00 02 32 01 00 ff`，仍
+error=70 handle=0。serving 未扰动。
+
+**判读**：WDA 拒绝在「与 START 同一次 IMS 会话、客户端持住、DPM
+已开、mux netdev 已 UP」条件下复现，不是散打时序伪影。MM 源码
+WDA SET 失败即硬退，pmOS 上 WDA 是应答的——同固件同内核下我们
+这路 WDA 仍然全拒，墙还在 modem 对 WDA/START 的状态拒绝，不在
+「没把 WDA 接进 81voltd」。
+
+**设备终态**：81voltd pid 7631；rmnet0 UP；WDA 客户端持住但 SET
+全失败；DPM 双 OPEN 成功；START 70；LTE 46011 PS attached；
+EFS/NV 未动。
+
+## 2026-09-15 — 切槽 b 上 Lineage：电信 IMS PDN 通 + 收件箱有验证码；金标 QMI=BIND_MUX mux=4 成功再 START（enchilada）
+
+用户命题：必须这张电信号收验证码。切槽对照。
+
+**切槽（fastboot `b0d9f7fe`，product sdm845）**：ABL 一度 USB 中毒
+（devices 在、getvar 挂），Restart bootloader 清态后活。
+`flash dtbo_b` ← `lab/los-20260909-dtbo.img`（bring-up 清零档，
+不恢复槽 b 会黑屏）。`set_active b`（a 未碰）。reboot。USB 枚举
+需安卓里改文件传输。
+
+**身份**：Lineage 22.2 `lineage_enchilada-userdebug 15` slot `_b`，
+adb root。SIM 双槽：slot0 ABSENT，**slot1 LOADED 46011 中国电信 LTE**。
+基带 `MPSS.AT.4.0.c2.15-00007-SDM845_GEN_PACK-1.437410.1.446401.1`
+（L0 DMS 报的是同系列 `.358880.1.399256.2`，子版本不同——对照栈
+modem 分区不是 L0 烤的 pmOS mbn）。
+
+**IMS 在役（dumpsys connectivity）**：`MOBILE[LTE] CONNECTED extra: IMS`，
+iface `rmnet_data1`/`rmnet_data3`（飞行模式后再起），IPv6
+`240e:578:…/64`，P-CSCF `240e:2e:8201:c000:…`，capability IMS+MMTEL。
+ctnet 另口 `rmnet_data3` IPv4 `10.6.56.71`。CS 在 telephony 里报
+HOME、availableServices=**[VOICE,SMS,VIDEO]**（IMS 把短信呈现为 CS）。
+进程：imsqmidaemon / imsdatadaemon / netmgrd / qcrild×2 / org.codeaurora.ims。
+
+**验证码实锤**：`content://sms` 本卡收件箱有工信部 12381「验证码：
+187019/128996/…」、电信 10000 账单（用户号码 189****9296）。
+**同一张电信号在 Lineage 上能收验证码。**
+
+**金标 QMI（飞行模式循环 + strace imsdatadaemon，存
+`.local/device/enchilada/lab/los-qmi-capture/imsdata.st`）**：
+modem→imsdatadaemon START CONNECTION 与 L0 81voltd 同形
+（apn=IMS、af=IPv6、3gpp=2、conn=100）。然后 imsdatadaemon 自己打 WDS：
+
+1. **BIND_MUX 0xA2** ep=(embedded, iface=1) **mux_id=4** → result **ok**
+   （L0 一直 mux_id=1 → err3）
+2. **BIND_SUB 0xAF** subscription=**2** → ok（L0 用 primary=1；安卓
+   这张卡是 phoneId=1）
+3. 两只 WDS 客户端：IPFAM 4 与 IPFAM 6 各 ok
+4. **START 0x0020**
+   `14 03 00 49 4d 53  19 01 00 06  31 01 00 02  32 01 00 ff  35 01 00 01`
+   （IMS + IPv6 + p2 + 3gpp2=FF + **calltype=1**）→ **ok，handle 非 0**
+
+netmgrd 侧对应 `rmnet_data0..10` 一整排 mux 链，不是 L0 那条
+`rmnet0 mux 1`。
+
+**回 L0 时要改的**：mux 链按安卓建到 mux 4（及邻号）、BIND_MUX
+mux_id=4、START 带 0x35=1；BIND_SUB 对照这张卡的 subscription。
+WDA 阶梯在安卓这条成功路上不是 imsdatadaemon 先发的——START 成功
+发生在 BIND_MUX(4) 之后。
+
+**设备终态**：槽 b Lineage 在役，电信 IMS PDN 通，adb `b0d9f7fe`；
+槽 a AginxOS 未动。回 L0 = `set_active a`（可能还要把 dtbo_b 清零
+才能再靴 mainline——记着）。
+
+## 2026-09-15 — 回槽 a L0：mux=4 链建成，BIND_MUX 仍 err3，START 仍 70（enchilada）
+
+用户批「切回 L0，按 mux=4 改」。`set_active a` + reboot（dtbo_a 未动，
+L0 靴起；NCM 10.9.8.1）。identity：6.11.0-sdm845 / OnePlus 6 /
+35fa138。
+
+**靴后缺口**：ipa.ko/rmnet.ko 未自动载（rmnet 仍不在镜像，本靴
+scp `/tmp/e5-rmnet.ko` md5 `17a85003…` 入 `/lib/modules/rmnet.ko`）；
+电信卡在 **phys slot 2**（安卓 phoneId=1），baked `provision` 打槽 1
+失败（card0 ERROR err3）；`provision2` SUCCESS，USIM ready，LTE
+home **PS ATTACHED**。误在未载 ipa 时发过一次 `online`（modem-up
+铁律禁止）；本靴 modem 未 assert，仍 running/online。
+
+**81voltd mux=4（md5 `8bd67db1…`）**：LOS 金标序接到 START 回调——
+建 `rmnet_data4` mux 4、UP；WDA 阶梯仍全 70；DPM OPEN 双成功；
+**BIND_MUX mux_id=4** ep=(4,1) → **err3 INTERNAL**（14 B）；
+BIND_SUB **2 ok**（金标同）；IPFAM 6 ok；START 逐字节
+`14 03 00 49 4d 53 19 01 00 06 31 01 00 02 32 01 00 ff 35 01 00 01`
+（含 calltype=1）仍 **err70 handle=0**。
+
+**判读**：AP 侧 mux 链和金标 WDS 形状已经对齐，BIND_MUX 仍拒。
+安卓成功时 netmgrd 已在开机把 WDA/多条 rmnet_data0–10 铺好，
+imsdatadaemon 的 BIND_MUX(4) 是踩在那张网上。L0 WDA 全拒可能
+仍是 BIND_MUX 的前置；也可能是 modem 分区档
+`.358880` vs LOS `.437410` 的差。mux=4 单独不是充分条件。
+
+**设备终态**：槽 a L0 在役，LTE 46011 PS attached；81voltd pid
+在役；`rmnet_data4` UP；BIND_MUX 4 / START 仍失败；槽 b Lineage
+完好（dtbo_b 已恢复）。
+
+## 2026-09-15 — netmgr 式 rmnet_data0–10 铺上 + 开机打 WDA：行在，WDA 仍拒，BIND_MUX 4 仍 err3（enchilada）
+
+用户批「接着把 WDA 和一排 rmnet 铺上」。对照 netmgr 开机形态：
+`rmnet_data0..10` mux 1..11（IMS 金标 mux 4 = data3），每条带
+QMAP v5 flags（deagg+map cmds+cksumv5）；WDA GET/SET 与 DPM 改到
+81voltd **启动时**就打，不等人家 START。
+
+中途设备掉网一次（NCM+Wi-Fi 全死，疑 CrashDump）；用户恢复后
+NCM `10.9.8.1` 再上。identity 6.11.0-sdm845 / 35fa138。铁律：先
+insmod ipa（握手 `IPA driver setup completed successfully`）再
+rmnet，再 81voltd，settle 后 `provision2`+`online`。
+
+**铺网收据**：data0–10 全部 created+UP，parent `rmnet_ipa0`。
+WDA GET ep(4,1) **err48**；SET qmapv5/v4/qmap/raw-noagg **全 err70**。
+DPM OPEN iface1+0 **ok**。
+
+**IMS START（attach 后）**：同金标
+`IMS + IPv6 + p2 + calltype1`；BIND_MUX mux=4 **仍 err3**；
+BIND_SUB 2 ok；START **仍 err70 handle=0**。行铺上没有让
+BIND_MUX 翻盘。
+
+**判读**：AP 侧 mux 表已经按安卓数量铺齐，WDA 在「行已在、DPM
+已开、开机就打」条件下仍然全拒。墙不在「少几条 rmnet_data」。
+
+**设备终态**：槽 a L0，LTE 46011 PS attached；81voltd md5
+`0b0a8a6d…` pid 586；rmnet_data0–10 在；WDA 拒、START 70。
+
+## 2026-09-15 — CrashDump 后按铁律再打 IMS：附着后再 WDA，仍全拒；BIND_MUX 1–5 皆 err3（enchilada）
+
+CrashDump 按键恢复后 L0 空闲（mode 5、无 ipa）。用户批继续打 IMS。
+上一轮 WDA 是在 mode 5 时打的，本条改序：**先 ipa 握手、实例已 idle
+~4 min、provision2、online、PS ATTACHED，再启 81voltd**（避免年轻
+实例 online / 空闲态 WDA）。未在 mode 5 发 WDA。
+
+identity：6.11.0-sdm845 / 35fa138 / NCM 10.9.8.1。ipa 握手
+`setup completed successfully`（仍有 `unexpected init_completed`）。
+online SUCCESS，立即 home+PS attached。
+
+**81voltd 在已附着 modem 上铺网+WDA**：data0–10 再创建/已在；
+WDA GET **err48**、SET 四档 **err70**——与 mode 5 时同形。DPM ok。
+IMS START 金标形状：BIND_MUX mux=4 **err3**、BIND_SUB 2 ok、
+START **err70**。本轮 **未进 CrashDump**。
+
+另：附着后独立 `qmi-ask wdsmux 1..5` 全 err3（每发一只新 WDS
+客户端）。不是单 mux=4 的问题。`aginx-sms` rc=1。
+
+**判读**：WDA 拒绝与「modem 还在 mode 5」无关；live+attached 照拒。
+BIND_MUX 1–5 全 INTERNAL。墙在 WDA/MUX 能力本身（固件/IPA 状态），
+不在开机时序。
+
+**设备终态**：槽 a L0 在役，mode 0 online，LTE 46011 PS attached；
+81voltd pid 780；rmnet_data0–10 UP；短信仍无。
+
+## 2026-09-15 — L0 vs Lineage MPSS 哈希：不是同一份；换 437410 后 MSS start 挂起掉网（enchilada）
+
+用户批先对比哈希，确认后再刷 Lineage modem。
+
+**只读对比（NCM 10.9.8.1，OnePlus 6 / 35fa138）**：
+
+| 对象 | md5 | 版本字符串 |
+|------|-----|------------|
+| L0 `/lib/firmware/.../modem.mbn` | `e3bb146c1d86125fdac09915b5d1b28e` | `MPSS.AT.4.0.c2.15-…-1.358880.1.399256.2` |
+| L0 `mba.mbn` | `34fb1bc9769d8be6b0e0d65df4e29263` | (MBA) |
+| `modem_a` `/dev/sde4` | `e00a0de8dd5fc5ef92566e890161bc5a` | FAT16 |
+| `modem_b` `/dev/sde32` | **同上** `e00a0de8…` | FAT16 与 a **逐字节相同** |
+
+分区内 split ELF：`modem.mdt` md5 `59cf4040…`，大段 `modem.b16` 含
+`MPSS.AT.4.0.c2.15-…-1.437410.1.446401.1`。LOS `mba.mbn` md5
+`985ab6398d76a89040d02616f6985f90`（与 L0 MBA **不同**）。
+
+**结论**：L0 加载的 MPSS/MBA 与 Lineage 分区里的 **不是同一份**。
+`fastboot flash modem` 无意义——a/b 分区已是 LOS 那份；L0 从
+rootfs `firmware-name=mba.mbn + modem.mbn` 加载。
+
+**换载（确认后执行）**：host+机上备份 358880（lab/l0-modem-358880/）。
+停 rproc3，把 LOS `mba.mbn`、`modem.mdt`→`modem.mbn`、全部
+`modem.bXX` 拷进 `/lib/firmware/qcom/sdm845/oneplus6/`。`echo start`
+写入 rproc3 后 **sysfs 阻塞、NCM 掉线**（疑 MSS 拒加载或 CrashDump）。
+未改 sde4/sde32。回退文件仍在 `l0-backup-358880/`。
+
+**设备终态**：掉网；固件目录已是 437410 拆片。需按键出 Dump 后
+先看 rproc3 是否起来，起不来则还原 358880。
+
+## 2026-09-15 — 437410 未起来（mba/modem.mbn 变成 0 字节）；已还原 358880，MSS running（enchilada）
+
+按键恢复后 identity：6.11.0-sdm845 / 35fa138 / uptime 151s。
+rproc3 **offline**。`modem.mbn` 与 `mba.mbn` md5 皆
+`d41d8cd9…`（空文件）。机上 `l0-backup-358880/` 同样被写成 0 字节
+（拷备份时目录后来被截断或同挂载写坏）。host
+`lab/l0-modem-358880/` 完好（modem `e3bb146c…` mba `34fb1bc9…`）。
+
+scp 还原后 `echo start` → rproc3 **running**，DMS mode 5 shutting-down
+（空闲，与换固件前同形）。**未 online、未再打 WDA。**
+
+**判读**：把 LOS `modem.mdt` 改名为 `modem.mbn` + 旁路 `.bXX` 这条
+加载路径失败（挂死/Dump，落地文件被掏空）。437410 还没在 L0 PIL
+上跑起来，IMS 对比未开始。分区 flash 仍无意义（a/b 已是 LOS FAT）。
+
+**设备终态**：槽 a L0，358880 已恢复，MSS running / mode 5；NCM
+10.9.8.1。437410 拆片若还在 firmware 目录不影响当前 mbn。
+
+## 2026-09-15 — 默认数据口：IPA 真 endpoint rx=10 tx=2 MAPv4；WDA/MUX 仍拒；attach 已有 ctnet 地址（enchilada）
+
+用户改序「先打通默认数据口」。358880 已恢复。不做 IMS、不换固件。
+
+**IPA sysfs（mainline ipa.ko）**：`endpoint_id/modem_rx=10`、
+`modem_tx=2`，offload **MAPv4**。此前 WDA/BIND_MUX 一直打
+iface=1。`rmnet_ipa0` ifindex=3 type=519。
+
+铁律：ipa 已在、uptime~13 min、provision2+online → LTE home PS
+ATTACHED。`rmnet-add rmnet_ipa0 rmnet_data0 mux 1` 成功并 UP。
+未拉 81voltd。
+
+**WDA**（qmapv4，与 MAPv4 对齐）ep iface **10 与 2**：GET 皆
+err48，SET 皆 err70。DPM OPEN 0/1 仍成功。
+
+**默认 PDN**（单客户端 `wdschain`）：BIND_SUB **2** ok（卡在槽 2）、
+BIND_MUX mux=1 iface 10/2 皆 err3、START **apn=ctnet ipv4 p0
+nocall** 仍 err70 handle=0。rmnet rx_packets **0**。
+
+**attach 会话本身是活的**：GET_LTE_ATTACH_PARAMETERS SUCCESS，
+APN=`ctnet`，IPv4 TLV `b1 9d 59 0a`，IPv6 `240e:478:…`。modem
+里默认承载有地址；AP 绑不上去。
+
+**判读**：默认数据口的墙与 IMS 是同一道（WDA/BIND_MUX），不是
+APN 选错、也不是 IPA iface 打成 1。系统下一步若还做数据，是
+ModemManager 整段（pmOS 反例），不是再换 endpoint 数字。
+
+**设备终态**：槽 a L0，358880，mode 0 online，LTE 46011 PS
+attached；rmnet_data0 UP 零包；未 CrashDump。
+
+## 2026-09-15 — ModemManager 打通默认数据口：qmapmux0.0 ping 8.8.8.8 0% 丢包（enchilada）
+
+用户批「上 ModemManager」。L0 已有 libqmi-glib 1.36 / glib 2.84
+（先前 qmicli 污染），缺动态链接器和 MM 本体。
+
+**装上**：Alpine v3.21 aarch64 `musl` `dbus` `libexpat` `libmm-glib`
+`modemmanager-1.22.0` `polkit` `duktape` `eudev` `kmod-libs` `zstd`
+`xz` `libcrypto3`。`ld-musl-aarch64.so.1` 修好（一度自指 symlink）。
+`dbus-daemon --system`（user=root）；`/run/dbus/system_bus_socket` →
+`/var/run/dbus/...`（本机 /var/run 不是 /run）。eudev +
+`77-mm-qcom-soc.rules` + `80-mm-candidate.rules` 后 `rmnet_ipa0` 带
+`ID_MM_PHYSDEV_UID=qcom-soc` `ID_MM_CANDIDATE=1`。polkitd 用
+passwd uid=0 的 polkitd 用户、`--replace`、禁 dbus activation。
+
+**MM 收据**：`mmcli -L` → Modem/0 QUALCOMM，plugin qcom-soc，
+ports `qrtr0 (qmi), rmnet_ipa0 (net)`，固件 358880，号码
+8618922709296。`--enable` → **registered**，operator CHN-CT 46011，
+packet attached，signal 65%。`--simple-connect=apn=ctnet,ip-type=ipv4v6`
+→ **successfully connected**。
+
+**数据面**：MM 打通 BIND_MUX mux id 1（我们手搓一直 err3）。
+bearer1 interface `qmapmux0.0` multiplexed，IPv4 `10.89.157.177/30`
+gw `10.89.157.178` DNS 218.2.2.2/218.4.4.4；IPv6
+`240e:478:410:d75:9579:b877:814b:e06c/64`。`ifconfig qmapmux0.0`
+配地址后：
+
+- `ping -I qmapmux0.0 218.2.2.2` **3/3** rtt ~23 ms
+- `ping -I qmapmux0.0 8.8.8.8` **3/3** rtt ~200 ms
+- qmapmux0.0 rx/tx 6/6，rmnet_ipa0 rx/tx 9/6（不再是零包）
+
+未改 usb0 默认路由（NCM ssh 仍走 usb0）。未 CrashDump。
+
+**判读**：默认数据口在 ModemManager 整段下是通的。手搓 WDA/MUX
+失败是 AP 栈不完整，不是射频或这张电信卡。
+
+**设备终态**：槽 a L0 + MM 1.22，modem **connected**，qmapmux0.0
+能出网；358880；dbus/udevd/polkitd/MM 在役。
+
+## 2026-09-15 — MM 拉起 IMS PDN（qmapmux0.1 IPv6）；81voltd 回了地址；IMSA 仍 err70（enchilada）
+
+数据口已通，接着打 IMS。不再手搓 WDS。
+
+**MM 第二承载**：`mmcli -m 0 --simple-connect=apn=ims,ip-type=ipv4v6`
+SUCCESS。bearer2 `qmapmux0.1` multiplexed，IPv6
+`240e:578:560:cd4:e048:b86d:471c:8fd/64`（与 Lineage IMS 口同族
+240e:578）。ctnet bearer1 仍在，`ping -I qmapmux0.0 8.8.8.8` 仍通。
+
+**81voltd** 改成优先读 MM IMS bearer 地址，不打 WDA/WDS。发布
+svc 770 后 modem 立即 START（apn=IMS af=IPv6 p2 conn=100）。
+81voltd SUCCESS + CONNECTION_CHANGED 带上该 IPv6。随后 modem
+**DEL_CLIENT** 连发。`imsen` / IMSA GET_REG / GET_SERVICES 仍
+**err70**。`aginx-sms status` 仍 52 / list 47。
+
+**判读**：IMS **PDN** 在 MM 下已经通（和默认数据同一套 mux）。
+on-modem IMS 注册仍拒（imsen 70），WMS 无承载。差在 IMS 客户端
+开关/凭据（空 IMPI、或 81voltd 入站 0x23/0x2e 仍 no-op），不是
+数据口。
+
+**设备终态**：MM connected，ctnet+ims 双承载在；81voltd pid 5800；
+短信未通。
+
+## 2026-09-15 — 短信：WMS 路由可读、MM messaging 有 sm/me；IMS BIND 成功但 SET 0x8f 仍 70（enchilada）
+
+接着打短信。ctnet+ims PDN、81voltd 770 仍在。
+
+**WMS**：`qmicli --wms-get-routes` SUCCESS（6 条 store-and-notify / transfer-only）。
+`Get Supported Messages` err71。`aginx-sms status` 仍 **52**（transport
+NW reg）。MM `--messaging-status`：**supported storages sm, me**，
+list 空。
+
+**IMS 开关**：`--ims-bind=1` SUCCESS（msg **0x0098**）。同一客户端上
+`imsen` 0x008f / `imsget` 0x0090 仍 **err70**。IMSA bind 0x0033
+err58，GET_REG 仍 70。`--imsp-get-enabler-state` 建客户端 err3
+INTERNAL。81voltd 在 CONNECTION_CHANGED 之后仍被 modem DEL_CLIENT。
+
+**判读**：存储/路由层能说话，**网络短信承载**还是没有（IMS 客户端
+没注册）。BIND 不是 70 的原因。差在 on-modem IMS 使能（空 IMPI /
+SET 形状 / 81voltd 入站 0x23 仍 no-op）。
+
+**设备终态**：数据+IMS PDN 仍通；短信未收。
+
+## 2026-09-15 — IMS 注册：DSD 已列 ims APN；0x23 fe80 已解析并双发 CONNECTION_CHANGED；SET 0x8f 仍 70（enchilada）
+
+继续打注册。DSD GET_SYSTEM_STATUS **SUCCESS**：LTE + APN 列表
+ctnet/ctwap/**ims**/sos。策略 GET 0x0048 仍 70。
+
+81voltd 解析入站 **0x23** ASCII `fe80::75f3:7aa2:981e:1645`。START 后
+CONNECTION_CHANGED 先发全局 `240e:578:560:cd4:…`（MM IMS bearer），
+再发该 link-local。IMS PDN 仍 connected。
+
+imschain：BIND 0x0098 **ok**；SET 0x008f 多 TLV 变 **err1 MALFORMED**；
+回到 voice+sms 两 TLV 仍 **err70**。IMSA BIND 0x0033 **err58**，
+GET_REG/SVC 70。WMS transport 52。
+
+**判读**：数据面（含 IMS PDN）和 770 会话都在。on-modem IMS 使能
+0x8f 在已 bind 客户端上仍 InvalidOperation——不是少 bind、不是
+少 fe80 指示。下一刀是 IMPI/用户配置（0x0047 / Android ims 凭据），
+不是再扩 0x8f TLV。
+
+**设备终态**：MM connected，ctnet+ims 双口；81voltd 在役；未注册。
+
+## 2026-09-15 — 切槽 b 抓 IMS Settings 对照：Lineage 停在开机动画，boot_completed 未置（enchilada）
+
+用户批进 fastboot 切槽 b 抓 IMS Settings/IMSA。fastboot `b0d9f7fe`
+product sdm845，`set_active b`（slot-successful:b yes），reboot。
+adb 立刻认到 Lineage `lineage_enchilada-userdebug 15` slot `_b`，
+`adb root` 成功。
+
+**未完成对照**：`sys.boot_completed` 一直空；开机动画 pid 仍在
+（uptime 5min+）；`cmd phone` / connectivity airplane 均
+Cannot broadcast before boot completed。keystore 等 boot_completed
+已 overdue。SIM numeric 空。strace 已挂上 imsdatadaemon/qcrild
+（SELinux Permissive），但几乎无 IMS Settings QMI（开机未完成）。
+
+上次同槽 Lineage 能进桌面并收验证码；这次卡在动画。未动槽 a。
+
+**设备终态**：槽 b Lineage 开机动画；adb 在；对照未抓到。
+
+## 2026-09-15 — 槽 b「开机锁屏」= bootanim 未停；LockSettings 打不开 /data/system/locksettings.db（enchilada）
+
+用户看到的是锁屏。系统侧：`init.svc.bootanim=running`，
+`sys.boot_completed` 空，`cmd phone` 无服务。logcat：
+`BOOT FAILURE making Lock Settings Service ready` —
+`SQLiteCantOpenDatabaseException` `/data/system/locksettings.db`
+Permission denied（文件曾是 root:root 660）。chown system:system
+后 `ctl.restart zygote`，bootanim 仍不退。userdata 是 L0 的 Linux
+根，不是 Android /data，Lineage 完不成开机，IMS Settings QMI
+无法在注册成功时抓。未 wipe。槽 a 未动。
+
+## 2026-09-15 — 用户在 fastboot：set_active a 已下，reboot 后 USB 未枚举（enchilada）
+
+fastboot `b0d9f7fe` sdm845 current-slot b → `set_active a` OK → reboot。
+120s 内 NCM/adb/fastboot 皆空（enchilada 重启后 USB 常需拔插）。
+
+## 2026-09-15 — CrashDump 按键后进 fastboot；slot a reboot，USB 仍未枚举（enchilada）
+
+用户「好了」时已在 fastboot `b0d9f7fe` sdm845 current-slot **a**。
+`reboot` 已发。90s 无 NCM。需拔插 USB。
+
+## 2026-09-15 — 槽 a CrashDump 循环：清掉 437410 的 modem.bXX 后 L0 起来（enchilada）
+
+用户再进 Dump → 按键 → fastboot。先 `set_active b` 用 adb 看
+userdata：358880 `modem.mbn` md5 `e3bb146c…` **完好**，但目录里还
+留着上次失败换载的 **modem.b00–b28**。PIL 可能把合包 mbn 和拆片
+混载导致 Dump。删掉全部 `modem.b*`。`set_active a` reboot，36s
+NCM `10.9.8.1`。identity：6.11.0-sdm845 / 35fa138，rproc3 running，
+无 split。
+
+**设备终态**：槽 a L0 在役，358880 干净，MSS running。
+
+## 2026-09-15 — 清拆片后重拉 MM：ctnet connected，ping 8.8.8.8 0% 丢包（enchilada）
+
+用户批恢复上网。identity 6.11.0-sdm845 / 35fa138，uptime 267s。
+ipa 握手成功再 rmnet；provision2+online → LTE home PS ATTACHED。
+dbus/udevd/polkitd/MM 1.22 再起。`mmcli --enable` registered CHN-CT
+46011；`--simple-connect=apn=ctnet` connected。bearer1 `qmapmux0.0`
+IPv4 `10.23.164.174/30` gw `.173`。`ifconfig` 后
+`ping -I qmapmux0.0 218.2.2.2` 3/3，`8.8.8.8` 3/3。未改 usb0
+默认路由。未拉 81voltd。
+
+**设备终态**：槽 a L0 + MM **connected**，蜂窝能出网。
+
+## 2026-09-15 — 再拉 IMS：PDN qmapmux0.1 通；IMSA BIND sub=2 成功（sub=1 是 58）；SET/REG 仍 70（enchilada）
+
+MM connected 下 `--simple-connect=apn=ims` SUCCESS，bearer2
+`qmapmux0.1` IPv6 `240e:579:490:529:…`。81voltd 770 START
+conn=101 **sub TLV 0x12=2** / 0x13=1，回全局+fe80。ctnet ping 仍通。
+
+`qmicli --ims-bind=2` SUCCESS；`--imsa-bind=2` **SUCCESS**（此前
+sub=1 为 err58）。随后 GET enabled / GET_REG 仍 **err70**。
+`imsen` 0x8f 仍 70。aginx-sms 52。
+
+**判读**：IMSA 要 bind **2**（与 START 0x12 一致）。注册查询仍
+InvalidOperation → IMS 应用没起来，不是 bind 槽位错。PDN 配方可重复。
+
+**设备终态**：ctnet+ims 双口；81voltd 1238；未注册。
+
+## 2026-09-15 — 一次性 IMS 配置：GET 0x48 仍 70；SET 0x47 malformed；SET_USER 0x2C err57；注册未变（enchilada）
+
+用户批走第 1 条，只做一次。IMPI=
+`460110404630489@ims.mnc011.mcc460.3gppnetwork.org`（本卡 HARDWARE
+已录 IMSI）。同一 IMS 客户端：BIND sub=2 SUCCESS → GET_POLICY
+0x0048 **err70** → SET_POL_MGR 0x0047 **err1 MALFORMED** →
+SET_USER_CONFIG 0x002C domain+impi+impu **err57**。IMSA BIND 2 本轮
+err58（先前 qmicli 成功过），GET_REG/SVC 仍 70。aginx-sms 52。
+ctnet ping 未断。
+
+**收口**：bind 2 之后策略接口仍不可用（GET 70），凭据写入不是合法
+消息或参数（57）。不再扩 TLV。L0 上这张电信号的 IMS 注册做不完。
+
+**设备终态**：MM connected，ctnet+ims PDN 仍在；未注册；未 Dump。
+
+## 2026-09-15 — 按安卓 qcrild 金标重放 IMS 0x8f：逐 TLV 仍 err70；770 回包 sub 已对齐（enchilada）
+
+用户命题：安卓能搞定就是换代码。对照 OpenIMSd 公开的 OP6T Lineage
+VoLTE 注册 pcap（qcrild + imsdatadaemon）和本机 `los-qmi-capture/imsdata.st`。
+
+**安卓金标（pcap，qcrild sport 39675）**：IMS Settings SET 0x008f
+**一条 TLV 一次**，顺序 `0x15=2 → 0x23=0 → 0x10=1 → 0x14=1 →
+0x11=1 → 0x19=1 → 0x18=1`，每条 SUCCESS，随后 indication 0x91。
+0x8f 发生在 IMS DCM START 之前。本卡 LINEAGE 金标 CONNECTION_CHANGED
+的 subscription TLV 0x12 = **2**。
+
+**L0 重放**（`qmi-ask ims8f`，/tmp，同一 IMS 客户端 BIND sub=2 成功
+后逐条 SET）：七条 0x8f **全部 error 70**；GET 0x90 仍 70。IMSA BIND
+sub=2 error **58**；IND_REG 0x22 **SUCCESS**；GET_REG/GET_SVC 仍 70。
+`aginx-sms status` 仍 **52**。ctnet `ping -I qmapmux0.0 8.8.8.8` 未断。
+qmicli `--imsa-bind=2` 成功后再 GET_REG 仍 70（BIND 不是 70 的原因）。
+
+**81voltd 对齐**：本卡 START 同时带 TLV 0x12=2 和 0x13=1。旧 IDL 只
+认 0x13，CONNECTION_CHANGED 把 sub=1 回给 modem。按金标改成 echo
+0x12。重启 81voltd 后 START `sub=2 echo12=2`，CONNECTION_CHANGED
+IPv6 `240e:579:…` **sub=2**（与 LINEAGE 同形）。0x8f 仍 70。
+
+**判读**：换的是用户态 QMI 形状，不是拷安卓 so。数据口 + 770 回包
+形状已经和金标对齐；qcrild 那串 0x8f 在这台 358880 上不被接受
+（InvalidOperation = 栈没起来）。差在基带 IMS 应用的启动条件
+（固件档 / EFS 里 0x8f 之前的步骤），不是短信 PDU、也不是「几个
+开关捆在一起发错了」。
+
+**设备终态**：槽 a L0，MM connected，ctnet+ims 双口；/tmp/81voltd-sub12
+在役（770 回包 sub=2）；短信未收；未 Dump。
+
+## 2026-09-15 — OpenIMSd 金标续：DSD 0x34 成功；PDC 切 Volte_OEM_Lab 后 WMS 52→transport 0；0x8f 仍 70（enchilada）
+
+用户批继续。对照 OpenIMSd OP6T pcap：0x8f 之后是 DSD 0x0034（TLV 0x12=4
+SUCCESS），再才是 IMS DCM 0x33/0x34 和 START。770 金标只回 **一帧**
+全局 IPv6 CONNECTION_CHANGED，随后 AP 发 0x34。
+
+**DSD 0x34**：`qmi-ask dsd34`（TLV 0x12=4）**SUCCESS**。不是 70。
+
+**PDC**：`hVoLTE_OPNMKT_CT`（id `61:64:03:B6:…2E:EA`）仍是 active。
+对其再 activate → qmicli **NoEffect**（已是当前档，踢不醒）。
+按 OpenIMSd 公开配方 activate **Volte_OEM_Lab**（id
+`DD:05:92:E3:…00:A1`）→ **Successfully requested**；list 确认 Lab
+Active、CT Inactive。modem 仍 registered CHN-CT 46011 PS attached。
+ctnet/ims 可再 `--simple-connect`。未 Dump。
+
+**WMS**：Lab 激活后 `aginx-sms status` 从 **error 52 DEVICE_NOT_READY**
+变成 **transport=0 (no service)**——查询通了，承载仍不是 full。0x8f
+七条仍全部 error 70；IMSA GET_REG 仍 70。
+
+**770**：MM 已持有 IMS PDN 时 modem **不再发 START**，只有 DEL_CLIENT。
+bearer bounce 见过一次 STOP + **0x33 REQ**（TLV 0x01=1），81voltd 当
+no-op SUCCESS。金标 0x34 回包这轮没打到（无 START）。81voltd 已改：
+只回一帧全局 IPv6；收到 0x33 后补发金标 0x34。setsid 常驻 pid 在。
+
+**DSD SET_APN_TYPE** `ims,ims` → error 94 NotSupported。GET_APN_INFO
+ims/default → 74 InformationUnavailable。
+
+**判读**：换 MBN 能把 WMS 从「设备未就绪」推进到「transport 层可问」；
+0x8f 在 Lab 档上一样拒。栈仍没起来。设备现档 = Volte_OEM_Lab（不是
+开机时的 CT 本家）。回 CT =
+`qmicli --pdc-activate-config=software,61:64:03:B6:18:CE:E2:67:4E:83:34:56:F9:DF:4E:00:BA:82:2E:EA`。
+
+**设备终态**：槽 a L0；PDC **Volte_OEM_Lab** Active；MM connected
+CHN-CT；ctnet+ims 可连；81voltd `/tmp/81voltd` setsid 在役；WMS
+transport 0；短信未收；未 Dump。
+
+## 2026-09-15 — Lab 档飞行循环：IMS PDN 超时；切回 CT 后双口+ping 恢复；WMS transport 0 残留（enchilada）
+
+用户批继续。Lab 档在役时 NAS 一度 `reg=2 SEARCHING`，MM packet
+detached。按 OpenIMSd 做 MM `--disable/--enable`（飞行循环）：
+
+**Volte_OEM_Lab**：循环后 NAS 回 `reg=1 home / ps ATTACHED / cs
+detached`。ctnet `--simple-connect` 成功；**ims 口 Timeout /
+InProgress**，bearer2 `connected: no`。0x8f 仍全 70。WMS 仍
+transport=0。
+
+**切回 hVoLTE_OPNMKT_CT**（activate SUCCESS）+ 再一次飞行循环：
+NAS home；ctnet `10.54.228.180/30`；ims IPv6 `240e:578:498:1f12:…`
+（与 Lineage 金标同族）。`ifconfig qmapmux0.0` 后
+`ping -I qmapmux0.0 218.2.2.2` **2/2**，`8.8.8.8` 1/2。MM packet
+attached。未 Dump。
+
+**WMS**：切回 CT 之后 **仍是 transport=0**，没有退回 52。52→0 在
+Lab 激活时出现，CT 恢复后残留——不是 Lab 独有的瞬时态。0x8f /
+IMSA GET_REG 在 bind 成功的 qmicli CID 上仍 70。81voltd 常驻无
+START（MM 已持 IMS PDN）。
+
+**判读**：Lab 档救不了 0x8f，还会把 IMS PDN 拖死。飞行循环能把
+SEARCHING 拉回 home。WMS 查询层保持可问（transport 0），承载仍
+不是 full。
+
+**设备终态**：槽 a L0；PDC **hVoLTE_OPNMKT_CT** Active；MM
+connected CHN-CT；ctnet ping 通、ims PDN 通；81voltd `/tmp/81voltd`
+setsid 在役；WMS transport 0；短信未收；未 Dump。
+
+## 2026-09-15 — 金标 WMS 0x004A 阶梯：0 → 1 → 4；我们停在 0；770 START 打不出来（enchilada）
+
+用户批继续。OpenIMSd OP6T pcap 把 WMS 0x004A 的 TLV 0x10 走完了：
+
+- 早段（IMS DCM START 前）= **0**（no service）——和现在 `aginx-sms
+  status` 同值
+- CONNECTION_CHANGED（#1207）之后立刻 = **1**
+- 再过几十帧 = **4**（full）；同时 0x0048 Get Transport Layer 回
+  `0x10=1 0x11=000001`
+
+所以 transport 0 不是死胡同，是金标阶梯的第一档。下一档要 770
+CONNECTION_CHANGED。
+
+**770**：IMS 口已由 MM 拉起时，modem **不发 START**（也没有 0x23/0x2e）。
+试过：IMS bounce、先灭 IMS 再 NEW_SERVER 770、飞行循环、LPM→online
+（都 SUCCESS）。全程只有 DEL_CLIENT。81voltd 已加 MM IMS 地址等待
+（最多 15s），这轮没接到 START，等待没触发。
+
+**收口**：ctnet `10.217.13.215` `ping -I qmapmux0.0 218.2.2.2` 2/2；
+ims `240e:578:458:1856:…` connected。WMS 仍 0。0x8f 未再打（形状
+已证 70）。未 Dump。
+
+**设备终态**：槽 a L0；PDC hVoLTE_OPNMKT_CT；MM connected CHN-CT；
+ctnet ping 通、ims PDN 通；81voltd `/tmp/81voltd` pid 14918；WMS
+transport 0；短信未收。
+
+## 2026-09-15 — 不预连 IMS、等 770 START：25s 无问询；IMS 0x8f 在支持位图里仍 70（enchilada）
+
+用户批继续。金标是 modem 先 770 START、AP 再给 IMS 地址。改 81voltd：
+START 里 `mmcli --simple-connect=apn=ims`（不再要求预先连 IMS）。
+
+**实验**：拆 IMS bearer → 飞行循环 → 只连 ctnet → 等 25s。NAS
+`reg=1 home / ps ATTACHED`。81voltd 日志只有 `770 up`，**无 0x23 /
+0x2e / START**。WMS 仍 transport 0。ctnet ping 218.2.2.2 通。
+
+**IMS GET_SUPPORTED_MESSAGES 0x001E SUCCESS**（此前没打过）。TLV
+0x10 位图（u16 长度前缀）解码：
+
+| msg | 位图 |
+|---|---|
+| BIND 0x98 | 有 |
+| SET 0x8f | **有** |
+| GET 0x90 | 有 |
+| GET_POL 0x48 | 有 |
+| SET_POL 0x47 | 无 |
+| SET_USER 0x2c | 无 |
+| IND 0x91 | 无 |
+
+无 IMS PDN 时再打金标 0x8f：BIND 成功，七条 SET 仍 **70**。固件声明
+支持 0x8f，运行时仍 InvalidOperation → 不是 opcode 缺失，是栈没起来。
+IMSA GET_SUPPORTED_MESSAGES **err3 INTERNAL**。
+
+随后把 IMS PDN 连回（设备可用）。未 Dump。
+
+**设备终态**：槽 a L0；PDC hVoLTE_OPNMKT_CT；MM connected；ctnet+ims
+双口；81voltd `/tmp/81voltd` 在役（START 驱动 MM 的新件）；WMS
+transport 0；短信未收。
+
+## 2026-09-15 — 金标 0x8f 前序：WMS 0x5c/0x45/0x4a/0x48 与 VOICE 0x40 全 SUCCESS；0x4a 仍为 0（enchilada）
+
+用户批继续。OpenIMSd pcap 里 0x8f 之前 qcrild 打过 WMS 0x5c、0x4a、
+0x45 和 VOICE 0x40（TLV 0x16=3）。本机原样重放（`qmi-ask` 新件）：
+
+| 命令 | 结果 |
+|---|---|
+| WMS 0x005c | SUCCESS；TLV 0x10=0 0x11=1（金标早段是 0x10=1 0x11=0） |
+| WMS 0x004A GET_TRANSPORT_NW_REG | SUCCESS；TLV 0x10=**0**（与金标 START 前同档） |
+| WMS 0x0048 GET_TRANSPORT_LAYER | SUCCESS；TLV 0x10=0（金标 full 后是 1 + 0x11=IMS） |
+| VOICE 0x0040 tlv 0x16=3 | SUCCESS；回 0x16=0 |
+| WMS 0x0045 IND_REG tlv 0x01=1 | SUCCESS |
+| DSD 0x34 | SUCCESS（复验） |
+
+随后金标 0x8f 七条仍 70。0x4a/0x48 打完仍是 0。serving 未扰动
+（home / ps ATTACHED）。81voltd 无 START。未 Dump。
+
+**判读**：WMS 控制面已经完全能说话，停在金标 CONNECTION_CHANGED
+之前那一档（0x4a=0）。0x8f 前序不是 70 的原因。
+
+**设备终态**：槽 a L0；PDC hVoLTE_OPNMKT_CT；MM connected；ctnet+ims
+在；WMS 0x4a=0；短信未收。
+
+## 2026-09-15 — rproc3 stop+start：offline→running 后 NCM 掉线（enchilada）
+
+用户批继续。770 START 只在 modem 刚起来时出现过，故按 modem-up
+铁律（ipa 已在位）停/起 remoteproc3，想让 IMS DCM 再开口。
+
+**目击**：`mmcli --disable` 成功；`echo stop > remoteproc3/state` 1s 内
+**offline**；`echo start` 回报 **running**。随后等 DMS（`qmi-ask mode`）
+期间 **NCM 10.9.8.1 丢包**，USB 无枚举。Dump 界面未目击（本机看不到
+屏幕）。未发 provision2/online（卡在等 DMS）。
+
+**对照**：modem-up 头注——对年轻实例发 online 会 HWP 超时，且
+online 会黏在 remoteproc 恢复上。本轮停机前 modem 是 mode 0
+online，**没有先 LPM**。掉线与「黏性 online 自毁」同形，未证实。
+
+**设备终态**：NCM 失联。恢复 = 拔插 USB / 看是否 CrashDump /
+fastboot。下次若再 rproc：先 `qmi-ask lpm` 再 stop。
+
+## 2026-09-15 — CrashDump 后冷启：L0 起来，mode 5，ipa 未载（enchilada）
+
+用户目击高通界面后已重启。NCM `10.9.8.1` 通。identity：
+`6.11.0-sdm845-g2fa43795f607`，hostname aginxos，uptime ~0 min。
+rproc0–3 **running**（含 remoteproc3 modem）。`/proc/modules` **无
+ipa**。DMS mode **5 shutting-down**。NAS `reg=2 SEARCHING` cs/ps
+detached radios=0。UIM card0 state=2 ERROR（未 provision，预期）。
+在役：rmtfs / pd-mapper / `/usr/bin/81voltd`（烤线旧件，/tmp 新件
+重启已清）。无 ModemManager。未 online（铁律：ipa 未载）。未 Dump。
+
+**设备终态**：槽 a L0 冷启在役；modem mode 5；蜂窝未上；NCM 通。
+
+## 2026-09-15 — modem-up 铁律：IPA 握手 → settle 60s → provision2 → online；LTE home；770 START 回来了（enchilada）
+
+用户批按铁律走 modem-up。烤线 `qmi-ask` 无 provision2，用 /tmp 新件。
+
+**序**：kill 81voltd → `insmod ipa.ko` → kmsg **`IPA driver setup completed successfully`**（t=0）→ `insmod rmnet.ko` → `/tmp/81voltd` setsid → **settle 60s**（mode 仍 5）→ `provision2` **SUCCESS**（card1 PRESENT）→ `online` **SUCCESS** mode 0。未 Dump。NCM 一直通。
+
+**无线电**：NAS `reg=1 home / cs=2 detached / ps=1 ATTACHED / radio 8 LTE`；sig **-88 dBm**。
+
+**770（冷启后第一次开口）**：81voltd 起来立刻 0x23/0x2e/0x34；online 后 **START conn=100 sub=2 echo12=2 apn=IMS IPv6**。当时无 dbus/MM，`mmcli` Connection refused；等 15s 无地址后手搓 WDS START **err70**，CONNECTION_CHANGED **err=13**，随后 DEL_CLIENT。WMS 0x004A **error 52**（本靴尚未到上一靴的 transport 0）。
+
+**设备终态**：槽 a L0；ipa+rmnet 在位；modem online LTE home；81voltd /tmp 在役；无 MM；短信 52。
+
+## 2026-09-15 — MM 起来后 770 START→IMS 地址回包成功（CONNECTION_CHANGED err=0）（enchilada）
+
+用户批继续。dbus（root）+ udevd + polkitd + MM 1.22 拉起；`rmnet_ipa0`
+已有 `ID_MM_CANDIDATE=1`。`mmcli -m 0 --enable` registered CHN-CT；
+`--simple-connect=apn=ctnet` connected。**不预连 IMS**。重启
+`/tmp/81voltd`。
+
+**770 金标序首次在 L0 走完**：
+
+- 0x23 / 0x2e / 0x34
+- **START conn=101 sub=2 echo12=2 apn=IMS IPv6**
+- 81voltd `mmcli --simple-connect=apn=ims,ip-type=ipv6` **successfully
+  connected**
+- **CONNECTION_CHANGED orig=101 sub=2 addr=`240e:579:460:1059:f48b:9f24:1515:3f2f` err=0**
+- 金标 0x34 回 modem
+
+ctnet `10.3.16.227` `ping -I qmapmux0.0 218.2.2.2` 2/2。ims
+`qmapmux0.1` connected。未 Dump。
+
+**WMS**：CONNECTION_CHANGED 后 30s 轮询 0x004A/0x0048 仍 **error 52**；
+0x0045 / 0x005c SUCCESS。金标 0x8f 在回包成功后仍全 70。serving 未扰。
+
+**判读**：AP 侧 770 数据口已经按安卓形状闭环。WMS 0→1 没跟着来，
+0x8f 也没醒。差仍在 IMS 应用层，不在 IMS PDN。
+
+**设备终态**：槽 a L0；MM connected；ctnet ping 通、ims PDN 通；
+81voltd 2192；WMS 52；短信未收。
+
+## 2026-09-15 — 770 local_id 改为金标 0x14；CONNECTION_CHANGED 再成功；WMS 仍 52（enchilada）
+
+用户批继续。金标 START resp 的 connection 是 **0x14/0x15**，我们之前回
+0。`alloc_conn` 改为 `0x14+i`。拆 IMS 后重启 81voltd：
+
+- START conn=100 sub=2
+- START resp **TLV 0x10=0x14**（与 Lineage 同形）
+- MM IMS `240e:578:560:470:f4bb:3774:f9ad:9467`
+- **CONNECTION_CHANGED local=20 orig=100 sub=2 err=0**
+- 金标 0x34
+
+ctnet ping 218.2.2.2 通。未 Dump。
+
+**WMS 同客户端**：BIND 0x004F sub=2 **err48**；GET 0x001E
+**err71**；0x004A/0x0048 仍 **err52**。aginx-sms 52。
+
+**判读**：770 数据口形状已与金标 connection id 对齐。WMS 在这台
+358880 上 0x4A 连「回 0」都做不到（52），不是 local_id=0 这一处。
+
+**设备终态**：槽 a L0；MM connected；ctnet+ims；81voltd /tmp
+local_id=0x14；WMS 52。
+
+## 2026-09-15 — WMS GET_ROUTES 通；0x4A 仍 52；去掉 CHANGED 后 0x34，DEL_CLIENT 仍在（enchilada）
+
+用户批继续。`qmicli --wms-get-routes` **6 条路由 SUCCESS**（class0/1
+nv store-and-notify；class2 uim；其余 transfer-only）。MM
+`--messaging-status` 仅 sm/me，无网络存储。`--wms-reset` SUCCESS；
+`--wms-get-supported-messages` **err71 InvalidQmiCommand**（0x001E
+本固件无）。qmi-ask 0x004A/0x0048 仍 **52**；0x0030 err25；0x0032
+err17（缺 TLV，qmicli 的 GET_ROUTES 能过）。
+
+81voltd 不再在 CONNECTION_CHANGED 之后发 0x34。START+CHANGED 仍
+err=0（`240e:578:520:18d0:…` local=0x14）。**DEL_CLIENT 仍在 CHANGED
+后 ~4s 出现**——不是那条 0x34 掐的。ctnet ping 通。未 Dump。收件箱
+空。
+
+**判读**：WMS 服务活着（路由可读），缺的是 transport 注册（0x4A）。
+770 会话 modem 拿到地址就拆。0x8f 仍是栈。
+
+**设备终态**：槽 a L0；MM connected；ctnet+ims；81voltd 3179；WMS
+路由可读、0x4A=52。
+
+## 2026-09-15 — USIM IMSI 可读；ISIM 槽1/槽2 读 IMPI 皆 err3；IMSP 未发布；BIND sub=1 后 0x8f 仍 70（enchilada）
+
+用户批继续。怀疑 ISIM 一直打在槽1。`usimread5`（PRIMARY_GW，本卡
+provision2）**SUCCESS**（EF_IMSI TLV 0x11 有数据）。`isimread5`
+CARD_SLOT_1 与新 `isim2` CARD_SLOT_2 读 EF_IMPI **皆 err3 INTERNAL**；
+`isim2dom` 同样 err3。这张卡没有可用 ISIM ADF（与更早 empty IMPI
+一致）。QRTR **无 service 31 IMSP**。IMS BIND **sub=1 SUCCESS**，同
+客户端 SET 0x8f 仍 **70**。WMS 0x4A 仍 52。serving 未扰。未 Dump。
+
+**判读**：ISIM 不是「打错槽」能解开的；0x8f 在 sub=1/2 都会 70。
+安卓从 IMSI 推导 IMPI，不依赖这张卡上的 ISIM 文件。
+
+**设备终态**：槽 a L0；MM connected；ctnet+ims；WMS 0x4A=52。
+
+## 2026-09-15 — 槽2 三应用：USIM ready、ISIM 仅 detected；APDU 读到 EF_DOMAIN=ims.cingularme.com，EF_IMPI 全 0（enchilada）
+
+用户批继续。`qmicli --uim-get-card-status`：Primary GW = slot2 app2。
+
+| 槽2 应用 | 类型 | 状态 |
+|---|---|---|
+| 1 | CSIM | detected |
+| 2 | USIM | **ready**（provisioning） |
+| 3 | ISIM | **detected**（非 ready） |
+
+` --uim-open-logical-channel=2,ISIM-AID` **SUCCESS**，channel id=2。
+APDU SELECT+READ：
+
+- EF_IMPI 6F02：`80 10` + **16 字节 0** + `90 00`（空）
+- EF_DOMAIN 6F03：`80 12` + ASCII **`ims.cingularme.com`** + `90 00`
+
+GET_CARD_STATUS 里 ISIM 仍是 detected。QMI `isim2` 仍 err3。金标
+0x8f 仍全 70。WMS 0x4A 仍 52。随后 close channel 2。serving 未扰。
+未 Dump。未写卡。
+
+**判读**：ISIM 在卡上，但没进 ready；IMPI 空、域是 Cingular 美网，
+不是电信 46011。安卓可从 IMSI 推 IMPI；本机 0x8f 仍拒。未改 SIM。
+
+**设备终态**：槽 a L0；MM connected；ctnet+ims；ISIM 通道已关；WMS
+0x4A=52。
+
+## 2026-09-15 — ISIM 通道保持打开时 0x8f 仍 70；GET_POL 0x48 亦 70（enchilada）
+
+用户批继续。EF_IMSI 按 nibble-swap 为 **460110440364089**（46011）。
+`ims.mnc011.mcc460.3gppnetwork.org` 为推导域。未对 SIM 写入。
+
+**开着 ISIM 逻辑通道**（仍 detected，未变 ready）打：BIND sub=2
+SUCCESS；**GET 0x48**（位图宣称支持）**err70**；金标 0x8f 七条仍
+70；WMS 0x4A 仍 52。关通道。serving 未扰。未 Dump。
+
+**判读**：ISIM SELECT 不够让栈起来。0x48 与 0x8f 同一类
+InvalidOperation——位图有、运行时栈无。
+
+**设备终态**：槽 a L0；MM connected；ctnet+ims；WMS 0x4A=52。
+
+## 2026-09-15 — 金标 UIM 会话：nonprov-slot2 读 ISIM SUCCESS；IMPI 空、DOMAIN=cingularme；0x8f 仍 70（enchilada）
+
+用户批继续。OpenIMSd pcap 0x8f 之前 qcrild 用 **NONPROVISIONING_SLOT_1
+(type 4)** + ISIM AID 读文件。本卡在物理槽 2，应对 **type 5
+NONPROVISIONING_SLOT_2**。此前 CARD_SLOT_2 / nonprov-slot1 皆 err3。
+
+`qmi-ask isimnp2`（type 5 + 本卡 ISIM AID）**SUCCESS**：
+
+- EF_IMPI：`80 10` + 16×0（空）SW 9000
+- EF_DOMAIN：`ims.cingularme.com` SW 9000
+- EF_IMPU READ_RECORD：`80 00` + FF（空）SW 9000
+
+GET_CARD_STATUS：ISIM 仍 **detected**；PIN1 从 not-initialized 变为
+**disabled**（retries 3）。随后金标 0x8f 仍全 70；WMS 0x4A 仍 52；同
+客户端 0x45 SUCCESS 后 0x4A 仍 52。serving 未扰。未 Dump。未写卡。
+
+**判读**：QMI 读 ISIM 的会话类型找对了。文件内容确认 IMPI/IMPU 空、
+域是 Cingular。SELECT 成功仍不够让 0x8f 过。
+
+**设备终态**：槽 a L0；MM connected；ctnet+ims；WMS 0x4A=52。
+
+## 2026-09-15 — 金标 UIM 0x36 SUCCESS；SET_USER 0x2C（正确 IMSI 推导）err57；0x8f 仍 70（enchilada）
+
+用户批继续。先 `isimnp2` SELECT SUCCESS。金标 0x8f 前的 UIM
+**GET_SERVICE_STATUS 0x0036**（PRIMARY_GW + TLV 0x02=1）**SUCCESS**，
+TLV 0x10=0。
+
+随后 `imscfg`（IMPI=`460110440364089@ims.mnc011.mcc460.3gppnetwork.org`，
+未写卡）：
+
+| 命令 | 结果 |
+|---|---|
+| BIND 0x98 sub=2 | SUCCESS |
+| GET_POL 0x48 | 70 |
+| SET_POL 0x47 | **err1 MALFORMED**（位图无） |
+| SET_USER 0x2C domain+IMPI+IMPU | **err57**（位图无） |
+| IMSA GET_REG | 70 |
+
+金标 0x8f 仍全 70。WMS 0x4A 仍 52。serving 未扰。未 Dump。
+
+**判读**：安卓空 IMPI 时走的 SET_USER 在这台 358880 上根本没有这条
+QMI。0x36 能打，不叫醒栈。
+
+**设备终态**：槽 a L0；MM connected；ctnet+ims；WMS 0x4A=52。
+
+## 2026-09-15 — 金标 UIM 前序：EVENT_REG err37；GET_CONFIGURATION / GET_FILE_ATTRIBUTES SUCCESS；0x8f 仍 70（enchilada）
+
+用户批继续。pcap 里 0x8f 之前第一条 UIM 是 **0x0041 EVENT_REG**（TLV
+0x01=1），然后 0x002A GET_CONFIGURATION。同一 UIM 客户端重放：
+
+| 命令 | 结果 |
+|---|---|
+| EVENT_REG 0x41 | **err37** |
+| GET_CONFIGURATION 0x2A | **SUCCESS** |
+| GET_FILE_ATTRIBUTES EF_IMPI nonprov-slot2 | **SUCCESS** SW 9000（文件在，size 0x4b） |
+| READ EF_IMPI | SUCCESS，仍 16×0 |
+
+ISIM 仍 detected。金标 0x8f 仍全 70。WMS 0x4A 仍 52。serving 未扰。
+未 Dump。未写卡。
+
+**判读**：EVENT_REG 被拒（37），多半 MM 已经占了 UIM 指示。文件属性
+证明 IMPI 文件存在且空。前序 UIM 读/属性齐了，仍叫不醒 0x8f。
+
+**设备终态**：槽 a L0；MM connected；ctnet+ims；WMS 0x4A=52。
+
+## 2026-09-15 — UIM 0x41=UIM_UNINITIALIZED；0x2E REGISTER_EVENTS 与 REFRESH vote=1 SUCCESS；ISIM 仍 detected（enchilada）
+
+用户批继续。common_v01：err37 = **QMI_ERR_SIM_NOT_INITIALIZED**，不是
+MM 占线。libqmi：Register Events 是 **0x002E**，0x0041 不在公开 JSON
+里（高通私有）。0x002A 是 **REFRESH_REGISTER**（不是 GET_CONFIGURATION）。
+
+`qmicli --uim-get-slot-status` SUCCESS：物理槽2 present/active，ICCID
+`89861114900206766670`，protocol uicc。个人化 all disabled。
+
+同客户端：**0x002E SUCCESS**（mask echo 0x03）；**0x002A vote_for_init=1
+SUCCESS**。ISIM 仍 detected。金标 0x8f 仍全 70。WMS 0x4A 仍 52。
+serving 未扰。未 Dump。未写卡。未停 MM。
+
+**判读**：真正的 Event Register 能打。Refresh 投票也成功。ISIM 仍不
+进 ready，0x8f 仍拒。0x41 私有命令在这台固件上是 UIM 未初始化。
+
+**设备终态**：槽 a L0；MM connected；ctnet+ims；WMS 0x4A=52。
+
+## 2026-09-15 — IMS PDN 无 P-CSCF/domains；金标 0x38 是 USIM CHANGE_PROVISIONING（enchilada）
+
+用户批继续。OpenIMSd pcap 里 UIM **0x0038 只有一次**：
+CHANGE_PROVISIONING_SESSION（PRIMARY_GW + USIM AID）。本机已
+`provision2`，USIM ready，不再动 GW。
+
+IMS bearer2（`qmapmux0.1`）仍 connected：addr
+`240e:578:520:18d0:64ac:3729:bc7d:7b12/64`，gw
+`240e:578:520:18d0:7581:9892:51e5:21ec`。MM 要了
+domain-name-list 与 operator-reserved-pco；**回包只有 IPv6 地址和网关**，
+`domains:` 空，日志无 P-CSCF。ctnet ping 218.2.2.2 通。未 Dump。未写卡。
+未停 MM。
+
+**判读**：IMS 数据口在，但这次 PDN 没带 P-CSCF（至少 MM 1.22 没解
+出来）。用户态 SIP 连代理地址都没有。0x38 不是 ISIM 激活。
+
+**设备终态**：槽 a L0；MM connected；ctnet+ims；WMS 0x4A=52。
+
+## 2026-09-15 — IMS GET_CURRENT_SETTINGS 仅 IPv6+gw；第二 WDS 客户端 mux2 为 OutOfCall（enchilada）
+
+用户批继续。MM 日志里 bearer2 的 GET_CURRENT_SETTINGS 回包 **只有**
+Result、IPv6 Address、IPv6 Gateway。请求 mask 含 dns / domain-name /
+operator-reserved-pco，这些 TLV **没回来**。770 0x23 只有 fe80
+link-local，START 只有 IMS APN/profile，无 P-CSCF。
+
+另开 WDS CID 5 `--wds-bind-mux-data-port mux-id=2,ep-type=embedded,
+ep-iface-number=1` SUCCESS，随后 `--wds-get-current-settings` **err15
+OutOfCall**（会话在 MM 的 CID 上）。IMS bearer 仍 connected。ctnet 未扰。
+已 noop 释放 CID 5。未 Dump。
+
+**判读**：P-CSCF 不能从旁路 WDS 客户端读；MM 那次查询也没带回
+P-CSCF。用户态 SIP 仍没有代理地址。
+
+**设备终态**：槽 a L0；MM connected；ctnet+ims；WMS 0x4A=52。
+
+## 2026-09-15 — 本镜像无 ipv6.ko：IMS 口 IPv6 在内核里不存在（enchilada）
+
+用户批继续。`qmapmux0.1` 原 flags=0x0 down。`ifconfig qmapmux0.1 up`
+后 UP RUNNING，但：
+
+- `ip -6 addr add …/64 dev qmapmux0.1` → **RTNETLINK Not supported**
+- `udhcpc6` → **socket: Address family not supported**
+- `/proc/net/if_inet6`、`/proc/sys/net/ipv6` **不存在**
+- `/proc/config.gz`：**CONFIG_IPV6=m**
+- `/lib/modules` **没有 ipv6.ko**（只有 ipa/rmnet/qrtr/wifi 等）
+
+MM 仍显示 IMS IPv6 connected（那是 QMI/WDS 账本）。770
+CONNECTION_CHANGED 把该地址告诉了基带。AP 数据面不能收发 IPv6。
+ctnet IPv4 ping 未测此步（qmapmux0.0 flags 仍 0x1）。未 Dump。未装模块。
+
+**判读**：这张 L0 根镜像跑不了用户态 IPv6/DHCPv6/SIP。基带侧 IMS
+仍可能走 IPA；SMS-over-IMS 的用户态路径被内核配置挡住。
+
+**设备终态**：槽 a L0；MM connected；qmapmux0.1 UP 无 IPv6 地址；WMS
+0x4A=52。
+
+## 2026-09-15 — ipv6.ko 入机 SUCCESS；IMS IPv6 地址可加；随后 modem HWP 环，rproc 已停（enchilada）
+
+用户批搞好内核。86quan `/home/ubuntu/op6/linux/net/ipv6/ipv6.ko`
+vermagic `6.11.0-sdm845-g2fa43795f607 SMP preempt mod_unload aarch64`
+与 `uname -r` 全同。scp 入 `/lib/modules/ipv6.ko`，`insmod` **SUCCESS**
+（`ipv6 512000 24 [permanent]`）。`/proc/net/if_inet6` 与
+`/proc/sys/net/ipv6` 出现。`ip -6 addr add
+240e:578:520:18d0:64ac:3729:bc7d:7b12/64 dev qmapmux0.1` **rc=0**
+（tentative）。`udhcpc6 -l` 要到 DNS `240e:5a::6666` /
+`240e:5b::6666`。ping6 网关 0/2（当时仍 tentative）。
+
+随后 dmesg：`wlan_vdev_down` fatal，接着 **ipa_hwp_init.c:386** 环
+（sticky online）。rproc 一度 offline。按铁律 stop + rmmod ipa/rmnet +
+start：mode 5 稳定、fatal 停。再 IPA 握手 + settle 60s + provision2
+SUCCESS + online → **再次 HWP 环**。`echo stop` rproc=offline，环停。
+NCM `10.9.8.1` 通。ipv6.ko 仍在。
+
+仓库：`devices/enchilada/modules.txt` 加 `ipv6`；`modem-bringup` /
+`modem-up` 在 IPA 前 `insmod ipv6.ko`。模块本体在
+`.local/device/enchilada/modules/ipv6.ko`（gitignore）。
+
+**设备终态**：槽 a L0；ipv6.ko 在役；modem **offline**（勿 online，
+sticky 未清）；NCM 通。建议冷启后再 modem-up（ipv6 已在，勿急着往
+qmapmux 填 IPv6）。
+
+## 2026-09-15 — 冷启后铁律 modem-up：ipv6 + IPA + settle + provision2 + online；LTE home；未填 qmapmux IPv6（enchilada）
+
+用户批按铁律走 modem-up。Dump 后 L0 冷启约 5min、mode 5。`insmod
+ipv6.ko` SUCCESS（`/proc/net/if_inet6` 出现）。`insmod ipa.ko` → kmsg
+**IPA driver setup completed successfully**。settle 60s 仍 mode 5。
+`provision2` SUCCESS；`online` SUCCESS **mode 0**。NAS `reg=1 home /
+ps ATTACHED / cs detached / radio 8 LTE`；sig **-86 dBm**。dmesg
+**ipa_hwp_init 计数 0**。rproc3 running。rmnet_ipa0 在。NCM 通。
+**未** 给 qmapmux 加 IPv6 地址。未 Dump。未起 MM。
+
+**设备终态**：槽 a L0；ipv6.ko+ipa+rmnet 在役；modem online LTE home；
+未填 IMS IPv6 地址。
+
+## 2026-09-15 — MM + ctnet IPv4 ping 通；内核 IPv6 全禁；未连 IMS、未填 qmapmux IPv6（enchilada）
+
+用户批继续。`disable_ipv6` all+default=1（避免再走 `ip -6 addr add`
+HWP 环）。dbus 重建 + polkitd + MM 1.22；`mmcli -m 0 --enable`
+registered CHN-CT；`--simple-connect=apn=ctnet,ip-type=ipv4` connected
+`10.199.189.249`。`ifconfig qmapmux0.0` 后 `ping -I qmapmux0.0
+218.2.2.2` **2/2**。rproc running。ipa_hwp_init **0**。NAS home。
+**未** `--simple-connect ims`，**未** 给任何 qmapmux 加 IPv6。WMS
+0x004A / aginx-sms 仍 **52**。`/proc/net/if_inet6` 空（禁用生效）。
+未 Dump。
+
+**设备终态**：槽 a L0；MM connected ctnet IPv4 ping 通；ipv6.ko 在但
+iface IPv6 禁用；IMS 未连；WMS 52。
+
+## 2026-09-15 — IMS START 已到；MM mux-id 2 加 qmap 失败；mux 3 可加；无 HWP（enchilada）
+
+用户批继续。iface `disable_ipv6=1` 时 `--simple-connect=apn=ims,ip-type=ipv6`
+失败：`Failed to add link with mux id 2`。改 `disable_ipv6=0` 后 mux 2
+仍失败。`qmicli --link-add mux-id=3` **SUCCESS**（`qmapmux2`），mux 2/4/5
+仍失败。删 `rmnet_data2` 后 mux 2 依旧失败。
+
+81voltd（/tmp 新件）收到 **START conn=101 sub=2 apn=IMS IPv6**，MM
+simple-connect 失败后无地址，CONNECTION_CHANGED 未成功回包。dmesg
+`ipa: unexpected tagged packet from endpoint 2`（modem 已往 mux 灌包）。
+ipa_hwp_init **0**。rproc running。NAS home。未给 qmapmux 人工加 IPv6。
+未 Dump。WMS 未再测本步（仍 52 预期）。
+
+**判读**：QMI IMS 承载 modem 侧已开口；AP 侧 **mux id 2 加不进**（ipv6.ko
+在役后）。mux 3 能加。未踩 HWP。
+
+**设备终态**：槽 a L0；MM ctnet bearer 仍 connected；IMS 口未建成；
+rproc running；无 HWP。
+
+## 2026-09-15 — IMS 走 mux 3：WDS START SUCCESS；CONNECTION_CHANGED IPv6 err=0；未填内核地址；无 HWP（enchilada）
+
+用户批继续。`qmicli --link-add mux-id=3` → `qmapmux2`。81voltd 改 BIND_MUX
+mux=3、跳过 MM（mux 2 加链失败）。手搓 WDS START 一次 CALL_FAILED 14/
+0x07d1。随后 **同一 CID** bind mux 3 + `start-network apn=ims,ip-type=6`
+**Network started** handle 32822384。GET_CURRENT_SETTINGS：
+
+- IPv6 `240e:579:480:16af:542c:92df:7af4:aee6/64`
+- gw `240e:579:480:16af:8d45:d3e0:e518:748c/64`
+- DNS `240e:5a::6666` / `240e:5b::6666`
+- Domains none（仍无 P-CSCF）
+
+`IMS_ADDR=…` 重启 81voltd：START 后 **CONNECTION_CHANGED err=0** 带回
+该全局地址。**未** `ip -6 addr add`。ipa_hwp_init **0**。rproc running。
+NAS home。WMS 0x4A 仍 **52**。未 Dump。
+
+**设备终态**：槽 a L0；ctnet MM + IMS WDS mux 3；770 回包成功；内核未配
+IMS IPv6；WMS 52。
+
+## 2026-09-15 — mux 3 CONNECTION_CHANGED 之后 0x8f 仍 70、WMS 仍 52（enchilada）
+
+用户批继续。770 回包仍在（`240e:579:480:16af:…` err=0）。金标 0x8f 七条
+仍 **70**；GET 0x90/0x48 70；IMSA GET_REG/GET_SVC 70；0x22 IND_REG
+SUCCESS。WMS 0x45 SUCCESS 后 0x4A 仍 **52**。NAS home。ipa_hwp_init
+**0**。未填内核 IPv6。未 Dump。
+
+**判读**：mux 3 数据口闭环不够叫醒 IMS 应用层。与 mux 2/MM 路径时
+同一 70/52。
+
+**设备终态**：槽 a L0；ctnet+IMS WDS mux 3；770 回包成功；WMS 52；无 HWP。
+
+## 2026-09-15 — NAS：LTE 上 voice/IMS 不可用（0x21=0, 0x26=0）；IMS 配置档存在（enchilada）
+
+用户批继续。WDS 3GPP 档：[1] ctnet default；**[2] IMS apn-type=ims
+ipv4-or-ipv6 未禁用**；[3] ctwap；[4] sos emergency。NAS
+GET_SYSTEM_INFO SUCCESS：TLV **0x21 Voice Support on LTE = 0**；TLV
+**0x26 LTE IMS Voice Availability = 0**。LTE 信号 RSSI -76 / RSRP -107。
+81voltd 在 CONNECTION_CHANGED 后仍 DEL_CLIENT。ipa_hwp_init 0。rproc
+running。未 Dump。未填内核 IPv6。
+
+**判读**：IMS PDN 和配置档都在，但 NAS 仍报「LTE 不能语音 / IMS voice
+不可用」——和 0x8f 70、WMS 52 同因：应用层没注册上。不是缺 IMS APN。
+
+**设备终态**：槽 a L0；ctnet+IMS mux 3；NAS IMS voice=unavailable；WMS
+52；无 HWP。
+
+## 2026-09-15 — 文献对齐：IMSA BIND TLV 0x10=0 后 GET_REG SUCCESS=未注册（不再是 70）（enchilada）
+
+用户批先搜再打。pmaports#1878 Richard Acayan：同一 IMSA 客户端先发
+`0x33` TLV **0x10**（不是我们一直用的 0x01），GET_REG 才不是
+InvalidOperation。
+
+本机一次：
+
+- BIND 0x33 **tlv 0x10=2** SUCCESS → GET_REG 仍 **70**
+- BIND 0x33 **tlv 0x10=0**（Richard 原文 hex）SUCCESS → GET_REG
+  **SUCCESS**：`registration status=0 not registered`，error code 0，
+  technology 1。无 HWP。NAS 仍 home。
+
+**判读**：栈不是「没起来所以 70」，是 **绑错 TLV 问不到**；问对了是
+**未向核心网注册**。与 Dylan「err70=未初始化」在绑错时同形，绑对后
+变成明确的 not-registered。公开 FOSS（81voltd）只做 IMS 数据口；
+注册在基带，依赖 MBN/EFS/身份。本卡 ISIM DOMAIN=`ims.cingularme.com`
+且 IMPI 空；358880 无 SET_USER 0x2C。pmOS 成功案例多为 **安卓先 VoLTE
+写好 EFS** 再 81voltd。
+
+**设备终态**：槽 a L0；IMS 未注册（问得到）；WMS 52；无 HWP。
+
+## 2026-09-15 — 只读 modemst/fsg：无明文 IMPI/域；fsg 全 0（enchilada）
+
+用户批继续（先搜再动）。文献：IMS 身份在基带 EFS。只读 `dd`：
+
+| 分区 | 标签 | 内容 |
+|---|---|---|
+| sdf2 | modemst1 | 2MiB，EFS 头 `10 00 00 00 03 00 00 00…`，256 种字节，**无** ASCII/UTF-16 `cingularme` / `3gppnetwork.org` / IMSI |
+| sdf3 | modemst2 | 同上，无上述明文 |
+| sdf4 | fsg | 2MiB **全 0** |
+
+未写盘。NAS 仍 home。rproc running。dd 时 NCM 一度丢包后恢复。未 Dump。
+
+**判读**：EFS 快照里看不到可改的明文 IMPI。身份仍在 SIM ISIM（DOMAIN=cingularme）和 MPSS 内存。无 diag 不能按 XDA/QPST 改 NV。
+
+**设备终态**：槽 a L0；LTE home；IMS 未注册；WMS 52。
+
+## 2026-09-15 — sda17 FBE=ICE，L0 解不开 locksettings；DIAG 4097 原先不广播（enchilada）
+
+用户批继续（先搜再动，不打 0x8f）。只读：
+
+- LTE `reg=1 home`，rproc3 running，ipa_hwp_init **0**，UDC `a600000.usb` 驱动 `agx`。
+- `wlan0` **192.168.3.111/24** 在（USB 之外还有一条 ssh）。
+- `/sys/kernel/config` 空（configfs 未挂）；`CONFIG_USB_CONFIGFS_F_FS=y`，`CONFIG_USB_FUNCTIONFS` 未开。
+- `/unencrypted/mode` = `ice:aes-256-cts:v1`。kmsg：`fscrypt (sda17, inode 98305): Unsupported encryption modes (contents 127, filenames 4)`。`/system` 与 `/data` 仍是加密文件名，L0 读不到 `locksettings.db`。
+- 分区：`sda13 system_a` 2928640 KB；`sda14 system_b` 同；`sda17 userdata` 115344108 KB，`/` 用了 716 MB。
+- QMI **MFS 0x15** 在 `0:26`。`GET_SUPPORTED_MESSAGES 0x001E` **SUCCESS**，bitmap `05 00 00 00 00 c0 03`（位：0x0000 / 0x0002 / 0x002E–0x0031）。裸 0x0000/0x0001 回 err `0x39`；裸 0x0020 回 err `0x11` missing-arg。
+- `/tmp/qmi-ask enumsvc 4097`：**无服务器**（AP 未发 DIAG 前，modem 不广播 4097）。
+
+未改 USB gadget，未切槽，未写 EFS/SIM，未填 qmapmux IPv6。未 Dump。
+
+**判读**：槽 b Lineage 的锁屏库在 L0 上看不见（高通 ICE，主线 fscrypt 不认 mode 127），所以不能靠改 `locksettings.db` 可逆进桌面。文献里的 EFS 身份通道不是 USB `/dev/diag`，是 QRTR 服务 4097 + linux-msm `diag-router`（pmOS `qcom-diag`）。MFS 0x15 活着但公开 IDL 几乎没有；DIAG EFS 才是 XDA/QPST 那条。
+
+**设备终态**：槽 a L0；LTE home；无 diag-router；WMS 未再测。
+
+## 2026-09-15 — diag-router 经 QRTR 接通 DIAG；EFS 可读；IMS_enable=1；无明文 IMPI（enchilada）
+
+用户批继续。Mac 交叉：`zig cc -target aarch64-linux-musl -static` 编 linux-msm/diag（`HAVE_LIBQRTR=1`，无 udev）+ vendored `libqrtr.a`。`scp` 入 `/tmp/diag-router` `/tmp/send_data` `/tmp/qmi-req`。**未** 开 USB functionfs、**未** 改 NCM。
+
+`setsid /tmp/diag-router` pid **8631**。日志：`/dev/ffs-diag` 不存在（预期）；`[sensors] mask … SOCKETS (0x2e73)`；`[modem] unsupported control packet: 28`。随后：
+
+- `enumsvc 4097`：**有**。modem `node0` inst `0x1@0:176`（CMD）、`0x3@0:179`；AP `node1` 发布 CNTL/DATA/DCI。
+- unix `\0diag` + `send_data 0` → 基带版本串 **`May 11 2021 22:18:30` / `May 09 2021 22:00:00` `sdm845.g`**（DIAG 问到 MPSS，不是本地回声）。
+- EFS HELLO / QUERY / STAT `/` 均回 `75 19 …`（不是 BAD_COMMAND）。QUERY：maxFilename=768、maxPath=1024、maxDirs=50、maxMounts=36。
+- STAT 目录存在：`/`、`/nv`、`/nv/item_files`、`/nv/item_files/ims`（约 53 项）。
+- **`IMS_enable` 存在且可读 = `0x01`**。`qp_ims_private_id` / `public_id` / `domain_name` / `qp_ims_param_config` **ENOENT (2)**。
+- `ims` 目录实名（READDIR dirp=2）：`DANConfiguration`、`DANPrivateSettings`、`RegistrationConfiguration`、`SMSConfiguration`、`ims_sip_config`、`ims_user_agent`、`ims_operation_mode`、`qp_ims_reg_config_db`、`qp_ims_xcap_private_config_item` 等。
+- 只读 OPEN+READ（O_RDONLY，随后 CLOSE）：
+  - `IMS_enable` = **1**
+  - `ims_operation_mode` = **2**
+  - `ims_user_agent` = **全 0**
+  - `DANPrivateSettings` = **全 0**
+  - `RegistrationConfiguration` 前几字节 `00 00 00 1e 00 08 07`，其后大量 0，**无** ASCII `cingularme` / `3gppnetwork.org` / IMSI
+  - `SMSConfiguration` 起头 `00 00 00 01`，其余 0
+  - `qp_ims_reg_config_db` 二进制，尾部有 ASCII **`IMS`**，无 IMPI 串
+  - `ims_sip_config` 64B 二进制，末两字节 `43 4e`（`CN`）
+
+NAS 全程 home。ipa_hwp_init **0**。未写 EFS。未 Dump。diag-router 仍在 `/tmp`（重启即失）。
+
+**判读**：文献路径打通——**不必 USB diag、不必进 Lineage**：AP 发布 QRTR 4097 后 MPSS 把 DIAG CMD 交出来，EFS2 可读写。CT MBN 已经把 IMS 配置项写进 EFS（`IMS_enable=1`），但 **IMPI/域仍不在这些文件的明文里**，和 ISIM `DOMAIN=ims.cingularme.com`、IMPI 空是同一缺口。下一步才是按 3GPP 23.003 **写** 身份（哪一个 item 文件、何种编码还没对上），本次只读。
+
+**设备终态**：槽 a L0；LTE home；`/tmp/diag-router` pid 8631 在役；EFS 只读过；IMS 仍未向核心网注册。
+
+## 2026-09-15 — 按 NV 67258 布局写入 IMPI/域；reg_config_db 只改 4 字节优先级；读回一致；IMS 仍未注册（enchilada）
+
+用户批写身份、别盲写编码。编码来源：sbaresearch/mbn-mcfg-tools `QpImsParamConfig`（`@EfsFile("/nv/item_files/ims/qp_ims_param_config")` `@NvItemId(67258)`）：
+
+| 字段 | 字节 | 写入 |
+|---|---|---|
+| RegConfigUserName | 128 NUL pad UTF-8 | `460110440364089@ims.mnc011.mcc460.3gppnetwork.org` |
+| RegConfigPassword | 128 | 空（IMS-AKA） |
+| RegConfigPrivateUri | 128 | 同上 IMPI（无 `sip:`） |
+| RegConfigDisplayName | 128 | IMSI `460110440364089` |
+| RegConfigDomainName | 256 | `ims.mnc011.mcc460.3gppnetwork.org` |
+| RegAuthSecretKey | 32 | 空 |
+| ThreeGppEnabled | 1 | `1` |
+| RegConfigOPField | 32 | 空 |
+合计 **833**。3GPP 23.003：MCC 460 / MNC 11 → `mnc011`。未写 SIM。
+
+工具：`/tmp/efs-rw`（DIAG EFS2 OPEN/READ/WRITE/CLOSE + cmd 48 sync，unix `\0diag`）。diag-router pid 8631 仍在。
+
+写前 STAT：`qp_ims_param_config` / `_Subscription01` **ENOENT**；`qp_ims_dpl_config` ENOENT（**未建**，PUT 编码未对齐且默认全 0 会关 IPv6）；`qp_ims_reg_config` ENOENT；`qp_ims_reg_config_db` 与 `_Subscription01` 各 1024B **字节相同**。QMI IMS 0x0048 GET_POLICY **err70**。
+
+`qp_ims_reg_config_db` 里文献结构的 offset 114 **对不上**（生成器自承不准）。实读：`02 03 01 07` 在 **offset 195**，紧挨 ASCII `IMS`——按字段名当作 Acs/ISim/Nv/Pco = 2/3/1/7。只改这 4 字节 → **`02 00 08 07`**（ISim=0 不用 cingularme，Nv=8 > Pco=7）。其余 1020 字节原样。
+
+写入（O_WRONLY|O_CREAT|O_TRUNC，mode 0777，随后 sync）：
+
+- 新建 `qp_ims_param_config` 与 `_Subscription01` 各 833B
+- 覆盖两个 `qp_ims_reg_config_db*` 为补丁本
+
+读回：param **833B 与写入逐字节相同**；db offset 195–198 = `2,0,8,7`，头 195 与尾与原件相同。STAT mode `0x81ff`。
+
+lpm SUCCESS → online SUCCESS；NAS 回 `reg=1 home`；ipa_hwp_init **0**；rproc running。IMSA BIND tlv 0x10=0 后 GET_REG 仍 **status=0 not registered**；WMS 0x004A 仍 **52**。未 Dump。未填 qmapmux IPv6。未建 dpl。
+
+**判读**：身份文件按公开 NV 布局写进去了，不是猜的。栈仍未向核心网注册——缺 IMS PDN/81voltd 叫醒，或还要 `qp_ims_dpl_config.ImsParamSrc`（文献 FileRead=0/NvRead=1/CardRead=2）这条 item 文件，本次因 PUT 形状未对齐没写。
+
+**设备终态**：槽 a L0；LTE home；EFS 已含 CT 3gppnetwork.org IMPI；IMS 未注册；`/tmp/diag-router` 在役。原 db 备份在宿主机 `/tmp/aginxos-diag/reg_db.bin`。
+
+## 2026-09-15 — 对齐后写入 qp_ims_dpl_config（item PUT 38）；读回 14B 与 VoLTE MBN 一致；IMS 仍未注册（enchilada）
+
+用户批对齐 dpl 再写、别盲写。未用全 0，未抄 OP3 `Ipv6Enabled=0`/`CardRead`，未抄 EfsTools C# PUT 错位包。
+
+**PUT 编码**（iamromulan/qfenix `diag.c`，注明对照 QPST）：cmd 38，`[hdr 4][data_len u16][pad 2][flags i32][mode i16][data][path\0]`，data 从 offset 14。flags `O_CREAT|O_WRONLY|O_TRUNC|O_ITEMFILE|O_AUTODIR` = `0xc0241`；mode `S_IFITM|0777` = `0xe1ff`（mbn-mcfg-tools perm 57855）。应答 `4b 13 26 00 ff e1 00 00 00 00`（errno=0，perm=`0xe1ff`）。
+
+**GET 39/27** 回 DIAG `0x15` BAD_LEN（bkerler `<IIH>` 与 path-only 都是）。读回走已验证的 OPEN/READ。
+
+**14 字节字段**（sbaresearch/mbn-mcfg-tools `QpImsDplConfig` NV 67261，`ITEM_FILE=True`）：`Ptime u16`、`IsIpv6PrivateAddrEnabled u16`、`E911Ipv6Enabled u8`、`Ipv6Enabled u8`、`MsRpPktSz u16`、`RuimImsiValue u8`、`DscpValue u32`、`ImsParamSrc u8`。
+
+真实 item 文件 `qp_ims_dpl_config__E1FF_F`（QualcommMBNs，14B）：
+
+| 来源 | hex | Ipv6Enabled | ImsParamSrc |
+|---|---|---|---|
+| Xiaomi MI5 AIS Thailand VoLTE | `00 00 00 00 00 01 00 00 00 00 00 00 00 04` | 1 | 4 UsimFallbackModeEnabled |
+| Asus zenfone3 AIS / asus_mbn CMCC | 同上 | 1 | 4 |
+| Asus zenfone3 CMCC volte_op/su | `… 00 01 … 02` | 1 | 2 CardRead |
+| OnePlus 3 w_one | `… 00 00 … 02` | **0** | 2 CardRead（未采用） |
+| Xiaomi A1 china/ct lab+commerci（hvolte_o/openmkt/volte_op） | 无此文件 | — | CT MBN 不带 dpl |
+
+写入 AIS/Asus-CMCC 那份：`Ipv6Enabled=1`，`ImsParamSrc=UsimFallbackModeEnabled=4`（文献枚举有 FileRead=0/NvRead=1，公开 MBN 里没找到这两值；CardRead=2 会走本卡 ISIM `ims.cingularme.com`）。未写 SIM。未填 qmapmux IPv6。
+
+diag-router pid **8631**。写前 STAT 两路径 **ENOENT**。PUT 两条：
+
+- `/nv/item_files/ims/qp_ims_dpl_config`
+- `/nv/item_files/ims/qp_ims_dpl_config_Subscription01`
+
+写后 STAT **err=0 mode=0xe1ff size=14**。OPEN/READ 各 14B，与写入逐字节相同。lpm SUCCESS → online SUCCESS 后再 STAT/READ 仍是 `00 00 00 00 00 01 00 00 00 00 00 00 00 04`。`qp_ims_param_config` 仍 833B mode `0x81ff`。
+
+NAS `reg=1 home` PS ATTACHED CT。rproc0–3 running。kmsg 无 HWP/CrashDump。IMSA BIND tlv 0x10=0 后 GET_REG **status=0 not registered**；WMS 0x004A 仍 **52**。未 Dump。
+
+**判读**：dpl 按公开 struct + 真实 VoLTE MBN 字节写进去了，不是猜的。UsimFallback 是公开 MBN 里唯一非 CardRead 且 IPv6=1 的组合。栈仍未向核心网注册——还缺 IMS PDN/81voltd 叫醒，或 identity 源即使 Fallback 仍被 ISIM DOMAIN 绑住。
+
+**设备终态**：槽 a L0；LTE home；EFS 已含 param_config（3gppnetwork.org）+ dpl（IPv6=1, UsimFallback=4）双订阅；IMS 未注册；`/tmp/diag-router` 在役。
+
+## 2026-09-15 — 叫醒 IMS PDN + 81voltd：ctnet ping；mux 3 WDS START；CONNECTION_CHANGED IPv6 err=0（enchilada）
+
+用户批接着叫醒 IMS PDN / 81voltd，别再猜 NV。未改 EFS/NV/SIM。未 `ip -6 addr add`。未 rproc-stop。
+
+dpl 写入后的 lpm/online 把 MM ctnet 拆掉（bearer error `lpm-or-power-down`）。MM 仍 registered CHN-CT。`DBUS_SYSTEM_BUS_ADDRESS=unix:path=/var/run/dbus/system_bus_socket` 后：
+
+- `--simple-connect=apn=ctnet,ip-type=ipv4` **successfully connected**
+- bearer1 `qmapmux0.0` `10.165.145.221/30` gw `.222` DNS 218.2.2.2
+- `ifconfig` IPv4 后 `ping -I qmapmux0.0 218.2.2.2` **3/3**
+
+**不预连 IMS**（MM mux-id 2 加链仍失败，与本靴旧收据同）。重启 `/tmp/81voltd`：0x23 fe80 / 0x2e / 0x34 → **START conn=100 sub=2 echo12=2 apn=IMS IPv6**。内置 WDS BIND_MUX mux=3 ok，START 一次 **CALL_FAILED 14 / 0x07d1**，CONNECTION_CHANGED err=13，DEL_CLIENT。与金标「第一次 14、同一 CID 再 start 才成」同形。
+
+手搓（金标同 CID）：CID 4 bind mux 3 + `--wds-set-ip-family=6` + `--wds-start-network=apn=ims,ip-type=6` → **Network started** handle `31620432`。第二次 start **NoEffect 26**。GET_CURRENT_SETTINGS：
+
+- IPv6 `240e:578:518:5e0:5d50:1937:7ae1:1f0/64`
+- gw `240e:578:518:5e0:8d76:2480:5cce:9737/64`
+- DNS `240e:5a::6666` / `240e:5b::6666`
+- Domains none
+
+`IMS_ADDR=` 该地址重启 81voltd pid **11852**：START conn=101 sub=2 → **CONNECTION_CHANGED local=20 orig=101 sub=2 addr=`240e:578:…:1f0` err=0**。~4.5 s 后 DEL_CLIENT（与金标同）。WDS CID 4 **仍 connected**。qmapmux2 UP RUNNING rx/tx 非零。未给内核配 IMS IPv6。
+
+NAS `reg=1 home` PS ATTACHED。rproc3 running。kmsg 有 `unexpected tagged packet from endpoint 2`（mux 2 旧痕），**无 HWP/CrashDump**。IMSA BIND tlv 0x10=0 后 GET_REG **status=0 not registered**；WMS 0x004A 仍 **52**。未 Dump。
+
+**判读**：AP 侧 770 数据口再次按已验证形状闭环（ctnet IPv4 + IMS WDS mux 3 + CHANGED err=0）。注册仍未向核心网发生——不是这次没叫醒 PDN。
+
+**设备终态**：槽 a L0；MM ctnet ping 通；IMS PDN WDS CID 4 持住；81voltd `/tmp` + IMS_ADDR；IMS 未注册；diag-router 8631 在役。
+
+## 2026-09-15 — IMSA 未注册：问得到；0x90 仍 70；SMS/Voice TLV 缺；NAS IMS voice=0（enchilada）
+
+用户批接着查 IMSA 未注册，别再改 NV。未写 EFS/NV/SIM，未 SET 0x8f，未填 qmapmux IPv6。
+
+**文献**：3GPP TS 23.228 — IP 连通之后才能发 SIP REGISTER，且要先有 P-CSCF。flamingradian IMS-QUALCOMM：注册在基带，前提是「与运营商 IMS 基础设施的数据连接」；多数 QC SoC 还要 AP 侧若干 daemon 把栈初始化。pmaports#1878 Richard：IMSA BIND `0x33` TLV **0x10** 之后 GET_REG 才不是 InvalidOperation；IMS Settings `0x98` 之后才能打 `0x8f/0x90`。Dylan：err70 = 栈未初始化。
+
+**本机只读（IMS PDN 仍 connected，WDS CID 4）**：
+
+| 查询 | 结果 |
+|---|---|
+| IMSA BIND tlv 0x10=0 → GET_REG 0x20 | SUCCESS：status=**0 not-registered**，error code **0**，technology **wwan (1)** |
+| IMSA GET_SVC 0x21 未 bind | err **70** |
+| IMSA BIND 后 GET_SVC | SUCCESS；回包只有 TLV **0x16=2、0x17=1**；**无** 0x10 SMS / 0x11 Voice status。qmicli 只把 UT/TAS 打成 available/wwan |
+| IMS BIND `--ims-bind=2` | SUCCESS |
+| 随后 GET 0x90 services-enabled | 仍 **err70 InvalidOperation** |
+| IMS GET_POLICY 0x48（bind2 后） | err **70** |
+| NAS GET_SYSTEM_INFO | TLV **0x21 Voice Support on LTE = 0**；**0x26 LTE IMS Voice Availability = 0** |
+| DSD GET_SYSTEM_STATUS | LTE；APN 列表 ctnet / ctwap / **ims** / sos |
+| WDS GET_CURRENT_SETTINGS CID 4 | IPv6+gw+DNS+MTU；Domain list 空。qmicli 请求 mask **不含 P-CSCF**（`dns,qos,ip,gw,mtu,domain,ip-family`）。此前 MM 要过 domain/PCO，**那些 TLV 也没回来** |
+| 81voltd | CONNECTION_CHANGED err=0 后仍 ~4s DEL_CLIENT（与金标同）；WDS CID 4 仍 connected |
+
+槽 b Lineage 金标：`dumpsys` IMS 口有 **P-CSCF `240e:2e:8201:c000:…`**，capability IMS+MMTEL。本 PDN 设置里看不到 P-CSCF。
+
+rproc3 running。NAS home。未 Dump。
+
+**判读**：IMSA 不是「问不到」，是基带明确 **没向核心网 REGISTER**（error code 0 = 没有 SIP 403/404，是根本没发出去）。81voltd/770 只替代 imsdatadaemon 数据口；`0x90` 在已 bind 的 IMS Settings 客户端上仍 70，说明 **imsqmidaemon/qcrild 那条使能序没跑起来**（Richard：0x98 之后才能 0x8f/0x90）。NAS IMS voice=0 与此一致。缺 P-CSCF 与 0x90=70 都能单独挡住 REGISTER；这次没改 NV，也没证明哪一条是唯一原因。
+
+**设备终态**：槽 a L0；ctnet ping + IMS PDN CID 4 持住；IMSA not-registered；WMS 未再测（仍 52 预期）；无 NV 改动。
+
+## 2026-09-15 — 0x98 使能序：TLV 0x10 缺参 17；TLV 0x01=2 BIND 成功后 0x8f/0x90 仍 70（enchilada）
+
+用户批接着打 0x98 使能序，别再改 NV。未写 EFS/NV/SIM，未填 qmapmux IPv6。IMS PDN WDS CID 4 全程 **connected**。
+
+**0x98 形状**
+
+| BIND | 结果 |
+|---|---|
+| 0x98 TLV **0x10=0**（Richard 对 IMSA 0x33 的对应 hex） | **err17 MISSING_ARGUMENT** |
+| 0x98 TLV **0x10=2** | **err17** |
+| 0x98 TLV **0x01=2**（libqmi Binding / qcrild 金标） | **SUCCESS**，应答另带 TLV 0x10=0 |
+
+libqmi `qmi-service-ims.json`：Bind 0x0098 的 input 只有 TLV **0x01 guint32 Binding**。0x10 不是这条的 BIND 参数。
+
+**使能（同一客户端，BIND 0x01=2 成功之后）** — OpenIMSd OP6T qcrild 金标逐 TLV：
+
+`0x15=2 → 0x23=0 → 0x10=1 → 0x14=1 → 0x11=1 → 0x19=1 → 0x18=1`
+
+七条 SET 0x8f **全部 err70**。GET 0x90 **err70**。身份/dpl 写入之后同样拒（此前 70 发生在写身份之前）。
+
+IMSA BIND sub=2 **err58**；IND_REG 0x22 SUCCESS；随后 GET_REG/SVC **70**（绑错 TLV）。另客户端 BIND tlv 0x10=0 后 GET_REG 仍 **status=0 not-registered** error 0。GET_SVC 仍只有 0x16=2、0x17=1。
+
+NAS home。rproc3 running。未 Dump。
+
+**判读**：0x98 使能序按公开 IDL 和金标 pcap 打完了。BIND 能成功，**0x8f/0x90 在已 bind 客户端上仍 InvalidOperation**——Richard「0x98 之后才能打 0x8f/0x90」在 358880 上不成立。固件 bitmap 里有 0x8f，运行时仍 70，不是 opcode 缺失。栈使能条件不在这条 QMI 序里。
+
+**设备终态**：槽 a L0；ctnet + IMS PDN CID 4；IMSA not-registered；无 NV 改动。
+
+## 2026-09-15 — IMS PDN 上有 P-CSCF（TLV 0x2e，与 Lineage 同族）；先前「没有」是 qmicli 没要这比特（enchilada）
+
+用户批接着查 P-CSCF，别再改 NV。未写 EFS/NV/SIM，未填 qmapmux IPv6。WDS CID 4 全程 **connected**。
+
+**文献**：3GPP TS 24.229 / 24.301 — P-CSCF 发现方法 II 是 PDN 激活时在 PCO 里要 IPv6 P-CSCF（container 0001）。libqmi WDS GET_CURRENT_SETTINGS 请求掩码：`PCSCF_ADDRESS=1<<10`、`PCSCF_SERVER_ADDRESS_LIST=1<<11`、`PCSCF_DOMAIN_NAME_LIST=1<<12`、`OPERATOR_RESERVED_PCO=1<<18`。qmicli 默认只要 dns/qos/ip/gw/mtu/domain/ip-family（`0xE330`），**不含 P-CSCF**。输出 TLV：0x22 PCO 标志、0x23 IPv4 列表、0x24 域名、**0x2e IPv6 列表**（本机 qmicli 未翻译 0x2e 名称）。
+
+**只读**：`LD_PRELOAD` 钩 `set_requested_settings`，CID 4 上 GET 0x002D，mask `0x4FF30`（含 pcscf + operator-pco）。应答 SUCCESS：
+
+| TLV | 值 |
+|---|---|
+| 0x22 PCSCF Address Using PCO | **1**（经 PCO 下发） |
+| 0x23 IPv4 PCSCF list | **无此 TLV** |
+| 0x24 PCSCF Domain Name List | 空 `{}` |
+| 0x2e（IPv6 PCSCF，33 B） | count=2：`240e:2e:8201:c000:2::1`、`240e:2e:8201:c000:7::1` |
+| 0x2F Operator Reserved PCO | **无此 TLV**（要过，没回来） |
+| 0x25 UE IPv6 | `240e:578:518:5e0:7848:62e4:22e9:2196/64` |
+| 0x27/0x28 DNS | `240e:5a::6666` / `240e:5b::6666` |
+| 0x2a Domain Name List | 空 |
+
+槽 b Lineage `dumpsys`：P-CSCF **`240e:2e:8201:c000:…`** — 与 0x2e 同前缀。
+
+另只读：WDS 默认/attach APN 都是 **ctnet** ipv4v6，OTA attach 已做。profile 列表 [1] ctnet default、**[2] IMS apn-type=ims**、[3] ctwap、[4] sos。未改 profile。
+
+**判读**：IMS PDN **已经带了电信 P-CSCF**，不是没发现代理。先前「Domains none / 无 P-CSCF」是 qmicli 默认掩码没要、0x2e 又没解码。IMSA 仍 not-registered 不能再归到「没有 P-CSCF」。差仍在 0x8f/0x90=70（栈使能）那一侧。
+
+**设备终态**：槽 a L0；ctnet + IMS PDN CID 4（含 P-CSCF 两条）；IMSA not-registered；无 NV 改动。
+
+## 2026-09-16 — 0x8f/0x90 err70 是绑错订户：Binding=0 则 GET/SET 全过（enchilada）
+
+用户批接着查 0x8f/0x90 err70，别再改 NV。未写 EFS/NV/SIM，未填 qmapmux IPv6。IMS PDN WDS CID 4 全程 **connected**。
+
+**文献**：libqmi `qmi-service-ims.json` — IMS Settings BIND `0x0098` 的 input 只有 TLV **0x01 Binding guint32**；qmicli `--ims-bind=` 把该整数原样写入。Richard pmaports#1878：同一客户端上先打 `0x98` 才能 `0x8f/0x90`，没有写 Binding 取值；他给 IMSA 的对应 hex 是 TLV 0x10=**0**。Dylan：err70 = 栈未初始化。WDS BIND_SUBSCRIPTION 常用 1=primary / 2=secondary；IMS Settings Binding 是 0 起的订户序号，不是物理槽号，也不是 770 START 的 sub 字段。
+
+**UIM（只读）**：GET_SLOT_STATUS — 物理槽 1 **active** 但 GET_CARD_STATUS card0 **ERROR**；物理槽 2 **PRESENT**，USIM **ready**，ISIM **detected**。活卡在槽 2。
+
+**IMS GET_SUPPORTED_MESSAGES 0x001E**：SUCCESS。位图含 **0x48 / 0x8f / 0x90 / 0x98**（opcode 在）。
+
+**同一形状、换 Binding（每值新客户端）**：
+
+| BIND 0x98 TLV 0x01 | BIND | GET 0x90 | GET 0x48 |
+|---|---|---|---|
+| **0**（primary） | SUCCESS（应答另带 TLV 0x10=0） | **SUCCESS** | **SUCCESS** |
+| 1 | SUCCESS | **err70** | **err70** |
+| 2 | SUCCESS | **err70** | **err70** |
+
+IMSA 0x33 tlv 0x10=0 + IND_REG 0x22 之后再 IMS BIND **2** + GET 0x90：仍 **70**。使能条件不是「先叫醒 IMSA」。
+
+**GET 0x90 在 Binding=0 上的回包（raw，权威）**：
+
+| TLV | 值 | 名（libqmi GET） |
+|---|---|---|
+| 0x11 | 1 | Voice |
+| 0x12 | 1 | VT |
+| 0x13 | 1 | （GET json 未列） |
+| 0x15 | 0 | VoWiFi |
+| 0x19 | 1 | IMS registration enabled |
+| 0x1a | 1 | UT |
+| 0x1b | 1 | SMS |
+| 0x1d | 0 | USSD |
+
+qmicli `--ims-bind=0` 随后 `--ims-get-ims-services-enabled-setting`：voice/VT/TAS/SMS = yes，VoWiFi = no。qmicli 把 USSD 打成 yes，是它把 UT 变量印到 USSD 行上（源码 bug）；raw **0x1d=0**。
+
+**GET 0x48 Binding=0**：SUCCESS。TLV 0x16 ISIM priority=2，0x18 PCO=8，0x1a APN **「IMS」**。
+
+**SET 0x8f（Binding=0，已是 1 的比特，非 NV）**：tlv 0x10=1 voice、0x1A=1 SMS、0x18=1 IMS 三条 **全部 SUCCESS**。随后 GET 0x90 各比特未变。此前金标七条 0x8f 全 70 是打在 BIND **2** 上。
+
+**IMSA**（SET 之后另客户端）：BIND tlv 0x10=0 → GET_REG SUCCESS，status=**0 not-registered**，error code **0**，technology 1。NAS sysinfo TLV **0x21=0 / 0x26=0** 未变。rproc3 running；81voltd 11852；WDS CID 4 仍 connected（本段 IPv6 `240e:578:518:5e0:788b:9a89:82b7:92a3/64`）。未 Dump。
+
+**判读**：0x8f/0x90 err70 **不是**「栈没起来 / opcode 缺失 / 少打 0x98」。是 IMS Settings 客户端绑到了没有实例的订户 1/2。活 SIM 在物理槽 2、770 START 也报 sub=2，但 **IMS Settings 的 Binding 是 primary=0**。Richard「0x98 之后才能 0x8f/0x90」在 Binding=0 上成立。使能位本来就是 1，SET 0x8f 不是缺的那一步。IMSA 仍没 REGISTER，墙不在 0x8f/0x90。
+
+**设备终态**：槽 a L0；ctnet + IMS PDN CID 4；IMS Settings Binding 0 可读可写、服务已开；IMSA not-registered；无 NV 改动。
+
+## 2026-09-16 — IMSA 仍未注册：0x90 已开；GET_SVC 无 SMS/Voice；无 0x23；ISIM 仍 cingularme（enchilada）
+
+用户批接着查 IMSA 未注册，别改 NV。未写 EFS/NV/SIM，未填 qmapmux IPv6，未再 SET 0x8f。只读。
+
+**文献**：3GPP TS 23.228 — IP + P-CSCF 之后才发 SIP REGISTER；无 ISIM 时从 IMSI 推 IMPI。flamingradian IMS-QUALCOMM：注册在基带；「数据连接完成之后还要额外命令，modem 不知道 AP 何时把 IMS PDN 建好」——那条就是 770 CONNECTION_CHANGED。Dylan：GET_SVC 在栈起来之后才会带 SMS/Voice available。libqmi IMSA BIND 的 Binding 在 TLV **0x10**（与 IMS Settings 的 TLV 0x01 不同）。GET_SVC：0x10 SMS / 0x11 Voice / 0x16 TAS；`QmiImsaServiceStatus` 0=unavailable 1=limited **2=available**。CafeTele VoNR gate：error 0 且从未见到 401/403 = REGISTER 没发出去。
+
+**本机只读（rproc3 running，81voltd 11852，WDS CID 4 connected）**：
+
+| 查询 | 结果 |
+|---|---|
+| IMS Settings BIND 0 → GET 0x90 | 仍 voice/VT/SMS/UT **yes**，VoWiFi no |
+| IMSA BIND tlv 0x10=0 | SUCCESS |
+| IMSA GET_BIND 0x34 | SUCCESS，Binding=**0** |
+| IMSA IND_REG 0x22 gold | SUCCESS |
+| IMSA GET_REG 0x20 | SUCCESS：status=**0 not-registered**，error **0**，tech **wwan (1)**。另有未文档 TLV 0x10=0 |
+| IMSA GET_SVC 0x21 | SUCCESS；**只有** TLV **0x16=2（TAS available）、0x17=1（wwan）**。**无** 0x10 SMS / 0x11 Voice / 0x12 VT |
+| 随后 8 s 等 0x23/0x24 indication | **0 条** |
+| qmicli 同客户端 | Status not-registered / wwan；SMS/Voice/VT 行无 Status；TAS available/wwan |
+| IMSP 0x1F | **无 NEW_SERVER** |
+| IMSRTP 0x28 | 无 |
+| IMS QMI Priv **0x4d / 77** | **有** node 0 port 86 |
+| 770 | node **1** port 16392（AP 81voltd） |
+| NAS serving | reg=1 home，PS ATTACHED，CT 46011 |
+| NAS sysinfo 0x21 / 0x26 | **仍 0 / 0** |
+| WMS 0x004A | **err 52** |
+| PDC GET_SELECTED sw | SUCCESS；info 描述 **`hVoLTE_OPNMKT_CT`**（电信开市场 VoLTE 档，不是 Lab） |
+| ISIM EF_IMPI nonprov-slot2 | SUCCESS SW 9000：`80 10` + **全 0** |
+| ISIM EF_DOMAIN | SUCCESS：ASCII **`ims.cingularme.com`** |
+| EFS `qp_ims_param_config`（只读） | 仍 833 B：IMPI/域 = `460110440364089@ims.mnc011.mcc460.3gppnetwork.org` |
+| EFS `qp_ims_dpl_config` STAT | mode `0xe1ff` size 14（未改） |
+| WDS CID 4 | IPv6 `240e:578:518:5e0:2054:18dc:caf4:585e/64`；stats **TX 0 / RX 1 (88 B)** |
+| 81voltd.log | **START 1 次 / CHANGED 1 次**（15:41:57 conn=101 **sub=2** addr=`…:1f0` err=0），其后 **136 次 DEL_CLIENT**，没有第二次 START |
+
+未 Dump。未填 IMS IPv6。
+
+**判读**：0x8f/0x90 打开之后 IMSA **仍然明确没 REGISTER**（error 0、无 0x23、GET_SVC 不报 SMS/Voice）。墙不在「问不到 IMSA」，也不在缺 CT MBN（现档就是 `hVoLTE_OPNMKT_CT`）、不在缺 P-CSCF、不在缺 0x90。基带没把 MMTEL 服务拉起来。两件仍对不上、这次没动：① ISIM 域仍是 Cingular、IMPI 空，尽管 EFS 里已有 3gppnetwork.org；dpl 是 UsimFallback，没证明它赢过了卡上的 DOMAIN。② 770 START 报 **sub=2**，IMS Settings/IMSA Binding 能用的是 **0**。770 那次 CHANGED 之后再没有 START，只剩 DEL_CLIENT。下一步若动，是这两条里的只读对照或 770 订户对齐，不是再改 NV。
+
+**设备终态**：槽 a L0；ctnet + IMS PDN CID 4；IMS Settings 已开；IMSA not-registered；无 NV 改动。
+
+## 2026-09-16 — ISIM IMPI：卡上是空 NAI + Cingular 域；EFS 是 3gpp；ISIM 仍 detected（enchilada）
+
+用户批接着查 ISIM IMPI，别改 NV。未写 EFS/NV/SIM（EF_IMPI UPDATE=ADM）。未填 qmapmux IPv6。
+
+**文献**：3GPP TS 31.103 — EF_IMPI `6F02` 是 tag **`80`** 的 NAI TLV（UTF-8）；UPDATE **ADM**。EF_DOMAIN `6F03` 同样 tag 80。EF_IMPU `6F04` 线性。EF_IST `6F07` 服务表（bit=1 可用）。3GPP TS 23.003 §13.2： **「若没有 ISIM 应用」** 才从 IMSI 推 `user@ims.mnc<MNC>.mcc<MCC>.3gppnetwork.org`。有 ISIM 时 UE 应用 ISIM。Android `getImsPrivateUserIdentity` 在 IMPI 缺席时返回 null，再由 AP 推导；on-modem IMS 读卡。mbn-mcfg-tools `ImsParamSrc`：FileRead=0 / NvRead=1 / **CardRead=2** / FileReadAuth=3 / **UsimFallback=4** / UsimOnly=5。本机 dpl 是 4。
+
+**UIM 只读**：qmicli card-status — 槽1 ERROR no-atr；槽2 PRESENT。Primary GW = slot2 app2 **USIM ready**。ISIM app3 仍 **detected**（非 ready），AID `A0000000871004FF86FF0389FFFFFFFF`，PIN1 **disabled**。
+
+USIM EF_IMSI（PRIMARY_GW，SW 9000）：`08 49 06 11 40 40 36 40 98` → nibble **`460110440364089`**（46011）。按 23.003 推导 IMPI = `460110440364089@ims.mnc011.mcc460.3gppnetwork.org`。
+
+**ISIM ADF（NONPROV_SLOT_2 + 本卡 AID，全部 SW 9000）**：
+
+| 文件 | 结构 | 内容 |
+|---|---|---|
+| EF_IMPI 6F02 | transparent 75 B | NAI TLV **`80 10` + 16×00**，其余 0。空 IMPI（合法空 NAI，不是缺文件） |
+| EF_DOMAIN 6F03 | transparent 50 B | **`80 12` + `ims.cingularme.com`** + FF 填充 |
+| EF_IMPU 6F04 | linear recsz 75 × 10 | rec#1/#2 都是 **`80 00` + FF**（空 IMPU） |
+| EF_IST 6F07 | transparent 2 B | **`FF FF`**（可选服务位全 1） |
+| EF_P-CSCF 6F09 | linear recsz 100 × 1 | rec#1 **全 FF**（无地址） |
+| EF_AD 6FAD | transparent 3 B | **`00 00 00`** |
+
+EFS 只读：`qp_ims_param_config` 833 B 仍是 3gpp IMPI/域；`qp_ims_dpl_config` `00 00 00 00 00 01 00 00 00 00 00 00 00 04` = Ipv6=1、**ImsParamSrc=4 UsimFallback**；`qp_ims_reg_config` ENOENT；`qp_ims_reg_config_db` 1024 B 在。rproc3 running。未 Dump。
+
+**判读**：卡上 **有** ISIM 应用，所以 23.003 的 IMSI 推导对「无 ISIM」条款不适用。IMPI 文件在、可读、编码正确，只是 NAI 长度为 16 的全 0——modem 若走 CardRead，会把空 IMPI + `ims.cingularme.com` 当成身份。UsimFallback=4 只有卡读 **失败** 才该回退 NV；这次卡读 **SUCCESS**，Fallback 未必会用 EFS 里那份 3gpp IMPI。Android 会在 IMPI 空时自己推 IMSI；本机 on-modem 栈没有这条 AP 推导。未写卡（ADM），未再改 NV。
+
+**设备终态**：槽 a L0；ISIM 仍 detected、IMPI 空、域 Cingular；EFS 3gpp 身份未动；无 NV 改动。
+
+## 2026-09-16 — 770 START 同时带 0x13=PRIMARY(1) 与 0x12=SECONDARY(2)；CHANGED 回了 2（enchilada）
+
+用户批接着查 770 sub=2，别改 NV。未写 EFS/NV/SIM，未改 81voltd 回包，未填 qmapmux IPv6。
+
+**文献**：81voltd `imsd.qmi` — START 0x20 的 subscription 是 TLV **0x13**；CONNECTION_CHANGED 回 **0x12**。本树 81voltd 另认 START TLV **0x12 echo_sub**，并在 `handle_start` 里 **用 0x12 覆盖 0x13**（注释：本卡 0x12=2、0x13=1；金标 Lineage CHANGED 是 2）。libqmi `QmiSubscriptionType`：**DEFAULT=0 PRIMARY=1 SECONDARY=2 TERTIARY=3 ANY=0xff**。WDS BIND_SUBSCRIPTION 0x00AF / GET 0x00B0 用同一枚举。IMS Settings BIND 0x98 的 Binding 是 **0 起**（0=primary 才有 0x90）。IMSA BIND TLV 0x10 也是 0 起。
+
+**本靴 770 START 原包**（81voltd.log `req<` 15:41:57，58 B，未改 NV）：
+
+`00 04 00 20 00 33 00` +  
+TLV 0x01 wds_spec apn=`IMS` ip_family=1 (IPv6) 3gpp profile **2**  
+TLV 0x10 connection=**101** (0x65)  
+TLV 0x11 = 0  
+TLV **0x12 = 2**  
+TLV **0x13 = 1**
+
+81voltd 打印 `START conn=101 sub=2 echo12=2`（覆盖之后）。应答 CHANGED TLV 0x12 = **2**。ind hex 末尾 `12 04 00 02 00 00 00`。
+
+**WDS 编号（新客户端，非 CID 4）**：GET 0xB0 未 bind = **0xff ANY**。BIND 0/1/2 皆 SUCCESS，GET 回 **0 / 1 / 2**（与写入相同）。WMS BIND 0x4F 对 0/1/2 **全 err48**，随后 0x4A 仍 52。IMSA GET_BIND 仍 **0**。WDS CID 4 仍 **connected**。rproc3 running。未 Dump。
+
+**对照**：
+
+| 编号 | 值 | 本机结果 |
+|---|---|---|
+| 770 START TLV 0x13 | **1 PRIMARY** | modem 自己报的订户 |
+| 770 START TLV 0x12 | **2 SECONDARY** | echo；金标 Lineage CHANGED 用这个 |
+| 81voltd CHANGED | **2**（抄 0x12） | 回给基带 |
+| IMS Settings Binding | **0** 才有 0x90 | 1/2 = err70 |
+| IMSA Binding | **0** | GET_REG 问得到、未注册 |
+| 物理槽 | **2** | USIM ready |
+
+**判读**：sub=2 不是瞎填，是 START 的 TLV 0x12，81voltd 按 Lineage 金标把它回进 CHANGED。同一帧里 **0x13=1 PRIMARY**。libqmi 的 PRIMARY=1 对上 IMS Settings 能用的 primary（Binding 0，0 起 vs 1 起差 1）。CHANGED 回 SECONDARY=2，对上的是 IMS bind **1**，那边 0x90 是 70。Lineage 上回 2 是因为 qcrild 也 bind 2 且栈在那一侧；L0 的 IMS 实例只在 Binding 0。这次没改 81voltd、没改 NV。
+
+**设备终态**：槽 a L0；770 CHANGED 仍是 sub=2（15:41 那一帧）；IMS Settings 仍只在 Binding 0；无 NV 改动。
+
+## 2026-09-16 — 81voltd 回包对照金标：START/CHANGED 回了 2；0x2e 少 TLV；未改回包（enchilada）
+
+用户批接着查 81voltd 回包，别改 NV。未写 EFS/NV/SIM，未改 81voltd，未填 qmapmux IPv6。对照：本靴 `/tmp/81voltd.log` 全量 `resp>`/`ind>`，以及槽 b Lineage `imsdata.st`（同卡 imsdatadaemon）。
+
+**文献**：`imsd.qmi` START 应答 subscription = TLV **0x12**，应回请求的 **0x13**。Richard pmaports#1878：应答 0x10=新 connection id，0x11=原 connection，0x12=请求的 subscription。Dylan IMS-QUALCOMM 0x2e 应答除 result 外还有 TLV **0x10=0x5f**。金标 STOP 应答 TLV 0x10=`0xFA`。
+
+**本靴 81voltd 回包（15:41，4 条 resp + 1 条 ind，之后 148 次 DEL_CLIENT）**：
+
+| 方向 | 消息 | 本机回包 | 同卡 Lineage / Dylan |
+|---|---|---|---|
+| 0x23 fe80 | no-op SUCCESS 14 B | 与 Dylan 同（只有 result） | 同 |
+| 0x2e | no-op SUCCESS **14 B** | Dylan 金标 **21 B**：result + **TLV 0x10=`5f 00 00 00`** | **少 TLV** |
+| 0x34 REQ | no-op SUCCESS 14 B | Dylan 同 14 B | 同。金标 AP 在 CHANGED 之后另发 0x34 REQ；本机不发 |
+| START 0x20 RESP | local=**0x14** orig=101 sub=**2** | Lineage：local=**0x15** orig=100 sub=**2** | local 差 1（金标先有一次失败占用 0x15）；**sub 都是 2** |
+| CHANGED IND | err=0 local=0x14 orig=101 sub=**2** IPv6 ASCII | Lineage：err=0 local=0x15 orig=100 sub=**2** 同形 family=1 + 长度前缀 ASCII | 编码同形；**sub 都是 2** |
+| STOP 0x21 | 本靴未收到 | Lineage 应答 `0xFA` + echo；81voltd 源码也会回 `0xFA` | — |
+
+**START 请求对照（回包的输入）**：
+
+| TLV | Lineage 同卡 | 本靴 L0 |
+|---|---|---|
+| 0x10 conn | 100 | 101 |
+| 0x11 | **1** | **0** |
+| 0x12 echo | **2** | **2** |
+| 0x13 sub | **2** | **1 PRIMARY** |
+
+Lineage 上 0x12=0x13=2，回 2 与 stock IDL（回 0x13）和 echo-0x12 都一致。L0 上两者不一致，81voltd **回 0x12=2**，没回 0x13=1。CHANGED 地址 TLV 形状与金标一致（u32 family + 长度 + ASCII）。
+
+WDS CID 4 仍 connected。rproc3 running。81voltd 11852。未 Dump。未改回包。
+
+**判读**：回包里和金标对得上的是 SUCCESS、local_id 0x14 档、IPv6 地址编码、CHANGED 只发一帧。对不上的两处：**① START/CHANGED 的 subscription 回了 2**（金标同卡是因为请求 0x13 就是 2；L0 请求 0x13=1，回 2 是 81voltd 用 0x12 覆盖的结果）；**② 0x2e 少了金标 TLV 0x10=0x5f**。这次没改 81voltd、没改 NV。
+
+**设备终态**：槽 a L0；770 回包仍是 15:41 那套（CHANGED sub=2）；IMS PDN CID 4 connected；无 NV 改动。
+
+## 2026-09-16 — 770 0x2e：请求与 Dylan 逐字节同族；应答少 TLV 0x10=0x5f；Richard 说 result-only 即可（enchilada）
+
+用户批接着查 0x2e，别改 NV。未写 EFS/NV/SIM，未改 81voltd 回包。
+
+**文献**：Dylan IMS-QUALCOMM「QMI msg 5」— service 770 (`0x0302`) 入站 **0x002E**，仍标 unknown。请求 TLV **0x10 u8=1**、**0x11 u32=0**；应答 result SUCCESS + TLV **0x10 u32=`0x5f`**。名字未解。Richard pmaports#1878：**除 0x20/0x21 外，其余 IMSD 请求只要 result TLV 0x02=0 即可**。本树 `imsd.qmi` **没有 0x2e**，走 `handle_noop`。同卡 Lineage `imsdata.st` 窗口从 START 附近开始，**不含** daemon 刚起来时的 0x2e。
+
+**本靴只读**（81voltd.log 全文件只有 **1** 次 0x2e，15:41:53.431，81voltd 起来 3 ms，夹在 0x23 与 0x34 之间，4.5 s 后才 START）：
+
+请求 18 B：
+`00 02 00 2e 00 0b 00 10 01 00 01 11 04 00 00 00 00 00`
+
+| TLV | 值 |
+|---|---|
+| 0x10 | u8 **1** |
+| 0x11 | u32 **0** |
+
+与 Dylan 请求 **逐字节同形**（只 txn 不同）。
+
+应答 14 B：
+`02 02 00 2e 00 07 00 02 04 00 00 00 00 00` — SUCCESS，**没有** TLV 0x10。
+
+Dylan 金标应答 21 B：result + **`10 04 00 5f 00 00 00`**（u32 **95**）。本机 QRTR 770 在 node 1 port **16392**，不是 95。TLV 0x02 已是 SUCCESS，`0x5f` 不是 result 里的 `QMI_ERR_NO_SUBSCRIPTION`（那是错误码位，且 Dylan 的 result 也是 0）。
+
+之后没有第二次 0x2e。rproc3 running；81voltd 11852。未 Dump。未给 0x2e 补 TLV。
+
+**判读**：0x2e 是 770 **START 之前**的探测（0x23 fe80 → 0x2e → 0x34 → START），不是 SIP REGISTER 触发器。请求形状已对齐金标。81voltd 按 Richard「其余 IMSD 只回 result」no-op；缺的是 Dylan 捕获但未命名的 u32 `0x5f`。没有公开 IDL 说明 0x5f 是句柄、位图还是版本。这次没补这个 TLV，也没改 NV。
+
+**设备终态**：槽 a L0；0x2e 仍是 15:41 那一帧 no-op SUCCESS；无 NV 改动。
+
+## 2026-09-16 — 81voltd 回 0x13=1：CHANGED sub=1；IMSA **registering**；WMS 0x4A=1（enchilada）
+
+用户批改 81voltd 回 0x13=1，别改 NV。未写 EFS/NV/SIM，未填 qmapmux IPv6。源码去掉 `echo_sub` 覆盖，START 应答 / CONNECTION_CHANGED 用请求 TLV **0x13**。`/tmp/81voltd` 新件 pid **19846**（旧 echo12 备份 `/tmp/81voltd.echo12`）。`IMS_ADDR=` 现 CID 4 地址，未拆 PDN。
+
+**770 本靴**（17:43:02）：START 请求仍 `0x12=2` `0x13=1` conn=100。应答 `12 04 00 **01** 00 00 00`。CHANGED **sub=1** err=0 local=0x14 addr=`240e:578:518:5e0:dce7:4440:4fe:69c9`。rproc3 running。未 Dump。
+
+**只读（CHANGED 后）**：
+
+| 查询 | 此前（CHANGED sub=2） | 本次（sub=1） |
+|---|---|---|
+| IMSA GET_REG | status **0** not-registered | qmicli **registering**（raw TLV 0x12=1；libqmi 0=not 1=registering 2=registered）。tech wwan |
+| IMSA GET_SVC | 仅 TAS available，无 SMS/Voice TLV | SMS/Voice/VT **unavailable**/wwan；TAS **available**/wwan |
+| WMS 0x004A | err **52** | **SUCCESS** TLV 0x10=**1**（金标 CHANGED 后同档） |
+| WMS 0x0048 | — | SUCCESS TLV 0x10=0 |
+| NAS 0x21 / 0x26 | 0 / 0 | 仍 **0 / 0** |
+| IMS 0x90 bind 0 | voice/SMS yes | 未变 |
+| WDS CID 4 | connected | 仍 connected |
+
+20 s 后再问仍是 registering，未到 registered。GET_SVC 的 SMS/Voice 行这次有了 Status（unavailable），不是缺 TLV。
+
+**判读**：回 0x13=1 之后基带开始走 IMS 注册（0→registering），WMS 控制面从 52 变成金标的 1。还没 REGISTERED（2），SMS/Voice 仍 unavailable。墙从「栈没对着订户」变成「注册进行中未完成」。未改 NV。
+
+**设备终态**：槽 a L0；81voltd 回 sub=1；IMSA registering；WMS 0x4A=1；IMS PDN CID 4；无 NV 改动。
+
+## 2026-09-16 — IMSA 停在 registering：无 SIP error TLV；WDS 地址已换、CHANGED 仍是旧址（enchilada）
+
+用户批接着查 IMSA registering，别改 NV。未写 EFS/NV/SIM，未再改 81voltd，未填 qmapmux IPv6。CHANGED 在 17:43:02，探针 17:54（约 **11 min**）。rproc3 running；81voltd 19846。
+
+**文献**：libqmi `QmiImsaImsRegistrationStatus` 0=not-registered **1=registering** 2=registered。GET_REG TLV **0x11** = SIP 错误码，**0x13** = 错误字符串；没有这两项 = 还没拿到最终 SIP 应答。3GPP TS 24.229：REGISTER 发出后要等最终响应或超时才会离开进行中。WMS 0x004A 金标阶梯 **0→1→4**，4 才是 full。
+
+**只读**：
+
+| 查询 | 结果 |
+|---|---|
+| qmicli GET_REG | Status **registering**，tech wwan。11 min 未变 |
+| GET_REG raw | TLV 0x12=1；**无** 0x11 error code；**无** 0x13 error string；0x14=1 wwan；未文档 0x10=0 |
+| GET_SVC | SMS/Voice/VT status **0 unavailable**（tech wwan）；TAS **2 available** |
+| IND_REG 后等 8 s | **0** 条 0x23/0x24（状态不在跳） |
+| WMS 0x4A | SUCCESS **1**（金标第二档，未到 4） |
+| WMS 0x48 | SUCCESS 0 |
+| NAS 0x21 / 0x26 | 仍 **0 / 0** |
+| serving | home PS ATTACHED CT 46011 |
+| WDS CID 4 | 仍 connected |
+
+**地址**：CHANGED 告诉基带 `240e:578:518:5e0:dce7:4440:4fe:69c9`。17:54 GET_CURRENT_SETTINGS 已是 **`240e:578:518:5e0:bda0:f015:4f8d:cf7c/64`**（同前缀，IID 换了）。81voltd 没有第二帧 CHANGED。未 Dump。
+
+**判读**：registering 不是问错——基带认为 REGISTER 还在进行，且 **没有 SIP 403/401/408 码** 可报。停了 11 min 已超过一般 SIP 定时器，更像路径/身份没闭环：卡上仍是空 IMPI+Cingular；同时 CHANGED 里的 IPv6 已经不是当前 WDS 地址。WMS 停在金标的 1，没到 4。未改 NV。
+
+**设备终态**：槽 a L0；IMSA registering；WMS 0x4A=1；CID 4 connected（地址已漂）；81voltd 仍回 sub=1；无 NV 改动。
+
+## 2026-09-16 — IPv6 IID 约 8 s 一漂；CHANGED 只发一帧旧址；IMSA 退回 not-registered（enchilada）
+
+用户批接着查 IPv6 漂移 CHANGED，别改 NV。未写 EFS/NV/SIM，未再发 CHANGED，未填 qmapmux IPv6。
+
+**文献**：3GPP TS 24.229 **5.1.1.5B** Change of IPv6 address due to privacy — 地址因隐私机制变化后 UE 要做 **新的 initial REGISTER**（且须等前一次 REGISTER 有最终应答或超时）。RFC 4941/8981 临时地址默认按天换，不是秒级。81voltd：`IMS_ADDR` 命中则 **只读一次**、发一帧 CHANGED，不订阅 WDS 地址变化。
+
+**本机只读**（CHANGED 17:43:02 一帧 `…:dce7:4440:4fe:69c9`；18:07 连读 CID 4 五次，间隔 8 s；PDN 一直 connected；gw 不变）：
+
+| 时刻 | WDS UE IPv6 |
+|---|---|
+| 17:43:02 CHANGED | `240e:578:518:5e0:dce7:4440:4fe:69c9` |
+| 17:54 上次探针 | `…:bda0:f015:4f8d:cf7c` |
+| 18:07:04 | `…:b424:e1eb:67c3:3c2` |
+| 18:07:12 | `…:5465:110b:c413:2c30` |
+| 18:07:20 | `…:60bb:26e7:2c4:37a6` |
+| 18:07:28 | `…:bcaa:f1d9:1dbd:e5f8` |
+| 18:07:36 | `…:e873:9dd2:5032:49bb` |
+
+前缀 **`240e:578:518:5e0::/64` 稳定**；网关 **`…:8d76:2480:5cce:9737` 稳定**。IID **每次 GET 都换**。`81voltd.log` CONNECTION_CHANGED **仍 1 帧**。rproc3 running。
+
+IMSA GET_REG：18:07 **not-registered**（17:54 还是 registering）。未 Dump。
+
+**判读**：漂移不是前缀/PDN 拆了，是 **同一 /64 上 IID 秒级轮换**。CHANGED 把 17:43 的 IID 钉死告诉基带，81voltd 不跟漂。24.229 要求地址一变就要新 REGISTER，而这边还停在上一轮 registering。约 24 min 后 IMSA 退回 not-registered。未改 NV，也没补第二帧 CHANGED。
+
+**设备终态**：槽 a L0；CHANGED 仍那一帧旧 IID；WDS CID 4 connected、IID 在漂；IMSA not-registered；无 NV 改动。
+
+## 2026-09-16 — WDS GET_CURRENT_SETTINGS **一读就换 IID**；不是 PDN 在 8 s 漂（enchilada）
+
+用户批接着查 IPv6 GET 是否一读就换，别改 NV。未写 EFS/NV/SIM，未再发 CHANGED，未填 qmapmux IPv6。CID 4 全程 **connected**。
+
+**本机只读**（同一秒连打三次，无 sleep）：
+
+| 探针 | 时刻 | UE IPv6 IID | 网关 |
+|---|---|---|---|
+| A1 | 18:19:01 | `f546:ae03:4991:f0e` | `8d76:2480:5cce:9737` |
+| A2 | 18:19:01 | `90d7:831c:dd2a:6edb` | 同 |
+| A3 | 18:19:01 | `11bf:a58c:8024:85d8` | 同 |
+| B1–B3 | 18:19:09（隔 8 s 后再连打） | 又三个全新 IID | 同 |
+| C1 hook `0x4ff30` | 18:19:17 | `5934:f040:f86:40b3` | 同 |
+| C2 hook 立刻再打 | 18:19:17 | `c8ee:140:6d7:f197` | 同 |
+
+前缀始终 `240e:578:518:5e0::/64`。默认掩码和 P-CSCF 掩码 **都是一读一 IID**。CHANGED 仍是 17:43 那一帧 `…:dce7:4440:4fe:69c9`（那也是一次 GET 的快照）。rproc3 running。未 Dump。
+
+**判读**：上一档「约 8 s 一漂」是 **GET 间隔**，不是承载自己在轮换。`GET_CURRENT_SETTINGS` 的 IPv6 address TLV **每次查询都给新 IID**；网关稳定。不能按每次 GET 去补 CHANGED，否则 Contact 会每问一次就变。`IMS_ADDR` 钉死的也只是某一次 GET 抽到的 IID。未改 NV。
+
+**设备终态**：槽 a L0；CID 4 connected；GET 一读一 IID；CHANGED 仍一帧；无 NV 改动。
+
+## 2026-09-16 — 只有 TLV 0x25 的后 64 bit 一读就换；前缀/网关/DNS 稳定（enchilada）
+
+用户批继续。未写 NV、未填 qmapmux IPv6、未再发 CHANGED。
+
+**文献**：libqmi-devel 2023-09（Martin Maurer / Bjørn Mork / Aleksander Morgado）— 同一 CID 反复 `--wds-get-current-settings`，**IPv6 address 每次都变、其余稳定**。网络只分配 **/64**，IID 是 modem **每次查询现编**的，所有高通 QMI 都这样。建议：用前缀自己造稳定地址；网关可忽略（没有 ND）。**本机不能 `ip -6 addr add`**（此前 HWP CrashDump）。
+
+**本机 verbose 连打两次 GET（CID 4 connected）**：
+
+| TLV | GET1 | GET2 |
+|---|---|---|
+| 0x25 IPv6 Address 前 4×u16 | `9230 1400 1304 1504` = `240e:578:518:5e0` | **同** |
+| 0x25 后 4×u16（IID） | `52525 19519 23701 13509` → `cd2d:4c3f:5c95:34c5` | **不同** `9c9:6705:6442:75ba` |
+| 0x26 Gateway | `…:8d76:2480:5cce:9737` | **同** |
+| 0x27 / 0x28 DNS | `240e:5a::6666` / `240e:5b::6666` | **同** |
+
+P-CSCF 掩码 `0x4ff30` 同样只有 0x25 IID 变。IMSA 仍 not-registered。rproc3 running。未 Dump。
+
+**判读**：一读就换的是 **GET 编出来的 IID**，不是承载在漂。前缀/网关/DNS 才是网络给的。CHANGED 里的地址也是某次 GET 的现编 IID。金标也是 START 时取一次就钉住，不会反复 GET。未改 NV，也没往 qmapmux 填稳定地址。
+
+**设备终态**：槽 a L0；CID 4 connected；0x25 IID 一读一变；无 NV 改动。
+
+## 2026-09-16 — GET IID 现编是高通常态；registering 超时后 GET_REG error **808**（enchilada）
+
+用户批继续。未写 NV、未填 qmapmux IPv6、未再发 CHANGED。
+
+**文献**：libqmi-devel 2023-09 — 高通 WDS GET 的 IPv6 IID 每次现编。金标 Lineage `imsdata.st` CHANGED 也是完整地址 `240e:578:4a0:7ca:6858:4428:9d6d:124f`（前缀+IID），钉一帧。libqmi GET_REG TLV **0x11** = IMS Registration Error Code（guint16）。标准 SIP 无 808；Android `ImsReasonInfo` 附近是 UT 801–804，**808 未列**。
+
+**本机只读**：CID 4 connected；CHANGED 仍 17:43 一帧（GET 快照 IID）。IMSA GET_REG：**status=0 not-registered**，TLV 0x11 = `28 03` = **808**，tech wwan。GET_SVC SMS/Voice/VT unavailable、TAS available。WMS 0x4A 仍 **1**。无 0x23 indication。rproc3 running。未 Dump。
+
+**判读**：IID 一读一变 **不是** 要跟漂补 CHANGED 的理由——金标也是取一次 GET/START 地址就钉住。registering 走完之后基带给出 **error 808**（不是 401/403/408）。WMS 停在金标第二档 1，没到 4。墙从「地址在漂」转到 **注册失败码 808 + 身份（空 IMPI/Cingular）**。未改 NV。
+
+**设备终态**：槽 a L0；IMSA not-registered error 808；WMS 0x4A=1；CID 4 connected；无 NV 改动。
+
+## 2026-09-16 — IMSA 808：TLV 0x11=`0x0328`；无 0x13 字符串；不是 SIP 401/403/408（enchilada）
+
+用户批接着查 IMSA 808，别改 NV。未写 EFS/NV/SIM。
+
+**文献**：libqmi `qmi-service-imsa.json` GET_REG TLV **0x11** = IMS Registration Error Code（guint16），TLV **0x13** = Error Message 字符串。qcril 把 0x11 填进 `ImsReasonInfo.extraCode`（`CODE_REGISTRATION_ERROR=1000` 的附加码，通常是 SIP）。RFC 3261 SIP 状态是 100–699，**没有 808**。AOSP `ImsReasonInfo`：UT 801–804 然后跳到 821，**808 未定义**。`DUN_CALL_DISALLOWED=0x808` 是十六进制 2056，对不上十进制 808。公开 QMI/IDL **没有**把 808 标成 timeout/403。
+
+**本机只读**（18:41，CHANGED 后约 58 min）：BIND tlv 0x10=0 后 GET_REG SUCCESS，msg_len 30：
+
+| TLV | 值 |
+|---|---|
+| 0x11 | `28 03` LE = **808** / `0x0328` |
+| 0x12 | 0 not-registered |
+| 0x14 | 1 wwan |
+| 0x10 | 0（未文档） |
+| **0x13** | **无**（没有错误字符串） |
+
+qmicli `--imsa-get-ims-registration-status` 只印 Status not-registered，verbose 看得到 TLV 0x11，不印数字。BIND tlv 0x10=2 则 GET_REG **err70**（订户仍只有 0）。rproc3 running。未 Dump。未改 NV。
+
+**判读**：808 是基带在 registering 失败后写下的 **IMSA 错误码**，不是标准 SIP 应答，本机也没有 0x13 文本。不能把它读成 403（身份被拒）或 408（P-CSCF 超时）——那两个码若出现会是 403/408。公开对照表对 808 无条目。未改 NV。
+
+**设备终态**：槽 a L0；IMSA not-registered、error 808、无 error string；无 NV 改动。
+
+## 2026-09-16 — IMSA 808 的 0x13 现为 `Request Timeout`（enchilada）
+
+用户批继续查 IMSA 808，别改 NV。未写 EFS/NV/SIM，未 `ip -6 addr add`，未 SET 0x8f。
+
+**文献**：libqmi GET_REG TLV **0x13** = IMS Registration Error Message（string）。RFC 3261 SIP **408** 的 reason-phrase 就是 `Request Timeout`；AOSP `CODE_SIP_REQUEST_TIMEOUT=335` 才是对 408 的映射，**808 仍不是** SIP 状态码。qcril 把 TLV 0x11 原样写入 `ImsReasonInfo.extraCode`、0x13 写入 `extraMessage`（`CODE_REGISTRATION_ERROR=1000`）。Richard Acayan（pmOS #1878）：IMS 通路不对时 IMSA 会出现 `Request Timeout` indication。公开 IDL 仍无 808 枚举名。
+
+**本机只读**（设备钟 18:58；NCM `10.9.8.1`，OnePlus 6 / 6.11.0-sdm845，rproc3 running，81voltd 19846 echo-0x13）：
+
+IMSA BIND tlv 0x10=0 后 GET_REG SUCCESS，**msg_len 48**（上一笔是 30、无 0x13）：
+
+| TLV | 值 |
+|---|---|
+| 0x11 | `28 03` LE = **808** / `0x0328` |
+| 0x12 | 0 not-registered |
+| 0x13 | `52 65 71 75 65 73 74 20 54 69 6D 65 6F 75 74` = **`Request Timeout`**（15 B） |
+| 0x14 | 1 wwan |
+| 0x10 | 0 |
+
+qmicli `--verbose` 同框。GET_SVC SMS/Voice 仍 unavailable。WMS 0x4A 仍 **1**。NAS GET_SYSTEM_INFO TLV **0x21=0**、**0x26=0**。WDS CID 4 仍 connected：TX **98** / RX **13**（8722 / 2400 B，两次 GET 之间计数未涨）。GET IID 又现编（`…:2cf0:cd8:1cf1:45dc`）；gw `…:8d76:2480:5cce:9737` 仍钉。81voltd CHANGED 仍 17:43 一帧 `…:dce7:4440:4fe:69c9`。`qmapmux2` 上现有 SLAAC 全球地址 `240e:578:518:5e0:3c94:d5ff:fefa:ad54/64`（同前缀，EUI-64，不是我们填的）。无 0x23 indication。未 Dump。
+
+**判读**：基带自己把 808 写成 **`Request Timeout`**——这是 SIP 408 的短语，不是 401/403。数字仍是 808 不是 408，所以不能记成「网上回了 SIP 408」；能记的是 **REGISTER 发出后没等到可用应答**（Timer F / P-CSCF 无回包 / 回包没对上 Contact）。身份闸（空 IMPI/Cingular）仍在，但本码不再支持「已被 403 拒」的读法。IMS 承载 TX≫RX 与重传无回应相符。未改 NV。
+
+**设备终态**：槽 a L0；IMSA not-registered、error 808、string `Request Timeout`；WMS 0x4A=1；CID 4 connected；无 NV 改动。
+
+## 2026-09-16 — DIAG 看 SIP REGISTER：CMD 通、DATA 日志 0 帧；WDS TX 涨、RX 钉（enchilada）
+
+用户批继续 DIAG 看 SIP REGISTER。未写 EFS/NV/SIM，未 `ip -6 addr add`，未 rproc-stop。
+
+**文献**：scat/QCSuper `LOG_IMS_SIP_MESSAGE` = **0x156E**（equip 1 item 0x56E）；`LOG_IMS_REGISTRATION` = **0x1832**。使能走 DIAG `0x73` LOG_CONFIG SET_MASK，异步日志是 `0x10` DIAG_LOG_F，从 MPSS **DATA** 口出来。linux-msm `diag-router` 把 unix `\0diag` 的 0x73 转成 CNTL `cmd 9` 再广播给外围。CMD 口是问答（EFS / VERNO / BUILD_ID），不是 SIP 文本。
+
+**本机只读**（NCM `10.9.8.1`，OnePlus 6 / 6.11.0-sdm845，rproc3 running）：
+
+- `send_data 124`（DIAG 0x7c EXT_BUILD_ID）仍回 **`DB410C`** — CMD 到 MPSS 活着。
+- 自写 `/tmp/diag-sip`：unix `\0diag` 上 SET_MASK 0x156E/0x1832/0x1578… **SUCCESS**（resp 293 B）。随后 listen：**0** 帧 `0x10`。
+- 同一连接 all-ones mask（equip1 0..0x848 全 1）+ EVENT_REPORT 0x60，听 12 s：**仍 0 帧**。
+- diag-router 日志：`[sensors] mask … SOCKETS (0x2e73)`；**`[modem] unsupported control packet: 28`**；没有 modem 的 feature-mask 行。第一次误发 0x7d SET_ALL_MSG_MASK 后原 pid 8631 退出；现 pid **25739**（同二进制）。
+- 81voltd 三次重拉都打出 START+CONNECTION_CHANGED（`IMS_ADDR=…:dce7:4440:4fe:69c9` err=0）：17:43 / 19:09:45 / 19:12:03 / **19:19:17**。
+- WDS CID 4：TX **98 → 117 → 158**，RX **钉 13**（2400 B 不动）。
+- AF_PACKET 嗅 `qmapmux2` / `qmapmux0.0` / `rmnet_ipa0` 50 s（含 19:19 CHANGED）：**0 包**（QMAP/ARPHRD 519 上没看到发到 AP 的帧）。
+- 捕获结束后 qmicli GET_REG：**Status registering** / tech wwan；**无 TLV 0x11、无 0x13**（还没写回 808）。
+
+**判读**：DIAG **问答通、日志不通**——所以这次**没有**从 0x156E 里读到 REGISTER/401/403/408 正文。不能把「没抓到 SIP」写成「没发 REGISTER」：WDS TX 在每次 CHANGED 后涨、RX 不动，仍像承载上有上行、没有下行。SIP 若在基带内发，AP 的 qmapmux 嗅探本来就可能是 0。modem CNTL 包 28 未实现，mask 是否真写进 MPSS **未证实**。未改 NV。
+
+**设备终态**：槽 a L0；IMSA **registering**（无 808 字符串）；CID 4 connected TX=158 RX=13；diag-router 25739；81voltd 26265；无 NV 改动。
+
+## 2026-09-16 — CNTL 包 28：公开头文件仍无名；本 boot 重发布抓不到十六进制（enchilada）
+
+用户批继续对齐 CNTL 包 28。未写 EFS/NV/SIM，未 `ip -6 addr add`，未 rproc-stop，未给 28 起名，未写处理函数。
+
+**文献**（对照头文件，不发明）：
+
+- LineageOS `android_kernel_oneplus_sdm845` lineage-20 `diagfwd_cntl.h`：1–20、22–25、27、29–31、33=`DIAG_CTRL_MSG_DIAGID`。缺口 **21 / 26 / 28 / 32 / 34**。同树 `diagfwd_cntl.c` 把 STM 写成字面量 `ctrl_pkt_id = 21`，default 分支 `Control packet %d not supported` 后**继续**扫缓冲。
+- Xiaomi sm8250 `diagfwd_cntl.h`：同上，另有 35=`DIAG_CTRL_MSG_PASSTHRU`。仍无 28。
+- linux-msm `diag/router/diag_cntl.c`：同样缺口；default `unsupported control packet` + `print_hex_dump`，循环不 break。
+- 因此 **stock 内核也丢掉 28**，不能把「DATA 日志 0 帧」单独归因成「没实现 28」。
+
+**本机**（NCM `10.9.8.1`，6.11.0-sdm845，rproc3 **running**）：
+
+- 首启 `/tmp/diag-router.log` 仍是：`[sensors] mask … SOCKETS (0x2e73)`；`[modem] unsupported control packet: 28`；**没有** modem 的 FEATURE 行；**没有** CNTL 十六进制（`print_hex_dump` 走 stdout，这条日志里没留下）。
+- 自写 `/tmp/dump-diag-cntl`（libqrtr `qrtr_publish(4097,ver=0)` + `write(2)` 立刻落盘）。`kill -9` 掉旧 router 后独占 CNTL 听 **20 s**：只有 nameserver `NEW_SERVER` 快照（modem CMD `0:176` / DCI `0:179`，本进程 CNTL `1:16397`，以及 node5/9/10 的 CMD）。**0 帧 DATA**。包 28 **没有**再来。
+- 旧 router 仍在时 `connect` 到 `0:179` 和 `10:12` 各听数秒：**0 包**。
+- 之后 `/tmp/diag-router-cntl28`（CNTL 路径加了 src `node:port` 日志）pid **31128**。`send_data 124` 仍回 **`DB410C`**。81voltd 仍 26265。
+
+**判读**：MPSS 的 CNTL 入站（sensors 的 cmd 8、modem 的 28）是 **本 boot 一次性**；AP 再发布 4097 ver 0，MPSS 不重发。没有 hex 就不能对公开 struct。stock 同样忽略 28，所以对齐 28 的下一步若只是「加一个空 case」不会让 0x156E 自己出现。linux-msm 的 CNTL writeq 是任意入站 DATA 才 `connect()`（首启 28 会开）；FEATURE cmd 8 才会回 feature/mask/diag_mode。modem **从没发过 cmd 8**（和 sensors 不同）。首启 28 已开 writeq 时 SET_MASK 仍 0 帧 LOG_F，说明「没处理 28」不是唯一缺口。本 boot 再抓 28 需要 rproc-stop，这次没做。未改 NV。
+
+**设备终态**：槽 a L0；rproc3 running；`/tmp/diag-router-cntl28` pid 31128；81voltd 26265；包 28 仍无名、无 hex；无 NV 改动。
+
+## 2026-09-16 — rproc3 stop→start 抓到 CNTL 包 28 hex（enchilada）
+
+用户批重启 rproc 抓 28 的 hex。未写 EFS/NV/SIM，未 `ip -6 addr add`，未给 28 起名，未写处理函数。未 online（当时已是 mode 5）。
+
+**序**（NCM 线未插，走 wlan `192.168.3.112`）：机上脚本 `echo stop` → **offline**（1s 内）→ `echo start` → **running**（立刻）；diag-router-cntl28 全程挂着。wifi 随后 split join + udhcpc 回到同一地址。pd-mapper 仍在。无 CrashDump、无 HWP 环（ipa.ko 本 boot 未载）。
+
+**modem CNTL 入站序**（src `0:32`）：
+
+| 序 | cmd | n | 要点 |
+|---|---|---|---|
+| 1 | 8 FEATURE | 15 | mask `f7 ee 01` → **0x1eef7**（含 LOG_ON_DEMAND、DIAG-ID） |
+| 2 | 12 NUM_PRESETS | 9 | num=2 |
+| 3 | **28** | **16** | 见下 |
+| 4 | 33 DIAGID | 34 | ver=1，diag_id=`0x44`，名 `msm/modem/root_pd` |
+| 5 | 1 REGISTER | 多帧 | 命令登记 |
+
+**包 28 十六进制**（两次 dump 相同）：
+
+```
+1c 00 00 00 08 00 00 00 01 00 00 00 00 80 00 00
+```
+
+LE：`pkt_id=28`，`len=8`，随后 8 字节 = `uint32 1` + `uint32 0x00008000`。公开 `diagfwd_cntl.h` 仍无 `#define` 对应 28，**不对它起名**。`0x8000` 与 CAF `MAX_PERIPHERAL_BUF_SZ` 数值相同，只是数字重合，不是结构对上。
+
+**对照**：上一 boot 只看到 28、没看到 modem FEATURE，是 dump 丢了。这次 FEATURE 在 28 **之前**，DIAGID/REGISTER 在 28 **之后**——stock 丢掉 28 并不挡住后序握手。linux-msm 已处理 cmd 8（打出 mask 行）。未改 NV。
+
+**设备终态**：槽 a L0；rproc3 running；mode **5** shutting-down；ipa 未载；wlan `192.168.3.112`；usb0 10.9.8.1 NO-CARRIER（线未插）；`/tmp/diag-router-cntl28` pid 6292；`/usr/bin/81voltd` 266；包 28 hex 已落盘。
+
+## 2026-09-16 — CNTL 包 28 hex 对齐：16B = 公开 hdr+version+u32；无 CAF 名（enchilada）
+
+用户批按 hex 继续对齐 28。未写 NV/EFS/SIM，未 `ip -6 addr add`，未给 28 起 CAF 名，未回包。
+
+**hex**（上一笔）：`1c 00 00 00 08 00 00 00 01 00 00 00 00 80 00 00`
+
+**文献对照**（Xiaomi sm8250 / OnePlus sdm845 `diagfwd_cntl.h`）：下列公开结构都是 16 字节 `pkt_id + len + version + uint32`：
+
+| 公开名 | pkt_id | 末字段 |
+|---|---|---|
+| `diag_ctrl_ssid_range_report` | 24 | count |
+| `diag_ctrl_build_mask_report` | 25 | count |
+| `diag_ctrl_dci_handshake_pkt` | 29 | magic |
+
+包 28 **同尺寸、同字段切法**（version=1，末字段 `0x00008000`），但 **ID 不是 24/25/29**，头文件仍无 28 的 `#define`。不能借用上述名字。stock default 仍忽略。
+
+**代码**：linux-msm `diag_cntl_recv` 按 hex 解析 `version`/`field` 后 `break`（与 NUM_PRESETS 一样空处理），不 reply。编进 `/tmp/diag-router-cntl28`。
+
+**本机**：换装新二进制 pid **7248** 后再次 rproc3 stop→start，想看解析行。脚本已 `launched`。之后 wlan `192.168.3.112` **未回来**（NCM 线仍未插），解析行 **未目击**。未改 NV。
+
+**设备终态**：槽 a L0；rproc3 在脚本里 stop/start 过；SSH 失联（wlan 未回）；解析是否打出 `cmd=28 version=1 field=0x8000` **未证实**。
+
+## 2026-09-16 — CNTL 包 28 解析目击：version=1 field=0x8000；无 unsupported（enchilada）
+
+用户报好了。NCM `10.9.8.1` 通。uptime **1 min**（冷启，/tmp 空）。未写 NV。未 rproc-stop。
+
+scp `/tmp/diag-router-cntl28`（hex 解析器）→ setsid pid **547**。modem CNTL 序：
+
+8 FEATURE → 12 NUM_PRESETS → **28** → 33 DIAGID → 1 REGISTER
+
+目击：`[modem] CNTL cmd=28 version=1 field=0x8000`。`unsupported control packet: 28` **无**。未回包。wlan `192.168.3.113`；usb0 UP；mode 5；rproc3 running。
+
+**设备终态**：槽 a L0；diag-router-cntl28 pid 547；包 28 按 hex 解析已目击；无 NV 改动。
+
+## 2026-09-16 — CNTL 握手完整后 DIAG DATA 通：5 帧 LOG_F；0x156E 无（mode 5）（enchilada）
+
+用户批继续。未写 NV/EFS/SIM，未 `ip -6 addr add`。
+
+**DATA 通路（mode 5，握手已含 FEATURE/28/DIAGID）**：`send_data 124` 回 **`MPSS.AT.4.0.c2.15-00007-SDM845_GEN_PACK-1.358880.1.399256.2`**。`/tmp/diag-sip 12 all`：SET_MASK SUCCESS（resp 293 B）；听 12 s：**11 包 / 5 帧 `0x10` LOG_F**（`0x12e8`、`0x1375`、`0x158c`×2、`0x1375`）+ event `0x60`（含 ASCII `msm/modem/wlan_pd`）。**sip156e=0 imsreg1832=0**（mode 5，无 IMS）。diag-router pid 547 全程在。上一 boot SET_MASK 0 帧是 writeq 没开；这次开了。
+
+**随后**按铁律起 cellular（ipv6.ko + ipa.ko + rmnet + settle 60s + provision2 + online + `/tmp/81voltd` echo-0x13 + diag-sip 40）。脚本 `launched` 后 **NCM `10.9.8.1` 与 wlan 都失联**。屏幕 Dump **未目击**。未改 NV。
+
+**设备终态**：NCM/wlan 失联；DATA 通路已证实；0x156E 未在 mode 5 出现。
+
+## 2026-09-16 — 用户目击高通红字 CrashDump，停在该界面（enchilada）
+
+用户报「高通红字，停在这个界面了」。本机 USB 未枚举（fastboot/adb 空）。上一笔刚 launched 铁律 cellular（ipv6 + ipa + rmnet + settle + provision2 + online + 81voltd + diag-sip），随后 NCM/wlan 失联——Dump 与那次 online 同窗。未在 Dump 屏上刷机、未改槽、未写 NV。
+
+**恢复（本机收据，勿停 Dump 里）**：Power+VolUp+VolDown 强制重启（2026-09-14）。若进 fastboot `b0d9f7fe`：`fastboot reboot`。L0 起来后 USB 常需拔插。冷启应回 mode 5、ipa 未载；**不要立刻 online**。
+
+## 2026-09-16 — CrashDump 后冷启：L0 槽 a，mode 5，ipa 未载（enchilada）
+
+用户报好了。NCM `10.9.8.1` 通。uptime **1 min**。`6.11.0-sdm845`，slot **a**。rproc0–3 **running**。DMS mode **5** shutting-down。`/proc/modules` **无 ipa/rmnet/ipv6**。kmsg **ipa_hwp_init 0**。wlan `192.168.3.114`。`/usr/bin/81voltd` 266。/tmp 空。未 online。未 Dump。
+
+**设备终态**：槽 a L0 在役；mode 5；ipa 未载；NCM 通。勿立刻 online。
+
+## 2026-09-16 — 铁律 online 成功 LTE home；0x156E 仍 0；随后 HWP 环，已 stop+rmmod 停住（enchilada）
+
+用户批继续。未写 NV/EFS/SIM，未 `ip -6 addr add`。**未**在 online 前打 all-ones DIAG mask。
+
+**铁律**：ipv6.ko + ipa（kmsg `IPA driver setup completed successfully`）+ rmnet + `/tmp/81voltd` echo-0x13 → settle → baked `qmi-ask provision2` **无此命令**；`/tmp/qmi-ask provision2` **err3**。本靴 UIM：**card0 PRESENT**（USIM+ISIM detected）、**card1 ERROR err3**（与上一靴 slot2 有卡相反）。`provision`（slot1）**SUCCESS**。`online` **SUCCESS** mode 0。NAS **reg=1 home / ps ATTACHED / radio 8 LTE**，sig **-89 dBm**，PLMN 46011。NCM 全程通。ipa_hwp **当时 0**。
+
+**DIAG**（attach 之后才起 router）：CNTL `cmd=28 version=1 field=0x8000`。`diag-sip 40`（只开 IMS 项，非 all-ones）：SET_MASK SUCCESS；40 s **63 包**（event `0x60`、`0x98`），**0 帧 `0x10` LOG_F**，sip156e=0。81voltd：BIND_MUX mux=3 **fail**，WDS START **failed**，CONNECTION_CHANGED **err=13**。
+
+**随后** kmsg `ipa_hwp_init.c:386 didnt rx any ind frm HWP` 连环，rproc3 **crashed**（sticky online）。`echo stop` → **offline**；`rmmod rmnet ipa`；`echo start` → **running**，mode **5**，环停，NCM 仍通。未进 Dump 屏。
+
+**设备终态**：槽 a L0；rproc3 running；mode 5；ipa 已卸；NCM `10.9.8.1`；勿立刻 online。
+
+## 2026-09-16 — mode 5 再 insmod ipa：HWP+1、rproc offline，NCM 失联（enchilada）
+
+用户批继续。uptime 13 min、mode 5、ipa 已卸、NCM 通。未 online。未写 NV。未 `ip -6 addr add`。先 kill diag-router，再 `insmod ipa.ko`：kmsg 仍有 `IPA driver setup completed successfully`，随即 **HWP 计数 10→11**，rproc3 **offline**，DMS 无服务。下一秒 NCM 超时。USB/fastboot 未枚举。屏幕 Dump **未在本机目击**（与上一笔高通红字同窗）。
+
+**设备终态**：NCM 失联。恢复同前：Power+VolUp+VolDown；起来后勿立刻 insmod ipa / online。
+
+## 2026-09-16 — 再冷启：L0 槽 a，mode 5，ipa 未载，HWP 0（enchilada）
+
+用户报好了。NCM `10.9.8.1` 通。uptime **1 min**。`6.11.0-sdm845`，slot **a**。rproc0–3 **running**。mode **5**。ipa/rmnet/ipv6 **未载**。kmsg **ipa_hwp 0**。wlan `192.168.3.115`。烤线 81voltd 263。未 insmod ipa。未 online。未 Dump。
+
+**设备终态**：槽 a L0 在役；mode 5；ipa 未载；NCM 通。勿立刻 insmod ipa / online。
+
+## 2026-09-16 — 冷启铁律 LTE home；拉 MM 时 HWP，已 stop+rmmod 停住（enchilada）
+
+用户批继续。冷启 uptime≥5 min、HWP 0。未写 NV。未 `ip -6 addr add`。未在 online 前开 DIAG mask。
+
+**铁律成功半段**：ipv6+ipa 握手 `setup completed successfully`、HWP 0、rproc running → settle 60s → `provision` slot1 SUCCESS → `online` SUCCESS → NAS **home / PS ATTACHED / LTE -70 dBm**。NCM 通。
+
+**MM**：无 `messagebus` 用户 + `._ModemManager1.conf` AppleDouble 导致 dbus 起不来。补 passwd 后 dbus 起来。`ModemManager` 启动后 **No modems**；同时 **HWP=2、rproc offline**。立即 `echo stop` + `rmmod rmnet ipa` + `echo start` → mode **5**、环停、NCM 仍通。未进 Dump 屏。
+
+**设备终态**：槽 a L0；rproc3 running；mode 5；ipa 已卸；NCM `10.9.8.1`。勿立刻 online / 勿拉 MM。
+
+## 2026-09-16 — 冷启不拉 MM：LTE home 稳定；0x156E 仍 0；BIND_MUX 3 仍 fail（enchilada）
+
+用户批继续。上一靴 HWP 后未再 insmod ipa；本机 `reboot` 清 sticky。未写 NV。未 `ip -6 addr add`。未拉 MM。
+
+**铁律**：uptime≥5 min → ipv6+ipa 握手 `setup completed`、HWP 0 → rmnet + `/tmp/81voltd` → settle 60s → `provision` slot1 SUCCESS → `online` SUCCESS。NAS **home / PS ATTACHED / LTE -61 dBm**。全程 NCM 通。
+
+**DIAG**（attach 后才起 router）：`cmd=28 version=1 field=0x8000`。`diag-sip 40` IMS 项：SET_MASK SUCCESS；40 s **59 包**（`0x60`/`0x98`），**0 帧 `0x10` LOG_F**，sip156e=0。81voltd：DPM OPEN ok，**wda_ok=0**，BIND_MUX mux=3 **fail**，START **failed**，CHANGED **err=13**。HWP 仍 **0**，rproc **running**。未 Dump。
+
+**判读**：不拉 MM 则 online 可稳定。0x156E 没有是因为 IMS PDN 没起来（BIND_MUX 墙），不是 CNTL/DATA 断了。
+
+**设备终态**：槽 a L0；mode 0 online；LTE home；ipa 在位；HWP 0；NCM 通；diag-router + 81voltd 在役。勿拉 MM。
+
+## 2026-09-16 — 不拉 MM：IMSA BIND0 未注册 err=0；WDS START IMS nomux 仍 70；0x156E 无（enchilada）
+
+用户批继续。未写 NV。未 `ip -6 addr add`。未拉 MM。未 SET 0x8f。LTE 仍 home，HWP 0。
+
+**IMSA** `imsa0`：BIND tlv 0x10=0 **SUCCESS**；GET_REG **status=0 not-registered**，TLV 0x11 **error 0**（不是 808），tech=1；IND 8 s **0 条**。
+
+**WDS** `wdschain 8 nomux ims`：BIND_SUB ok，IPFAM ipv4 ok，START apn=ims **err70** handle=0。
+
+**DIAG** 同期 `diag-sip 45`：SET_MASK SUCCESS；收尾 **logs=0 sip156e=0**。rproc running。未 Dump。
+
+**判读**：on-modem IMS 还没开始注册（error 0 不是超时）。IMS PDN 仍 70。不拉 MM 则 online 稳定，PDN/SIP 仍缺。
+
+**设备终态**：槽 a L0；mode 0；LTE home；HWP 0；NCM 通。勿拉 MM。
+
+## 2026-09-16 — 已 online 再拉 MM：ctnet ping 通；IMS PDN CHANGED err=0；IMSA 仍未注册；未 Dump（enchilada）
+
+用户批继续。未写 NV。未 `ip -6 addr add`。未 SET 0x8f。LTE 已 home、HWP 0 时才起 MM。
+
+**MM**：缺 PHYSDEV_UID 时 `Failed to find a net port`。`udevadm trigger` 后 `rmnet_ipa0` 带 `ID_MM_PHYSDEV_UID=qcom-soc`，MM 看到 `qrtr0 (qmi)+rmnet_ipa0 (net)`。无 polkitd 时 enable 被拒；`/usr/lib/polkit-1/polkitd` 后 `--enable` **registered CHN-CT**，`--simple-connect=apn=ctnet` **connected**，`--simple-connect=apn=ims,ip-type=ipv6` **connected**。HWP 全程 **0**。
+
+**数据面**：`ifconfig qmapmux0.0 10.19.32.51` 后 `ping -I qmapmux0.0 218.2.2.2` **2/2**。qmapmux0.1 有 SLAAC `240e:579:400:10ec:9cad:eff:fe98:bd2d/64`（非手填）。MM bearer2 IMS IPv6 `240e:579:400:10ec:548a:1fdc:1ce5:d76b`。
+
+**770**：重启 `/tmp/81voltd` 后 START，`mm: IMS bearer 2 addr …d76b`，**CONNECTION_CHANGED err=0**。
+
+**IMSA** BIND 0 SUCCESS，GET_REG **status=0 not-registered error 0**。DIAG `diag-sip 25` **0 帧 LOG_F**。rproc running。未 Dump。
+
+**设备终态**：槽 a L0；mode 0；LTE home；MM ctnet+ims connected；81voltd CHANGED err=0；HWP 0；NCM 通。
+
+## 2026-09-16 — IMS PDN 已 CHANGED：IMSA 仍未注册 err=0；0x90 bind0 业务位已 1；NAS 0x21/0x26 仍 0（enchilada）
+
+用户批继续。未写 NV。未 SET 0x8f。未 `ip -6 addr add`。LTE home，HWP 0，81voltd 2263，MM 在役。
+
+**IMSA** BIND tlv 0x10=0 SUCCESS；GET_REG **status=0 not-registered**，TLV 0x11 **error 0**（不是 808），tech=1；IND 8 s **0 条**。GET_SVC 无 bind 时 **err70**；imsa0 同客户端有 TLV 0x16=2、0x17=1。
+
+**IMS Settings** BIND 0x98 tlv 0x01=0 SUCCESS；GET 0x90 **SUCCESS** msg_len 96：TLV **0x11=1 0x12=1 0x13=1 0x19=1 0x1a=1 0x1b=1**（与此前 voice/VT/SMS/UT/registration yes 同形），0x15/0x1c–0x24=0。bind 1/2 后 GET 0x90 **err70**。未发 0x8f。
+
+**NAS** sysinfo TLV **0x21=0**（Voice Support on LTE）、**0x26=0**（LTE IMS Voice Availability）。
+
+**判读**：PDN 和 settings 位已经开，IMSA 仍完全没进 registering。NAS 仍报 LTE 上无 IMS 语音。未 Dump。
+
+**设备终态**：槽 a L0；mode 0；LTE home；IMS PDN CHANGED err=0；IMSA 未注册；HWP 0；NCM 通。
+
+## 2026-09-16 — 文献：NAS GET SYS INFO 0x26 不是 IMS 语音；0x21=0 可以是 IMS 失败的结果（enchilada）
+
+用户批再找资料，不写 NV、不 SET 0x8f。本条无新机上读数。
+
+**更正上一笔 TLV 名**（libqmi `data/qmi-service-nas.json` Get System Info 0x004D，master）：
+
+| TLV | libqmi 名 | 格式 |
+|-----|-----------|------|
+| 0x21 | LTE Voice Support | guint8 gboolean |
+| 0x26 | **LTE eMBMS Coverage Info Support** | guint8 gboolean |
+| 0x29 | **IMS Voice Support** | guint8 gboolean（since 1.24） |
+| 0x2A | **LTE Voice Domain** | guint32 `QmiNasLteVoiceDomain`（since 1.28） |
+
+nerves-networking/qmi `network_access.ex` 同映射：`0x21 voice_support_on_lte`、`0x29 lte_ims_voice_avail`、`0x2A lte_voice_status`。Elixir QMI 解析器把 0x26 标成 deprecated/跳过，不是 IMS。ChromiumOS libqmi：`QMI_NAS_LTE_VOICE_DOMAIN_NONE=0 IMS=1 1X=2 3GPP=3`。上一笔把 0x26=0 写成「LTE IMS Voice Availability」是标错名；IMS 语音可用性是 **0x29**，本机还没单独记过 0x29/0x2A。
+
+**0x21=0 的因果**（51CTO 引 qcril `cmsds.c`）：`IMS_REG_STATUS_IND status 0` + fail cause 2 TEMPORARY → `DOM_SEL: Indicating NO VOICE support on LTE`。也就是 **IMS 注册失败之后**，CM 才会把 voice-on-LTE 打成 0。0x21=0 可以是 IMSA idle 的**结果**，不能单独当成「网上没开 VoPS」去写 NV。网上的 VoPS 指示应对 **0x29**。
+
+**栈仍不发 REGISTER**（已有收据 + 文献）：
+
+- flamingradian `IMS-QUALCOMM.md`：注册在基带；IMS PDN 建好后还要额外 QMI，因为 modem 不知道 AP 何时把数据口完成。81voltd manpage：770 只做 START/STOP 经 MM，**其余当 no-op**。
+- libqmi IMSA GET_REG：status 0=not-registered、1=registering、2=registered。本机 status=0 且 error=0 = 没进 registering（不是 808 超时）。
+- libqmi IMSP Get Enabler State 0x0024：1 uninitialized / 2 initialized-not-registered / 3 airplane / 4 registered。本机 2026-09-15 QRTR **无 service 0x1F IMSP**，这条可能问不到。
+- qmi-ask `ssp` 已解码 GET SSP TLV **0x20 Voice Domain Preference**（0 cs-only / 1 ps-only / 2 cs-preferred / 3 ps-preferred）。HARDWARE 还没有这条的读数。
+
+**下一步只读（未做）**：`sysinfo` 盯 0x29/0x2A（缺 TLV 也记）；`ssp` 盯 0x20（及 usage 0x1F 若有）。不 SET 0x8f（GET 已 1）、不写 NV、不 `ip -6 addr add`、不 PDC activate（现档已是 `hVoLTE_OPNMKT_CT`）。
+
+**设备终态**：未碰；仍以上一笔为准。
+
+## 2026-09-16 — NAS sysinfo：0x29 IMS Voice Support=1；0x2A LTE Voice Domain=NONE（enchilada）
+
+用户批继续，把 0x29/0x2A 记下来。只读。未写 NV。未 SET 0x8f。未 `ip -6 addr add`。未 insmod / 未改 mode。
+
+**机上**：NCM `10.9.8.1`；uptime ~39 min；`6.11.0-sdm845`；rproc3 **running**；DMS mode **0 online**；kmsg 无 `ipa_hwp_init.c:386`。`/tmp/qmi-ask sysinfo` SUCCESS msg_len 158。TLV 0x19 仍 ASCII **46011**。
+
+**GET SYS INFO 0x004D（libqmi 名）**：
+
+| TLV | 名 | 值 |
+|-----|----|----|
+| 0x21 | LTE Voice Support | **0** |
+| 0x26 | LTE eMBMS Coverage Info Support | **0**（不是 IMS） |
+| **0x29** | **IMS Voice Support** | **1**（len 1：`01`） |
+| **0x2A** | **LTE Voice Domain** | **0 NONE**（len 4：`00000000`；enum 0 none / 1 IMS / 2 1X / 3 3GPP） |
+
+顺手只读 `ssp`（GET 0x0034，未 SET）：TLV **0x20 Voice Domain Preference = 3 ps-preferred (volte)**；TLV 0x18 service domain = ps only；TLV 0x1F Usage Preference = 1（libqmi GET：voice-centric）。
+
+**判读**：网上 VoPS **开着**（0x29=1）。当前选中的 LTE 语音域却是 **NONE**（0x2A=0），0x21 仍 0。UE 偏好已经是 ps-preferred，不是 cs-only，不必为这条去 SET SSP。与 qcril `cmsds.c`「IMS 没注册成功 → Indicating NO VOICE support on LTE」同形：墙不在「这格没开 IMS 语音」。未 Dump。
+
+**设备终态**：槽 a L0；mode 0 online；rproc3 running；NCM 通。未改 NV/0x8f/mode。
+
+## 2026-09-16 — 文献：770 0x2E 金标要 TLV 0x10=0x5f；NCM 本轮失联（enchilada）
+
+用户批继续找 IMS 为啥不注册。未写 NV。未 SET 0x8f。未 `ip -6 addr add`。本条无新 IMSA 读数：`sysinfo` 之后再 SSH `10.9.8.1` **超时**；wlan 192.168.3.112–115 不通；host USB 未枚举 OnePlus/fastboot。未目击 Dump 屏。
+
+**已排除（上一笔机上 + 文献）**：网上 VoPS 开着（NAS **0x29=1**）。UE 偏好已是 ps-preferred。PDN / P-CSCF / PDC `hVoLTE_OPNMKT_CT` / GET 0x90 业务位 1 都不是墙。IMSA status=0 **error 0** = 没进 registering（不是 808/403）。ISIM Cingular/空 IMPI 更像 REGISTER 发出后的 403，解释不了「根本没发出去」。
+
+**Dylan IMS-QUALCOMM.md（更新后的 770 序）**：modem→AP 的 0x23 / **0x2E** / 0x34 / 0x33 / START 之后，「imsdatadaemon 侧栈才算初始化」。金标 **0x2E RESP 21 B** = result + **TLV 0x10=`5f 00 00 00`**。本机 81voltd 一直是 result-only **14 B no-op**——770 回包里**唯一对不上金标**的一条（2026-09-16 对照表已记，当时未改回包）。0x23/0x34 金标也是 14 B result-only。imsqmidaemon 在那份 strace 里**不发 QMI**。
+
+**源码（未上机）**：`81voltd.c` 对 0x2E 改为金标 21 B。host 交叉编出 `/tmp/aginxos-diag/81voltd-0x2e`。未 scp、未替换在役 `/tmp/81voltd`。
+
+**下一步（机回来后）**：铁律 LTE home 后换新 81voltd，只读看 0x2E `resp>` 是否 21 B、IMSA 是否离开 status=0。不写 NV。
+
+**设备终态**：NCM 失联。恢复同前：USB 拔插；若红字 Power+VolUp+VolDown。起来后勿立刻 insmod ipa / online。
+
+## 2026-09-16 — 新 81voltd 上机：0x2E 金标 21 B；LTE home 后 HWP，已 stop+rmmod 停住（enchilada）
+
+用户批设备回来再上新 81voltd。未写 NV。未 SET 0x8f。未 `ip -6 addr add`。未拉 MM。
+
+**回来**：NCM `10.9.8.1`；uptime ~12 min；mode **5**；rproc running；ipa/rmnet **未载**；kmsg 当时 **ipa_hwp 0**。烤线 `/usr/bin/81voltd` pid 270。
+
+**换二进制**（online 前）：scp `/tmp/aginxos-diag/81voltd-0x2e` → `/tmp/81voltd` 与 `/usr/bin/81voltd`；kill 270；setsid `/tmp/81voltd` pid **1332**。立刻 770：
+
+- 0x23 fe80 no-op 14 B
+- **0x2E gold 21 B**：`02 02 00 2e 00 0e 00 02 04 00 00 00 00 00 10 04 00 5f 00 00 00`（与 Dylan 金标同）
+- 0x34 REQ no-op 14 B
+
+**铁律**：`insmod ipv6.ko` 一次 segfault 但模块 **Live/permanent**；ipa 握手 **`IPA driver setup completed successfully`**、HWP 0；rmnet；settle 60s（uptime 940→1000）；`provision` slot1 **SUCCESS**；`online` **SUCCESS** mode 0。NAS **home / PS ATTACHED / CT**。HWP 当时仍 **0**。NCM 通。
+
+**770 START**（online 后）：`conn=100 sub13=1 echo12=1 af=1 apn=IMS`（PRIMARY=1，不再是 2）。DPM OPEN ok，**wda_ok=0**，BIND_MUX mux=3 **fail**，WDS START **failed**，**CONNECTION_CHANGED err=13**。无 0x33。
+
+**随后**：烤线 `imsareg` 无 bind **err70**。编 `/tmp/qmi-ask` 跑 `imsa0` 时 IMSA 已无服务：kmsg **ipa_hwp 3**，rproc3 **crashed**。立刻 `echo stop` + `rmmod rmnet ipa` + `echo start`。环一度打到 hwp=6，随后 **停在 6**。mode **5**；ipa 已卸；rproc **running**；NCM 仍通。未进 Dump 屏。未再 online。
+
+**判读**：新 81voltd **已在役**，0x2E 金标回包 **机上见到**。无 MM 时 IMS PDN 仍 BIND_MUX 墙。IMSA 没问到（rproc 已 crashed）。HWP 与既有「online 后 sticky」同类，未证明是 0x2E 引起。
+
+**设备终态**：槽 a L0；rproc3 running；mode 5；ipa 已卸；`/tmp/81voltd` pid 1332（金标 0x2E）；NCM `10.9.8.1`。勿立刻 insmod ipa / online。
+
+## 2026-09-16 — USB 插拔后 NCM 回；同靴 mode 5（enchilada）
+
+用户报插拔了。NCM `10.9.8.1` 通。uptime ~20 min（同靴，未冷启）。rproc0–3 **running**。mode **5**。ipa/rmnet **未载**；ipv6 仍在。kmsg **ipa_hwp 仍 6**（最后一条仍是 1115 s，无新环）。`/tmp/81voltd` pid **1332** 金标 0x2E 仍在役。未 insmod ipa。未 online。未 Dump。未写 NV。
+
+**设备终态**：槽 a L0；mode 5；ipa 已卸；81voltd 1332；NCM 通。勿立刻 insmod ipa / online。
+
+## 2026-09-16 — 冷启金标 0x2E + MM IMS PDN：CHANGED err=0；IMSA 仍 status=0 err=0（enchilada）
+
+用户批继续。上一靴 HWP 过，未再 insmod ipa；`reboot` 清 sticky。未写 NV。未 SET 0x8f。未 `ip -6 addr add`。
+
+**冷启**：uptime 51 s 时 mode 5、HWP 0、ipa 未载。`/usr/bin/81voltd` pid 268 md5 `51629fe4…`（金标 0x2E）。等 **uptime≥300 s** 再铁律：ipv6 + ipa 握手 `setup completed successfully`（t=305）HWP 0 + rmnet + settle 60s + `provision` SUCCESS + `online` SUCCESS。NAS **home / PS ATTACHED / CT**。NCM 通。
+
+**770（本冷启）**：开机 `0x23` → **0x2E gold 21 B** `TLV 0x10=0x5f` → 0x34 REQ → **0x33 then AP 0x34 gold**（上一靴缺 0x33）。online 后 START **sub13=1 echo12=1** apn=IMS。无 MM 时 WDS START fail、CHANGED **err=13**。
+
+**MM（已 online、HWP 0 才拉）**：清 AppleDouble + 重建 dbus；udevadm 后 `rmnet_ipa0` `ID_MM_PHYSDEV_UID=qcom-soc`。`--enable` registered CHN-CT；`--simple-connect=apn=ctnet` **connected** `qmapmux0.0 10.137.161.99`；`--simple-connect=apn=ims,ip-type=ipv6` **connected** `qmapmux0.1 240e:578:538:671:e58b:5656:1572:215d`（非手填）。HWP **0**。
+
+**重启 81voltd** pid 1371：`mm: IMS bearer 2 addr …215d`，**CONNECTION_CHANGED orig=101 sub=1 err=0**；随后再一次 0x2E gold + START + CHANGED err=0。
+
+**IMSA** BIND tlv 0x10=0 SUCCESS；GET_REG **status=0 not-registered**，error **0**，tech=1；IND 8 s **0 条**。GET_SVC SUCCESS TLV 0x16=2 0x17=1（无 SMS/Voice 0x10/0x11）。
+
+**NAS** 0x21=0、0x26=0、**0x29=1**、**0x2A=NONE**。rproc running。HWP 全程 **0**。未 Dump。
+
+**判读**：金标 0x2E + sub=1 + IMS PDN err=0 **仍不够**让基带进 registering。0x2E 不是这块墙。下一缺口仍是身份/栈使能（ISIM Cingular、空 IMPI），不是 770 回包长度。
+
+**设备终态**：槽 a L0；mode 0；LTE home；MM ctnet+ims connected；81voltd CHANGED err=0；IMSA 未注册；HWP 0；NCM 通。
+
+## 2026-09-16 — 本靴 ISIM：IMPI 空 NAI；DOMAIN=ims.cingularme.com（enchilada）
+
+用户批继续。只读。未写 NV/EFS/SIM（EF_IMPI/DOMAIN UPDATE=ADM）。未 SET 0x8f。未 SET_USER_CONFIG 0x2C。未 `ip -6 addr add`。LTE home、MM connected、HWP 0。
+
+**文献**：TS 24.229 **5.1.1.1A** — ISIM **present 就必须用 ISIM** 做 IMS 鉴权（TS 33.203）。TS 24.229 **C.2** / 23.003 §13 — 从 IMSI 推 IMPI/域 **仅当 UICC 没有 ISIM**。有 ISIM 时即使用户身份文件是空的，也不能走 USIM 推导。TS 31.103 EF_IMPI `6F02` 是 tag `80` NAI TLV。GSMA NG.114：有 ISIM 用 EF_IMPI，否则才从 IMSI 推。
+
+**本靴 UIM**（provision slot1；NONPROV_SLOT_1 + ISIM AID；SW **9000**）：
+
+| 文件 | 结果 |
+|------|------|
+| USIM EF_IMSI | SUCCESS：nibble **`460110440364089`**（46011） |
+| ISIM EF_IMPI 6F02 | SUCCESS：`80 10` + **16×00**（空 NAI，文件在） |
+| ISIM EF_DOMAIN 6F03 | SUCCESS：`80 12` + **`ims.cingularme.com`** + FF |
+| NONPROV_SLOT_2 | err **3**（这靴卡在槽1，不是槽2） |
+
+NONPROV_SLOT_2 / CARD_SLOT_1 读 IMPI 皆 err3。rproc running。HWP **0**。未 Dump。
+
+**判读**：卡上 **有 ISIM 应用**，24.229 禁止用 IMSI 推出来的 `460110440364089@ims.mnc011.mcc460.3gppnetwork.org`。CardRead 成功拿到空 IMPI + Cingular 域，UsimFallback 不会当失败回退。SIP REGISTER 的 Authorization username 就是 IMPI——空的就 **组不出 REGISTER**，和 IMSA status=0 **error 0**（不是 403）同形。未写卡。下一刀若动身份，是 QMI IMS SET_USER_CONFIG 0x2C（不写 SIM）或等用户点头，不是 ADM 写 EF。
+
+**设备终态**：槽 a L0；mode 0；LTE home；MM ctnet+ims；ISIM IMPI 空 / DOMAIN Cingular；IMSA 未注册；HWP 0；NCM 通。
+
+## 2026-09-16 — 358880 无 SET_USER 0x2C（位图 bit 44=0）；GET 0x48 bind0 SUCCESS（enchilada）
+
+用户批继续（上一笔下一刀是 0x2C）。未写 SIM/NV/EFS。未 SET 0x8f。未 SET 0x2C。未 SET 0x47。未 `ip -6 addr add`。LTE home、MM connected、HWP 0。
+
+**IMS GET_SUPPORTED_MESSAGES 0x001E** SUCCESS，list 前缀 `9b 00` 后 byte[5]=`05`。消息 **0x002C = bit 44** → byte 5 bit 4 = **0（位图没有）**。0x0047 SET_POL 同理不在位图。与 2026-09-15 `SET_USER 0x2C err57` / `SET_POL 0x47 MALFORMED` 同因：358880 没有这两条。Android 空 IMPI 走的 SET_USER 这条路在这台固件上走不通。
+
+**只读新收据**：同一 IMS 客户端 BIND **0**（这靴 IMSA/0x90 能用的一侧）再 GET **0x48 SUCCESS** msg_len 177（先前 BIND 2 上 0x48 是 70）。TLV 0x1A ASCII **`IMS`**。0x15=`00` 0x16=`02` 0x17=`00` 0x18=`08`（公开 libqmi 没有 0x48 的 TLV 名，不臆造）。rproc running。HWP **0**。未 Dump。
+
+**判读**：0x2C 不做。身份墙仍在卡上空 IMPI + 有 ISIM。QMI 写身份这条死了。剩下能改「从哪读身份」的是 EFS `qp_ims_dpl_config` **ImsParamSrc**（现 4=UsimFallback；CardRead 成功所以不回退）。那是 EFS 写，不是 ADM 写卡，需另点头。
+
+**设备终态**：槽 a L0；mode 0；LTE home；MM ctnet+ims；IMSA 未注册；HWP 0；NCM 通。
+
+## 2026-09-16 — dpl ImsParamSrc 4→5 UsimOnly；读回 05；IMSA 仍 status=0 err=0（enchilada）
+
+用户批继续（改 ImsParamSrc）。未写 SIM。未 SET 0x8f/0x2C。未 `ip -6 addr add`。未 rproc-stop。DIAG 只开 linux-msm router 做 EFS，未 SET_MASK。
+
+**写前** STAT 两路径 err=0 mode `0xe1ff` size=14；OPEN/READ `00 00 00 00 00 01 00 00 00 00 00 00 00 **04**`（Ipv6=1，UsimFallback=4）。
+
+**PUT** cmd 38 item，flags `0xc0241` mode `0xe1ff`，data 末字节 **05**（mbn-mcfg-tools `ImsParamSrc` **UsimOnly=5**；公开 MBN 样本里没见过 5，只见过 2/4）。路径：
+
+- `/nv/item_files/ims/qp_ims_dpl_config`
+- `/nv/item_files/ims/qp_ims_dpl_config_Subscription01`
+
+应答 `4b 13 26 00 ff e1 00 00 00 00` errno=0。读回两份皆 `… 00 **05**`。
+
+**lpm→online** SUCCESS；dpl 读回仍 05。NAS home CT。HWP **0**。MM 再连 ctnet `10.37.67.57` + ims `240e:579:488:965:…4a05`。81voltd pid 5323 **CONNECTION_CHANGED err=0** + 0x2E gold。
+
+**IMSA** BIND 0 SUCCESS；GET_REG **status=0 not-registered error 0**；IND 8 s **0 条**。GET_SVC TLV 0x16=2 0x17=1。rproc running。未 Dump。
+
+**判读**：EFS 写进去了且过了 lpm/online。UsimOnly=5 **没有**让栈开始 REGISTER。358880 可能不认枚举 5（公开 MBN 只用 2/4），仍走 CardRead 空 IMPI；或认了但还缺别的使能。下一刀若还动 dpl：`NvRead=1`（用已有 `qp_ims_param_config` 3gpp IMPI），或回到 CardRead 失败才能 Fallback。未把 05 改回去。
+
+**设备终态**：槽 a L0；mode 0；LTE home；MM ctnet+ims；dpl ImsParamSrc=**5**；IMSA 未注册；HWP 0；NCM 通。
+
+## 2026-09-16 — dpl ImsParamSrc 5→1 NvRead；param_config 仍是 3gpp IMPI；IMSA 仍 status=0（enchilada）
+
+用户批继续。未写 SIM。未 SET 0x8f/0x2C。未 `ip -6 addr add`。DIAG 只做 EFS，未 SET_MASK。
+
+**写前**：dpl 仍 `… 05`。`qp_ims_param_config` 833 B 开头 ASCII **`460110440364089@ims.mnc011.mcc460.3gppnetwork.org`**（与 IMSI 推导一致）。
+
+**PUT** 末字节 **01**（`ImsParamSrc=NvRead`）。两路径 errno=0。读回 `00 00 00 00 00 01 00 00 00 00 00 00 00 **01**`。
+
+**lpm→online** SUCCESS；dpl 仍 01。NAS home CT。HWP **0**。MM ctnet `10.57.20.102` + ims `240e:579:498:1249:…da9b`。81voltd pid 5823 **CONNECTION_CHANGED err=0**。
+
+**IMSA** BIND 0 SUCCESS；GET_REG **status=0 not-registered error 0**；IND 8 s **0 条**。rproc running。未 Dump。
+
+**判读**：UsimOnly=5 和 NvRead=1 都写进 EFS 且过了无线电开关，**都没有**让栈开始 REGISTER。公开 MBN 只用 2/4，358880 可能忽略 0/1/5，身份仍走 CardRead 空 IMPI；或者身份源根本不是这块墙。dpl 现留 **01**，未改回 4。
+
+**设备终态**：槽 a L0；mode 0；LTE home；MM ctnet+ims；dpl ImsParamSrc=**1**；IMSA 未注册；HWP 0；NCM 通。
+
+## 2026-09-16 — DIAG IMS-only：sip156e=0；qmapmux0.1 DOWN 无地址（enchilada）
+
+用户批继续。未写 SIM/NV。未 SET 0x8f。未 `ip -6 addr add`。未全 1 SET_MASK。dpl 仍 NvRead=1。
+
+**DIAG**（已在役 router，IMS 项 SET_MASK 281 B SUCCESS）：`diag-sip 40`，同期重启 81voltd。听 40 s：**pkts=1 logs=0 sip156e=0 imsreg1832=0**。仅 EVENT `0x60`。81voltd 仍 **0x2E gold + CONNECTION_CHANGED err=0**（addr `…da9b`）。此前全 1 掩码能收到 `0x158c`，故 **0x156E 在 range 内**；0 帧不是 CNTL 没开。
+
+**数据面（只读）**：MM bearer IMS 仍报 `qmapmux0.1` IPv6 `240e:579:498:1249:cd83:316b:8588:da9b` DNS `240e:5a::6666`。内核：`qmapmux0.0`/`qmapmux0.1` **存在但 DOWN**（`qdisc noop`，无 flags、无 IPv6）。未 ifconfig UP。未手填地址。
+
+HWP **0**。rproc running。未 Dump。
+
+**判读**：PDN 在 modem/MM 侧 CHANGED err=0，基带 **40 s 内没有 SIP REGISTER 日志**。IMSA error 0 不是「发了但问不到」。AP mux 口 DOWN 解释不了 on-modem SIP（那条不走 AP 口）；最多说明 lpm/online 后 MM 的 netlink 口没起来。身份源 1/5 之后仍无 SIP。
+
+**设备终态**：槽 a L0；mode 0；LTE home；MM 报 ctnet+ims；mux 口 DOWN；sip156e=0；dpl=1；HWP 0；NCM 通。
+
+## 2026-09-16 — qmapmux UP：IMS SLAAC 自来；IMSA 仍 status=0（enchilada）
+
+用户批继续。未写 SIM/NV。未 SET 0x8f。未 `ip -6 addr add`。只 `ip link set qmapmux0.0/0.1 up`。disable_ipv6 已是 0。
+
+**UP 后**：两口 `<UP,LOWER_UP>` qdisc pfifo。qmapmux0.0 仅 fe80。qmapmux0.1 **SLAAC** `240e:579:498:1249:ac64:d1ff:fe20:2aa6/64`（与 MM 报的 `…:da9b` 同前缀、不同 IID，非手填）。default v6 via `fe80::dd81:ba9a:c860:6df3` dev qmapmux0.1。`ping -6 -I qmapmux0.1 240e:5a::6666` **2/2 丢**（有路由）。
+
+**IMSA** BIND 0 SUCCESS；GET_REG **status=0 not-registered error 0**；IND 8 s **0 条**。HWP **0**。rproc running。未 Dump。
+
+**判读**：AP mux DOWN 不是「没发 REGISTER」的原因。口起来、SLAAC 有了，栈仍 idle。
+
+**设备终态**：槽 a L0；mode 0；LTE home；qmapmux0.1 UP+SLAAC；IMSA 未注册；dpl=1；HWP 0；NCM 通。
+
+## 2026-09-16 — 新建 qp_ims_reg_config PowerOn+IMSI 用户名；IMSA 仍 status=0（enchilada）
+
+用户批继续。未写 SIM。未 SET 0x8f。未 `ip -6 addr add`。DIAG 只写 EFS。
+
+**写前 STAT**：`qp_ims_reg_config` / `_Subscription01` **err=2 ENOENT**。`IMS_enable=1`，`ims_operation_mode=2`，`qp_ims_reg_config_db` 1024 B offset 195 仍 `02 00 08 07`。
+
+**文献**（mbn-mcfg-tools `QpImsRegConfig` NV 67264，regular file perm 33279）：`RegOnMode` PowerOn=0 / OnCall=1；`RegModeConfig` ImsWithoutIpSec=3；`RegRatConfig` Lte=10；`RegUserNameImsi` u16；`RegPcScfPort` 5060。合计 **405 B**。缺文件时走 MBN 默认（公开样本里有 OnCall）。
+
+**写入**（OPEN/WRITE 非 item PUT）两路径各 405 B：OnMode=0、ModeCfg=3、APN=`ims`、PCO=1、RAT=10、**UserNameImsi=1**、Attempts=4、Port=5060。STAT mode `0x81ff` size=405。读回 **CMP_OK**。
+
+**lpm→online** SUCCESS；文件仍在。NAS home CT。HWP **0**。MM ctnet+ims connected。81voltd **CHANGED err=0**（`…4a0e`）。
+
+**IMSA** BIND 0 SUCCESS；GET_REG **status=0 not-registered error 0**；IND 8 s **0 条**。未 Dump。
+
+**判读**：开机注册档按公开 struct 补上了，无线电也过了，栈仍不发 REGISTER。要么 358880 不读这份 405 B 布局，要么卡上 ISIM 空 IMPI 仍优先于 `RegUserNameImsi`。
+
+**设备终态**：槽 a L0；mode 0；LTE home；MM ctnet+ims；reg_config 405 B PowerOn；dpl=1；IMSA 未注册；HWP 0；NCM 通。
+
+## 2026-09-16 — PowerOn 档后再听 DIAG：sip156e 仍 0（enchilada）
+
+用户批继续。未写 SIM。未 SET 0x8f。未全 1 掩码。`qp_ims_reg_config` 仍 405 B PowerOn（STAT 未变）。
+
+**DIAG IMS-only** 40 s，同期重启 81voltd：**pkts=0 logs=0 sip156e=0 imsreg1832=0**。GET_LOG_RANGE equip1_range=2120（0x156E 仍在 range）。81voltd **CONNECTION_CHANGED err=0**（`…4a0e`）。
+
+**IMSA** BIND 0 SUCCESS；GET_REG **status=0 error 0**；IND 8 s **0 条**。HWP **0**。rproc running。未 Dump。
+
+**判读**：补了开机注册档之后，基带 **仍然不发 SIP**。不是「发了 DIAG 没收到」。PDN + 0x2E 金标 + PowerOn + NvRead 都不够压过空 ISIM IMPI。
+
+**设备终态**：槽 a L0；mode 0；LTE home；MM ctnet+ims；sip156e=0；IMSA 未注册；HWP 0；NCM 通。
+
+## 2026-09-16 — 金标拆文件：imsdata.st 只是 770/WDS；358880 IMS 0x28=err54、0x2A 空 SUCCESS（enchilada）
+
+用户批继续，按「对 qcrild 金标、只打位图里有的」走。未切槽。未塞 437410。未 SET 0x8f/0x2C。未写 SIM。
+
+**Lineage 本机抓包** `.local/device/enchilada/lab/los-qmi-capture/imsdata.st`：是 **imsdatadaemon** 的 QRTR，不是 qcrild。能看到的 QMI：770 START/CHANGED、WDS **0xA2 BIND_MUX mux=4 SUCCESS**、**0xAF BIND_SUB=2**、**0x4D SET_IP_FAMILY**、**0x20 START**（TLV 0x35 calltype=1）。没有 IMS Settings 0x8f/0x2C。qcrild 那串 0x8f 来自 OpenIMSd **OP6T 公开 pcap**，本机 358880 已逐 TLV 重放 **全 err70**（2026-09-15）。
+
+**位图里有、以前没单独 GET 的 IMS 消息**（BIND 0 之后，同一客户端）：
+
+| msg | 结果 |
+|-----|------|
+| 0x0028 | FAILURE **error 54**（TLV 0x10=`03`） |
+| 0x002A | **SUCCESS**，应答只有 result，无其它 TLV |
+| 0x002C | 位图无，不发 |
+
+HWP **0**。rproc running。未 Dump。
+
+**判读**：Lineage 能通的「多出来的文件」不在内核树。本机金标 strace 里 AP 多做的是 **WDS mux=4 + calltype=1**（81voltd/MM 路径已覆盖到 PDN err=0）。写身份的 0x2C 在 358880 上不存在；使能序 0x8f 位图有但运行时 70。再往 `/lib/firmware` 加 LOS mbn 或再打 0x8f 没有新出处。
+
+**设备终态**：槽 a L0；mode 0；LTE home；IMSA 未注册；HWP 0；NCM 通。
+
+## 2026-09-16 — 358880 IMS 位图全 GET：0x70 端口 5060；0x73 字符串 CTNET（enchilada）
+
+用户批继续。只 GET，未 SET 0x8f/0x2C。未塞 437410。BIND 0 后扫位图全部 GET 口（除 0x8f）。
+
+**位图有的 IMS 消息**：0x1e, 0x23, 0x28, 0x2a, 0x48, 0x56, 0x5d–0x5e, 0x63–0x64, 0x66–0x6a, 0x6c–0x6d, 0x6f–0x70, 0x72–0x75, 0x77–0x78, 0x7a–0x7b, 0x7d–0x7e, 0x80–0x81, 0x83–0x84, 0x86–0x87, 0x89–0x8a, 0x8c–0x8d, **0x8f**, 0x90, 0x96, 0x98, 0x9a。无 0x2C。
+
+**带载荷的 GET**（其余多为空 SUCCESS 或 err17 缺参）：
+
+| msg | 要点 |
+|-----|------|
+| 0x5e | 一长串 u32（定时器类，0x11/0x13/0x23–0x25=`0x78`） |
+| 0x64 | `01 01 01 00` |
+| 0x68 | 多 u32；0x11=`0x7d0`(2000) 0x12=`0x3e80`(16000) |
+| **0x70** | 0x12=`1e00`(30) 0x13=`0807` **0x15=`c413`=5060**（与手写 `qp_ims_reg_config` 端口一致 → 这份 EFS **有被读**） |
+| **0x73** | 0x11=1 0x12 ASCII **`CTNET`** |
+| 0x75 | 0x12=`01` |
+| 0x78 | ASCII **`audio`** |
+| 0x7e | ASCII **`video`** |
+| 0x90 | 业务位仍 1（voice/vt/…） |
+| 0x9a | 0x11=`01` |
+| 0x66/0x89/0x96 | err **17** MISSING_ARGUMENT |
+
+HWP **0**。rproc running。未 Dump。未改 IMSA（本条只 GET）。
+
+**判读**：reg_config 不是完全被忽略（5060 能从 0x70 读回来）。0x73 报的 APN 是 **CTNET 不是 ims**——若这条是 IMS 信令 APN，栈可能还在用上网 APN。未 SET。下一刀若动，只考虑把 0x73 对上的 SET（需先确认偶/奇口），不是再打 0x8f。
+
+**设备终态**：槽 a L0；mode 0；LTE home；IMS GET 扫描完；IMSA 未注册；HWP 0；NCM 通。
+
+## 2026-09-16 — 0x73 不是 0x72 的 SET；EFS APN 已是 ims；CTNET 来自 attach（enchilada）
+
+用户批继续。未写 SIM。未 SET 0x8f/0x2C。未 `ip -6 addr add`。未塞 437410。未 rproc-stop。
+
+本机 **uptime 4h+**，mode 0，LTE home 46011，HWP **0**。MM 已 connected：Bearer/1 `ctnet` IPv4 mux `qmapmux0.0`；Bearer/2 **`ims` IPv6** mux `qmapmux0.1`。进会话时两条 qmapmux 都是 **DOWN**（MM D-Bus 仍报 connected）；`ip link set up` 之后 0.1 出现 SLAAC `240e:579:478:16ea:…`（tentative→global）。未手写 IPv6。
+
+**0x72 / 0x73 配对（BIND 0，空请求）**：
+
+| 口 | 空请求 | 带任何 TLV |
+|----|--------|------------|
+| 0x6f | SUCCESS 无载荷 | — |
+| 0x70 | SUCCESS 端口 **5060** | — |
+| **0x72** | SUCCESS 无载荷 | **err 1 MALFORMED**（0x12=`ims` / 0x10=`ims` / 镜像 0x73 / u16 长度前缀 全 1） |
+| **0x73** | SUCCESS **CTNET** | 多带 0x12=`ims` 仍回 CTNET（当 GET，忽略入参） |
+
+0x73 载荷：TLV 0x11 u32=`1`，0x12 ASCII **`CTNET`**（5 B，无长度前缀），0x13 u32=`0`，0x14 空。公开 IDL 里没有把 0x72 标成这条 GET 的 SET；实测 **0x72 是无参 GET**，不是写口。
+
+**EFS** `/nv/item_files/ims/qp_ims_reg_config` 405 B：开头 `00 03 69 6d 73` = OnMode 0 + APN **`ims`**；尾 `c4 13` = 5060（与 0x70 一致）。`_Subscription01` 同。`qp_ims_reg_config_db` / `RegistrationConfiguration` / `ims_sip_config` / `DANConfiguration` **都没有 CTNET**。`qp_ims_param_config` 833 B 是 `460110440364089@ims.mnc011.mcc460.3gppnetwork.org`（IMSI 派生 NAI，不是 cingular）。
+
+**WDS 3GPP profile**（GET 0x2B type=0；先前 argc=4 没写 idx，err 81）：
+
+| idx | APN |
+|-----|-----|
+| 1 | **ctnet** |
+| 2 | **IMS** |
+| 3 | ctwap |
+| 4 | sos |
+
+**WDS GET_LTE_ATTACH_PARAMETERS** 0x85 TLV 0x10 = **`ctnet`**。DSD GET_SYSTEM_STATUS 仍列 ctnet/ctwap/ims/sos。libqmi DSD GET_APN_INFO **0x0033** type 0/1/2/8 全 **err 0x4A**。
+
+**IMSA** BIND 0 SUCCESS；GET_REG **status=0 error 0**；IND 8 s **0 条**。未 Dump。
+
+**判读**：信令 APN 在 EFS 和 WDS profile 2 已经是 ims/IMS。0x73 的 CTNET 跟 **attach/上网 APN** 同字，不在 IMS EFS 里，也 **没有** 对上的 SET（0x72 一加 TLV 就 MALFORMED）。把 0x73 改成 ims 这条刀走不通。位图里还缺参的只有 0x66/0x89/0x96（err17），未盲写。PDN + mux UP + 5060 + IMSI NAI 仍不发 REGISTER。
+
+**设备终态**：槽 a L0；mode 0；LTE home；qmapmux0.0/0.1 UP；MM ctnet+ims connected；0x73 仍 CTNET；IMSA 未注册；HWP 0；NCM 通。
+
+## 2026-09-16 — IMS 0x66/0x89/0x96：缺的是 TLV 0x01；0x96 仍不成型（enchilada）
+
+用户批查 0x66/0x89/0x96。未写 SIM。未 SET 0x8f/0x2C。未 `ip -6 addr add`。未塞值类 TLV（不写 APN/使能）。BIND 0。
+
+空请求三口仍 **err 17** MISSING_ARGUMENT。IMS **0x1F GET_SUPPORTED_FIELDS**（TLV 0x01=msg_id u16）三口全 **err 3 INTERNAL**——358880 不实现按消息查字段。
+
+**邻居空请求**（对照位图）：
+
+| 口 | 结果 |
+|----|------|
+| 0x65 / 0x88 / 0x95 / 0x97 | err **57** NOT_SUPPORTED（位图无） |
+| **0x67** | SUCCESS 无载荷 |
+| **0x68** | SUCCESS 定时器：0x11=`2000` 0x12=`16000` 0x13=`17000` 0x19=`128000`（与全 GET 扫描相同） |
+| **0x8a** | SUCCESS TLV 0x11 **空串** |
+| 0x8c | SUCCESS 无载荷 |
+| 0x8d | SUCCESS 0x11=`00 04 00 00 00 00 00 00` 0x12 空 |
+| **0x9a** | SUCCESS 0x11=`01` |
+
+**选择子（只带一个 TLV）**：
+
+| 口 | 0x01 u8=0..8 | 0x01 u16/u32 | 0x10 u8=0 | 0x11 / 0x12 |
+|----|----------------|--------------|-----------|-------------|
+| **0x66** | **SUCCESS 无回包** | err 1 | 仍 err 17 | 仍 err 17 |
+| **0x89** | **SUCCESS 无回包**（u16/u32=0 也 SUCCESS） | SUCCESS | 仍 err 17 | 仍 err 17 |
+| **0x96** | u8=0 → **err 3**；u8=1..8 → **err 1** | err 1 | err 1 | 0x11 err 1；0x12 仍 err 17 |
+
+打完 0x66/0x89 的 0x01 u8 之后再 GET：0x67/0x68/0x8a/0x8d/0x9a **字节未变**；空 0x66/0x89 仍 err 17。HWP **0**。未 Dump。
+
+**判读**：0x66 和 0x89 缺的是 **TLV 0x01**（0x66 必须正好 1 字节）。SUCCESS 只有 result、配对 GET 不变 → 像无值 SET/选择子，不是能读出 APN 的 GET。0x8a 空串不是被 0x01 写进去的。0x96 只承认 0x01 长度为 1 且值为 0，随后 INTERNAL，结构还对不上。未再塞值 TLV。公开 IDL 没有把这三口的必选字段列全；0x1F 在这台固件上帮不上。
+
+**设备终态**：槽 a L0；mode 0；LTE home；0x66/0x89 需 0x01；0x96 未解开；IMSA 未注册；HWP 0；NCM 通。
+
+## 2026-09-16 — 0x67/0x8a 不收选择子（err58）；0x96 标签图（enchilada）
+
+用户批继续。未写 SIM。未 SET 0x8f。未往 0x66/0x89 塞值 TLV。BIND 0。mode 0。HWP **0**。
+
+**把 0x01 打在配对 GET 上**（这两口空请求本来就是 SUCCESS）：
+
+| 口 | 空 | + TLV 0x01 u8 |
+|----|----|----------------|
+| 0x67 | SUCCESS 无载荷 | **err 58 ENCODING**（0–8 全是） |
+| 0x8a | SUCCESS 空串 | **err 58** |
+| 0x9a | SUCCESS 0x11=`01` | **err 58** |
+
+这三口 GET **不收请求 TLV**。0x66/0x89 的 0x01 只属于 SET 侧。
+
+**0x96 单 TLV 标签扫描**（值一律 u8=0，除非另写）：
+
+| 标签 | 结果 |
+|------|------|
+| 无 | err **17** |
+| 0x01 u8=0 | err **3** INTERNAL |
+| 0x01 u8=1..8 | err **1** |
+| 0x01 u8=`0xff` | err **19** INVALID_ARG |
+| 0x01 空 / 0x01+0x10 | err **1** |
+| 0x02–0x0f | err **58** ENCODING（解码器当未知标签扔掉） |
+| **0x10** 任意宽度（u8/u16/u32/u64/空） | err **1**（标签认识，长度/值对不上） |
+| 0x11 u8/u32 | err **1**；u16 被忽略 → 仍 err 17 |
+| 0x12–0x16 | 仍 err **17** |
+
+未 Dump。未改 IMSA。
+
+**判读**：0x66/0x89 是带必选 0x01 的写口，配对读口 0x67/0x8a 没有选择子、也读不出 APN。0x96 的 0x01=0 能进实现然后 INTERNAL（像未实现的枚举 0）；0x10 在 IDL 里但宽度一直 MALFORMED。这三口目前读不出能叫醒 REGISTER 的东西，值字段仍缺公开 IDL，不再盲写。
+
+**设备终态**：槽 a L0；mode 0；LTE home；0x66/0x89/0x96 查完结构；IMSA 未注册；HWP 0；NCM 通。
+
+## 2026-09-16 — IMSA 仍 idle；LTE 语音域 NONE；旁路 WDS 读不到 P-CSCF（enchilada）
+
+用户批继续。0x66/0x89/0x96 不再盲写。未写 SIM。未 SET 0x8f。未 `ip -6 addr add`。未抢 MM 的 WDS CID。
+
+**文献**：CafeTele VoNR gate-1 — 没有 P-CSCF 就不会发 SIP REGISTER。3GPP TS 23.228 5.1.1 — IP 连通之后还要完成 P-CSCF 发现。flamingradian IMS-QUALCOMM — 数据口起来之后还要额外 QMI，基带不知道 AP 何时把 IMS PDN 建完（本树对应 770 CONNECTION_CHANGED）。qcril `cmsds.c` — IMS 失败会让 NAS 报 LTE 无语音。
+
+**本机** uptime ~5h，mode 0，HWP **0**。MM Bearer/2 **connected** apn=`ims` IPv6 `qmapmux0.1`（SLAAC `240e:579:478:16ea:…`；MM 静态地址另一条；DNS `240e:5a::6666`）。81voltd pid 9170。770 NEW_SERVER node 1 port 16392。
+
+**IMSA** BIND 0 SUCCESS；GET_REG **status=0 error 0**；IND 8 s **0 条**。
+
+**NAS GET_SYS_INFO 0x4D**：TLV **0x29=1**（IMS Voice Support）；TLV **0x2A=0 NONE**（LTE Voice Domain）。**NAS GET_SSP 0x34**：service domain **2 ps-only**；voice domain pref **3 ps-preferred**。偏好是 VoLTE，小区当前语音域仍是 NONE。
+
+**WMS 0x4A** GET_TRANSPORT_NW_REG 仍 **err 52 DEVICE_NOT_READY**。
+
+**WDS GET_CURRENT_SETTINGS 0x2D** mask `0x4FF30`（含 P-CSCF，与 2026-09-15 金标同）：本客户端 BIND_SUB + BIND_MUX mux=2/3 均 SUCCESS，随后 GET **err 15 OUT_OF_CALL**。PDN 在 MM 的 WDS CID 上，旁路客户端不是呼叫主人。MM 1.22 bearer 只报 DNS，没有 P-CSCF 字段。这次 **没证明** 本 boot 的 IMS PDN 带不带 `240e:2e:8201:…` 那条 P-CSCF。
+
+未 Dump。未改 NV。
+
+**判读**：使能偏好已经是 PS/IMS，但 LTE 语音域仍 NONE、WMS 仍 52、IMSA 仍 idle——和「根本没发 REGISTER」一致，不是 0x66/0x89/0x96 能读出来的开关。P-CSCF 这条 CafeTele 门，这次用旁路 WDS 读不到（err 15），不能当本 boot 缺代理。下一刀若动，是在 **不拆 MM bearer** 的前提下读到 0x2e，或对 770 CHANGED 之后仍 idle 的触发口（公开的还是 0x8f，本机运行时 70）。
+
+**设备终态**：槽 a L0；mode 0；LTE home；MM ctnet+ims；NAS 0x29=1 0x2A=NONE；IMSA 未注册；HWP 0；NCM 通。
+
+## 2026-09-16 — mux UP 后仍无 SIP；IMSPRIVATE 是 WFC 不是 REGISTER（enchilada）
+
+用户批继续。未写 SIM。未 SET 0x8f/0x2C。未 `ip -6 addr add`。未抢 MM WDS CID。未 rproc-stop。0x66/0x89/0x96 不再盲写。
+
+**文献**：cnss2 `ip_multimedia_subsystem_private_service_v01.h` — `IMSPRIVATE_SERVICE_ID_V01=0x4D`，公开消息只有 **0x3E SUBSCRIBE_FOR_INDICATIONS**（`mt_invite` / `wfc_call_status`）和 **0x40 WFC_CALL_STATUS_IND**。这是 WiFi Calling 订阅，不是 SIP REGISTER。libqmi：IMSVT=0x20、IMSRTP=0x28、IMSP=0x1F。flamingradian IMS-QUALCOMM — PDN 起来之后的额外 QMI 是让基带知道 AP 建完了数据口（本树 = 770 CONNECTION_CHANGED）。QMI err 57=NOT_SUPPORTED；err 71=INVALID_QMI_COMMAND（opcode 未实现）。
+
+**本机** uptime ~5h13，槽 a，serial `b0d9f7fe`，mode **0**，rproc0–3 running。MM Bearer/1 ctnet IPv4 `10.151.191.92` qmapmux0.0 **UP**；Bearer/2 ims IPv6 connected qmapmux0.1 **UP**。内核 SLAAC `240e:579:478:16ea:ac72:a9ff:fe0a:417d/64`；MM 静态 `240e:579:478:16ea:bc94:4d62:6679:4a0e/64`（**不在** `ip -6 addr` 上）。DNS `240e:5a::6666`。MM JSON **无 P-CSCF 字段**。统计 rx **88** tx **152**（DIAG 听完未涨）。81voltd pid **9170** `/usr/bin/81voltd`。diag-router pid 5132。dmesg 无 `ipa_hwp_init` 行。
+
+**770**：本靴 `CONNECTION_CHANGED` **err=0** 两次（04:04:16 / 04:08:28），addr=`…:bc94:4d62:6679:4a0e`（MM 静态，不是内核 SLAAC）。0x2E gold `TLV 0x10=0x5f`。其后只剩 DEL_CLIENT。
+
+**enumsvc**：IMS 0x12 `0:90`；IMSA 0x21 `0:89`；IMSPRIVATE 0x4D `0:86`；770 node **1** port **16392**。**IMSP 0x1F / IMSVT 0x20 / IMSRTP 0x28 无 NEW_SERVER**。
+
+**GET 0x1E（只读）**：
+
+| 服务 | 结果 |
+|------|------|
+| IMSVT 0x20 | ABSENT |
+| IMSRTP 0x28 | ABSENT |
+| IMSP 0x1F | ABSENT |
+| IMSPRIVATE 0x4D | 有服务器；0x1E **err 57** NOT_SUPPORTED |
+| DSD 0x2A | 0x1E **err 57** |
+| VOICE 0x09 | 0x1E **err 71** INVALID_QMI_COMMAND |
+
+358880 这三口不实现 GET_SUPPORTED_MESSAGES，位图读不到。未打 0x3E 订阅（那是 WFC SET）。未再 SET DSD 0x34 / VOICE 0x40。
+
+**IMSA** BIND tlv 0x10=0 SUCCESS；GET_BIND Binding=**0**；GET_REG **status=0 error 0** tech=1；GET_SVC 只有 TLV **0x16=2（TAS）0x17=1（wwan）**，无 SMS/Voice；8 s IND **0**。无 BIND 的 GET_REG **err 70**（客户端未绑，不是栈变了）。
+
+**NAS**：0x29=**1**；0x2A=**NONE**；SSP domain **ps-only**、voice pref **ps-preferred**。**WMS 0x4A** 仍 **err 52**。
+
+**DIAG**（已在役 router；`diag-sip` 默认 45 s IMS 项）：GET_LOG_RANGE equip1_range=**2120**（0x156E 仍在 range）；SET_MASK SUCCESS 281/293 B。听 45 s：**pkts=0 logs=0 sip156e=0 imsreg1832=0**。mux 已 UP，仍 0 帧。未 Dump。未改 NV。
+
+**判读**：PDN + mux UP + SLAAC + CONNECTION_CHANGED err=0 之后，基带还是没发 SIP（0x156E=0，IMSA idle error 0）。IMSPRIVATE 在这台固件上只是 WFC 口，0x1E 都没有，叫醒不了 REGISTER。DSD/VOICE 的 0x1E 同样未实现，OpenIMSd 那两口金标 SET 以前已经 SUCCESS，这次没再写。公开的 CHANGED 后触发口仍是 0x8f（Binding=0 已是 1，再 SET 是空操作；绑错订户才 70）。本 boot 仍没从 MM 读到 P-CSCF 字段；旁路 WDS 仍不能抢 CID。
+
+**设备终态**：槽 a L0；mode 0；LTE home；MM ctnet+ims、mux UP；sip156e=0；IMSA 未注册；HWP 0；NCM 通。
+
+## 2026-09-16 — 只读身份：overideconfig 不在；NvRead=1 + 3gpp NAI 仍无 REGISTER（enchilada）
+
+用户批继续。未写 SIM。未 SET 0x8f/0x2C。未改 dpl。未 `ip -6 addr add`。未抢 MM CID。DIAG 只做 EFS STAT/READ。
+
+**文献**：XDA Qualcomm IMS demystify — 改 identification domain 用 **`overideconfig`** 文件（MBN 拼写缺 r）。JohnBel QualcommMBNs 抽出 `efsprofiles/overideconfig__E1FF_F`（INI：`[QIPCALL:ImsVoiceConfig]` 等，不是 IMPI 串）。mbn-mcfg-tools `ImsParamSrc` FileRead=0 / NvRead=1 / CardRead=2 / UsimFallback=4 / UsimOnly=5。本机先前已写过 **5 和 1**，都没发 SIP。TS 24.229 5.1.1.1A：有 ISIM 必须用 ISIM。槽 b Lineage `dumpsys` 只有 P-CSCF，**没有**留下 IMPI/DOMAIN 文本。
+
+**本机** uptime ~5h53，槽 a，mode 0，mux `qmapmux0.1` UP，SLAAC `240e:579:478:16ea:ac72:…`。81voltd 9170。diag-router 5132。dmesg 无 `ipa_hwp_init`。
+
+**EFS STAT/READ**（`/tmp/efs-rw`）：
+
+| 路径 | 结果 |
+|------|------|
+| `/nv/item_files/ims/overideconfig` 及 override / efsprofiles / `/data` / `/ims` 变体 | **err 2 ENOENT** |
+| `qp_ims_private_id` / `public_id` / `domain_name` / `qp_ims_config` | **ENOENT** |
+| `qp_ims_dpl_config` 与 `_Subscription01` | size 14，`… 00 **01**`（Ipv6=1，**NvRead**） |
+| `qp_ims_param_config` 833 B | ASCII **`460110440364089@ims.mnc011.mcc460.3gppnetwork.org`** + 域 `ims.mnc011.mcc460.3gppnetwork.org` |
+| `qp_ims_reg_config` | 405 B 在 |
+| `IMS_enable` | `01` |
+
+**UIM**（本靴卡在槽1）：`isimread6` NONPROV_SLOT_1 SUCCESS，EF_IMPI `80 10` + **16×00**；`isimdom6` SUCCESS `80 12` + **`ims.cingularme.com`** SW 9000。`usimread5` SUCCESS（USIM 在）。其它 ISIM 会话形状 err 3。
+
+**IMSA** BIND 0 SUCCESS；GET_REG **status=0 error 0**；GET_SVC 仅 TAS；8 s IND **0**。未 Dump。未改 NV。
+
+**判读**：XDA 那条 `overideconfig` 在这台 EFS 上 **不存在**，不能当本 boot 的身份覆盖文件。NvRead=1 已经指向填好的 3gpp `param_config`，mux 也 UP，仍然 **不发 REGISTER**——要么 358880 忽略 ImsParamSrc 仍走卡上的空 IMPI，要么身份源不是这块「完全不发 SIP」的墙。FileRead=0 还没试，但目标 INI 也是 ENOENT，盲写 0 没有文件可读。未写卡。
+
+**设备终态**：槽 a L0；mode 0；LTE home；dpl NvRead=1；overideconfig 无；ISIM 空 IMPI + cingularme；IMSA 未注册；HWP 0；NCM 通。
+
+## 2026-09-16 — 槽 b 抓 qcrild：Lineage 卡开机动画；qcrild 在但几乎无 IMS QMI（enchilada）
+
+用户批切槽 b 抓 qcrild。未 wipe userdata。未写 SIM/NV。未 SET 0x8f/0x2C。
+
+**切槽**：L0 `reboot bootloader` **只回到槽 a**（uptime 重置，NCM 回来）。用户进 fastboot 后：serial **`b0d9f7fe`** product **sdm845** current-slot a。`flash dtbo_b` ← `lab/los-20260909-dtbo.img` OK。`set_active b` OK。`reboot` 一次仍停在 fastboot；再 `reboot` 后 adb。
+
+**Lineage**：`lineage_enchilada-userdebug 15` slot `_b`，adb root。uptime 0–4 min：**`sys.boot_completed` 空**，`init.svc.bootanim=running`。SIM numeric 空。logcat：`BOOT FAILURE making Lock Settings Service ready` — `/data/system/locksettings.db` 与 `recoverablekeystore.db` **Permission denied**（userdata 仍是 L0 Linux 根）。未 chown。未 wipe。
+
+**进程在**：`qcrild` 1609 + 1639，`imsdatadaemon` 1635，`imsqmidaemon` 1459，`ims_rtp_daemon` 2311，`netmgrd` 1468。SELinux 已 Permissive 只为 strace。
+
+**strace 40 s**（`trace=network`，存 `lab/los-qmi-capture/qcrild-20260916Tbootanim/`）：1609 **676 B**、1639 **231 B**。内容是 QRTR 控制包 + 一帧 QMI **msg 0x26** TLV 0x11=1 0x12=1，应答 **err 70 INVALID_OPERATION**。**没有 IMS Settings 0x8f/0x2C，没有 IMSA BIND。** 开机未完成，电话栈没把 IMS 使能序跑起来。
+
+**回槽 a**：Lineage `adb reboot bootloader` OK。serial 闸过，`set_active a` OK，reboot。NCM ~24 s 回来，槽 **`_a`**，serial `b0d9f7fe`，model OnePlus 6。未 Dump。dtbo_a 未动。
+
+**判读**：同 2026-09-15 那次，L0 userdata 上 Lineage 完不成开机，**抓不到注册成功时的 qcrild QMI**。qcrild 进程在不等于 IMS 序在跑。要这份金标，需要 Android 的 `/data`，不能在现有 L0 根上、也不能 wipe。
+
+**设备终态**：槽 a L0；NCM 通；userdata 未 wipe。
+
+## 2026-09-16 — 起 ctnet；去掉 81voltd（enchilada）
+
+用户确认：蜂窝+WiFi，短信先淘汰；起 ctnet；去掉 81voltd。未连 IMS。未写 SIM/NV。未 SET 0x8f。未 `ip -6 addr add`。未 wipe。
+
+**81voltd**：pid 266 已杀；`/etc/init.d/modem-bringup` 与仓库 `devices/enchilada/bringup/modem-bringup` 去掉自动启动。二进制仍在 `/usr/bin/81voltd`，开机不再拉。
+
+**铁律**：uptime ~18 min、mode 5。`insmod ipv6.ko`；`disable_ipv6` all+default=1。`insmod ipa.ko` → kmsg **`IPA driver setup completed successfully`**，HWP **0**，rproc3 running。`insmod rmnet.ko` → `rmnet_ipa0`。settle 60s。`provision` slot1 SUCCESS。`online` SUCCESS **mode 0**。NAS **reg=1 home / ps ATTACHED / CT 46011**。HWP 仍 0。
+
+**MM**：dbus（root）+ udevd + polkitd + MM 1.22。`mmcli --enable` **registered** CHN-CT 46011 LTE 65%。`--simple-connect=apn=ctnet,ip-type=ipv4` **connected**。Bearer/1 `qmapmux0.0` IPv4 `10.67.198.103/28` gw `.104` DNS 218.2.2.2/218.4.4.4。无 Bearer/2。
+
+**数据面**（`ip link set up` + `ip addr add`，未改 usb0/wlan 默认路由）：
+
+- `ping -I qmapmux0.0 218.2.2.2` **3/3**
+- `ping -I qmapmux0.0 8.8.8.8` **3/3**
+- `ping 1.1.1.1`（wlan0）仍通
+- usb0 `10.9.8.1` 仍通
+
+未 Dump。81voltd 不在。
+
+**设备终态**：槽 a L0；WiFi + NCM + ctnet 出网；无 IMS PDN；无 81voltd。
+
+## 2026-09-16 — 人用轨：panel-off 之后 SETCRTC 成功；bootcard 就位（enchilada）
+
+用户确认 enchilada 做人用智能体手机，先做屏/键，不管 redfin、不做相机。未 wipe。未改 NV。未连 IMS。
+
+**本机**：槽 a L0，serial `b0d9f7fe`。DRM `card0-DSI-1` 1080x2280 connected。开机仍走过 `aginx-panel-off`（kmsg t=9s `pipeline down`）。输入仍是 event0 电源 / event1 拨片 / event2 霍尔 / event3 音量。无触摸 event。无 `/dev/video*`。无 `aginx-term`。
+
+**现场**：zig musl 编 `splash2`+`bootcard` 推入。`/usr/bin/aginx-splash-hold 0000ff00 hold` SET_MASTER 后：
+
+- `splash2: conn=33 enc=32 mode=1080x2280`
+- `splash2: crtc=82`
+- **`SETCRTC rc=0 OK`**
+- pid **4168** 持着 DRM master
+
+应是绿底白边（splash2 默认：边 48px 白，心 `00ff00`）。**屏上颜色以人眼为准**，本条只记 ioctl。`/bin/bootcard` 已装（rcS 有 `[ -x ]` 则不再 panel-off）。包装了 `/bin/bootcard.real`：无 `/var/bin/aginx-term` 时 wordmark 结束后 `exec splash-hold`，避免 150s 后黑屏。未装 term。未编 rmi4。未 Dump。NCM 通。
+
+**设备终态**：槽 a L0；splash-hold 持屏；bootcard 已装；蜂窝/WiFi 仍在。
+
+## 2026-09-16 — 触摸绑定：Synaptics S3706B → event4（enchilada）
+
+用户确认绿屏。下一刀触摸。未 wipe。未改 NV。未连 IMS。
+
+**config**：`CONFIG_RMI4_CORE=m` `CONFIG_RMI4_I2C=m`，镜像 `/lib/modules` 原先没有这两件（只烤了 wifi/modem/ipa 链）。
+
+**模块**：86quan `/home/ubuntu/op6/linux/drivers/input/rmi4/{rmi_core,rmi_i2c}.ko`，vermagic **`6.11.0-sdm845-g2fa43795f607 SMP preempt mod_unload aarch64`** 与 `uname -r` 全同。`insmod` 皆 0。
+
+**绑定**：`12-0020` driver → `rmi4_i2c`。kmsg：`registering I2C-connected sensor`；`rmi4_f01` manufacturer Synaptics product **S3706B** fw id 2827775；`input: Synaptics S3706B` → **input4** `/dev/input/event4`。ABS 位图 `6f3800001000003`（有多轴）。本窗 8 s `dd event4` **0 包**（未点或未记到，不记成触摸已点亮）。
+
+**持久化**：`/etc/init.d/touch-bringup`（rcS 已有 `[ -x ]` 门）；`modules.txt` 加 rmi_core/rmi_i2c；`device.toml` `touch_device=/dev/input/event4`。splash-hold pid 4168 仍在。未 Dump。
+
+**设备终态**：槽 a L0；绿屏 hold；S3706B event4 在；蜂窝/WiFi 仍在。
+
+## 2026-09-16 — 触摸有 ABS：点绿屏收到 BTN_TOUCH + MT 坐标（enchilada）
+
+用户报点了。`/tmp/evread /dev/input/event4` 收到 **64** 事件。解码（linux input）：
+
+- `EV_KEY` code **330** `BTN_TOUCH` value 1 然后 0（按下/抬起）
+- `ABS_MT_TRACKING_ID` 0 然后 -1，随后第二次 id=1（两点）
+- `ABS_MT_POSITION_X/Y` **637 / 1444**（屏 1080×2280，在幅面内）
+- `ABS_MT_PRESSURE` 69→0
+
+F12 irq **0→407**，`msmgpio 125` **761**。器件仍是 Synaptics S3706B → event4。splash-hold 仍在，画面不会因触摸改变。未 Dump。
+
+**设备终态**：槽 a L0；触摸 event4 已点到坐标；绿屏 hold；蜂窝/WiFi 仍在。
+
+## 2026-09-16 — aginx-term 接管 DRM：打开 card0 + event4 触摸 + event0 电源（enchilada）
+
+用户批继续。未 wipe。未连 IMS。未改 NV。
+
+现场推 musl `aginx-term`（9-12 产物）+ `agterm-cjk.otf` → `/usr/bin/aginx-term`、`/var/bin/aginx-term`、`/usr/share/fonts/`。`device.toml` 已是 `touch_device=/dev/input/event4`、`power_device=/dev/input/event0`。杀 splash-hold。handoff 会抢第二份实例；清到 **pid 6973** 一份。
+
+**打开的 fd**：`/dev/dri/card0`、`/dev/input/event4`（S3706B）、`/dev/input/event0`（pwrkey）。DSI `enabled`。kmsg 有 `a630_sqe.fw` 失败（Adreno 固件，dumb-fb SETCRTC 不靠它；splash2 先前无此固件也 SETCRTC=0）。term 日志几乎只有 handoff 时间戳（stdio 全缓冲）。
+
+**人眼**：应从绿底白边换成待命面（近黑 + 呼吸绿光标）。本条只记 fd/DRM，画面以人眼为准。
+
+**设备终态**：槽 a L0；aginx-term 持屏；触摸/电源已接到 term；蜂窝/WiFi 仍在。
+
+## 2026-09-16 — 人眼确认待命面；补 a630 固件后 DSI 短暂 disabled 再由 term SETCRTC 拉回（enchilada）
+
+用户确认黑底呼吸绿光标。未 wipe。未连 IMS。
+
+**Adreno**：86quan `fw/qcom/a630_sqe.fw` + `a630_gmu.bin` + `a630_zap.mbn` 落到 `/lib/firmware/qcom/` 与 `/lib/firmware/`。kmsg：`Direct firmware load for qcom/a630_sqe.fw failed with error -2` 多次后 **`loaded qcom/a630_sqe.fw from new location`**、**`loaded qcom/a630_gmu.bin from new location`**。加载瞬间 DSI `enabled=disabled`；杀 term 重拉后 **enabled**，fd 仍是 card0 + event4 + event0。
+
+音量键仍是 event3，term 只开 power_device（event0）——PTT 归 voice，本机未装。未 Dump。
+
+**设备终态**：槽 a L0；term 待命面；a630 固件已在盘；蜂窝/WiFi 仍在。
+
+## 2026-09-16 — 重启验收：term 能起来；bootcard SETCRTC EACCES 曾占 master；ctnet 手工恢复（enchilada）
+
+用户同意验开机自动亮 term。未 wipe。未连 IMS。未烧。
+
+**重启**：`reboot` → NCM ~33 s（uptime 45）。槽 a，serial `b0d9f7fe`。
+
+**自动起来的**：`touch-bringup` insmod rmi → **S3706B event4**；wifi `192.168.3.121`；`httpget baidu` 719472B；usbnet 10.9.8.1；`done ok`。81voltd 未起。
+
+**屏**：bootcard.real t=9.8s **SETCRTC errno=13 EACCES**，随后死循环占着 card0 master（`logging state only`）。term 两次 `DRM never came up`（wait_up 10 min）。现场杀 bootcard 后 term pid 620：**card0 + event4 + event0**，DSI enabled。
+
+**修（已推机+仓库）**：bootcard modeset 失败则 **close fd 并在 done 后 exit**；handoff 等到 `touch_device` 节点存在再 spawn term。
+
+**ctnet**：ipa 握手 HWP 0 → provision/online mode 0 → MM `apn=ctnet` `10.224.38.245/30`。`ping -I qmapmux0.0 8.8.8.8` 2/2。online 后又一次 DSI disabled；重拉 term pid 907 后 enabled。
+
+请人眼看是否仍是待命绿光标。未 Dump。
+
+**设备终态**：槽 a L0；term 持屏（event4/event0）；WiFi + ctnet + NCM。
+
+## 2026-09-16 — 相机探针：CAMSS/CCI 在现役 DTB 里 disabled；无传感器节点（enchilada）
+
+用户确认待命面，下一刀相机。未 wipe。未改 NV。未连 IMS。未烧。
+
+**本机**（uptime ~13 min 起，槽 a，serial `b0d9f7fe`）：无 `/dev/video*`。i2c 只有 `10-0055` bq27411、`12-0020` rmi4、`4-003a` max98927。`CONFIG_VIDEO_QCOM_CAMSS=m` `CONFIG_I2C_QCOM_CCI=m` `CONFIG_SDM_CAMCC_845=m`。`CONFIG_OF_DYNAMIC=y`，`CONFIG_OF_OVERLAY` 未开。`/sys/firmware/devicetree` status 只读（echo okay → Permission denied）。
+
+**现役 DT**（只读）：
+
+- `camss@acb3000` compatible `qcom,sdm845-camss`，**status=disabled**。ports port@0–3 只有 reg/name，无 endpoint。
+- `cci@ac4a000` compatible `qcom,sdm845-cci` `qcom,msm8996-cci`，**status=disabled**。子节点 `i2c-bus@0` / `i2c-bus@1` 空，无 camera@。
+- 全树无 `imx*` / `ov*` / `s5k*` / `camera-sensor` compatible。
+- pinctrl 有 cci0/cci1 default+sleep，**无 mclk / cam 脚**。无 `main_cam_*` / `cam_vio` 这类命名节点。
+- `clock-controller@ad00000` compatible `qcom,sdm845-camcc`（无 status 键=默认 okay），平台设备在，驱动当时未绑。
+- reserved-memory `camera-mem@8bf00000` 5120 KiB nomap（开机 kmsg 已有）。
+
+**86quan 树**：tag `sdm845-6.11` commit `2fa43795f`，`sdm845-oneplus-common.dtsi` 966 行、**0** 处 imx/cci/camss 板级引用。`camcc-sdm845.ko` / `i2c-qcom-cci.ko` / `qcom-camss.ko` vermagic 与 `uname -r` 全同。`imx519.ko`/`imx376.ko`/`imx371.ko` 盘上有（Sep 12 产物），**无对应 .c**，本 DTB 也无从绑定。
+
+未 insmod CAMSS（节点 disabled，不会出 video）。未编造传感器节点。
+
+**设备终态**（探针结束时）：槽 a L0；无 `/dev/video*`；CAMSS/CCI 仍 disabled。
+
+## 2026-09-16 — 运行时打开 CCI：camcc 绑定 + i2c-16/17；扫描全 NAK（enchilada）
+
+未烧。未改 DTB 文件。未加传感器节点。未 wipe。
+
+**camcc**：`insmod camcc-sdm845.ko` rc=0。`ad00000.clock-controller` driver → `sdm845-camcc`。DSI 当时仍 enabled。camcc 无 kmsg 行。
+
+**CCI DT**：现场 ko `aginx_cci_on`（`CONFIG_OF_DYNAMIC` changeset，不入库）把 `/soc@0/cci@ac4a000` status `disabled`→`okay`。kmsg：`available_before=0` `available_after=1` `pdev already ac4a000.cci`。sysfs status 读到 `okay`。
+
+**CCI 驱动**：`insmod i2c-qcom-cci.ko` rc=0。driver → `i2c-qcom-cci`。新适配器 **i2c-16**、**i2c-17**（name `Qualcomm-CCI`）。DSI 当时仍 enabled。无 `/dev/video*`。CAMSS status 仍 `disabled`。
+
+**i2cdetect -y 16**：整表 `--`（master 0，无 timeout 行）。**i2cdetect -y 17**：整表 `--`，kmsg 连续 `i2c-qcom-cci ac4a000.cci: master 1 queue 0 timeout`。扫描期间 DSI 掉到 disabled；杀 term 重拉后 **enabled**，CCI 仍绑着。
+
+不把扫描 NAK 写成「没有模组」——现役 DT 没有供电/复位/MCLK 节点，传感器可以在复位里。也不把 sdm845-mainline 7.1 dts 的 IMX519@0x1a / IMX371@0x10 / IMX376k@0x10 写进本机观察。
+
+未改 `device.toml`（`rear_sensor` 仍 `none`）。camcc/cci ko 在 `/tmp`，重启即丢。未 Dump。
+
+**设备终态**：槽 a L0；term 持屏（event4/event0）；CCI i2c-16/17 在（本靴）；无 video；WiFi `192.168.3.121` + ctnet `10.224.38.245` + NCM `10.9.8.1`。
+
+## 2026-09-16 — 相机 DT 合进 6.11：三颗 sensor 绑定 + /dev/video0–11（enchilada）
+
+用户批继续。未 wipe。未动槽 b。未连 IMS。未改 NV。
+
+**做法**：86quan 树 `enchilada-cam`（基 `sdm845-6.11` `2fa43795f`）。把 sdm845-mainline 7.1 的 CCI/CAMSS/供电 GPIO/MCLK/IMX519@1a/IMX371@10/IMX376k@10/LC898217XC 板级 DT 合进 6.11 dtsi；cam_mclk gpio13–16 写入 `sdm845.dtsi`。驱动 `imx519.c`/`imx376.c`/`imx371.c`/`lc898217xc.c` 从 7.1 检出，`linux/unaligned.h`→`asm/unaligned.h`。dtb 118181B。只换 dtb，**内核 Image 仍是 6.11.0-sdm845-g2fa43795f607**。
+
+**刷写**：确认 serial `b0d9f7fe` 槽 `_a` `PARTNAME=boot_a` = `/dev/sde11`。备份 64MiB → host `boot_a.pre-cam.img` sha `e75a9c08…`。`dd` 新 `enchilada-boot.img`（17.0MiB sha `c5ab80b1…`）进 sde11。`reboot`。NCM ~1 min 回。
+
+**开机 DT**：cci/camss status **okay**。节点 `camera@1a sony,imx519`、`camera@10 sony,imx371`、`i2c-bus@1/camera@10 sony,imx376k`、两颗 `onnn,lc898217xc`。CCI 适配器 i2c-16/i2c-17 自动出现。
+
+**模块**：首靴 `camera-bringup` 把 `videodev` 放在 `mc` 前 → videodev Unknown symbol media_*，imx/camss 全 fail。现场改序 `mc`→`videodev` 后再 insmod：**全部 rc=0**。脚本已改（仓库+机上）。
+
+**绑定（观察）**：
+
+- `16-0010` driver `imx371` → v4l-subdev19 `imx371 16-0010`
+- `16-001a` driver `imx519` → v4l-subdev22 `imx519 16-001a`
+- `16-0072` driver `lc898217xc`
+- `17-0010` driver `imx376` → v4l-subdev20 `imx376 17-0010`
+- `17-0074` driver `lc898217xc`
+- `qcom-camss acb3000.camss` iommu group 10
+- `/dev/media0` + `/dev/video0`–`video11`（`msm_vfe0/1/2_video*`）
+
+未抓帧。未开预览。DSI 曾 disabled，杀 term 重拉后 enabled。WiFi `192.168.3.122`，NCM 10.9.8.1。`device.toml` `rear_sensor` 改为 `imx519`。
+
+**第二靴**（改序后的 camera-bringup）：全部 `insmod ok`，`camera ok` 进 boot.state，`/dev/video0`–`11` + media0 开机即有。subdev `imx371 16-0010` / `imx376 17-0010` / `imx519 16-001a`。term pid 415，DSI **enabled**（未再手拉）。
+
+**设备终态**：槽 a L0 + 新 dtb；相机开机自动绑定；term 持屏；未 Dump。
+
+## 2026-09-16 — 抓帧：IMX371 / IMX376 RAW 出图；IMX519 CPHY STREAMON 后无 DQBUF（enchilada）
+
+用户批继续。未 wipe。未烧。未动槽 b。
+
+现场编静态 `camss-shot`（media SETUP_LINK + subdev S_FMT + video MPLANE mmap）。pipeline：sensor → CSIPHY → CSID0 → VFE0 RDI0 → `/dev/video0`。
+
+**IMX371**（前置，csiphy2 DPHY）：G_FMT 4656×3496 `SBGGR10_1X10`。S_FMT video `pBAA` size 20360704。STREAMON 0，DQBUF used=20360704 seq=0。raw 非全零。host 解包 MIPI RAW10 + 8× 预览能认出室内（顶灯、墙、人）。
+
+**IMX376**（广角，csiphy1 DPHY）：2592×1940 `SBGGR10_1X10`，size 6301120，STREAMON+DQBUF 成功。预览是桌面/线材（未做白平衡，偏绿）。
+
+**IMX519**（后置，csiphy0 CPHY）：G_FMT 4656×3496 `SRGGB10_1X10`。关掉其它 CSIPHY→CSID 后 link 成功，STREAMON 0，**12s 内无 DQBUF**（alarm）。6.11 camss 对 CPHY 出图未在本机观察到。
+
+工具落 `/usr/bin/camss-shot`。源 `rootfs/src/camss-shot.c`。预览 jpeg 只在 `.local/device/enchilada/cam/`（不入库）。term 杀后重拉 DSI enabled。未 Dump。
+
+**设备终态**：槽 a L0；前置+广角已出 RAW；后置绑着但没抓到帧；term 持屏。
+
+## 2026-09-16 — 机上 JPEG：raw2jpg 收成 /home/photos（enchilada）
+
+用户批继续。未 wipe。未烧。未改 NV。
+
+推 musl `raw2jpg`（`rootfs/src/raw2jpg.c` + jpegenc.h）→ `/usr/bin/raw2jpg`。已有 RAW 当场编码（`--color --cfa bggr` q85）：
+
+- `/tmp/imx376.raw` 2592×1940 stride 3248 → `/home/photos/imx376.jpg` **176680 B**，**0.157 s**，头 `ff d8 ff e0 … JFIF`
+- `/tmp/imx371.raw` 4656×3496 stride 5824 → `/home/photos/imx371.jpg` **659616 B**，**0.610 s**，同样 JFIF
+
+host 打开两张都能认出实景（室内人像 / 桌面线材）。无 AE、无 gamma，画面偏暗；无白平衡，广角偏绿。这是观察，不是成品 ISP。
+
+`/usr/bin/cam-snap`（仓库 `devices/enchilada/cam-snap`）：`camss-shot` + `raw2jpg` 一条龙。现场 `cam-snap imx376 /home/photos/snap-376.jpg` 出 **182012 B**（编码 0.191 s）。DSI 仍 enabled。未接 term 快门。未 Dump。
+
+**设备终态**：槽 a L0；`/home/photos/` 有 JPEG；`cam-snap` 在；term 持屏。
+
+## 2026-09-16 — term 快门：待命面底栏「拍照」→ cam-snap IMX376（enchilada）
+
+用户要快门接到 term。未 wipe。未烧。未改 NV。
+
+**代码**（`crates/term`）：已配对且 `/usr/bin/cam-snap` 在、voice 不在时，pair bar 隐退后的 y∈[h-200,h-60) 死区画「拍照」。点下 spawn `cam-snap imx376 /run/aginx-voice/eye.jpg`（广角是朝外能出片的镜头；IMX519 CPHY 仍抓不到）。收割后 JPEG 全屏预览，再点回待命。档案仍进 `/home/photos/`。host `cargo test -p aginx-term` 47/47。
+
+**上机**：musl aginx-term 1567520B → `/usr/bin/aginx-term`（`/var/bin` 软链）。handoff 重生 pid 4425，fd card0+event4+event0，DSI enabled。cam-snap 同步更新。
+
+未点快门（等人手按）。未 Dump。
+
+**设备终态**：槽 a L0；新 term 在待命面；快门条应在屏底；等人眼确认。
+
+## 2026-09-16 — 快门预览横屏发绿：DT 旋转 + 灰世界 WB + gamma；term 等比留边（enchilada）
+
+用户看快门结果「横屏，绿色」。未 wipe。未烧。
+
+传感器 DT `rotation` 270/90（顺时针），RDI 出的是横幅 Bayer，term 又把横图拉满竖屏。无 WB 时 Bayer 两颗 G 发绿。
+
+**raw2jpg** 增 `--rotate 90|180|270`、`--wb`、`--gamma g`（默认全关，redfin dump 不变）。**cam-snap**：imx376 `--rotate 270 --wb --gamma 2.2`，imx371 `--rotate 90 --wb --gamma 2.2`。ssh 现拍 `/home/photos/20260916-131724-imx376.jpg` **1940×2592**（竖）、363802 B。画面不再是那种刺绿横拉，木纹/线材可认。term `snap_photo` 改等比留边。新 term 1567616B pid 5574，DSI enabled。
+
+等人再点「拍照」看屏。未 Dump。
+
+**设备终态**：槽 a L0；竖幅 JPEG 管线在；term 已换；等人眼。
+
+## 2026-09-16 — 快门白纱+偏绿：黑电平 16 后再 WB/gamma（enchilada）
+
+用户：正了，但蒙白纱、还偏绿。未 wipe。未烧。
+
+IMX376 8-bit 平面 p1=16、min=14，均值 ~21。不减黑电平就 gamma 2.2：16→~70，暗部抬成灰纱，G 底也一起抬所以偏绿。
+
+**raw2jpg** 增 `--bl n`（灰图上 (v-bl)*255/(255-bl)，同 campix）。**cam-snap** 两颗都 `--bl 16 --wb --gamma 2.2`。ssh 现拍 `20260916-133056-imx376.jpg` 1940×2592、1.14 MB：黑是黑，木纹/线材颜色正常，无纱。term 不用换（它只显示 JPEG）。
+
+等人再点「拍照」。未 Dump。
+
+**设备终态**：槽 a L0；新 raw2jpg/cam-snap 在；term 快门仍接广角。
+
+## 2026-09-16 — 快门还不像正常拍照：IMX376 默认 analog gain=0；补曝光/增益（enchilada）
+
+用户：好多了，但还不是正常拍照。未 wipe。未烧。
+
+IMX376 `V4L2_CID_ANALOGUE_GAIN` 默认 **0**。室内 raw 均值 ~16（就是黑电平）。增益必须在 STREAMON 前写入，`s_stream` 的 `handler_setup` 才落到寄存器；流上再 S_CTRL 也曾把 mean 17 卡死。
+
+**camss-shot**：STREAMON 前 analog=max 480、exposure=max 4726、digital=2048；丢掉前 3 帧；若 mean8<50 再把 digital 最高到 3072。对焦 DAC 先回到 0（infinity）——中途试 682 更糊。ssh 现拍 `20260916-134709` mean8=**86**：USB 线/口、插排、桌面可认，不再是灰绿雾。仍无对比度 AF、无 ISP 锐化。term 不用换。
+
+等人再点「拍照」。未 Dump。
+
+**设备终态**：槽 a L0；新 camss-shot 在；快门仍走广角。
+
+## 2026-09-16 — 快门红变蓝：跟 redfin 同一条 Bayer 相位律，IMX376 改 RGGB（enchilada）
+
+用户：还是不像正常拍照；红色变成蓝色。未 wipe。未烧。
+
+redfin `campix.h` 2026-09-05 色卡收据：Bayer 相位错了，灰世界 WB 下 **白不变、红蓝对调**（所以绿偏/白卡测不出来）。Pixel 5 后置实测是 BGGR。
+
+enchilada IMX376/371 驱动 `HFLIP`/`VFLIP` 默认都是 1，等于把传感器 BGGR 转 180° 成 **RGGB**。cam-snap 一直 `--cfa bggr`，正好踩这条。已改 `cfa=rggb`（旋转/曝光不动）。请拍带红色的东西验收。无对比度 AF、无 ISP 锐化——那是下一截。
+
+**设备终态**：槽 a L0；cam-snap RGGB；term 快门仍接广角。
+
+## 2026-09-16 — 快门红变蓝：G 位点按 BGGR 解，不是改 RGGB（enchilada）
+
+用户：红色变蓝色还是没有处理。未 wipe。未烧。
+
+只把 cam-snap 改成 `--cfa rggb` 不够。`raw2jpg` 解 Bayer 时 G 位点写死「偶数行 = R 行」（只对 RGGB 成立）。Pixel 5 `campix.h` `cp_px_lin`（2026-09-05）：BGGR 偶数行是 **B 行**，G 的左右是 B、上下是 R。G 位点方向错了之后，`--cfa bggr` 和 `--cfa rggb` 看起来都是红蓝对调（灰世界白不变）。G_FMT 仍是 `SBGGR10`。
+
+**改**：`raw2jpg` G 位点跟 campix 同一套行主色；cam-snap 回到 `--cfa bggr`。musl raw2jpg 1591960B + cam-snap → `/usr/bin/`。ssh `20260916-142918-imx376.jpg`：同一台显示器，git 删除条是 **红+绿**（141635 rggb 是紫+绿），墙上暖色，支架卡片是红的。term 不用换。
+
+用户看屏「好了」。未 Dump。
+
+**设备终态**：槽 a L0；新 raw2jpg/cam-snap 在；term 快门仍接广角。
+
+## 2026-09-16 — 快门对比度 AF：LC898217XC 8+5 扫描（enchilada）
+
+用户：除了没有定焦，颜色可以了。未 wipe。未烧。
+
+DAC 中值 682 比无穷远更糊（已有收据）＝马达会动，缺的是扫描。照 redfin `frame_sharp`（RAW10 中心 50% |gx|+|gy|，不吃第 5 字节）+ 滑轨细窗（2026-09-10）：粗 8 步扫 0–2047，细 5 点，SKIP=2。峰比无穷远不到 +10% 或 mean8<40 就停在 def 0。term 预算 20s 未改。
+
+ssh 暗场 `20260916-144114`：扫描跑完，锐度 7.66–8.37（+3%）噪声地板，按门限停无穷远。有细节的光学峰等人点「拍照」。未 Dump。
+
+**设备终态**：槽 a L0；新 camss-shot 在；term 快门仍接广角。
+
+## 2026-09-16 — 快门改成取景器 + 手动对焦 + 快门（enchilada）
+
+用户：点拍照应该出现镜头，手动聚焦再按快门。未 wipe。未烧。
+
+Idle「拍照」不再直接 cam-snap。term Mode::Cam：camss-shot `--view` 常开 STREAMON，RGW1 预览 `/run/aginx-voice/eye.raw`（1/4 BGGR、转 270）。右侧滑条写 `/run/aginx-cam/focus`（0 远–2047 近），底栏「快门」写 `cmd=snap`，view 进程用当前帧走 raw2jpg（bggr/bl16/wb/gamma）进 `/home/photos` + eye.jpg。BACK 关取景。host `cargo test -p aginx-term` 48/48。
+
+上机：musl camss-shot 1718944B + term 1576576B。ssh `--view` 6s 出 eye.raw 627276B。term 重生 pid 12545，fd card0+event4+event0，DSI enabled。
+
+等人点「拍照」看取景。未 Dump。
+
+**设备终态**：槽 a L0；新 term/camss-shot 在；等人眼。
+
+## 2026-09-16 — 取景器变形：预览改成和成片一样等比留边（enchilada）
+
+用户：镜头里画面变形，拍出来的照片还算正常。未 wipe。未烧。
+
+成片 1940×2592（传感器 4:3 转 270）走 `snap_photo` 等比留边。取景 RGB565 却被 `upscale565` 拉满 1080×2280（19:9），横竖比被拧了。Cam 面改成同一套 `fit_rect` 留边。host 49/49。term 1577288B 重生 pid 13125，DSI enabled。
+
+用户看屏「还行」。未 Dump。
+
+**设备终态**：槽 a L0；新 term 在；取景等比留边。
+
+## 2026-09-16 — 相机面按真机重做：铺满取景 + 圆快门 + 点按对焦（enchilada）
+
+用户：界面要和真手机一样。未 wipe。未烧。
+
+Idle「拍照」仍只是进相机。相机面不再是 BACK/滑条/「快门」字条：预览 aspect-fill 铺满底栏以上（4:3 裁进取景区，不拉伸）；底栏黑底圆快门；左上 x 退出；点预览发 `af`（live 5 步对比度），白框约 0.8s。成片仍等比留边。host 49/49。
+
+上机：term 1578744B + camss-shot 1723504B，pid 14193，DSI enabled。
+
+等人开拍照看。未 Dump。
+
+**设备终态**：槽 a L0；新相机面在；等人眼。
+
+## 2026-09-17 — 取景发绿：预览补灰世界 WB + gamma 2.2（enchilada）
+
+用户：显示屏上是绿色的，拍出来还算正常。未 wipe。未烧。
+
+成片走 raw2jpg `--wb --gamma 2.2`；取景 RGB565 只做了 BGGR 2×2，Bayer 两颗 G 发绿。`publish_preview` 接同一套灰世界 + γ2.2。term 不用换。camss-shot 1753480B。若当时在取景，kill 了 view 进程，再点「拍照」即可。
+
+未 Dump。
+
+**设备终态**：槽 a L0；新 camss-shot 在；term pid 416，DSI enabled。
+
+## 2026-09-17 — 取景偏白：灰世界保亮度 + 一点对比度（enchilada）
+
+用户：正常了，只是还有点偏白。未 wipe。未烧。
+
+灰世界抬 R/B、G 不动，整帧变亮发白；γ2.2 再把中间调抬一层。预览改为亮度守恒的灰世界（G<20 不进统计）、γ 后再 ×1.2 对比度。取景 AE 目标 64、dgain 上限 2048，过亮则降增益。成片管线未改。camss-shot 1760816B。再点「拍照」。
+
+未 Dump。
+
+**设备终态**：槽 a L0；新 camss-shot 在；DSI enabled。
+
+## 2026-09-17 — 自动对焦：开镜扫描 + 快门前再扫；live AF 改 SKIP=2（enchilada）
+
+用户：颜色好多了，就是自动聚焦没有。未 wipe。未烧。
+
+取景一直停在无穷远；点按 AF 只 skip 1 帧，量到的是飞行中的旧画面，峰是噪声。live AF 改成和成片一样 8 粗+5 细、SKIP=2。开镜两帧预览后自动扫一次；快门前再扫一次再编码。term 等成片 12s→25s。camss-shot 1762352B，term 重生 pid 2851，DSI enabled。
+
+开镜后画面会顿一下再合焦。未 Dump。
+
+**设备终态**：槽 a L0；新 camss-shot/term 在；等人眼。
+
+## 2026-09-17 — 快门不再重对焦：拍取景里已经合上的那一帧（enchilada）
+
+用户：第一次聚焦很好，拍出来不聚焦；第二次直接不聚焦。未 wipe。未烧。
+
+开镜 AF 锁上之后，快门又跑一遍 live_af，把合上的焦冲掉，成片是扫描中/扫偏的帧；第二次 did_af 已置位，不再自动扫。快门改为直接编码当前 DQ 帧（所见即所得），DAC 不动。点画面仍可重对。camss-shot 1759248B。kill view 时 DSI 掉了，term 重生 pid 3262 后 DSI enabled。
+
+请再开拍照：等第一次合焦，再按快门。未 Dump。
+
+**设备终态**：槽 a L0；新 camss-shot 在；term 3262，DSI enabled。
+
+## 2026-09-17 — 对焦量到飞行中的旧帧：SKIP=4 + 复测无穷远（enchilada）
+
+用户：聚焦不行。未 wipe。未烧。
+
+`cam-view.log` 两轮：第一轮粗扫 code0=56 是真峰（透镜已在 0）；第二轮粗扫 2047=143 然后细扫 2047=89——2 个 mmap 缓冲 skip 2 只丢掉飞行中的旧帧，`measure(i)` 实际是 i-1。落点 2047 是糊的。`AF_SKIP` 2→4，扫完复测 winner 和无穷远，取更高的。快门仍拍当前帧。camss-shot 1761800B。DSI enabled，term 未重启。
+
+开镜合焦会稍慢。未 Dump。
+
+**设备终态**：槽 a L0；新 camss-shot 在；term 3262，DSI enabled。
+
+## 2026-09-17 — 用户：相机本身不聚焦。主摄 IMX519 CPHY 仍无帧（enchilada）
+
+用户纠正：不是快门时序，是相机本身不合焦。未 wipe。未烧。
+
+现快门走的是副摄 **IMX376**（csiphy1 DPHY，能出 RAW）。OnePlus 6 会对焦的后置主摄是 **IMX519**（PDAF + 16-0072 LC898217XC）。本机再试 `camss-shot imx519`：S_FMT 4656×3496 pRAA，FOCUS 0–2047 在，STREAMON 0，**15s 无 DQBUF**（timeout 143）。与 2026-09-16 收据同：6.11 camss 对 CPHY 出图仍未在本机观察到。广角上的对比度扫焦不是主摄 PDAF。
+
+**设备终态**：槽 a L0；快门仍是 IMX376；IMX519 绑着但无帧。
+
+## 2026-09-17 — IMX519 CPHY 出帧：3840×2160 DQBUF（enchilada）
+
+用户：那就先把主摄弄出来。未 wipe。未烧 boot。reboot 一次加载新 camss。
+
+6.11 `qcom-camss` 把 CPHY 当 DPHY 配，STREAMON 成功但无 DQBUF。从 sdm845-7.1-rc1 把 C-PHY 接到本树（CSID `PHY_TYPE_SEL`、CSIPHY 3ph `lane_regs_sdm845_3ph`、endpoint `bus_type`、link-freq 16/7）。只换 `/lib/modules/qcom-camss.ko`（旧文件备份 `.precphy`）。vermagic `6.11.0-sdm845-g2fa43795f607`。
+
+开机 dmesg：`csiphy0 endpoint bus_type=6 lanes=3`（CPHY）、`csid0 RX_CFG0=0x1002102 cphy=1`、`csiphy0 lanes_enable phy_cfg=6 settle=15 freq=500399375`。
+
+`camss-shot imx519` 改 3840×2160（主线 OP6 出过图的档；4656×3496 仍未试成功）：STREAMON 0，**DQBUF seq=6 used=10368000 mean8=241→写盘 mean8=24**。`raw2jpg --cfa rggb --rotate 270 --bl 16 --wb --gamma 2.2` → `/home/photos/20260917-025900-imx519.jpg` 2160×3840、884265 B。画面是实景光影（偏暗、发糊——镜头可能对着暗处，且 AE 见 241 后把增益打下去）。同模块再抓 IMX376：DQBUF 6301120 mean8=147，DPHY 未坏。
+
+快门改走 `imx519`。term pid 773，DSI enabled。主摄对焦（PDAF/对比度）还没在这颗上收过。
+
+**设备终态**：槽 a L0；新 qcom-camss.ko + camss-shot/cam-snap/term；主摄 3840×2160 能出 RAW/JPEG。
+
+## 2026-09-17 — 主摄取景卡在「取景中」：STREAMON 后 DQBUF 无超时（enchilada）
+
+用户：一直显示取景中，好像卡死了。未 wipe。未烧。
+
+`camss-shot --view imx519` pid 869 STREAMON ok 之后日志停住，无 DQBUF、无 eye.raw。成片路径 alarm(20) 能等到 seq=6；view 关了 alarm，又先 skip 7 帧，CPHY 第一帧不来就永远堵在 VIDIOC_DQBUF。另：view 把曝光限到 1600（3840 档 max=2128）。
+
+**改**：view 一 STREAMON 就进循环发预览；DQBUF poll 8s 超时；IMX519 用 emax；开镜自动 AF 先关掉（点画面仍可对）。camss-shot 1766576B。kill 了卡住的 view。term 773，DSI enabled。
+
+请再点「拍照」。未 Dump。
+
+**设备终态**：槽 a L0；新 camss-shot 在；等人再开主摄取景。
+
+## 2026-09-17 — 主摄取景仍卡：第一次 STREAMON 常无帧，第二次才有（enchilada）
+
+用户：还是一样。未 wipe。未烧。
+
+本靴只跑 IMX519：第一次 `camss-shot` 20s timeout 无 DQBUF；紧接着第二次 seq=6 used=10368000。view 只开一次流，8s 无帧就退出，屏上停在「取景中」（当时 DSI 也 disabled）。
+
+**改**：DQBUF 超时则 STREAMOFF/QBUF/STREAMON，最多踢 3 次。ssh `--view` 25s 写出 `/run/aginx-voice/eye.raw` 1036812B（540×960 RGW1）。term 重生 pid 671，DSI enabled。
+
+开拍照后可能先黑一两秒再出画面。未 Dump。
+
+**设备终态**：槽 a L0；新 camss-shot 在；term 671。
+
+## 2026-09-17 — 主摄画面反了、不清晰：旋转 90° + 降曝光 + 出画后对焦（enchilada）
+
+用户：出现画面，镜头是反的，很不清晰。未 wipe。未烧。
+
+取景/成片都按 DT 270 转。IMX376 270 是正的；IMX519 默认 HFLIP/VFLIP=0，同样 270 被说成反。改 `--rotate 90`（预览同一套）。view 原先 analog max + CIT max + dgain 2048，预览死白；改为 analog/4、CIT≤800、dgain 默认，出 3 帧后再对比度 AF。
+
+kill 了旧 view。请再点「拍照」。未 Dump。
+
+**设备终态**：槽 a L0；新 camss-shot/cam-snap；term 671，DSI enabled。
+
+## 2026-09-17 — 主摄超级黑、没对焦：view 曝光压过了（enchilada）
+
+用户：超级黑，没有聚焦。未 wipe。未烧。
+
+`cam-view.log`：analog 960→240、CIT 2128→800、dgain 2048→256。锐度 12→2，AF 只能停无穷远。改 analog/2、CIT=emax、dgain 1024；mean8<40 不扫焦。kill 了旧 view。
+
+请再点「拍照」，出画后会顿一下对焦。未 Dump。
+
+**设备终态**：槽 a L0；新 camss-shot；term 671，DSI enabled。
+
+## 2026-09-17 — 主摄不聚焦、移动卡：AF 把峰丢掉 + 长曝光（enchilada）
+
+用户：不聚焦，移动手机画面很卡。未 wipe。未烧。
+
+`cam-view.log`：粗扫峰 code=877 sharp=57（inf 45，+25%），细扫/复测无穷远 39 > 复测 877 的 30，被规则改回 0。CIT 2128 把帧率拖死，扫焦时还不发预览。
+
+**改**：view analog max、CIT 500、dgain 2048；预览 1/8 下采样；扫焦每步出画；峰比无穷远高 12% 就留下，不再被 confirm-inf 盖掉。kill 旧 view。
+
+请再点「拍照」。未 Dump。
+
+**设备终态**：槽 a L0；新 camss-shot；term 671，DSI enabled。
+
+## 2026-09-17 — 成片不聚焦、雪花：快门用长曝光；细扫跟峰（enchilada）
+
+用户：拍的照不聚焦，雪花，颜色应该没啥问题了。未 wipe。未烧。
+
+`20260917-074415`：AF 粗扫峰 877 sharp=124（+22%），细扫还在往 1023 爬（112），成片仍糊。view CIT 500 + dgain 2048 直接编码 → 雪花。
+
+**改**：细扫 ±1 档 7 点、只用细扫分数；快门时 analog max、CIT max、dgain 1024，丢 4 帧再编码，然后恢复取景短曝光。kill 旧 view。
+
+请再点「拍照」再按快门。未 Dump。
+
+**设备终态**：槽 a L0；新 camss-shot；DSI enabled。
+
+## 2026-09-17 — 成片完全没法看：AF 锁在 1949 微距糊；快门改为 SKIP=4 再拍（enchilada）
+
+用户：完全没法看，一样的。未 wipe。未烧。
+
+`20260917-075227`：粗扫 2047 仅 +8%，细扫在近端爬到 **1949**（+51% 锐度其实是虚化边缘），成片一团糊 + 雪花。dgain 1024 仍是 4×。
+
+**改**：取景不再自动扫焦。快门时 analog/2、CIT max、**dgain 256**，SKIP=4 扫焦（中心 1/4 窗），轨道峰不够高就改用中间档，再编码。按快门会停一两秒。kill 旧 view。
+
+请再进相机按快门。未 Dump。
+
+**设备终态**：槽 a L0；新 camss-shot；DSI enabled。
+
+## 2026-09-17 — 近处能合焦；降增益去雪花（enchilada）
+
+用户：现在是有雪花，放近可以聚焦。未 wipe。未烧。
+
+对焦近处可用。雪花来自 analog 960 + dgain 2048（取景）/1024（成片）。view 改 analog/2、CIT 800、dgain 1024；快门 analog/4、CIT max、dgain 256。AF 逻辑未动。kill 旧 view。
+
+请再点「拍照」。未 Dump。
+
+**设备终态**：槽 a L0；新 camss-shot；DSI enabled。
+
+## 2026-09-17 — 用户：还是有雪花，但是好多了（enchilada）
+
+近处能合焦；降增益后雪花减轻但仍在。未再改增益。未 Dump。
+
+**设备终态**：槽 a L0；主摄取景+近处对焦可用；成片仍有颗粒。
+
+## 2026-09-18 — 进不了 L0：slot a 被标 unbootable；Lineage bootctl 拉回（enchilada）
+
+用户：进不了 L0。未 wipe。未烧。
+
+adb 在役是 Lineage 15 槽 **b**（4.9.337）。`adb reboot bootloader` 未停在 fastboot（USB 空约 100s 后仍回 Lineage）。root 后 `bootctl`：current=1 `_b`；slot 0 `_a` **is-slot-bootable rc=70 / is-slot-marked-successful rc=70**（不可启动、未标成功）；slot 1 `_b` 均可 rc=0。ABL 因此不选 a。
+
+`bootctl set-active-boot-slot 0` rc=0 → next=0、bootable_a=1（succ_a 仍 0）。`adb reboot`。t+15s USB `enchilada rescue` serial `enchilada`；t+45s ping `10.9.8.1` 通。ssh：uname `6.11.0-sdm845-g2fa43795f607`，cmdline `androidboot.serialno=b0d9f7fe` `slot_suffix=_a`，boot.state `done ok` / wifi `192.168.3.128`。
+
+随后 scp 新 `aginx-term` → `/usr/bin/aginx-term`（1620584），handoff 单实例 pid 620，DSI `connected`/`enabled`。屏上桌面未在 host 目击。enchilada 仍无 mark-boot-successful（succ_a=0）——再冷启动可能再次排水把 a 标死。未 Dump。
+
+**设备终态**：槽 a L0；NCM 10.9.8.1；新 term 在役。
