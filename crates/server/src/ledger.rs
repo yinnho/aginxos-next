@@ -1,19 +1,21 @@
 // ledger — D8 会话账：append-only JSONL，一行一帧，server 是唯一记账人。
 //
-// 记账顺序是铁律：**先记账、再 spawn**（「模型可见即已记录」）。runtime
-// 的冷恢复重放这份账（avatar::replay_session），重放已含本轮 request，
-// runtime 侧有 trailing_request_logged 防叠份。
+// 记账顺序是铁律：**先记账、再直调 kernel**（「模型可见即已记录」）。
+// kernel 自管消息历史，这份账是审计真源：谁说了什么、调了什么工具、
+// 回合如何收口。
 //
-// 每一轮必须以 done 收口：runtime 崩在半路（EOF 无 done帧时 server 补一
-// 帧 synthetic done(err)，让重放永远落在合法形状上；更深的崩溃残骸
-// （悬空 tool_call）由 runtime 的 repair 自愈。
+// 每一轮必须以 done 收口：server 死在半路（EOF 无 done 帧）的残骸
+// （未收口轮、悬空 tool_call）由下一轮开跑前的 repair 一次性清偿——
+// 追加式、可审计，盘上日志永远合法形状。
 
 use agi::Frame;
 use std::fs::OpenOptions;
 use std::io::{self, BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
 
-/// 会话账路径：workspaces/{化身}/sessions/{会话}.jsonl
+/// 会话账路径（测试辅助）：{root}/{化身}/sessions/{会话}.jsonl。生产
+/// 路径归 host::agent_log——me 走 home 根，助理走 home/workflows。
+#[cfg(test)]
 pub fn session_log(workspaces_root: &Path, avatar: &str, session: &str) -> PathBuf {
     workspaces_root.join(avatar).join("sessions").join(format!("{session}.jsonl"))
 }
@@ -33,10 +35,9 @@ pub fn append(log: &Path, frame: &Frame) -> io::Result<()> {
 // 回合编号：request 带 turn（从 1 起，每轮 +1），done 回填同号；旧账
 // 无 turn 字段（serde 读 0/None），next_turn 按帧计数续号，部署序自由。
 //
-// 补账（spawn 前跑）：更深的崩溃残骸（悬空 tool_call、未收口 request）
+// 补账（开轮前跑）：更深的崩溃残骸（悬空 tool_call、未收口 request）
 // 由 server 落账清偿——修复一次性、追加式、可审计，不重写历史。借
-// dsh 的话：修复落在语义层且持久化，盘上日志永远合法形状。runtime 的
-// 内存 repair 降级为最后防线保留。
+// dsh 的话：修复落在语义层且持久化，盘上日志永远合法形状。
 
 /// 一次账形扫描的结果：下一回合号 + 残骸清单。
 #[derive(Debug, Default, PartialEq)]
@@ -193,7 +194,7 @@ mod tests {
 
     #[test]
     fn repair_closes_open_turn_with_synthetic_done() {
-        // server 死在半路：request 落账、无 done。下次 spawn 前 repair
+        // server 死在半路：request 落账、无 done。下轮开跑前 repair
         // 补 synthetic done(err, interrupted) 带回合号。
         let d = tmp("repair-open");
         let log = session_log(&d, "a", "main");
