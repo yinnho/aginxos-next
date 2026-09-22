@@ -45,7 +45,7 @@
 | 1 | 引擎对齐 FS.md（me 归 home 根、workspaces 残留、ACP 桥摘除） | ✅ `4fde120` |
 | 2a | kernel TurnObserver（工具帧回流） | ✅ `d6ce9a8` |
 | 2b | server 直调 kernel（mother.rs→host.rs、turn.rs 退役、D8 帧账、brain env 桥、外层 workspace exclude mother/） | ✅ `5743305` |
-| 3 | 出厂 /home 内嵌进 server；AGINX_HOME=/home | ✅ 代码+主机测试。上机收据未取（样机改 redfin，本次未接线） |
+| 3 | 出厂 /home 内嵌进 server；AGINX_HOME=/home | ✅ `ed13bc5`。redfin 首启种树已目击；进程因无 brain.json 退出，已换回旧二进制 |
 | 4 | router 查找序 providers→tools→PATH | 待开 |
 | 5 | 手机构建面（musl+L0 尺寸；aginx-runtime 物理删除） | 待开 |
 
@@ -168,14 +168,19 @@
 
 ## 上机日备忘
 
-- **样机是 Pixel 5（redfin）**，不是 OnePlus 6。serial `aginxosredfin`，
-  fastboot `13201FDD4001N8`。2026-09-22 这一棒 adb / fastboot 都没有这台机器，
-  收据没取。插上之后再做，不要拿 enchilada 顶。
-- 设备现存 `/home/.aginx` 旧树——AGINX_HOME 翻 /home 后成**孤儿**。不迁移，
-  新树由种子自起；收据日注意别把旧树当现状读。enchilada 上的旧树同理，但
-  那台不是这条线的样机。
-- 裸 L0 装包**首启即出树**＝刀3 三承诺的第一份真收据，落 `docs/HARDWARE.md`
-  （只记目击，且不要把麦线未提交的 HARDWARE 改动卷进系统提交）。
+- **样机是 Pixel 5（redfin）**，不是 OnePlus 6。adb `aginxosredfin`，
+  fastboot / cmdline serial `13201FDD4001N8`。在跑的是槽 **b**，内核仍是
+  机器自带的 4.19（`rdinit=/aginxos/trampoline`），不是 enchilada 那棵 6.11。
+- 2026-09-22 收据（详见 HARDWARE.md 同日 redfin 条）：空的 `/home` 上，
+  新 server 退出前种出 `SOUL.md`、`MEMORY.md`、`sessions/`，并写出
+  `data/carrier.db`。没有 `brain.json`。这台机的 `/etc/aginx/env` 有
+  `AGINXBRAIN_API_KEY`，没有 `AGINX_BRAIN_URL`，刀2 的桥没合成文件；
+  kernel 接着要 `OPENCLONE_HUB_KEY`，进程退出码 1。
+- 母体已换回 9 月 14 日的二进制，unit 仍是 `AGINX_HOME=/home/.aginx`。
+  新二进制在机上 `aginx-server.seed`。种下的 `/home` 留着。旧进程继续听
+  `/home/.aginx/workspaces`。要让新母体留在 ready，先有 `/home/brain.json`
+  （或补上 `AGINX_BRAIN_URL` 让桥合成），再换回 `aginx-server.seed`。
+- 裸 L0 装包首启的完整包安装还没做；这次是换二进制，不是重刷。
 
 ---
 
