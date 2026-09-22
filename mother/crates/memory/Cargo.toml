@@ -1,0 +1,24 @@
+[package]
+name = "carrier-memory"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Memory substrate for the aginx-carrier 分身 OS"
+
+[dependencies]
+carrier-types = { path = "../types" }
+tokio = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+rmp-serde = { workspace = true }
+rusqlite = { workspace = true }
+chrono = { workspace = true }
+uuid = { workspace = true }
+tracing = { workspace = true }
+sha2 = { workspace = true }
+regex = { workspace = true }
+lazy_static = { workspace = true }
+dashmap = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }

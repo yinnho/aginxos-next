@@ -1,0 +1,38 @@
+[package]
+name = "agmem"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "agmem - 记忆工具 CLI（M35 kv/memory_tree/knowledge 外置成包）"
+
+# agmem（M35）— kv_get / kv_set / kv_list / kv_delete / memory_tree 及
+# knowledge 库操作的单真源：runtime 只留薄桥（同名 ToolDefinition +
+# spawn `agmem tool <name>`）。与 agf 不同，本 CLI 直接开 memory
+# substrate（rusqlite WAL，spike 2026-09-03 验证 daemon∥CLI 并发安全：
+# substrate.rs open 即 PRAGMA journal_mode=WAL + busy_timeout=5000），
+# 默认 $HOME/.aginx/carrier/data/carrier.db——与守护同一库同一迁移。
+# 身份三元组 (agent/owner/user) 经 stdin JSON 保留键 `_ctx` 注入
+# （runtime 桥）；人面用 --agent/--owner/--user 旗标。kv 域按身份隔离，
+# 人面默认身份看不到化身私域是正确行为，不是 bug。
+[[bin]]
+name = "agmem"
+path = "src/main.rs"
+
+[lib]
+path = "src/lib.rs"
+
+[dependencies]
+anyhow.workspace = true
+carrier-types.workspace = true
+carrier-memory.workspace = true
+carrier-lifecycle.workspace = true
+clap.workspace = true
+libc.workspace = true
+serde_json.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+chrono.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true

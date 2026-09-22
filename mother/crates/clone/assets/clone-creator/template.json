@@ -1,0 +1,18 @@
+{
+  "version": "2",
+  "name": "clone-creator",
+  "description": "克隆大师 — 帮你创造三种数字分身：角色分身（律师/心理咨询师等功能型）、公众分身（与名人/历史人物对话）、人格分身（基于聊天记录复刻真实人格）。自动设计、打包并安装到 aginx-carrier",
+  "author": "aginx",
+  "display_name": "克隆大师",
+  "tags": [
+    "meta",
+    "creator",
+    "generator"
+  ],
+  "category": "官方",
+  "exported_at": "1777377026",
+  "knowledge_version": 3,
+  "plugins": [],
+  "mcp_servers": [],
+  "default_flow": "clone-generate"
+}

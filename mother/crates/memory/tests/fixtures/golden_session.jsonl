@@ -1,0 +1,11 @@
+{"seq":1,"ts_ms":1755216000000,"kind":"TurnStart"}
+{"seq":2,"ts_ms":1755216001000,"kind":{"UserMessage":{"content":"帮我查下月票"}}}
+{"seq":3,"ts_ms":1755216005000,"kind":{"AssistantMessage":{"content":[{"type":"tool_use","id":"tu_1","name":"bus_query_order","input":{"order_no":"M123"}}]}}}
+{"seq":4,"ts_ms":1755216007000,"kind":{"UserMessage":{"content":[{"type":"tool_result","tool_use_id":"tu_1","tool_name":"bus_query_order","content":"订单 M123 已出票，有效期至 08-31","is_error":false}]}}}
+{"seq":5,"ts_ms":1755216010000,"kind":{"AssistantMessage":{"content":"您的月票 M123 已出票，有效期至 8 月 31 日。"}}}
+{"seq":6,"ts_ms":1755216010001,"kind":{"TurnEnd":{"iterations":2,"tools_called":1,"tool_errors":0,"outcome":"complete"}}}
+{"seq":7,"ts_ms":1755216100000,"kind":"TurnStart"}
+{"seq":8,"ts_ms":1755216101000,"kind":{"UserMessage":{"content":"谢谢"}}}
+{"seq":9,"ts_ms":1755216104000,"kind":{"AssistantMessage":{"content":"[[silent]]"}}}
+{"seq":10,"ts_ms":1755216104001,"kind":{"Silent":{"reason":"silent directive"}}}
+{"seq":11,"ts_ms":1755216104002,"kind":{"TurnEnd":{"iterations":1,"tools_called":0,"tool_errors":0,"outcome":"silent"}}}

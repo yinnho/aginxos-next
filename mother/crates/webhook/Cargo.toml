@@ -1,0 +1,21 @@
+[package]
+name = "carrier-webhook"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Webhook HTTP inbound channel for aginx-carrier (machine-to-agent event triggers)"
+
+[dependencies]
+carrier-types = { path = "../types" }
+carrier-runtime = { path = "../runtime" }
+tokio = { workspace = true }
+axum = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tracing = { workspace = true }
+dashmap = { workspace = true }
+uuid = { workspace = true }
+async-trait = { workspace = true }
+
+[dev-dependencies]
+reqwest = { workspace = true }

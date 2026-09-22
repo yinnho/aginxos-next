@@ -1,0 +1,32 @@
+[package]
+name = "dup"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "dup - AI clone version control CLI (化身工作区 git 式同步, duphub/runtime remote)"
+
+# dup (M30) — 从 opencarrier-clones/crates/dup 搬运（只读参考仓，零共享
+# git 历史）。搬运时剥掉 create/health/eval（LLM 生成与体检属宿主侧
+# clone-creator 生态，不上机），remote 端点形状可配（duphub templates /
+# runtime clones）。同步协议与上游逐字节同构：manifest + per-file +
+# base64 push，无归档。
+[[bin]]
+name = "dup"
+path = "src/main.rs"
+
+[dependencies]
+anyhow.workspace = true
+base64.workspace = true
+chrono.workspace = true
+clap.workspace = true
+dirs.workspace = true
+reqwest.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+tokio.workspace = true
+toml.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+uuid.workspace = true
