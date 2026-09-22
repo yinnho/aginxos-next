@@ -16,7 +16,7 @@ pub fn is_internal_path(rel: &str) -> bool {
         || rel.starts_with("flows/")
         || rel.starts_with("sessions/")
         || rel.starts_with("senders/")
-        || rel.starts_with("workspaces/")
+        || rel.starts_with("workflows/")
         || rel.starts_with("data/")
         // staging/ holds in-progress clone definition layers (clone-creator
         // writes each file incrementally; a [CLONE_INSTALL:<name>] marker in

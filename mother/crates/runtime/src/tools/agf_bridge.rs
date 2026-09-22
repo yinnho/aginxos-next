@@ -446,7 +446,7 @@ mod tests {
             .expect("input/ should resolve (not internal)")
             .expect("path should be ok");
         let expected = h
-            .join("workspaces")
+            .join("workflows")
             .join("mo-catering-ops")
             .join("senders")
             .join(sender)
@@ -463,18 +463,18 @@ mod tests {
         let p_out = resolve_user_data_path("output/r.md", &h, "u1", None, "ag")
             .unwrap()
             .unwrap();
-        assert_eq!(p_out, h.join("workspaces/ag/senders/u1/output/r.md"));
+        assert_eq!(p_out, h.join("workflows/ag/senders/u1/output/r.md"));
 
         let p_mem = resolve_user_data_path("memory/n.md", &h, "u1", None, "ag")
             .unwrap()
             .unwrap();
-        assert_eq!(p_mem, h.join("workspaces/ag/senders/u1/memory/n.md"));
+        assert_eq!(p_mem, h.join("workflows/ag/senders/u1/memory/n.md"));
 
         // catch-all (no recognized prefix) still goes to output/
         let p_catch = resolve_user_data_path("foo.md", &h, "u1", None, "ag")
             .unwrap()
             .unwrap();
-        assert_eq!(p_catch, h.join("workspaces/ag/senders/u1/output/foo.md"));
+        assert_eq!(p_catch, h.join("workflows/ag/senders/u1/output/foo.md"));
     }
 
     #[tokio::test]

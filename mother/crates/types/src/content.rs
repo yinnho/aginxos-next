@@ -258,7 +258,7 @@ pub struct DeliverableEntry {
 }
 
 /// Per-agent content registry, loaded from
-/// `~/.aginx/carrier/workspaces/{agent}/content.toml`.
+/// `~/.aginx/carrier/workflows/{agent}/content.toml`.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(default)]
 pub struct ContentConfig {

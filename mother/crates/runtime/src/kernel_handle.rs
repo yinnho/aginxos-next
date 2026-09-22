@@ -288,7 +288,7 @@ pub trait KernelHandle: Send + Sync {
 
     /// Install a clone from definition-layer files (`path -> bytes`).
     ///
-    /// Writes every file under `workspaces/<name>/`, builds `agent.toml` from the
+    /// Writes every file under `workflows/<name>/`, builds `agent.toml` from the
     /// resulting workspace, and spawns the agent. Returns
     /// `(agent_id, agent_name, display_name)`. Executed kernel-side by the
     /// `[CLONE_INSTALL:<name>]` reply-marker handler (clone_marker.rs) — the

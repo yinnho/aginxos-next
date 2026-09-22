@@ -213,7 +213,7 @@ mod apply_patch_routing_tests {
     async fn apply_patch_routes_output_to_sender_dir() {
         let tmp = tempfile::tempdir().unwrap();
         let home = tmp.path();
-        let workspace = home.join("workspaces/ag");
+        let workspace = home.join("workflows/ag");
         std::fs::create_dir_all(&workspace).unwrap();
 
         // AddFile via patch -> must land in senders/u1/output/, not workspace/output/
@@ -225,7 +225,7 @@ mod apply_patch_routing_tests {
             .await
             .unwrap();
         assert!(out.contains("added"), "{out}");
-        let sender_file = home.join("workspaces/ag/senders/u1/output/p1/material.md");
+        let sender_file = home.join("workflows/ag/senders/u1/output/p1/material.md");
         assert!(sender_file.exists(), "file must land in sender output dir");
         assert!(!workspace.join("output/p1/material.md").exists());
 
@@ -247,7 +247,7 @@ mod apply_patch_routing_tests {
     async fn apply_patch_rejects_replacement_char_path() {
         let tmp = tempfile::tempdir().unwrap();
         let home = tmp.path();
-        let workspace = home.join("workspaces/ag");
+        let workspace = home.join("workflows/ag");
         std::fs::create_dir_all(&workspace).unwrap();
         let ctx = sender_ctx(home, &workspace);
         let bad = serde_json::json!({
@@ -263,7 +263,7 @@ mod apply_patch_routing_tests {
     async fn apply_patch_rejects_input_writes() {
         let tmp = tempfile::tempdir().unwrap();
         let home = tmp.path();
-        let workspace = home.join("workspaces/ag");
+        let workspace = home.join("workflows/ag");
         std::fs::create_dir_all(&workspace).unwrap();
         let ctx = sender_ctx(home, &workspace);
         let bad = serde_json::json!({
@@ -280,7 +280,7 @@ mod apply_patch_routing_tests {
         // knowledge/ is an internal path - must NOT be rerouted to the sender dir.
         let tmp = tempfile::tempdir().unwrap();
         let home = tmp.path();
-        let workspace = home.join("workspaces/ag");
+        let workspace = home.join("workflows/ag");
         std::fs::create_dir_all(workspace.join("knowledge")).unwrap();
         let ctx = sender_ctx(home, &workspace);
         let add = serde_json::json!({
@@ -291,7 +291,7 @@ mod apply_patch_routing_tests {
             .unwrap();
         assert!(workspace.join("knowledge/new.md").exists());
         assert!(!home
-            .join("workspaces/ag/senders/u1/output/knowledge/new.md")
+            .join("workflows/ag/senders/u1/output/knowledge/new.md")
             .exists());
     }
 }

@@ -3414,7 +3414,7 @@ mod tests {
     #[tokio::test(flavor = "multi_thread")]
     async fn model_visible_surface_flow_assembly_golden() {
         let (tmp, kernel) = boot_test_kernel();
-        let ws = tmp.path().join("workspaces").join("golden-agent");
+        let ws = tmp.path().join("workflows").join("golden-agent");
         std::fs::create_dir_all(ws.join("flows").join("fixture-writer")).unwrap();
         std::fs::write(
             ws.join("flows").join("fixture-writer").join("flow.md"),

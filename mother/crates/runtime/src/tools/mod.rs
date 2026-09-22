@@ -119,7 +119,7 @@ pub fn builtin_modules(
     // skill/manifest tools list downstream.
     let home_dir = carrier_types::config::home_dir();
     let mut api_tool_configs = crate::api_tools::loader::load_all_api_tools(&home_dir, None);
-    let ws_root = home_dir.join("workspaces");
+    let ws_root = home_dir.join("workflows");
     if let Ok(entries) = std::fs::read_dir(&ws_root) {
         for entry in entries.flatten() {
             let ws_toml = entry.path().join("api_tools.toml");

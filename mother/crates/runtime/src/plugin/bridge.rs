@@ -581,7 +581,7 @@ impl PluginBridgeManager {
             }
             // 2) Public view URL for the saved file (requires external_url).
             if let Some(rel) = saved_rel {
-                // rel is home-relative: workspaces/{agent}/senders/{owner}/input/file
+                // rel is home-relative: workflows/{agent}/senders/{owner}/input/file
                 // view path is relative to sender data dir: input/file
                 if let Some(under_sender) = rel
                     .rsplit_once("/input/")
@@ -735,7 +735,7 @@ impl PluginBridgeManager {
             _ => return None,
         };
 
-        // sender_relative_path returns a home_dir-relative path (e.g. "workspaces/{agent}/senders/{sender}/input"),
+        // sender_relative_path returns a home_dir-relative path (e.g. "workflows/{agent}/senders/{sender}/input"),
         // so we must use home_dir as the base, NOT the workspace root, to avoid double-nesting.
         let base = match self.kernel.home_dir() {
             Some(b) => b.to_path_buf(),

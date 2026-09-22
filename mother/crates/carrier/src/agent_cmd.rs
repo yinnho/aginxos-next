@@ -207,18 +207,22 @@ fn list(kernel: &CarrierKernel, json: bool) {
     }
 }
 
-fn remove(kernel: &CarrierKernel, name: &str) -> anyhow::Result<()> {    let entry = kernel
+fn remove(kernel: &CarrierKernel, name: &str) -> anyhow::Result<()> {
+    if name == carrier_types::config::SYSTEM_AGENT_ME {
+        anyhow::bail!("me 是母体（家根身份），不可卸载");
+    }
+    let entry = kernel
         .registry
         .find_by_name(name)
         .ok_or_else(|| anyhow::anyhow!("本机没有叫 {name} 的化身"))?;
 
-    // kill_agent 一并清：后台任务/调度/能力/事件/cron/持久化/aginx 离网。
+    // kill_agent 一并清：后台任务/调度/能力/事件/cron/持久化。
     kernel.kill_agent(entry.id)?;
-    let ws = kernel.config.effective_workspaces_dir().join(name);
+    let ws = kernel.config.agent_workspace_dir(name);
     if ws.exists() {
         std::fs::remove_dir_all(&ws)?;
     }
-    println!("已卸载 {name}（workspace 已删除，已离网）");
+    println!("已卸载 {name}（workspace 已删除）");
     daemon_restart_hint();
     Ok(())
 }
@@ -276,8 +280,7 @@ fn restart(kernel: &CarrierKernel, agent: &str) -> anyhow::Result<()> {
 fn local_version(kernel: &CarrierKernel, name: &str, fallback: &str) -> String {
     let path = kernel
         .config
-        .effective_workspaces_dir()
-        .join(name)
+        .agent_workspace_dir(name)
         .join("template.json");
     std::fs::read_to_string(&path)
         .ok()

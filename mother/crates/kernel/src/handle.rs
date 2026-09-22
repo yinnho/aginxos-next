@@ -990,8 +990,17 @@ impl CarrierKernel {
             )));
         }
 
-        let workspace_dir = self.config.effective_workspaces_dir().join(name);
-        if !workspace_dir.starts_with(self.config.effective_workspaces_dir()) {
+        // 母体不是助理：她住在家根（agent_workspace_dir 特判），绝不能走
+        // clone 管线——install 的 reinstall-clear 分支会把家根清空。她由
+        // wiring::seed_system_me 用独立种子路径落位。
+        if name == carrier_types::config::SYSTEM_AGENT_ME {
+            return Err(CarrierError::Internal(
+                "'me' 是母体（家根身份），不能作为 clone 安装".into(),
+            ));
+        }
+
+        let workspace_dir = self.config.effective_workflows_dir().join(name);
+        if !workspace_dir.starts_with(self.config.effective_workflows_dir()) {
             return Err(CarrierError::Internal("Path traversal denied".into()));
         }
 
@@ -1125,19 +1134,6 @@ impl CarrierKernel {
 
         if !plugins.is_empty() {
             self.resolve_plugin_dependencies(&plugins).await;
-        }
-
-        // ── aginx 入网钩子 ──
-        // 分身装好即入网：写 ~/.aginx/agents/<name>/aginx.toml，网关扫描即
-        // 可见。失败不挡安装（aginx 网关可以不存在）。
-        let (desc, ver) = match template.as_ref() {
-            Some(t) => (t.description.clone(), t.version.clone()),
-            None => (String::new(), String::new()),
-        };
-        if let Err(e) =
-            crate::aginx_net::register_clone_default(&agent_name, &display_name, &desc, &ver)
-        {
-            tracing::warn!(name = %agent_name, error = %e, "aginx registration failed (clone still installed)");
         }
 
         tracing::info!(

@@ -1,7 +1,7 @@
 //! 绑定即路由——sender_id → agent 名的内存路由表。
 //!
 //! 路由不再有独立的磁盘真源（老 config.json 已退役）：weixin 会话的
-//! `bind_agent`（DB / workspaces 下 session.json）与 webhook 的 config.toml
+//! `bind_agent`（DB / workflows 下 session.json）与 webhook 的 config.toml
 //! 在启动时种入这里。一个绑定对应一个分身；多分身管理走 webui/桌面端，
 //! 不在聊天协议里（命名流/@名字切换//list 已随 opencarrier 多分身模型
 //! 一起删除）。

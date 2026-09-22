@@ -16,12 +16,12 @@ use carrier_runtime::kernel_handle::KernelHandle;
 // ── Cron delivery helper ───────────────────────────────────
 
 /// Filesystem / profile key for outbound side-effects (HTML/cover paths under
-/// `workspaces/<key>/senders/...`, content.toml cache).
+/// `workflows/<key>/senders/...`, content.toml cache).
 ///
 /// Must be the agent **name** (e.g. `ai-writer`), never `AgentId` UUID string.
 /// Interactive bridge routes already store names; cron jobs only have UUID and
 /// must resolve here — otherwise workspace paths join under a non-existent
-/// `workspaces/<uuid>/`.
+/// `workflows/<uuid>/`.
 fn outbound_agent_key(kernel: &CarrierKernel, agent_id: AgentId) -> String {
     match kernel.registry.get(agent_id) {
         Some(entry) => entry.name,
@@ -1651,7 +1651,7 @@ mod tests {
                 metadata: HashMap::new(),
                 tags: vec![],
                 autonomous: None,
-                workspace: Some(std::path::PathBuf::from(format!("/tmp/workspaces/{name}"))),
+                workspace: Some(std::path::PathBuf::from(format!("/tmp/workflows/{name}"))),
                 generate_identity_files: true,
                 exec_policy: None,
                 cli_exec: None,
@@ -1677,7 +1677,7 @@ mod tests {
     }
 
     /// Contract: cron must resolve AgentId → name before workspace path joins.
-    /// Interactive routes store names; UUID must never become the workspaces/ segment.
+    /// Interactive routes store names; UUID must never become the workflows/ segment.
     #[test]
     fn outbound_agent_key_contract_name_not_uuid() {
         let id = AgentId::new();
@@ -1700,10 +1700,10 @@ mod tests {
             &id.to_string(),
             Some("sender@im.wechat"),
         );
-        assert!(profile_via_name.ends_with("workspaces/ai-writer/senders/sender@im.wechat"));
+        assert!(profile_via_name.ends_with("workflows/ai-writer/senders/sender@im.wechat"));
         assert!(!profile_via_uuid
             .to_string_lossy()
-            .contains("workspaces/ai-writer/"));
+            .contains("workflows/ai-writer/"));
     }
 
     /// Chained-pipeline no-op guard: the degenerate-response contract.

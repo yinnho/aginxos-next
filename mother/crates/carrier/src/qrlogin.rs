@@ -1,7 +1,7 @@
 //! `aginx-carrier qr-login` — iLink 扫码登录（headless 服务器形态）。
 //!
 //! 终端直接渲染 ASCII 二维码（手机微信扫屏幕即可），轮询到确认后落
-//! `workspaces/<bind_agent>/senders/<user_id>/session.json`（绑定即路由：
+//! `workflows/<bind_agent>/senders/<user_id>/session.json`（绑定即路由：
 //! 会话住在分身下；一次性进程无 DB 回调 → JSON 旁路，daemon 的 respawn
 //! watcher 每 5s 扫描收编）。此后 daemon 与 `notify` 一次性告警都有会话可发。
 //!

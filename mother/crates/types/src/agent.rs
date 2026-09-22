@@ -388,7 +388,7 @@ pub struct AgentManifest {
     #[serde(default)]
     pub autonomous: Option<AutonomousConfig>,
     /// Agent workspace directory. Auto-created on spawn.
-    /// Default: `{workspaces_dir}/{agent_name}-{agent_id_prefix}/`
+    /// Default: `{workflows_dir}/{agent_name}-{agent_id_prefix}/`
     #[serde(default)]
     pub workspace: Option<PathBuf>,
     /// Whether to generate workspace identity files (SOUL.md, USER.md, etc.) on creation.

@@ -125,7 +125,7 @@ mod tests {
                 "owner_id": null,
                 "agent_name": "mo-catering-ops",
                 "external_url": "https://x.example",
-                "resolved": { "path": "/home/workspaces/mo/senders/u1@im.wechat/output/a.md" }
+                "resolved": { "path": "/home/workflows/mo/senders/u1@im.wechat/output/a.md" }
             }
         });
         let ctx = ctx_of(&input).expect("ctx present");
@@ -138,7 +138,7 @@ mod tests {
         let p = resolve_param(&input, "path", "output/a.md").unwrap();
         assert_eq!(
             p,
-            PathBuf::from("/home/workspaces/mo/senders/u1@im.wechat/output/a.md")
+            PathBuf::from("/home/workflows/mo/senders/u1@im.wechat/output/a.md")
         );
     }
 

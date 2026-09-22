@@ -7,7 +7,7 @@
 //! - 默认 `?` 无 wait：202 立即返回，轮后台跑，回复文本进日志（agent 靠
 //!   工具做事）；`?wait=N`：同步阻塞拿回复（机器请求-响应流）。
 //! - 会话：`sender_id = webhook:{name}` → label `user:webhook:{name}`，同一
-//!   hook 的连续事件一个连续会话；数据目录 `workspaces/{agent}/senders/{name}/`。
+//!   hook 的连续事件一个连续会话；数据目录 `workflows/{agent}/senders/{name}/`。
 //! - 路由：DirectBind + 启动时种路由（`cm.set_sender_route(name, agent)`）。
 
 pub mod channel;

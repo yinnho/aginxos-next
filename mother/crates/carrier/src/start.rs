@@ -30,10 +30,6 @@ async fn async_main() -> anyhow::Result<()> {
     // ── 系统身份：「我」——主人的统一身份（总管/门面），开箱即聊。──
     aginx_carrier::wiring::seed_system_me(&kernel).await;
 
-    // ── aginx 入网同步：workspace 里已装但 ~/.aginx/agents/ 缺登记的分身
-    // 补写 aginx.toml（clone_install 是增量钩子，这里是启动对账）。──
-    aginx_carrier::wiring::sync_aginx_registrations(&kernel);
-
     let cm = aginx_carrier::wiring::boot_channels(&kernel).await?;
 
     // webhook HTTP 入站通道（daemon 形态专属；uniffi/移动端不起监听）。
@@ -62,7 +58,7 @@ async fn async_main() -> anyhow::Result<()> {
         loop {
             interval.tick().await;
             let mut tomls = vec![carrier_types::config::home_dir().join("api_tools.toml")];
-            let ws_root = carrier_types::config::home_dir().join("workspaces");
+            let ws_root = carrier_types::config::home_dir().join("workflows");
             if let Ok(entries) = std::fs::read_dir(&ws_root) {
                 for entry in entries.flatten() {
                     let t = entry.path().join("api_tools.toml");
