@@ -591,6 +591,14 @@ impl KernelHandle for CarrierKernel {
         Some(self.config.home_dir.clone())
     }
 
+    /// D8 帧账观察者（server 直调时经 set_turn_observer 注入）。
+    fn turn_observer(&self) -> Option<Arc<dyn carrier_types::observer::TurnObserver>> {
+        self.turn_observer
+            .read()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone()
+    }
+
     fn external_url(&self) -> Option<String> {
         self.config.external_url.clone()
     }

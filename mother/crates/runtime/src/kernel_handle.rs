@@ -67,6 +67,14 @@ pub trait KernelHandle: Send + Sync {
         Ok(format!("[用户发送了非文本内容: {_content_type}]"))
     }
 
+    /// D8 帧账观察者（工具执行回调 + steer 抽取；见
+    /// `carrier_types::observer`）。默认 None——只有直调 kernel 且要
+    /// 记账的宿主（server）才注入。挂在 handle 上而不是 run_agent_loop
+    /// 参数表：随 kernel 走，全部现有调用点零改动。
+    fn turn_observer(&self) -> Option<std::sync::Arc<dyn carrier_types::observer::TurnObserver>> {
+        None
+    }
+
     /// List all running agents visible to the caller.
     fn list_agents(&self) -> Vec<AgentInfo>;
 

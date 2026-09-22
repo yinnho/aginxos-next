@@ -34,6 +34,15 @@ impl CarrierKernel {
         let _ = self.coordination.self_handle.set(Arc::downgrade(self));
     }
 
+    /// 注入 D8 帧账观察者（server 直调 kernel 时在 boot 后调用一次；
+    /// 见 carrier_types::observer）。
+    pub fn set_turn_observer(&self, obs: Arc<dyn carrier_types::observer::TurnObserver>) {
+        *self
+            .turn_observer
+            .write()
+            .unwrap_or_else(|e| e.into_inner()) = Some(obs);
+    }
+
     // ── Agent Binding management ──────────────────────────────
 
     // ── Config hot-reload ─────────────────────────────────────
