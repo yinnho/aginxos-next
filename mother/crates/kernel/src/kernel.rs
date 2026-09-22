@@ -631,7 +631,7 @@ impl CarrierKernel {
 
                     let mut entry = entry;
 
-                    let ws = kernel.config.effective_workspaces_dir().join(&name);
+                    let ws = kernel.config.agent_workspace_dir(&name);
                     entry.manifest.workspace = Some(ws.clone());
 
                     // Hot-reload agent.toml if it exists — picks up tool/capability changes
@@ -791,8 +791,18 @@ impl CarrierKernel {
         let workspace_dir = manifest
             .workspace
             .clone()
-            .unwrap_or_else(|| self.config.effective_workspaces_dir().join(&name));
-        ensure_workspace(&workspace_dir)?;
+            .unwrap_or_else(|| self.config.agent_workspace_dir(&name));
+        if workspace_dir == self.config.home_dir {
+            // 母体（"me"）：家目录即工作区。只补会话账目录——助理脚手架
+            // （knowledge/logs/history/AGENT.json）不落在家根上（docs/FS.md）。
+            std::fs::create_dir_all(workspace_dir.join("sessions")).map_err(|e| {
+                KernelError::Carrier(carrier_types::error::CarrierError::Internal(format!(
+                    "Failed to create mother sessions dir: {e}"
+                )))
+            })?;
+        } else {
+            ensure_workspace(&workspace_dir)?;
+        }
         if manifest.generate_identity_files {
             generate_identity_files(&workspace_dir, &manifest);
         }

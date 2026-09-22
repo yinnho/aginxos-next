@@ -844,11 +844,6 @@ impl CarrierKernel {
             warn!(agent_id = %agent_id, error = %e, "Failed to remove agent from persistent storage");
         }
 
-        // aginx 入网钩子：分身卸载即离网（~/.aginx/agents/<name>/ 移除）。
-        if let Err(e) = crate::aginx_net::unregister_clone_default(&entry.name) {
-            warn!(name = %entry.name, error = %e, "Failed to remove aginx registration");
-        }
-
         // Clean up per-agent runtime resources to prevent leaks
         self.runtime.running_tasks.remove(&agent_id);
         if let Ok(mut bindings) = self.coordination.bindings.lock() {

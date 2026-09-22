@@ -164,28 +164,6 @@ pub async fn boot_channels(kernel: &Arc<CarrierKernel>) -> anyhow::Result<Channe
     Ok(cm)
 }
 
-/// Boot-time aginx 入网对账：kernel 里已装但 `~/.aginx/agents/` 缺登记的
-/// 分身补写 aginx.toml。clone_install 是增量钩子；这里是启动兜底，覆盖
-/// 手工导入/拷贝 workspace、aginx.toml 丢失等情况。
-///
-/// 已存在的登记**不覆盖**——保留手工编辑；只有缺失才补。
-pub fn sync_aginx_registrations(kernel: &Arc<CarrierKernel>) {
-    for entry in kernel.registry.list() {
-        if carrier_kernel::aginx_net::registration_exists_default(&entry.name) {
-            continue;
-        }
-        match carrier_kernel::aginx_net::register_clone_default(
-            &entry.name,
-            &entry.manifest.display_name,
-            &entry.manifest.description,
-            &entry.manifest.version,
-        ) {
-            Ok(()) => tracing::info!(agent = %entry.name, "aginx registration reconciled"),
-            Err(e) => tracing::warn!(agent = %entry.name, error = %e, "aginx registration failed"),
-        }
-    }
-}
-
 /// 首启兜底：`~/.aginx/carrier/brain.json` 不存在则写骨架——kernel boot 硬
 /// 要求 brain 可加载；base_url 为空时由宿主（AginxOS 设置面）引导补齐。
 /// 从 web.rs 收编（web 子命令退役，2026-08-30）。
@@ -239,26 +217,61 @@ pub async fn seed_system_creator(kernel: &Arc<CarrierKernel>) {
     }
 }
 
-/// 系统身份种子：未注册「我」时用内嵌定义层装上（同 seed_system_creator 模式）。
+/// 系统身份种子：母体（"me"）住在家根——她的人格就是家目录本身
+/// （SOUL.md / MEMORY.md 在 {AGINX_HOME} 根上，docs/FS.md）。不走 clone
+/// 安装管线：那会清空重装目录，家根绝不能进。
+///
+/// 未注册时：家根缺的人格文件补种（if !exists，不覆盖用户编辑），再以
+/// workspace=家根 spawn。已注册即跳过；失败只告警不挡启动，重启重试。
 pub async fn seed_system_me(kernel: &Arc<CarrierKernel>) {
+    use carrier_types::agent::AgentManifest;
+
     if kernel
         .registry
-        .find_by_name(carrier_clone::system_creator::SYSTEM_ME_NAME)
+        .find_by_name(carrier_types::config::SYSTEM_AGENT_ME)
         .is_some()
     {
         return;
     }
+
+    let home = kernel.config.home_dir.clone();
+    if let Err(e) = std::fs::create_dir_all(&home) {
+        tracing::warn!(error = %e, "me 种子失败：家目录不可建（不影响启动，重启重试）");
+        return;
+    }
+
+    // 家根人格缺则补。SOUL.md / MEMORY.md 是母体在 FS.md 树上的全部定义
+    // 层；助理形状的 template/profile/flows 不种到家根。
     let files = carrier_clone::system_creator::system_me_files();
-    match kernel
-        .clone_install_files(carrier_clone::system_creator::SYSTEM_ME_NAME, files)
-        .await
-    {
-        Ok((id, name, display_name)) => {
-            tracing::info!(id = %id, name = %name, display_name = %display_name, "系统分身已种子：me");
+    for file in ["SOUL.md", "MEMORY.md"] {
+        let dst = home.join(file);
+        if dst.exists() {
+            continue;
         }
-        Err(e) => {
-            tracing::warn!(error = %e, "me 种子失败（不影响启动，重启重试）");
+        match files.get(file) {
+            Some(bytes) => {
+                if let Err(e) = std::fs::write(&dst, bytes) {
+                    tracing::warn!(path = %dst.display(), error = %e, "me 人格文件补种失败");
+                }
+            }
+            None => tracing::warn!(file = file, "me 内嵌定义层缺文件"),
         }
+    }
+    if let Err(e) = std::fs::create_dir_all(home.join("sessions")) {
+        tracing::warn!(error = %e, "me sessions 目录创建失败");
+    }
+
+    let manifest = AgentManifest {
+        name: carrier_types::config::SYSTEM_AGENT_ME.to_string(),
+        display_name: "我".to_string(),
+        description: "母体 — 对主人是总管，对外是门面（家根身份）".to_string(),
+        workspace: Some(home),
+        generate_identity_files: false,
+        ..Default::default()
+    };
+    match kernel.spawn_agent(manifest) {
+        Ok(id) => tracing::info!(id = %id, "母体已种子：me（workspace=家根）"),
+        Err(e) => tracing::warn!(error = ?e, "me 种子失败（不影响启动，重启重试）"),
     }
 }
 

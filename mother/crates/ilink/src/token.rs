@@ -108,7 +108,7 @@ impl BotSession {
 // Global state manager
 // ---------------------------------------------------------------------------
 
-/// 扫 `workspaces/*/senders/*/session.json` 里的 weixin 会话（JSON 旁路
+/// 扫 `workflows/*/senders/*/session.json` 里的 weixin 会话（JSON 旁路
 /// ——DB 不可用/为空时的兜底）。`load_from_dir`/`load_new_from_dir` 与
 /// `aginx-carrier notify` 一次性进程共用；别处复制这份过滤逻辑会漂移。
 ///
@@ -117,10 +117,10 @@ impl BotSession {
 pub fn scan_json_token_files() -> Vec<BotTokenFile> {
     let home = carrier_types::config::home_dir();
     let mut tfs = Vec::new();
-    let Ok(workspaces) = std::fs::read_dir(home.join("workspaces")) else {
+    let Ok(workflows) = std::fs::read_dir(home.join("workflows")) else {
         return tfs;
     };
-    for agent_entry in workspaces.flatten() {
+    for agent_entry in workflows.flatten() {
         let senders_dir = agent_entry.path().join("senders");
         let Ok(senders) = std::fs::read_dir(&senders_dir) else {
             continue;
@@ -162,14 +162,14 @@ pub fn scan_json_token_files() -> Vec<BotTokenFile> {
     tfs
 }
 
-/// Delete `workspaces/<other>/senders/<user_key>/session.json` for every
+/// Delete `workflows/<other>/senders/<user_key>/session.json` for every
 /// clone other than `keep_agent` — a rebind moves the session, it doesn't
 /// fork it.
 fn remove_stale_session_files(home: &std::path::Path, user_key: &str, keep_agent: &str) {
-    let Ok(workspaces) = std::fs::read_dir(home.join("workspaces")) else {
+    let Ok(workflows) = std::fs::read_dir(home.join("workflows")) else {
         return;
     };
-    for agent_entry in workspaces.flatten() {
+    for agent_entry in workflows.flatten() {
         let agent = agent_entry.file_name().to_string_lossy().to_string();
         if agent == keep_agent {
             continue;
@@ -374,7 +374,7 @@ impl WeixinState {
         }
 
         // Fallback: JSON file under the bound clone's workspace
-        // (workspaces/<bind_agent>/senders/<user>/session.json — 绑定即路由，
+        // (workflows/<bind_agent>/senders/<user>/session.json — 绑定即路由，
         // 会话住在分身下). No bind_agent → nowhere to put it: warn and skip
         // (the session is still usable in-memory; one-shot qr-login requires
         // --bind-agent).

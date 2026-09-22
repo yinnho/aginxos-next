@@ -574,7 +574,7 @@ pub struct KernelConfig {
     pub vault: VaultConfig,
     /// Assistant packs (FS.md: `/home/workflows`). Default: `{home}/workflows`
     #[serde(default)]
-    pub workspaces_dir: Option<PathBuf>,
+    pub workflows_dir: Option<PathBuf>,
     /// Hub (openclone-hub) connection settings.
     #[serde(default)]
     pub hub: HubConfig,
@@ -1003,7 +1003,7 @@ impl Default for KernelConfig {
             web: WebConfig::default(),
             browser: BrowserConfig::default(),
             vault: VaultConfig::default(),
-            workspaces_dir: None,
+            workflows_dir: None,
             hub: HubConfig::default(),
             media: crate::media::MediaConfig::default(),
             links: crate::media::LinkConfig::default(),
@@ -1039,13 +1039,29 @@ impl Default for KernelConfig {
 }
 
 impl KernelConfig {
-    /// Resolved workspaces root directory.
-    pub fn effective_workspaces_dir(&self) -> PathBuf {
-        self.workspaces_dir
+    /// Resolved workflows root directory.
+    pub fn effective_workflows_dir(&self) -> PathBuf {
+        self.workflows_dir
             .clone()
             .unwrap_or_else(|| self.home_dir.join("workflows"))
     }
+
+    /// Workspace directory for one agent by name. The mother ("me") lives at
+    /// the home root itself — her persona IS the home tree, not an assistant
+    /// folder (docs/FS.md: 不要再做 workflows/me). Every other agent is a
+    /// directory under the workflows root.
+    pub fn agent_workspace_dir(&self, name: &str) -> PathBuf {
+        if name == SYSTEM_AGENT_ME {
+            self.home_dir.clone()
+        } else {
+            self.effective_workflows_dir().join(name)
+        }
+    }
 }
+
+/// System identity agent name — the mother. Kept here (not in carrier-clone)
+/// so KernelConfig can special-case her workspace without a reverse dep.
+pub const SYSTEM_AGENT_ME: &str = "me";
 
 /// SECURITY: Custom Debug impl redacts sensitive fields (api_key).
 impl std::fmt::Debug for KernelConfig {
@@ -1076,7 +1092,7 @@ impl std::fmt::Debug for KernelConfig {
             .field("web", &self.web)
             .field("browser", &self.browser)
             .field("vault", &format!("enabled={}", self.vault.enabled))
-            .field("workspaces_dir", &self.workspaces_dir)
+            .field("workflows_dir", &self.workflows_dir)
             .field("hub", &format!("url={}", self.hub.url))
             .field(
                 "media",
@@ -1121,16 +1137,16 @@ pub fn home_dir() -> PathBuf {
     PathBuf::from("/home")
 }
 
-/// Resolve the per-sender-per-agent data directory under `workspaces/`.
+/// Resolve the per-sender-per-agent data directory under `workflows/`.
 ///
-/// Returns `workspaces/{agent_name}/senders/{owner_id}/` or
-/// `workspaces/{agent_name}/senders/{owner_id}/users/{user_id}/` when user_id differs from owner_id.
+/// Returns `workflows/{agent_name}/senders/{owner_id}/` or
+/// `workflows/{agent_name}/senders/{owner_id}/users/{user_id}/` when user_id differs from owner_id.
 ///
 /// - `owner_id` is the route_key: for WeChat it's the openid, for WeCom/Feishu/DingTalk it's the bot_id/app_id/app_key.
 /// - `user_id` is the actual user identity from the platform message. When present and different
-///   from `owner_id`, the path becomes `workspaces/{agent_name}/senders/{owner_id}/users/{user_id}/`
+///   from `owner_id`, the path becomes `workflows/{agent_name}/senders/{owner_id}/users/{user_id}/`
 ///   (group users under a bot). When `None` or equal to `owner_id`, the path is
-///   `workspaces/{agent_name}/senders/{owner_id}/` (the owner's own data).
+///   `workflows/{agent_name}/senders/{owner_id}/` (the owner's own data).
 pub fn sender_data_dir(
     home_dir: &std::path::Path,
     owner_id: &str,
@@ -1140,7 +1156,7 @@ pub fn sender_data_dir(
     let safe_owner = sanitize_path_component(owner_id);
     let safe_agent = sanitize_path_component(agent_name);
     let base = home_dir
-        .join("workspaces")
+        .join("workflows")
         .join(safe_agent)
         .join("senders")
         .join(safe_owner);
@@ -1159,7 +1175,7 @@ pub fn sender_data_dir(
 /// and runtime layers — both call this single function.
 ///
 /// The returned path is a subdirectory of the workspace:
-/// `workspaces/{agent}/senders/{owner}/` (sender-driven) or
+/// `workflows/{agent}/senders/{owner}/` (sender-driven) or
 /// `workspace_root/` (CLI/system).
 pub fn resolve_turn_cwd(
     home_dir: &std::path::Path,
@@ -1177,10 +1193,10 @@ pub fn resolve_turn_cwd(
     }
 }
 
-/// Compute a home-relative path under `workspaces/` for a given subdir (input/output/memory).
+/// Compute a home-relative path under `workflows/` for a given subdir (input/output/memory).
 ///
-/// Returns a string like `workspaces/{agent_name}/senders/{owner_id}/{subdir}` or
-/// `workspaces/{agent_name}/senders/{owner_id}/users/{user_id}/{subdir}` when user_id differs from owner_id.
+/// Returns a string like `workflows/{agent_name}/senders/{owner_id}/{subdir}` or
+/// `workflows/{agent_name}/senders/{owner_id}/users/{user_id}/{subdir}` when user_id differs from owner_id.
 pub fn sender_relative_path(
     owner_id: &str,
     agent_name: &str,
@@ -1189,7 +1205,7 @@ pub fn sender_relative_path(
 ) -> String {
     let safe_owner = sanitize_path_component(owner_id);
     let safe_agent = sanitize_path_component(agent_name);
-    let base = format!("workspaces/{}/senders/{}", safe_agent, safe_owner);
+    let base = format!("workflows/{}/senders/{}", safe_agent, safe_owner);
     match user_id {
         Some(uid) if uid != owner_id => {
             format!("{}/users/{}/{}", base, sanitize_path_component(uid), subdir)

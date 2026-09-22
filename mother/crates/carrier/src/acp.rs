@@ -227,12 +227,16 @@ fn ensure_kernel(state: &BridgeState) -> Result<Arc<CarrierKernel>, String> {
 
 /// Resolve `--clone` to a session binding and register a session.
 ///
-/// 分派三路：本地化身（aginx.toml 在册）走 lazy boot——与既有行为一致，
-/// boot 失败保留原报错路径；远程句柄（且无同名本地化身）不 boot kernel
-/// （本机无 brain/无本地化身也能对话远程化身）；两者皆非时落回 lazy boot，
-/// 让 "未安装" 类错误原样报告。名字互斥在注册期拦死（remote add 双向查）。
+/// 分派三路：本地化身（workflows/<name> 目录在）走 lazy boot——与既有行为
+/// 一致，boot 失败保留原报错路径；远程句柄（且无同名本地化身）不 boot
+/// kernel（本机无 brain/无本地化身也能对话远程化身）；两者皆非时落回
+/// lazy boot，让 "未安装" 类错误原样报告。名字互斥在注册期拦死
+/// （remote add 双向查）。
 fn boot_and_register(state: &BridgeState) -> Result<String, String> {
-    let kind = if carrier_kernel::aginx_net::registration_exists_default(&state.clone) {
+    let local_clone_dir = carrier_types::config::home_dir()
+        .join("workflows")
+        .join(&state.clone);
+    let kind = if local_clone_dir.is_dir() {
         let kernel = ensure_kernel(state)?;
         let entry = kernel
             .registry

@@ -632,7 +632,7 @@ async fn tool_image_generate(
     let mut saved_paths: Vec<String> = Vec::new();
     let mut rel_paths: Vec<String> = Vec::new();
     if let (Some(hd), Some(an)) = (home_dir, agent_name) {
-        // Match file_write / files/view: workspaces/{agent}/senders/{owner}[/users/{sid}]/output
+        // Match file_write / files/view: workflows/{agent}/senders/{owner}[/users/{sid}]/output
         let sid = sender_id.unwrap_or("shared");
         let oid = owner_id.unwrap_or(sid);
         let output_dir = carrier_types::config::sender_data_dir(hd, oid, an, Some(sid)).join("output");

@@ -93,7 +93,7 @@ impl PermissionLevel {
             | "task_post" | "task_claim" | "task_complete"
             | "event_publish" | "schedule_create" | "schedule_delete"
             | "cron_create" | "cron_cancel"
-            // clone_install — writes into workspaces/<name>/ with name + traversal validation
+            // clone_install — writes into workflows/<name>/ with name + traversal validation
             // clone_publish — external push, gated by admin-configured hub api_key + URL validation
             | "clone_install" | "clone_publish"
             // charter_create_order — creates a real order + notifies admins (external side effect)

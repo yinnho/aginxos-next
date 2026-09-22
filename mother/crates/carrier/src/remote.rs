@@ -158,8 +158,12 @@ fn add(
         anyhow::bail!("化身名只允许小写字母、数字与连字符（1-64 位）");
     }
     // 同名互斥两个方向都在注册期拦死（install 侧反向拦）：acp 的本地/远程
-    // 分派依赖名字不撞。
-    if carrier_kernel::aginx_net::registration_exists_default(&name) {
+    // 分派依赖名字不撞。本地登记面=workflows/<name> 目录（docs/FS.md）。
+    if carrier_types::config::home_dir()
+        .join("workflows")
+        .join(&name)
+        .exists()
+    {
         anyhow::bail!("本机已有同名化身 {name}——远程句柄请换一个别名");
     }
     let (url_norm, agent_from_path) = split_url(&url).map_err(|e| anyhow::anyhow!("{e}"))?;
