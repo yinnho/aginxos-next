@@ -29,6 +29,30 @@ use std::sync::{Arc, Mutex};
 /// 不能无边；引擎侧另有 brain 截断，这里的 20 万字符是审计留量。
 const TOOL_OUT_MAX_CHARS: usize = 200_000;
 
+/// /home 出厂树（repo home/，单真源内嵌）。镜像和包都不带这些文件——
+/// 出厂树长在母体进程里：裸 L0 装包首启即出树、重刷（清了 /home）后
+/// 自动重建、OTA 永不碰 /home（FS.md 三承诺零机制成本）。
+const HOME_SOUL: &str = include_str!("../../../home/SOUL.md");
+const HOME_MEMORY: &str = include_str!("../../../home/MEMORY.md");
+
+/// 种出厂 /home 树：SOUL.md/MEMORY.md 缺则建 + sessions/ 目录。存在即
+/// 跳过——用户编辑绝不覆盖。种在 brain 桥之前：kernel boot 失败退进程
+/// 时树也已在位。
+fn seed_home(home: &std::path::Path) {
+    if let Err(e) = std::fs::create_dir_all(home.join("sessions")) {
+        eprintln!("mother: seed home sessions dir failed: {e}");
+    }
+    for (name, content) in [("SOUL.md", HOME_SOUL), ("MEMORY.md", HOME_MEMORY)] {
+        let dst = home.join(name);
+        if dst.exists() {
+            continue;
+        }
+        if let Err(e) = std::fs::write(&dst, content) {
+            eprintln!("mother: seed {name} failed: {e}");
+        }
+    }
+}
+
 fn cap(s: &str) -> String {
     if s.chars().count() <= TOOL_OUT_MAX_CHARS {
         s.to_string()
@@ -141,6 +165,7 @@ impl Mother {
     /// boot kernel 一次：brain 桥 → KernelConfig → set_self_handle →
     /// 装账本观察者 → reconcile（me + workflows/ 全员在册）。
     pub fn boot(home: PathBuf, desk: Arc<FrontDesk>) -> Result<Mother, String> {
+        seed_home(&home);
         bridge_brain_json(&home)?;
         let config = KernelConfig {
             home_dir: home.clone(),
@@ -219,6 +244,16 @@ impl Mother {
         // 前台会话连续性归 front 层（光标+账本回合号）；kernel 的意图
         // 轮换会把「换个话题」折成新 session，与 D9 会话语义打架。
         manifest.intent_classifier_enabled = Some(false);
+        // kernel 的 identity 7 件套（USER/TOOLS/AGENTS/BOOTSTRAP/IDENTITY…）
+        // 不落树——FS.md 的家根与助理形状都不认。母体的 SOUL/MEMORY 由
+        // seed_home 种出厂版，助理的性格由 create 面（soul 参数）写。
+        manifest.generate_identity_files = false;
+        if name == SYSTEM_AGENT_ME {
+            // 母体 manifest 对齐 wiring::seed_system_me 的语义（那边是老
+            // carrier 入口的种子；server 直调路径自己种，不背 carrier crate）
+            manifest.display_name = "我".to_string();
+            manifest.description = "母体 — 对主人是总管，对外是门面（家根身份）".to_string();
+        }
         self.kernel
             .spawn_agent_with_parent(manifest, None, None)
             .map_err(|e| format!("spawn agent '{name}': {e}"))
@@ -390,6 +425,36 @@ mod tests {
         // kernel 侧真在册：me 与 小满 都有 agent
         assert!(mother.kernel.registry.find_by_name("me").is_some());
         assert!(mother.kernel.registry.find_by_name("小满").is_some());
+    }
+
+    /// 出厂树种子（刀3）：boot 种 SOUL/MEMORY/sessions——已存在的用户
+    /// 编辑绝不覆盖；me 跑过一轮后家根干净——kernel 的 identity 脚手架
+    /// （USER/TOOLS/AGENTS/BOOTSTRAP/IDENTITY/HEARTBEAT）一个都不落树，
+    /// 助理目录同理（助理的性格走 create 面的 soul 参数，不走脚手架）。
+    #[test]
+    fn home_seed_idempotent_and_no_identity_junk() {
+        let dir = std::env::temp_dir().join(format!("aginx-server-test-mother-seed-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("workflows/小满")).unwrap();
+        std::fs::write(dir.join("SOUL.md"), "用户改过的灵魂").unwrap();
+
+        let addr = stub_brain(vec![now(oai("答", None, "stop"))]);
+        let (desk, mother) = boot_host(&dir, &addr);
+
+        // 种子规矩：SOUL 用户版原样、MEMORY 出厂版补种、sessions/ 在位
+        assert_eq!(std::fs::read_to_string(dir.join("SOUL.md")).unwrap(), "用户改过的灵魂");
+        assert!(std::fs::read_to_string(dir.join("MEMORY.md")).unwrap().contains("知识索引"));
+        assert!(dir.join("sessions").is_dir());
+
+        let d = mother.run_turn(&desk, MOTHER, "你是谁");
+        assert!(d.ok, "me turn: {:?}", d.error);
+
+        // 家根与助理目录都不得出现 kernel identity 脚手架
+        for root in [&dir, &dir.join("workflows/小满")] {
+            for junk in ["USER.md", "TOOLS.md", "AGENTS.md", "BOOTSTRAP.md", "IDENTITY.md", "HEARTBEAT.md"] {
+                assert!(!root.join(junk).exists(), "identity junk leaked: {}/{}", root.display(), junk);
+            }
+        }
     }
 
     /// 残账修复：上次死在半路（悬空 tool_call、request 未收口），

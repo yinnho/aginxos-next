@@ -43,9 +43,10 @@ OTA 不覆盖 `/home`。
 /home/
 ├── SOUL.md                 # 母体：对主人是总管，对外是门面
 ├── MEMORY.md               # 母体的长期记忆索引
-├── config.toml             # brain、通道、策略
+├── config.toml             # 预留（v0 未接线——brain 真源=brain.json/env 桥）
 ├── sessions/               # 人对母体的会话账
 │   └── main.jsonl
+├── data/                   # kernel 自账（carrier.db：会话史/记忆/计量）
 │
 ├── tools/                  # 普通 CLI
 │   └── <name>/
@@ -168,7 +169,7 @@ aginxos-next/
 │   ├── gateway/            # agent://
 │   ├── router/             # /usr/bin 宇宙
 │   └── term/ voice/ …
-├── home/                   # 烤进 /home 的默认 SOUL/MEMORY/config
+├── home/                   # 出厂 SOUL/MEMORY 两件，server include_str! 内嵌种子
 ├── workflows/              # 烤进出厂助理（可空）
 ├── devices/<codename>/
 ├── rootfs/
