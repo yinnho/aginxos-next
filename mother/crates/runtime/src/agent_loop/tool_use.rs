@@ -262,6 +262,12 @@ pub(in crate::agent_loop) async fn handle_tool_use(
             carrier_types::tool_compat::normalize_tool_name(&tool_call.name).to_string();
         debug!(tool = %tool_name, id = %tool_call.id, "Executing tool");
 
+        // D8：先记账、再执行。观察者拿不到任何把手，纯旁观；被钩子
+        // 拦下的调用同样有 call 帧——配下面的 result 帧成对。
+        if let Some(obs) = kernel.and_then(|k| k.turn_observer()) {
+            obs.on_tool_call(&manifest.name, &tool_call.id, &tool_name, &tool_call.input);
+        }
+
         // Notify phase: ToolUse
         if let Some(cb) = on_phase {
             let sanitized: String = tool_name
@@ -286,6 +292,11 @@ pub(in crate::agent_loop) async fn handle_tool_use(
                 }),
             };
             if let Err(reason) = hook_reg.fire(&ctx) {
+                // D8：被拦下的调用也要回账（与上面的 call 帧配对）。
+                if let Some(obs) = kernel.and_then(|k| k.turn_observer()) {
+                    let blocked = format!("Hook blocked tool '{tool_name}': {reason}");
+                    obs.on_tool_result(&manifest.name, &tool_call.id, false, &blocked);
+                }
                 tool_result_blocks.push(ContentBlock::ToolResult {
                     tool_use_id: tool_call.id.clone(),
                     tool_name: tool_name.clone(),
@@ -459,6 +470,11 @@ pub(in crate::agent_loop) async fn handle_tool_use(
                 }
             }
         };
+
+        // D8：回账（超时折成的错误结果同样走这里——有结果就有账）。
+        if let Some(obs) = kernel.and_then(|k| k.turn_observer()) {
+            obs.on_tool_result(&manifest.name, &tool_call.id, !result.is_error, &result.content);
+        }
 
         // Count only SUCCESSFUL tool executions as progress for the no-progress
         // detector (Problem 3): an iteration where every tool call errored
@@ -706,6 +722,16 @@ pub(in crate::agent_loop) async fn handle_tool_use(
     };
     // O6: Single-track — only push to messages, not session
     messages.push(tool_results_msg);
+
+    // ② 工具步边界下发 steer：结果已进消息列，这里取走排队的中途输入
+    // 折成 user 轮——下一次 brain 调用可见（账序同构：server 侧先落
+    // steer 帧再回供货，管序=账序）。刚回过账的轮必然还要再调 brain；
+    // 若下一步就是 EndTurn，这些 user 轮随会话留存，不丢话。
+    if let Some(obs) = kernel.and_then(|k| k.turn_observer()) {
+        for text in obs.drain_steers(&manifest.name) {
+            messages.push(Message::user(text));
+        }
+    }
 
     // flow_load 可观测性（流式路径）。tool_search 已退役（M31 D3 批1，
     // 宪法性替代：`ag commands`）——工具发现的两条活路径：flow `tools:`

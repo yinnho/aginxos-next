@@ -143,6 +143,10 @@ pub struct CarrierKernel {
     pub metering: Arc<MeteringEngine>,
     /// Cron job scheduler.
     pub cron_scheduler: crate::cron::CronScheduler,
+    /// D8 帧账观察者（server 直调 kernel 时注入；见
+    /// carrier_types::observer）。
+    pub turn_observer:
+        std::sync::RwLock<Option<Arc<dyn carrier_types::observer::TurnObserver>>>,
 
     /// Channel send function: (channel_type, bot_id, user_id, text) → Result.
     /// Wired up by the API server after the ChannelManager starts. Used by
@@ -619,6 +623,7 @@ impl CarrierKernel {
                 booted_at: std::time::Instant::now(),
                 self_handle: OnceLock::new(),
             },
+            turn_observer: std::sync::RwLock::new(None),
         };
 
         // Restore persisted agents from SQLite

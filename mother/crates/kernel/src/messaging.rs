@@ -3717,6 +3717,169 @@ mod tests {
         ));
     }
 
+    /// D8 帧账观察面（母体刀2-2a）：直调 kernel 跑一轮带工具的轮，
+    /// 观察者必须看见 on_tool_call → on_tool_result（同 id 配对，先账
+    /// 后执行）；drain_steers 在工具步边界供货的文本必须折成 user 轮
+    /// ——下一次 brain 调用可见。这是 server 侧 ledger 观察者实现的
+    /// 全部协议。
+    #[tokio::test(flavor = "multi_thread")]
+    async fn turn_observer_sees_tool_frames_and_folds_steers() {
+        use carrier_runtime::llm_driver::{
+            CompletionRequest, CompletionResponse, LlmDriver, LlmError,
+        };
+        use carrier_types::message::{ContentBlock, Role, StopReason, TokenUsage};
+        use carrier_types::observer::TurnObserver;
+
+        /// 记账探针：事件按到达序记；steer 队列预载一条，首次 drain
+        /// 供货、之后为空（take 语义）。
+        struct LedgerProbe {
+            events: Arc<std::sync::Mutex<Vec<String>>>,
+            steers: Arc<std::sync::Mutex<Vec<String>>>,
+        }
+        impl TurnObserver for LedgerProbe {
+            fn on_tool_call(&self, agent: &str, id: &str, tool: &str, args: &serde_json::Value) {
+                self.events
+                    .lock()
+                    .unwrap()
+                    .push(format!("call {agent} {id} {tool} {args}"));
+            }
+            fn on_tool_result(&self, agent: &str, id: &str, ok: bool, content: &str) {
+                let head: String = content.chars().take(40).collect();
+                self.events
+                    .lock()
+                    .unwrap()
+                    .push(format!("result {agent} {id} {ok} {head}"));
+            }
+            fn drain_steers(&self, _agent: &str) -> Vec<String> {
+                std::mem::take(&mut *self.steers.lock().unwrap())
+            }
+        }
+
+        /// 第 1 次调用发一个必然失败的工具调用（未知工具——账面照样
+        /// call/result 成对）；第 2 次起收尾。每次调用旁路记录全部
+        /// user 消息文本，验证 steer 折页只发生一次。
+        struct ToolThenEndDriver {
+            calls: std::sync::atomic::AtomicUsize,
+            users: Arc<std::sync::Mutex<Vec<Vec<String>>>>,
+        }
+        #[async_trait::async_trait]
+        impl LlmDriver for ToolThenEndDriver {
+            async fn complete(
+                &self,
+                request: CompletionRequest,
+            ) -> Result<CompletionResponse, LlmError> {
+                let users: Vec<String> = request
+                    .messages
+                    .iter()
+                    .filter(|m| m.role == Role::User)
+                    .map(|m| m.content.text_content())
+                    .collect();
+                self.users.lock().unwrap().push(users);
+                let usage = TokenUsage {
+                    input_tokens: 1,
+                    output_tokens: 1,
+                };
+                if self.calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst) == 0 {
+                    Ok(CompletionResponse {
+                        content: vec![ContentBlock::Text {
+                            text: "我查一下".to_string(),
+                            provider_metadata: None,
+                        }],
+                        stop_reason: StopReason::ToolUse,
+                        tool_calls: vec![carrier_types::tool::ToolCall {
+                            id: "c1".to_string(),
+                            name: "no_such_tool_xyz".to_string(),
+                            input: serde_json::json!({"x": 1}),
+                        }],
+                        usage,
+                        media: None,
+                    })
+                } else {
+                    Ok(CompletionResponse {
+                        content: vec![ContentBlock::Text {
+                            text: "done".to_string(),
+                            provider_metadata: None,
+                        }],
+                        stop_reason: StopReason::EndTurn,
+                        tool_calls: vec![],
+                        usage,
+                        media: None,
+                    })
+                }
+            }
+        }
+
+        let (_tmp, k) = boot_test_kernel();
+        let events: Arc<std::sync::Mutex<Vec<String>>> = Arc::default();
+        let steers = Arc::new(std::sync::Mutex::new(vec!["改成上海".to_string()]));
+        let users: Arc<std::sync::Mutex<Vec<Vec<String>>>> = Arc::default();
+        install_test_driver(
+            &k,
+            ToolThenEndDriver {
+                calls: std::sync::atomic::AtomicUsize::new(0),
+                users: Arc::clone(&users),
+            },
+        );
+        let kernel = Arc::new(k);
+        kernel.set_self_handle();
+        kernel.set_turn_observer(Arc::new(LedgerProbe {
+            events: Arc::clone(&events),
+            steers: Arc::clone(&steers),
+        }));
+
+        let entry = entry_with_workspace(std::path::Path::new("/tmp/nonexistent-ws"));
+        let agent_id = entry.id;
+        kernel
+            .registry
+            .register(entry)
+            .expect("agent should register");
+
+        let out = kernel
+            .send_message_with_handle(
+                agent_id,
+                "问个问题",
+                kernel.get_kernel_handle(),
+                Some("front".to_string()),
+                None,
+                None,
+                None,
+                None,
+                None,
+            )
+            .await
+            .expect("turn should succeed");
+        assert!(!out.response.is_empty());
+
+        // 账面：call 在前、result 在后，同 id 配对；未知工具 = 失败回账
+        let events = events.lock().unwrap().clone();
+        assert_eq!(events.len(), 2, "exactly one call + one result: {events:?}");
+        assert!(
+            events[0].starts_with("call test-agent c1 no_such_tool_xyz "),
+            "call frame shape: {}",
+            events[0]
+        );
+        assert!(
+            events[1].starts_with("result test-agent c1 false "),
+            "result frame shape: {}",
+            events[1]
+        );
+
+        // steer 折页：第 2 次 brain 调用的 user 列里看得见，且只折一次
+        let users = users.lock().unwrap().clone();
+        assert!(users.len() >= 2, "two LLM calls, got {}", users.len());
+        assert!(
+            users[1].iter().any(|t| t == "改成上海"),
+            "steer folded into user turn visible to next brain call: {:?}",
+            users[1]
+        );
+        for later in users.iter().skip(2) {
+            assert!(
+                !later.iter().any(|t| t == "改成上海"),
+                "steer must drain exactly once: {later:?}"
+            );
+        }
+    }
+
     /// 借用轮（第三刀 3.1）：票据进/出 + 上下文连续性 + 无状态断言。
     ///
     /// EchoDriver 回显它看到的全部 user 消息——第二轮能看见第一轮的内容

@@ -21,6 +21,7 @@ pub mod mcp_manifest;
 pub mod media;
 pub mod memory_tree;
 pub mod message;
+pub mod observer;
 pub mod plugin;
 pub mod scheduler;
 pub mod serde_compat;
