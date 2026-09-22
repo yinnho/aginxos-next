@@ -1,0 +1,19 @@
+[package]
+name = "carrier-lifecycle"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+carrier-types = { workspace = true }
+carrier-clone = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+anyhow = { workspace = true }
+chrono = { workspace = true }
+tracing = { workspace = true }
+sha2 = { workspace = true }
+notify = { version = "7", features = ["macos_kqueue"] }
+
+[dev-dependencies]
+tempfile = { workspace = true }

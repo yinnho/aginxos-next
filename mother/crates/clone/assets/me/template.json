@@ -1,0 +1,17 @@
+{
+  "version": "1",
+  "name": "me",
+  "description": "我 — 你的统一身份：对内是自留地和总管（看得到全部分身、派得动任何分身），对外是你在这个 agent 网络里的门面（别人找你先到我这）",
+  "author": "aginx",
+  "display_name": "我",
+  "tags": [
+    "system",
+    "identity"
+  ],
+  "category": "官方",
+  "exported_at": "1787700000",
+  "knowledge_version": 3,
+  "plugins": [],
+  "mcp_servers": [],
+  "default_flow": "hub"
+}

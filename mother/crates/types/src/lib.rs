@@ -1,0 +1,98 @@
+//! Core types and traits for the Carrier Agent Operating System.
+//!
+//! This crate defines all shared data structures used across the Carrier kernel,
+//! runtime, memory substrate, and wire protocol. It contains no business logic.
+
+pub mod agent;
+pub mod api_tool;
+pub mod automation;
+pub mod brain;
+pub mod capability;
+pub mod channel;
+pub mod config;
+pub mod content;
+pub mod env;
+pub mod dotenv;
+pub mod error;
+pub mod event;
+pub mod flow;
+pub mod manifest_signing;
+pub mod mcp_manifest;
+pub mod media;
+pub mod memory_tree;
+pub mod message;
+pub mod plugin;
+pub mod scheduler;
+pub mod serde_compat;
+pub mod sidecar;
+pub mod ssrf;
+pub mod taint;
+pub mod tool;
+pub mod tool_compat;
+
+/// Walk `bp` back to the nearest UTF-8 char boundary (≤ bp, clamped to `s.len()`).
+///
+/// Shared char-boundary primitive for all the tool-result truncation layers
+/// (per-tool static, dynamic budget, overflow recovery), which previously each
+/// hand-rolled this `while !is_char_boundary { bp -= 1 }` loop.
+pub fn floor_char_boundary(s: &str, bp: usize) -> usize {
+    let mut end = bp.min(s.len());
+    while end > 0 && !s.is_char_boundary(end) {
+        end -= 1;
+    }
+    end
+}
+
+/// Safely truncate a string to at most `max_bytes`, never splitting a UTF-8 char.
+pub fn truncate_str(s: &str, max_bytes: usize) -> &str {
+    if s.len() <= max_bytes {
+        return s;
+    }
+    &s[..floor_char_boundary(s, max_bytes)]
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn truncate_str_ascii() {
+        assert_eq!(truncate_str("hello world", 5), "hello");
+    }
+
+    #[test]
+    fn truncate_str_chinese() {
+        // Each Chinese character is 3 bytes
+        let s = "\u{4F60}\u{597D}\u{4E16}\u{754C}"; // 你好世界
+        assert_eq!(truncate_str(s, 6), "\u{4F60}\u{597D}"); // 你好
+        assert_eq!(truncate_str(s, 7), "\u{4F60}\u{597D}"); // still 你好 (7 is mid-char)
+        assert_eq!(truncate_str(s, 9), "\u{4F60}\u{597D}\u{4E16}"); // 你好世
+    }
+
+    #[test]
+    fn truncate_str_emoji() {
+        let s = "hi\u{1F600}there"; // hi😀there — emoji is 4 bytes
+        assert_eq!(truncate_str(s, 3), "hi"); // 3 is mid-emoji
+        assert_eq!(truncate_str(s, 6), "hi\u{1F600}"); // after emoji
+    }
+
+    #[test]
+    fn truncate_str_em_dash() {
+        // Em dash (—) is 3 bytes (0xE2 0x80 0x94) — the exact char that caused
+        // production panics in kernel.rs and session.rs (issue #104)
+        let s = "Here is a summary — with details";
+        assert_eq!(truncate_str(s, 19), "Here is a summary ");
+        assert_eq!(truncate_str(s, 20), "Here is a summary ");
+        assert_eq!(truncate_str(s, 21), "Here is a summary \u{2014}");
+    }
+
+    #[test]
+    fn truncate_str_no_truncation() {
+        assert_eq!(truncate_str("short", 100), "short");
+    }
+
+    #[test]
+    fn truncate_str_empty() {
+        assert_eq!(truncate_str("", 10), "");
+    }
+}

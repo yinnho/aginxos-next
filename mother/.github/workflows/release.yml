@@ -1,0 +1,57 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-unknown-linux-musl
+
+      - name: Install zig
+        run: |
+          curl -fsSL https://ziglang.org/download/0.16.0/zig-x86_64-linux-0.16.0.tar.xz -o /tmp/zig.tar.xz
+          sudo tar -xJf /tmp/zig.tar.xz -C /usr/local
+          sudo ln -sf /usr/local/zig-*/zig /usr/local/bin/zig
+          zig version
+
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-zigbuild
+
+      - name: Build
+        run: cargo zigbuild --release --target aarch64-unknown-linux-musl
+
+      - name: Rename binary
+        run: |
+          cd target/aarch64-unknown-linux-musl/release
+          mv aginx-carrier aginx-carrier-${{ github.ref_name }}-aarch64-unknown-linux-musl
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: aginx-carrier-aarch64-unknown-linux-musl
+          path: target/aarch64-unknown-linux-musl/release/aginx-carrier-*
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          merge-multiple: true
+
+      - name: Create release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: artifacts/*
+          generate_release_notes: true

@@ -1,0 +1,32 @@
+[package]
+name = "agf"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "agf - 文件工具 CLI（D3 批2 文件工具外置成包）"
+
+# agf（M32 D3 批2）— file_read / file_write / file_list / file_convert /
+# image_analyze 五个文件面工具的实现单真源：runtime 只留薄桥
+#（同名 ToolDefinition + spawn `agf tool <name>`）。路径解析与沙箱留在
+# runtime 桥内（§9：sandbox 随末模块退役），本 CLI 收工具语义——
+# 二进制/文档识别、目录纠偏提示、markitdown/pandoc 编排、view_url、
+# 截断说明。身份与预解析路径经 stdin JSON 的保留键 `_ctx` 注入。
+[[bin]]
+name = "agf"
+path = "src/main.rs"
+
+[lib]
+path = "src/lib.rs"
+
+[dependencies]
+anyhow.workspace = true
+carrier-types.workspace = true
+clap.workspace = true
+libc.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+base64.workspace = true
+urlencoding.workspace = true
+tokio.workspace = true
+tracing.workspace = true
