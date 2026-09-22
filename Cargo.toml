@@ -23,6 +23,9 @@ members = [
     "crates/pair",
     "crates/hwd",
 ]
+# mother/ 自成 workspace（母体引擎子树，刀2 起 server 直依赖）——
+# 不隔离的话它的 workspace.dependencies 继承会被错认到本根上
+exclude = ["mother"]
 
 [workspace.package]
 version = "0.1.0"

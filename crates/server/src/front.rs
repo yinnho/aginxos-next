@@ -3,7 +3,7 @@
 // - 光标是纯内存状态：开机 = 母体 me（D10），重启即回 me——这不是丢失，
 //   这就是语义（退房是登记行为，不是数据）。
 // - 花名册 = workspaces 目录清单派生（D5：化身 = 文件夹，目录即注册）。
-// - 母体 me 不是文件夹，是前台里的一段代码（见 mother.rs）。
+// - 母体 me 不是文件夹，是前台里的一段代码（见 host.rs）。
 // - 派活（D16）：不点名且光标在母体 → 册上有人就交给字典序首个化身，
 //   光标随迁（= 隐式进）；空册 = 自举地板，母体直答（母体是无工具的
 //   单发 brain，答题会角色扮演——所以有化身在册就别让母体答题）。
@@ -44,8 +44,8 @@ pub fn is_checkout_word(text: &str) -> bool {
 // 区内闭合：begin/end 都发生在持轮线程手里，不存在入了队却没人
 // 善后的窗口。
 
-/// steer 发送方的回执：Delivered(回合号) = 已落账并写进 runtime 的
-/// 管；TurnEnded = 轮先收口了，没插进去。
+/// steer 发送方的回执：Delivered(回合号) = 已落账并折进 kernel 的消
+/// 息列；TurnEnded = 轮先收口了，没插进去。
 pub enum SteerOutcome {
     Delivered(u64),
     TurnEnded,
@@ -91,7 +91,7 @@ impl FrontDesk {
         *self.cursor.lock().unwrap_or_else(|p| p.into_inner()) = who.to_string();
     }
 
-    /// 全局一轮锁。拿到才许开跑一轮（母体直答或化身 spawn 都算）。
+    /// 全局一轮锁。拿到才许开跑一轮（母体直答或化身直调都算）。
     pub fn turn_lock(&self) -> MutexGuard<'_, ()> {
         self.turn.lock().unwrap_or_else(|p| p.into_inner())
     }
