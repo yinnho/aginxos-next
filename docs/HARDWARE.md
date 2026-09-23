@@ -7869,3 +7869,409 @@ adb 在役是 Lineage 15 槽 **b**（4.9.337）。`adb reboot bootloader` 未停
 随后 scp 新 `aginx-term` → `/usr/bin/aginx-term`（1620584），handoff 单实例 pid 620，DSI `connected`/`enabled`。屏上桌面未在 host 目击。enchilada 仍无 mark-boot-successful（succ_a=0）——再冷启动可能再次排水把 a 标死。未 Dump。
 
 **设备终态**：槽 a L0；NCM 10.9.8.1；新 term 在役。
+
+## 2026-09-18 — 后装嘴耳收进在役系统：voice+asr+tts+ocr（enchilada）
+
+用户：把以前后安装的直接加入系统，TTS/ASR 现成。未 wipe。未烧。
+
+Wi-Fi `192.168.3.128` scp 本地 4pc：asr 253M / tts 207M / ocr 41M / voice 0.2.1 / qr / pair。`aginx-pkg install` 六件 sha 与清单一致。`aginx-svc reload` 后 `aginx-voice` ready pid 4911，日志 `local=true, brain=true, ptt=/dev/input/event3`。`/run/aginx-voice/face` 在；对话面改为「按住屏幕说话」。
+
+`/dev/snd` 仍只有 `timer`（声卡未探针，device.toml capture_pcm 空）。软件在役，采集/放音还没有 PCM。未 Dump。
+
+**设备终态**：槽 a L0；aginx-voice/asr/tts/ocr 已 stamp；声卡仍未起。
+
+## 2026-09-18 — enchilada 声卡探针：card 起来，放音 PREPARE 通，录音 AFE 仍失败
+
+用户批把声卡探针起来。未 wipe。未烧。
+
+DT `/sound` compatible `qcom,sdm845-sndcard` status okay，无 driver。slim-ngd `171c0000` 无 driver；i2c `4-003a` max98927 无 driver。`/dev/snd` 仅 timer。ADSP running，APR audio svc 已注册。config：`SND_SOC_SDM845=m` `WCD934X=m` `MAX98927=m` `MFD_WCD934X=m` `SLIM_QCOM_NGD_CTRL=m`。
+
+86quan 树既有 .ko，vermagic `6.11.0-sdm845-g2fa43795f607` 与 uname 全同。insmod 链后：slim `SLIM controller Registered`；max98927 `revisionID: 0x42`；缺 MFD 时 deferred `SLIM Playback 1: codec dai not found`。补 `wcd934x.ko`（alias `slim:217:250:*`）+ `gpio-wcd934x.ko` 后：`wcd934x-slim 217:250:1:0` chip id major 0x108；**card `0 [O6] sdm845 - OnePlus 6`**；PCM `pcmC0D0..D6` p/c。
+
+`snd-mixer` 打开 `QUAT_MI2S_RX Audio Mixer MultiMedia1` 后 `snd-play pcmC0D0p` **play=0**（19200 frames）。`snd-cap pcmC0D0c` 在 WCD TX 路由后 PREPARE 通、写出 96000B，但内容全 0；kmsg `AFE enable for port 0x4001 failed -22` / `DSP returned error[9]`。`q6prm` 因 audioreach 符号未装上（本卡走 q6afe，未再追）。未听确认扬声器出声。
+
+device.toml 写入 observed `pcmC0D0c` / `pcmC0D0p`。audio-bringup 落地。voice 已 restart。
+
+**设备终态**：槽 a L0；声卡 OnePlus 6 在役；放音 ioctl 通、录音 AFE 仍失败。
+
+## 2026-09-18 — 用户：没声音出（enchilada 扬声器）
+
+未 wipe。未烧。对话 TTS 无声。
+
+复查 mixer：`QUAT_MI2S_RX Audio Mixer MultiMedia1` 已回到 0（FE→BE 断了，ASoC 会 `no backend DAIs`）。重新打开后 `snd-play pcmC0D0p` 仍 play=0。播放中 MAX98927（i2c-4@3a rev 0x42）**AMP_EN=1 GLOBAL_SHDN=1 SPK_GAIN=6 VOL=0x64 PCM_RX=0x03 SR=48k BSEL=32**，DAPM `Amp Enable`/`HiFi Playback`/`QUAT_MI2S_RX` 全 On。无新的 QUAT AFE error。芯片内部 tone gen 也写过。用户仍报没声音。录音侧 AFE SLIMBUS_0_TX error 9 未变。
+
+**设备终态**：槽 a L0；speaker 通路软件/寄存器全开，人耳未证实出声。
+
+用户续：「一直有声音」。测试音段 MAX98927 AMP/SHDN 随 DAPM 开关，idle 时寄存器已是 0。mixer 现保持 QUAT_MI2S_RX←MM1、Speaker Volume 6、Digital Volume 100。人耳确认有出声。
+
+**设备终态**：槽 a L0；扬声器出声已目击（用户）。
+
+## 2026-09-18 — 用户：还是不行（对话）
+
+voice 日志只有 `vol 50/40/30/20`：音量下短按被当成减音量并播「音量N」，TTS 被打到 20。按住屏幕的 hold 文件未出现。麦克风 cap 仍全 0（AFE SLIMBUS_0_TX error 9）。`--say 你好` rc=0。vol 写回 70；短按不再减音量。未 Dump。
+
+**设备终态**：槽 a L0；voice 新二进制；vol=70；mic 仍空。
+
+## 2026-09-18 — 用户：有声音出来；要修的是上屏识别（不是回放自己）
+
+产品律与 Pixel 5 同：Heard → face.line 上屏确认；Say 不上喇叭；Speak 才是分身开口。用户确认喇叭已出声。
+
+enchilada 麦：WCD934x SLIM TX，不是 redfin 的 rt5514 TDM。`snd-cap pcmC0D2c`（MM3，对齐 pmOS CapturePCM hw:O6,2）PREPARE 要么 AFE port **0x4001 SLIMBUS_0_TX START 回 0x9**，要么写出 96000B 全 0。AMIC2/3、DMIC0/1 同样全 0。q6afe 试 `slimbus_dev_id=1` → START **-110 timeout**；试把 0x9 当成功 → 仍 timeout。已 **restore q6afe.ko.prev**，喇叭通路保留。86quan `q6afe.c` 试验已 checkout 回去。
+
+**设备终态**：槽 a L0；TTS 出声确认；mic/AFE slim TX 未通，识别上屏未成。
+
+用户续：「有声音出来」。TTS/扬声器人耳确认。
+
+**设备终态**：槽 a L0；喇叭出声已确认；mic 仍空。
+
+## 2026-09-18 — 修上屏识别：AFE 挂死、ADSP stop 卡 slim、UCM 底麦改路由（enchilada）
+
+用户批继续修麦→对话面上屏。未 wipe。未烧。未动 slot。未再改 q6afe.c。
+
+AFE（APR svc 4）已不注册：放音 `QUAT_MI2S_RX` 0x1006 与录音 SLIMBUS_0_TX 0x4001 都是 `AFE * failed -110`。ADSP sysfs 仍 `running`。`q6afe.ko` 是 restore 后的原件。
+
+判读：先前 STOP-before-START / `slimbus_dev_id=1` / 把 DSP 0x9 当成功 把 AFE 服务弄挂了。对照 sdm845-mainline UCM OnePlus 6：底麦是 **ADC4 / CDC_IF TX7 / AIF1_CAP SLIM TX7 / MultiMedia2 Mixer SLIMBUS_0_TX / pcmC0D1c**，不是本机一直在用的 TX0/ADC1/MM1（那是耳机麦）。`snd-mixer` 枚举目击：TX7 MUX `2=DEC7`，ADC MUX7 `1=AMIC`，AMIC MUX7 `4=ADC4`，AMIC4_5 SEL `0=AMIC4`；当时 ADC4 Volume=0。
+
+试 `echo stop > remoteproc0/state`（只动 ADSP，未动 modem remoteproc3）：15s 仍 `running`，进程 D 在 `qcom_slim_ngd_xfer_msg`；kmsg `slim-ngd HW wakeup attempt during SSR`。`/dev/snd` 掉到只剩 `timer`（`/proc/asound/cards` 空，ASoC debugfs 还挂着 OnePlus 6）。unbind `msm-snd-sdm845` 同样超时。未再 rproc-stop。
+
+把 UCM 底麦路由写进 `/etc/init.d/audio-bringup`，`device.toml` `capture_pcm=/dev/snd/pcmC0D1c`。随后 `reboot`：dropbear 被杀掉（NCM ping 仍通、USB ioreg 仍是同一 `enchilada rescue` id），port 22 拒绝——内核没复位，卡在 D-state slim。软件 reboot 未完成。
+
+**设备终态**：槽 a L0 内核僵尸（userspace 已死、NCM ping、无 ssh）；底麦路由已落盘，未在新 boot 上目击。需电源键硬重启。succ_a 仍 0。
+
+## 2026-09-18 — 硬重启后：喇叭回、底麦 DAPM 通、MCLK 关、录音仍空（enchilada）
+
+用户长按电源硬重启。未 wipe。未烧。未再 rproc-stop。
+
+t≈60s NCM ssh：uname `6.11.0-sdm845-g2fa43795f607` serial `b0d9f7fe` slot `_a`。ADSP running。APR svc 4 在 t=7.6s 重新 Adding。card `OnePlus 6` PCM 全在。audio-bringup 已把 UCM 底麦打上：`MultiMedia2 Mixer SLIMBUS_0_TX`、`AIF1_CAP Mixer SLIM TX7`、`CDC_IF TX7 MUX=DEC7`、`ADC MUX7=AMIC`、`AMIC MUX7=ADC4`、`ADC4 Volume=16`。`device.toml` `capture_pcm=/dev/snd/pcmC0D1c`。
+
+`snd-play pcmC0D0p` 440 Hz 0.4s **play=0**（喇叭 ioctl 通）。`snd-cap pcmC0D1c` 48k 2ch **PREPARE 通、写出全 0**，无 AFE 0x9。DAPM 录音中：ADC4/AMIC4/MIC BIAS1/SLIM TX0/AIF1 Capture/Slimbus Capture **On**；寄存器 `ANA_AMIC4=0xf4`（ADC en）、`ANA_MICB1=0x50`（MICB enable）。**MCLK widget Off**（DT 只把 MCLK 接到 RX_BIAS）；`ln_bb_clk2` prepare=0。`217:250:0:0` IFC unbound `waiting_for_supplier=0`。
+
+86quan `sdm845.c` 加 late_probe：`AMIC1..5 → MCLK`。`snd-soc-sdm845.ko` vermagic 对齐后 insmod。MCLK 路由目击接到 AMIC4。随后 SLIMBUS_0_TX START 又回 **DSP 0x9 / AFE 0x4001 -22**（reload 后端口 EALREADY）。喇叭 `snd-play` 仍 play=0。新 ko 已装到 `/lib/modules/snd-soc-sdm845.ko`（备份 `.pre-mclk`）。voice 已 restart，vol=70。
+
+**设备终态**：槽 a L0；喇叭 ioctl 通；底麦模拟通路 On 但 MCLK 在干净 boot 上是关的；现役模块带 AMIC→MCLK；reload 后录音 AFE 0x9。识别上屏未成。succ_a 仍 0。
+
+## 2026-09-18 — 电量 0% 是假的；bq27411 真值 97%（enchilada）
+
+用户：电池电量不对，显示 0%。未 wipe。未烧。
+
+`/sys/class/power_supply` 此前空。问候 `status_text` / `selfnet_greet` 读不到 capacity 就 **unwrap_or(0)** 报「电池0%」。DT `bq27441-battery@55` status okay，i2c `10-0055` 名 `bq27411`，`CONFIG_BATTERY_BQ27XXX=m`。86quan `.ko` vermagic 与 uname 全同。
+
+insmod `bq27xxx_battery` + `bq27xxx_battery_i2c`：psy **`bq27411-0`** `present=1` **capacity=97** `voltage_now=4317000` `status=Not charging` `charge_full=2747000` `charge_full_design=3240000` Li-ion。kmsg `missing battery:energy-full-design-microwatt-hours`（capacity 仍可读）。
+
+device.toml `power_supply` 改为该节点；battery-bringup 落地；问候未探针不再报 0%。
+
+**设备终态**：槽 a L0；bq27411-0 在役 97%。
+
+## 2026-09-18 — slim 录音口：q6afe 热替换再次弄挂 APR svc 4（enchilada）
+
+用户批继续修 slim 录音口、对照源码。未 wipe。未烧。未 rproc-stop。
+
+源码：`q6afe_dai_prepare` 仅当 `is_port_started[]` 为真才 STOP；START 回 **ADSP_EALREADY 0x9** 被 `afe_apr_send_pkt` 打成 -EINVAL，旗标不置位 → DSP 口已开、驱动以为没开，之后每次 START 都是 0x9。`q6afe_slim_port_prepare` 不写 `slimbus_dev_id`（保持 0）。Pixel 5 的 TDM 回环/DSP ADC 本机没有对应 mixer。
+
+试把 START 的 0x9 当成功，热替换 `q6afe.ko`：rmmod q6afe 链后 APR **service is not registered (4)**，放音 `0x1006` 与录音 `0x4001` 都 **-110**。已 restore `q6afe.ko.pre-ealready`；86quan `q6afe.c` checkout 回去。喇叭 ioctl 现 PREPARE timeout。sdm845 AMIC→MCLK 模块仍在。
+
+**设备终态**：槽 a L0；AFE/APR svc 4 未注册；放音录音均 timeout。需电源键硬重启。succ_a 仍 0。
+
+## 2026-09-18 — 干净启动 slim 录音有能量（enchilada）
+
+用户批「试试」。软件 `reboot` 成功（无 D-state）。uptime 98s，APR svc 4 在 t=8.5s Adding。未动 q6afe。
+
+`snd-play pcmC0D0p` play=0。`snd-cap pcmC0D1c` 48k 1ch **PREPARE 通、无 AFE 0x9**。两轮：c1 min/max -846/+1204 **rms=44** nz 94284/96000；c2 min=-7907 **rms=132**。录音中 DAPM **MCLK On、ADC4 On、MIC BIAS1 On、SLIMBUS_0_TX On**。voice 已 restart。audio-bringup 加一轮空录热身（对齐 redfin）。
+
+**设备终态**：槽 a L0；喇叭 ioctl 通；slim 录音有能量。识别上屏待按住对话面说话确认。succ_a 仍 0。
+
+## 2026-09-18 — 麦有能量但 ASR 幻听英文碎片（enchilada）
+
+用户：看日志，识别不行。未 wipe。未烧。
+
+voice 日志：`cap start` 后 `heard "Oh."` / `"The."` / `"你好。"` / `"好。"` / `"I."` ——麦通了，sense-voice **language=auto** 把安静中文听成英文单字。最后一截 PTT wav 1.78s rms=105，多数窗 15–20，一窗 401。`ag-asr` 用法只有 `<wav>| --serve`，语言写死 auto。
+
+改：`ag-asr.c` 默认 `zh`（`AG_ASR_LANG` 可覆）；ADC4=20 DEC7=100；voice 丢弃纯标点/≤3 字母英文碎片，本地 ASR 在时不落云。重链 ag-asr + 部署 voice。
+
+**设备终态**：槽 a L0；zh ASR 在役；模拟增益已抬。请再按住说一句中文确认。succ_a 仍 0。
+
+## 2026-09-18 — 用户确认识别上屏（enchilada）
+
+用户：好像识别到了。voice 日志后续：`heard "你好。"` 两次、`"你在听到吗？"`、`asr unusable "。"`（碎片已丢）、`"嗯。"`。face `嗯 / 嗯。有事直说。`。未 wipe。未烧。
+
+**设备终态**：槽 a L0；slim 录音 + 中文 ASR 上屏已目击。succ_a 仍 0。
+
+## 2026-09-19 — 首页改为对话面（enchilada）
+
+用户：首页就是对话界面。term 开机进 Talk，去掉「返回」与四图标闲置面；关相机/终端/眼后回 Talk。已部署 `/usr/bin/aginx-term`，handoff 后 pid 754。未 dump 屏。未 wipe。未烧。
+
+**设备终态**：槽 a L0；term 对话即首页已推上机。succ_a 仍 0。
+
+## 2026-09-19 — 开机即大圆+按住+眼（enchilada）
+
+用户：Rabbit 按住 + ChatGPT 圆 + Gemini 眼，打开就是这张脸。term 中间圆半径 260 带光晕；眼开时取景仍是这张脸、底下小圆写「镜头开着」。voice：「打开镜头」→ Eye，「关掉镜头」→ EyeClose。已部署 term+voice。未 dump 屏。未 wipe。未烧。
+
+**设备终态**：槽 a L0；orb 面已上机。succ_a 仍 0。
+
+## 2026-09-19 — 识别「我。」是静音幻觉；PCM 又全 0（enchilada）
+
+用户：好像识别不了我说的话。未 wipe。未烧。
+
+`/tmp/aginx-voice-hear.wav` 2.77s **rms=0 全零**。sense-voice 把静音听成「我。」。DAPM 仍 On（MCLK/ADC4/MIC BIAS1/SLIM TX7/AIF1 Capture active），模拟寄存器 `ANA_BIAS=0x80` `AMIC4=0xb4` `MICB1=0x50`。喇叭 play=0。TX7 隔离、ADC4→TX0、顶麦 MM4、MM1、sdm845 强制 slim ch 135 均 **nz=0**。voice 改为静音不送 ASR（`cap empty`→没听懂）。
+
+**设备终态**：槽 a L0；录音数字通路静音；静音闸已上。succ_a 仍 0。
+
+## 2026-09-19 — slim DEF_ACT_CHAN 超时；ngd 重绑掉卡；reboot 未复位（enchilada）
+
+用户批继续修 slim 录音口。未 wipe。未烧。未 rproc-stop。
+
+dmesg 多次 `qcom,slim-ngd ... TX timed out:MC:0x21,mt:0x2`（`SLIM_USR_MC_DEF_ACT_CHAN`）+ `wcd934x-slim 217:250:1:0` 同样超时。模拟 DAPM/寄存器仍 On，PCM 全 0：WCD 音频通道激活失败。`qcom,slim-ngd.1` runtime **suspended**。unbind 卫星后 slim 设备空、`/dev/snd` 只剩 timer。unbind `171c0000.slim-ngd` 超时。随后 `reboot`：NCM ping、port 22 拒绝（与上次 D-state 僵尸同类）。需电源键硬重启。
+
+**设备终态**：槽 a L0 内核可能僵尸（NCM ping、无 ssh）。succ_a 仍 0。
+
+## 2026-09-19 — WCD TX7/ch135 配置正确；DEF_ACT_CHAN 超时；q6afe 热换再挂 APR（enchilada）
+
+用户批继续修 slim。硬重启后 APR 4 在。printk：`wcd934x slim dir=1 ch_count=1 port_mask=0x80 ch[0] port=7 ch_num=135`。仍 PCM 0。`slim-ngd.1` 常 **suspended**；第一次采集 `TX timed out MC:0x21`（DEF_ACT_CHAN）。`q6afe_slim_port_prepare` 从不写 `slimbus_dev_id`（DSP 要求 DEVICE_1）。热换 q6afe.ko 设 id=1 → APR svc 4 又未注册，放音 0x1006 -110。已 restore 原件到内存路径失败（仍 -110）；把 id=1 的 ko 放到 `/lib/modules/q6afe.ko` 等冷启动。需电源键。
+
+**设备终态**：槽 a L0；AFE 未注册，喇叭 PREPARE timeout。succ_a 仍 0。
+
+## 2026-09-19 — 冷启动 id=0+ngd on 仍 PCM 0；「没听懂」是静音闸（enchilada）
+
+用户：一直说没听懂。已硬重启。APR 4 在，喇叭 play=0，ngd **active**，无 MC:0x21 超时。printk 仍 `ch_count=1 port=7 ch_num=135`。`snd-cap pcmC0D1c` **nz=0**。voice `cap empty`→没听懂。换回 pre-tx7 机器驱动后 SLIMBUS_0_TX START **0x9**。已 insmod 回 TX7 那份 sdm845。
+
+**设备终态**：槽 a L0；喇叭通；录音仍全 0。succ_a 仍 0。
+
+## 2026-09-19 — AIF2/3 占走 TX7；抢回后 slim enable=0 仍 PCM 0（enchilada）
+
+用户：要搞好，说话没回音。AIF1/2/3 的 `SLIM TX7` 同时为 1，`tx_port_value` 全局，AIF1 的 slim_ch_list 空。改 mixer put 抢端口到当前 AIF。printk：`ch_count=1 port=7 ch_num=135`，`slim enable ret=0`。仍 nz=0。喇叭 play=0。未热换 q6afe。
+
+**设备终态**：槽 a L0；WCD 列表已对；录音仍空。succ_a 仍 0。
+
+## 2026-09-19 — 主机侧 slim 配置已对齐仍 PCM 0（enchilada）
+
+继续修。printk：`q6slim prepare dai=3 n=1 map=135 rate=48000 w=16`；`wcd934x decim port=7 mux=2 dec=7 rv=4`；`slim enable ret=0`。IFC `TX_PORT_CFG(7)=0x05`（watermark+enable）、`MULTI_0=0x80`。喇叭 play=0。`snd-cap pcmC0D1c` 仍 nz=0。未热换 q6afe。
+
+**设备终态**：槽 a L0；主机 WCD/AFE/IFC/DEC7 全对齐；样点仍空。succ_a 仍 0。
+
+## 2026-09-19 — AFE 改到 WCD enable 之后 START 仍 PCM 0（enchilada）
+
+用户：还是没动静。q6afe-dai：prepare 只 SET_PARAM，trigger 里 50ms delayed START。dmesg：`START scheduled` → `wcd slim enable ret=0` → `delayed START dai=3 rc=0`。map=135 48k/16。仍 nz=0。喇叭 play=0。未热换 q6afe。
+
+**设备终态**：槽 a L0；启动顺序已正；样点仍空。succ_a 仍 0。
+
+## 2026-09-19 — slim slave cfg 冷启动仍 PCM 0（enchilada）
+
+用户：还是没动静。q6afe 增加 `AFE_PARAM_ID_CDC_SLIMBUS_SLAVE_CFG`（WCD 217:250:1:0），冷启动 APR 4 在。dmesg：`slim slave cfg ret=0`、`delayed START rc=0`、map=135。喇叭 play=0。`snd-cap` 仍 nz=0。TX0/128 同样全对齐仍 0。
+
+**设备终态**：槽 a L0；喇叭通；录音仍空。succ_a 仍 0。
+
+## 2026-09-19 — 复现 9-18 能量组合：干净启动第一段仍全 0（enchilada）
+
+用户：继续修，之前能听到。未 wipe。未烧。未热换 q6afe。未 unbind slim-ngd。
+
+磁盘对齐 9-18 能量会话：`q6afe-dai.ko` 160520（prepare 里 START，无 delayed trigger）、`snd-soc-sdm845.ko` 86944（AMIC→MCLK、原 16-ch map）、`snd-soc-wcd934x.ko` 578688（无 TX7 steal）、`q6afe.ko` 116976、audio-bringup 空录注释掉。干净启动 uptime 52s 第一段 `snd-cap pcmC0D1c` 48k 1ch PREPARE 通、无 AFE 0x9 / MC:0x21，**h1/h2 nz=0**。喇叭 `snd-play pcmC0D0p` play=0。IFC `217:250:0:0` 仍无 driver（`217:250:1:0` 已绑 wcd934x-slim）。2ch 与 play-then-cap 同样全 0。
+
+**设备终态**：槽 a L0；喇叭通；录音仍空。succ_a 仍 0。
+
+## 2026-09-19 — 换上 9-18 本地 q6afe 117160 后掉到 Lineage；已救回 L0（enchilada）
+
+用户：系统启动不了。未 wipe。未烧。
+
+把 `.local/device/enchilada/modules/q6afe.ko`（117160，9-18 14:48）拷到 `/lib/modules/q6afe.ko` 后 `reboot`：L0 SSH 未回。adb 见 **Lineage 15** `lineage_enchilada-userdebug` 槽 **b** serial `b0d9f7fe` kernel 4.9.337。`/data/lib/modules` 仍是 L0 模块树。已 `cp q6afe.ko.pre-slave`（116976）覆盖回去；`bootctl set-active-boot-slot 0`（bootable_a 恢复，succ_a 仍否）。`adb reboot` 后 SSH `root@10.9.8.1`：uname `6.11.0-sdm845-g2fa43795f607` 槽 a，APR svc 4 在 t=7.8s Adding，pcmC0D0p/D1c 在，`snd-play` play=0，term+voice 在。未再装 117160。
+
+**设备终态**：槽 a L0；喇叭 ioctl 通；录音未再测。succ_a 仍 0。
+
+## 2026-09-19 — AFE START 已在 WCD enable 之后且 rc=0，IFC 已写上，PCM 仍全 0（enchilada）
+
+用户：看日志 / 继续修。未 wipe。未烧。未热换 q6afe。未 reboot（succ_a=0 每靴烧命）。
+
+DPCM 这条 BE 以前把 START 放在 trigger 里等于没启动。改成 prepare 里 50ms delayed START 后热加载（q6afe 不动）：顺序目击 `ch_count=1 port=7 ch_num=135` → `map=135 48k/16` → `wcd slim enable ret=0` → **`delayed START dai=3 rc=0`**。IFC 录音中 `TX_PORT_CFG(7)=0x05`、`MULTI_0=0x80`。`snd-cap pcmC0D1c` 仍 **nz=0**。TX0/ch128 同样 START rc=0、STOP 通、nz=0。喇叭 play=0。TX7 的 STOP 有时 `AFE close failed -110`。
+
+**设备终态**：槽 a L0；主机 WCD/IFC/AFE START 对齐；样点仍空。succ_a 仍 0。
+
+## 2026-09-21 — 灭屏把触摸睡死；空采集不上脸（enchilada）
+
+用户：没有反应，连没听懂都没有。未 wipe。未烧。未热换 q6afe。
+
+SSH `root@10.9.8.1` 槽 a serial `b0d9f7fe` kernel `6.11.0-sdm845-g2fa43795f607`。term pid 开着 `/dev/input/event4`，但 `card0-DSI-1` **enabled=disabled dpms=Off**（60s 无输入 null SETCRTC）。`rmi4_i2c` IRQ **143**（与探针后相同，无新中断）。voice 日志有 `cap start`/`cap empty`（假 hold 文件），face `{"eye":false,"result":false}` 无 line。机上 voice 二进制 strings 无「没听懂」。
+
+kill term 让 handoff 重生：DSI **enabled/On**。假 hold → 新 voice 写 face `line=没听懂`。PPM 1080×2280：圆上方「没听懂」、下方「按住屏幕说话」。DSI 再点亮后 `rmi4_i2c` IRQ **143→752**（modeset 突发，此后停在 752）。Talk 面不再自动灭屏（电源键仍可灭）。录音仍空。
+
+**设备终态**：槽 a L0；屏亮、空采集上脸「没听懂」已 dump；PCM 仍全 0。succ_a 仍 0。
+
+## 2026-09-21 — 真人按住说话：触摸到了，PCM 仍全 0（enchilada）
+
+用户：发了。未 wipe。未烧。未热换 q6afe。
+
+屏仍 DSI enabled/On。`rmi4_i2c` IRQ **752→1348**（按住属实）。voice 多次 `cap start`/`cap empty`。末段 `/tmp/aginx-voice-cap.raw` 229248 B ≈2.39s @48k **nz=0 rms=0**。face `line=没听懂`。
+
+停 voice 后清 AIF2/AIF3 TX7：写 0 **仍读回 1**。ADC4=20 DEC7=100 已写上。`snd-cap pcmC0D1c` 2s **nz=0**。喇叭 mixer QUAT=1。已重启 voice。
+
+**设备终态**：槽 a L0；按住对话面上脸「没听懂」已目击；录音数字通路仍静音。succ_a 仍 0。
+
+## 2026-09-21 — 录音时 MCLK 曾关；拉上后 DAPM 齐仍 PCM 0（enchilada）
+
+用户：继续修录音。未 wipe。未烧。未热换 q6afe。未 unbind slim-ngd。未 reboot。
+
+`MultiMedia2 Mixer SLIMBUS_1_TX`：PREPARE **EINVAL**，dmesg `AFE enable for port 0x4003 failed -22`（DSP 0x9 EALREADY），dai=5。`SLIMBUS_2_TX` 同样 **0x4005 -22**。未再走这两口。
+
+原 `pcmC0D1c`/`SLIMBUS_0_TX` 采集中 DAPM：**ADC4/MIC BIAS1/SLIM TX7/AIF1/AMIC4/SLIMBUS_0_TX On，MCLK Off、RX_BIAS Off**。AMIC4 输入只有 MIC BIAS1。`sdm845` late_probe 把 AMIC→MCLK 加在 **card DAPM**，codec 侧没接上。改加到 **wcd934x 组件 DAPM** 后热加载 `snd-soc-sdm845.ko`（90088，q6afe 未动）：AMIC4 出现 MCLK 输入。再热加载 `wcd934x.ko.steal`（580760）：采集中 **MCLK On、ADC4 On、AIF1 Capture On、AIF1_CAP Mixer in=1、ch_count=1 port_mask=0x80、slim enable ret=0**。`snd-cap pcmC0D1c` 3s 仍 **nz=0**。随后只 reload `q6afe-dai`（q6afe 仍 116976、APR 4 在）：同样 MCLK/ADC4/AIF1 On，仍 nz=0。喇叭 mixer QUAT=1。voice 已拉起。
+
+**设备终态**：槽 a L0；模拟+MCLK+WCD slim 已目击 On；PCM 仍全 0。succ_a 仍 0。
+
+## 2026-09-21 — 用户重启后第一段可测录音仍全 0（enchilada）
+
+用户：我重启了。未 wipe。未烧。未热换 q6afe。
+
+SSH `root@10.9.8.1` uptime **86s**，uname `6.11.0-sdm845-g2fa43795f607` 槽 **a** serial `b0d9f7fe`。APR svc 4 在 t=7.75s Adding。`q6afe.ko` 116976，`snd-soc-sdm845.ko` 90088，`wcd934x` steal 580760。bringup 打完 `audio ok`；dummy `snd-cap` 在 **t=9s** 已跑（slim enable ret=0）。voice 在 t=62/63/67s 已 `cap empty`。停 voice 后 h1（t≈117s）/h2 **nz=0 rms=0**。h3 采集中 DAPM **MCLK On、ADC4 On、AIF1 On**，仍 nz=0。无 AFE 0x9 / MC:0x21。已注释 live dummy，避免下次第一段被吃掉。voice 已拉起。屏 enabled。
+
+**设备终态**：槽 a L0；干净启动可测段仍全 0。succ_a 仍 0。
+
+## 2026-09-21 — 无 dummy、voice 停住：开机第一段 TX 仍全 0（enchilada）
+
+用户：再重启一次。未 wipe。未烧。未热换 q6afe。
+
+停 voice unit（toml.hold）、dummy 已注释后 `reboot`。SSH uptime 45s 起，槽 a serial `b0d9f7fe`。voice 未起。bringup `audio ok`。**本 boot 第一条 slim enable 在 t=142s（本次 snd-cap）**，dummy 未跑。`pcmC0D1c` 2s **boot1 nz=0**；boot2 DAPM **MCLK/ADC4/AIF1 On**，`ch_count=1 slim enable ret=0`，仍 **nz=0**。无 AFE 0x9 / MC:0x21。已把 voice unit 放回并 start。succ_a 仍 0。
+
+**设备终态**：槽 a L0；开机第一段可测 TX 仍全 0。succ_a 仍 0。
+
+## 2026-09-21 — q6afe SET_PARAM slim 改为 24 字节；第一段仍全 0（enchilada）
+
+用户：继续改 q6afe。未 wipe。未烧。未热换 q6afe（盘上替换后 reboot）。
+
+`q6afe_port_start` 原先 `sizeof(union afe_port_config)=36` 发给 DSP。改为 slim 口只发 `sizeof(slim_cfg)=24`，并 printk map。`q6afe.ko` 118896（pre-slave 116976 仍在）。voice unit hold。reboot 后 uptime 38s 槽 a，APR 4 在。第一段 `pcmC0D1c`：kmsg `slim prepare port=0x4001 rate=48000 w=16 nch=1 fmt=0 map=135`，`SET_PARAM psize=24 union=36 slim=24`，`slim slave cfg ret=0`，`ch_count=1 slim enable ret=0`，PREPARE 通。2s **nz=0**。未热加载。voice 已拉回。
+
+**设备终态**：槽 a L0；slim SET_PARAM 24 字节已目击；PCM 仍全 0。succ_a 仍 0。
+
+## 2026-09-21 — slim mapping 扩 16 槽：SET_PARAM 32B 后 START 0x9，READI I/O error（enchilada）
+
+用户：扩成 16 槽，继续改 q6afe。未 wipe。未烧。未热换 q6afe。
+
+`afe_param_id_slimbus_cfg.shared_ch_mapping` 改为 **16**，psize=32。冷启动第一段：`mapn=16 psize=32`，`slave cfg ret=0`，**DEVICE_START cmd 0x100e5 DSP error 0x9**，PREPARE EINVAL。随后 q6afe 把 slim START 0x9 当成功：PREPARE 通，`slim enable ret=0`，但 `snd-cap` **READI: I/O error**，产物 0 字节。已盘上换回 psize=24 的 `q6afe.ko.psize`（118896）并 reboot。voice 已拉回。pre-slave 116976 仍在。
+
+**设备终态**：槽 a L0；16 槽已被否（START 0x9 + 读口 I/O error）；现役仍 24 字节 SET_PARAM。succ_a 仍 0。
+
+## 2026-09-22 — fastboot：槽 a 被标 unbootable；set_active a 后 L0 回来（enchilada）
+
+用户：现在手机在 fastboot，之前重启不成功。未 wipe。未烧。
+
+fastboot serial **`b0d9f7fe`** product **sdm845** unlocked。当时 current-slot **b**；slot-unbootable:**a=yes** retry_a=0 succ_a=no；槽 b successful/bootable。`fastboot set_active a` 后 current-slot **a**、unbootable:a **no**、retry_a=7（succ_a 仍 no）。`reboot`。t+10s USB en14；t+45s ping **10.9.8.1**。ssh：uname `6.11.0-sdm845-g2fa43795f607`，`slot_suffix=_a`，serial `b0d9f7fe`，uptime 80s，pcmC0D0p/D1c 在，DSI **enabled/On**。
+
+**设备终态**：槽 a L0 在役；NCM 10.9.8.1；屏亮。succ_a 仍 0。
+
+## 2026-09-22 — CAF slim slave：SVC CDC_DEV_CFG + PORT cfg 带真机 laddr；第一段仍全 0（enchilada）
+
+用户：继续搞麦。未 wipe。未烧。未热换 q6afe（盘上替换后 reboot）。
+
+现役 L0 槽 a，`q6afe.ko` 先是 psize=24 的 118896。按 CAF：`AFE_PARAM_ID_CDC_SLIMBUS_SLAVE_CFG` 改走 **`AFE_SVC_CMD_SET_PARAM` + `AFE_MODULE_CDC_DEV_CFG`（0x10234）**；另发 **`AFE_PARAM_ID_SLIMBUS_SLAVE_PORT_CFG`（0x10233）**，从 slimbus 查 PGD `217:250:1:0` / IFD `217:250:0:0` 的 laddr。`q6afe.ko` **121584**（md5 `6941c2c4bd52e7e51dadc8088329602d`），pre-slave 116976 / psize 118896 仍在。voice unit hold。`reboot` 后 uptime 36s SSH。
+
+第一段 `pcmC0D1c` 2s：`SET_PARAM psize=24`，**`slim slave cfg SVC ret=0`**，**`PORT cfg ret=0 pgd_la=207 ifd_la=206 map0=7 psize=48`**，`wcd slim enable ret=0`。`/tmp/boot1.raw` **192000 B nz=0 rms=0**。喇叭 `snd-play pcmC0D0p play_rc=0`。已把 voice unit 放回并 start。succ_a 仍 0。
+
+**设备终态**：槽 a L0；CAF SVC+PORT 已被 DSP 收下；开机第一段 PCM 仍全 0。succ_a 仍 0。
+
+## 2026-09-22 — delayed START 在 WCD enable 之后 + CDC_REG_CFG_INIT；第一段仍全 0（enchilada）
+
+用户：继续。未 wipe。未烧。未热换 q6afe。
+
+机上 `q6afe-dai.ko` 仍是 **160520**（prepare 里同步 START）。上一刀 dmesg：SET_PARAM/PORT 在 t=54.04，**wcd slim enable 在 54.11**，START 早于 WCD。热加载 86quan **168104** delayed-START（只卸 `snd-soc-sdm845`+`q6afe-dai`，**q6afe 未卸**，APR 4 仍在）：顺序变成 `START scheduled` → `wcd slim enable ret=0` → SET_PARAM/SVC/PORT → **`delayed START dai=3 rc=0`**。喇叭 1 kHz 2s `snd-play` play=0。同时 `snd-cap` **nz=0**。已把 168104 落到 `/lib/modules/q6afe-dai.ko`（160520 备份在 `.160520`）。
+
+随后盘上换 `q6afe.ko` **122016**（md5 `7ce088b1fdfac037d96339ecde199f08`）：CAF slave cfg 成功后加 **`AFE_PARAM_ID_CDC_REG_CFG_INIT`（0x10237）**。voice hold。`reboot` uptime 39s。第一段 2s：`CDC_REG_CFG_INIT ret=0`，PORT `pgd_la=207 ifd_la=206` ret=0，delayed START rc=0，wcd enable 在 START 前。`/tmp/boot1.raw` **192000 B nz=0 rms=0**。STOP 有 `AFE close failed -110`。voice 已拉回。succ_a 仍 0。
+
+**设备终态**：槽 a L0；WCD→AFE 顺序和 CAF INIT 都已目击；开机第一段仍全 0。succ_a 仍 0。
+
+## 2026-09-22 — 采集中模拟/IFC 已开、口无溢出；TX mute 边沿后仍全 0（enchilada）
+
+用户：继续搞定麦。未 wipe。未烧。未热换 q6afe。未 unbind slim-ngd。本 boot 未再 reboot（succ_a 仍 0）。
+
+同一 boot（q6afe 122016、delayed dai 168104）上，单独 `snd-cap pcmC0D1c` 2s 写出 **192000 B nz=0 rms=0**。采集进行中寄存器：`ANA_BIAS 0601=80`，`AMIC4 0611=b4`，`MICB1 0622=50`，`MCLK_PRG 0711=91`，`TX7_PATH 0aa1=24`，`MCLK_CONTROL 0d41=01`；`ln_bb_clk2` enable=1。IFC：`TX_PORT_CFG(7)=05`，`MULTI_0=80`，`INT_STATUS_TX=00`，port7 source `0077=00`（无 overflow/underflow）。dmesg 无 overflow/underflow。`delayed START dai=3 rc=0` 之后 **`AFE close failed -110`**，紧接着 `q6asm` `ASM_DATA_CMD_EOS 0x10bdb not expecting rsp`。同时放音会让两边 `READI/WRITEI I/O error`；只放音 `pcmC0D0p` 1 kHz **play_rc=0**（144000 frames）。
+
+热加载 `snd-soc-wcd934x.ko` **581096**（只卸 `snd-soc-sdm845`+`wcd934x`，q6afe 未卸）：`enable_dec` POST_PMU 把 TX PATH_CTL bit 0x10 置上再清掉（tavil 的 PGA mute 边沿）。dmesg `wcd934x dec unmute dec=7 path=24`，`slim enable ret=0`，`delayed START rc=0`。`/tmp/unmute.raw` **192000 B nz=0 rms=0**。STOP 仍 `AFE close failed -110`。喇叭随后 `snd-play` play_rc=0。voice 已拉回 ready。旧 ko 在 `snd-soc-wcd934x.ko.pre-unmute`（580760）。
+
+**设备终态**：槽 a L0；采集时偏置/ADC/MCLK/TX7/IFC 口已开且无端口溢出；PCM 仍全 0；喇叭 ioctl 通。succ_a 仍 0。
+
+## 2026-09-22 — 自重启后第一段：DEF_ACT 被管理器收下，PCM 仍全 0（enchilada）
+
+用户：你自己重启。未 wipe。未烧。未热卸 slim-ngd / q6afe。
+
+盘上换 `slim-qcom-ngd-ctrl.ko` **136168**（原件 135688 在 `.pre-log`），只加 DEF_ACT / RECONFIG / GENERIC_ACK 的 printk。voice unit 先挪到 `.hold`。`reboot`。t=5s ping 仍是旧机，t=10s 起断，约 t=45s SSH。uptime **47.86s**，uname `6.11.0-sdm845-g2fa43795f607`，serial `b0d9f7fe`，槽 `_a`。`slim_qcom_ngd_ctrl` 已是新 ko（lsmod 带 O）。voice 未起。
+
+开机第一段 `snd-cap pcmC0D1c` 2s：`/tmp/boot1.raw` **192000 B nz=0 rms=0**。dmesg：`ngd DEF_ACT ret=0 nb=6 w=cf 24 20 83 94 87 r=20 00 00 00`（la=0xcf，ch=0x87=135），GENERIC_ACK `mc=25 len=5` 载荷 **0x20**；`ngd RECONFIG ret=0 w0=95 w1=cf r=2f 00 00 00`，对应 ACK 载荷 **0x2f**。`wcd slim enable ret=0`，`delayed START dai=3 rc=0`，随后 **`AFE close failed -110`**。voice unit 已放回并 start。
+
+**设备终态**：槽 a L0；Slim 管理器对 DEF_ACT 回了 0x20、对 RECONFIG 回了 0x2f；第一段 PCM 仍全 0。succ_a 仍 0。
+
+## 2026-09-22 — 路由已接上；改成 1 声道后 PCM 仍全 0（enchilada）
+
+用户：继续。未 wipe。未烧。未热卸 q6afe / slim-ngd。未 reboot。
+
+热加载 `q6routing.ko` **662168**（只卸 `snd-soc-sdm845`、`q6asm-dai`、`q6routing`；q6afe 仍在，APR 4 未动）。旧件在 `q6routing.ko.pre-route`（661664）。`q6adm_matrix_map` 成功时返回的是 `wait_event_timeout` 剩余 jiffies，不是 DSP 错误码。
+
+`snd-cap pcmC0D1c` 2s：`q6route open fe=1 sid=2 port=3 path=2 rate=48000 ch=2 bits=16 perf=0`，`matrix ... copp=0 n=1 ret=999`。path=2 是 `ADM_PATH_LIVE_REC`，port=3 是 `SLIMBUS_0_TX`。`/tmp/route.raw` **192000 B nz=0**。`delayed START rc=0`，`AFE close failed -110`。
+
+后端 fixup 对所有 BE 强制 2 声道，AFE slim 口是 1 声道。再热加载 `snd-soc-sdm845.ko` **90272**（只卸 sdm845）：Slim 采集改为 1 声道。`q6route open ... ch=1`，`matrix ret=1000`。`/tmp/ch1.raw` **192000 B nz=0 rms=0**。喇叭 `snd-play pcmC0D0p` 1 kHz **play_rc=0**。voice 已拉回。旧 sdm845 在 `.pre-1ch`（90088）。
+
+**设备终态**：槽 a L0；ADM 矩阵接到 port 3、48 kHz、1 声道、16 bit，DSP 未回错误；PCM 仍全 0。succ_a 仍 0。
+
+## 2026-09-22 — 安卓单麦 TX0/DEC0/通道 128：codec 已切过去，PCM 仍全 0（enchilada）
+
+用户：继续。未 wipe。未烧。未热卸 q6afe / slim-ngd。未 reboot。同一 boot（uptime 约 7303s），serial `b0d9f7fe`，槽 `_a`。
+
+Lineage `handset-mic` 是 `amic4`：TX0 ← DEC0 ← ADC MUX0=AMIC ← AMIC MUX0=ADC4。只改混音器，未改驱动。AIF1 先挂上 TX0，再关掉 AIF1/2/3 的 TX7，避免空列表把 TX7 偷回来。读回：`AIF1_CAP Mixer SLIM TX0=1`，TX7=0，`CDC_IF TX0 MUX=DEC0`，`ADC MUX0=AMIC`，`AMIC MUX0=ADC4`，`AMIC4_5 SEL=AMIC4`，`CDC_IF TX7 MUX=ZERO`，`DEC0 Volume=84`，`ADC4 Volume=20`。
+
+`snd-cap pcmC0D1c` 3s：`/tmp/amic4.raw` **288000 B nz=0 rms=0**。dmesg：`decim port=0 mux=2 dec=0`，`port_mask=0x1`，`ch_num=128`，`q6afe slim prepare map=128`，`q6route open fe=1 sid=2 port=3 path=2 rate=48000 ch=1`，`matrix ret=998`（仍是剩余 jiffies）。`dec unmute dec=0 path=24`。DEF_ACT `w=cf 24 20 83 09 80`（末字节 0x80=128）回 `20 00 00 00`；RECONFIG 回 `2f`。`delayed START dai=3 rc=0`。同一轮 `slave PORT cfg map0=7`（q6afe 里写死的 TX7，未改这只 ko）。随后 **`AFE close failed -110`**，`ASM_DATA_CMD_EOS 0x10bdb not expecting rsp`。再录 2s `/tmp/amic4b.raw` **192000 B nz=0**。voice 已放回，status ready（pid 9233）。混音器留在这条 TX0 路上。
+
+**设备终态**：槽 a L0；codec/AFE slim 配置在通道 128、WCD 口 0，DSP 的 slave PORT cfg 仍是口 7；PCM 仍全 0。succ_a 仍 0。
+
+## 2026-09-22 — pre-slave q6afe 冷启动，安卓单麦第一段仍全 0（enchilada）
+
+用户：换 pre-slave 再重启。未 wipe。未烧。未热卸 q6afe。
+
+盘上 `/lib/modules/q6afe.ko` 换成 `q6afe.ko.pre-slave` **116976**，md5 `8ed51f71ad73115f3e400a47d6ab45b5`。带 slave PORT 的 122016 仍在 `q6afe.ko.init`（md5 `7ce088b1fdfac037d96339ecde199f08`）。voice unit 先挪到 `.hold`。`audio-bringup` 改为 Lineage `amic4`（TX0 ← DEC0 ← ADC4，TX7 关掉），假采集仍注释。`reboot`。SSH 时 uptime **35.74s**，serial `b0d9f7fe`，槽 `_a`，uname `6.11.0-sdm845-g2fa43795f607`。盘上 ko 仍是上述 md5。dmesg 在采集前没有 slim/路由行，也没有 `slave PORT` / `slave cfg`。
+
+开机第一段 `snd-cap pcmC0D1c` 2s（uptime 约 49s）：`/tmp/boot1.raw` **192000 B nz=0 rms=0**。dmesg：`decim port=0 mux=2 dec=0`，`port_mask=0x1`，`ch_num=128`，`q6slim prepare map=128`，`dec unmute dec=0 path=24`，`delayed START dai=3 rc=0`，`q6route open ... ch=1`，`matrix ret=998`。DEF_ACT `w=cf 24 20 83 94 80`（0x80=128）回 `20 00 00 00`；RECONFIG 回 `2f`。`wcd slim enable ret=0`。DEF_ACT 在 delayed START 之后。随后 **`AFE close failed -110`**。没有 slave cfg / PORT cfg 行。喇叭 `snd-play pcmC0D0p` 0.4s **play_rc=0**。voice 已放回，ready pid 796。
+
+**设备终态**：槽 a L0；pre-slave q6afe 在役，安卓单麦第一段仍全 0；喇叭 ioctl 通。succ_a 未再读。
+
+## 2026-09-22 — redfin：新母体首启种出 /home，随后因没有 brain.json 退出；已换回旧二进制（Pixel 5）
+
+用户：机器在线，样机用 Pixel 5。未 wipe。未刷。未动 voice。
+
+adb serial `aginxosredfin`，cmdline `androidboot.serialno=13201FDD4001N8` `androidboot.hardware=redfin` `androidboot.slot_suffix=_b` `slot_successful=yes`。内核 `4.19.278-g7b0944645172-ab10812814`，`init` 是 busybox，`rdinit=/aginxos/trampoline`。当时 uptime 约 1735s。`/home` 是空目录。在役 `aginx-server` 是 9 月 14 日那只，unit `AGINX_HOME=/home/.aginx`，`/home/.aginx` 不存在。`aginx` 当时 ready pid 443。
+
+把 `ed13bc5` 的 `aginx-server`（musl 静态，15648864 字节）推上，unit 改成 `AGINX_HOME=/home`（去掉 `AGINX_RUNTIME_BIN`），`aginx-svc stop` 后换二进制再 start。进程退出码 1，日志：`Brain config not found at /home/brain.json`，Hub 拉取要 `OPENCLONE_HUB_KEY`，该变量不在。`/etc/aginx/env` 有 `AGINXBRAIN_API_KEY`，没有 `AGINX_BRAIN_URL`，所以刀2 的 brain 桥没有合成 `brain.json`。
+
+退出前树已经种上：`/home/SOUL.md` 1682 字节，首行 `# 灵魂定义 —「我」（母体）`；`/home/MEMORY.md` 67 字节，首行 `# 知识索引`；`/home/sessions/` 空目录；`/home/data/carrier.db` 462848 字节。没有 `brain.json`。
+
+已把二进制和 unit 换回（备份在 `aginx-server.pre-seed`、`aginx.toml.pre-seed`；新二进制留在 `aginx-server.seed`）。`aginx` ready pid 4842，日志回到 `listening on /run/aginx.sock (workspaces: /home/.aginx/workspaces)`。`aginx-voice` 仍 ready pid 454。种下的 `/home` 树留着，旧进程不读它。
+
+**设备终态**：redfin 槽 b L0；母体是旧二进制、家仍钉在 `/home/.aginx`；`/home` 上有这次种下的 SOUL/MEMORY/sessions/data。
+
+## 2026-09-22 — redfin 出厂重刷后装上面板：Talk 进程在画，母体仍因无 brain 退出（Pixel 5）
+
+用户：重新刷，用新代码，开机就是一个圆。未切槽。fastboot 只见 `13201FDD4001N8`，`getvar product=redfin`。`GO=1 devices/redfin/boot/flash-redfin.sh`：不抓 state。userdata 稀疏包 28916 KB 写入 OK（45s），`vendor_boot_b` 34936 KB 写入 OK，reboot。
+
+adb `aginxosredfin` 回来。uptime 约 42s 时 `/run/boot.state`：`pkg ok`、`touch ok`、`camera ok`、`battery ok 0%`、`modem ok`、`audio ok`、`wlan ok wlan0`、`done ok`、`wifi fail no /etc/wifi.conf`。镜像版本文件当时还不在 initramfs 里；切根后 `aginx-pkg` 在。
+
+出厂清单不装 opt 包，所以亮圆不在镜像里。adb 装了本地包：`aginx-qr`、`aginx-pair`、`aginx-term`（开机落在 Talk 圆）、`aginx-update`、`aginx-secretd`、`aginx-gateway`、`aginx`（刀3 server）、`aginx-asr`、`aginx-tts`、`aginx-ocr`、`aginx-voice`（语音用已提交树，未带麦线未提交改动）。
+
+`/var/bin/aginx-term` 在，pid 2011，日志 `aginx-term start` 后 `slow present 25ms`。`aginx-voice` ready pid 2088。`aginx-secretd` ready。`aginx` **failed**（backoff）：新 server 又在空 `/home` 上种了 `SOUL.md` / `MEMORY.md` / `sessions/` / `data/carrier.db`，然后同样没有 `brain.json` 退出。`aginx-gateway` failed。没有 `/etc/wifi.conf`。
+
+**设备终态**：redfin 槽 b，新 userdata + `vendor_boot_b`。面板进程是 Talk。母体未留在 ready。Wi-Fi 未配。
+
+## 2026-09-22 — redfin 本地嘴耳打通（Pixel 5）
+
+用户：语音和耳麦要打通，识别和输出，用本地模型。未再刷。
+
+`aginx-voice` ready，日志 `up (local=true, brain=false, ptt=/dev/input/event1+/dev/input/event0)`。`/var/bin/aginx-asr` → `ag-asr`，模型 `/var/models/asr/model.int8.onnx` 239233841 字节。`/var/bin/aginx-tts` → `ag-tts`，`/var/models/tts/vits-melo-tts-zh_en/model.onnx` 170429550 字节。采集 `/dev/snd/pcmC0D0c`，放音 `/dev/snd/pcmC0D0p`。
+
+`aginx-voice --say "你好，我是母体。"` 返回 0。产物 `/tmp/aginx-voice-tts.wav` 44100 Hz 单声道 1.45 s，rms 636，peak 2756。把这份 wav 交给 `aginx-voice --hear`，打印 **「你好，我是母体。」**，返回 0。
+
+同一句放大后经 `snd-play pcmC0D0p` 放 2.9 s（48000 Hz 2 声道，play 写出 139440 帧），同时 `snd-cap pcmC0D0c` 4 s：192000 帧里非零 187222，peak 19626，rms 3154。这份麦录音 `--hear` 打印 **「你好，我是母体你好我是母体。」**（放了两遍），返回 0。
+
+**设备终态**：槽 b。本地识别和本地合成都走通，喇叭进了麦。母体仍 failed（无 brain.json）。Wi-Fi 仍无。`aginx-voice` ready。
+
+## 2026-09-22 — redfin 按住说话没进采集：语音二进制不看 hold（Pixel 5）
+
+用户：说了，没动静。未再刷。
+
+`aginx-voice` 日志只有启动行，没有 `cap start`。`/run/aginx-voice/hold` 不存在，face 仍是开机那份 `{"eye":false,"result":false}`。屏是亮的（`card0-DSI-1` enabled，dpms On）。term pid 2011 打开了 `event2`（sec_touchscreen）。手写 `hold` 1.5 秒再删，日志仍无 `cap start`。
+
+原因：装上的 `aginx-voice` 是已提交版本，只听音量键；屏上按住是工作区里未提交的改动，term 会写 `/run/aginx-voice/hold`，那只旧语音不读。
+
+换上含 hold 的 musl `aginx-voice`（2581400 字节）。`aginx-svc stop` 后覆盖 `/var/bin/aginx-voice` 再 start，ready pid 2583。再写 hold 1.2 秒：日志 `cap start`，随后 `asr aginx-asr unusable "T."`（空房间，静音闸）。
+
+**设备终态**：槽 b。按住屏幕才会采集。语音 ready pid 2583，`local=true`。母体仍 failed。Wi-Fi 仍无。
