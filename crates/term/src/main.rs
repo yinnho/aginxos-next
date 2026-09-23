@@ -2403,6 +2403,48 @@ fn host_ppm(out: &str) {
             eprintln!("ppm: {e}");
         }
         println!("wrote {path}");
+        // 刀C 开机首页：Home 即 Talk 面——按住说话的小兽 + hint，下方
+        // 卡片带列定时任务产物（FS.md {home}/cards）。fixture 卡替 cron
+        // 落进 cards/ 的信封，README 开机图即此面。
+        let mut pixt = vec![0u32; pitch * h];
+        talk::paint_wait(
+            &mut pixt,
+            pitch,
+            w,
+            h,
+            &font,
+            8,
+            false,
+            false,
+            None,
+            talk::hint(true, false, false),
+        );
+        let cards = vec![
+            cards::Card {
+                path: "/home/cards/2026-09-23-morning.json".into(),
+                title: "晨报".into(),
+                template: "morning".into(),
+                source: "cron".into(),
+            },
+            cards::Card {
+                path: "/home/cards/2026-09-23-weather.json".into(),
+                title: "天气 · 南京".into(),
+                template: "weather".into(),
+                source: "cron".into(),
+            },
+            cards::Card {
+                path: "/home/cards/2026-09-23-trip.json".into(),
+                title: "出行 · 下午三点".into(),
+                template: "trip".into(),
+                source: "cron".into(),
+            },
+        ];
+        talk::paint_cards(&mut pixt, pitch, w, h, &font, &cards, 0, None);
+        let path = format!("{}-talk", out);
+        if let Err(e) = ppm_dump(&path, &pixt, w, h, pitch) {
+            eprintln!("ppm: {e}");
+        }
+        println!("wrote {path}");
     }
 }
 
