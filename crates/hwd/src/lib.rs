@@ -231,6 +231,18 @@ pub fn load_or_exit() -> &'static Device {
     })
 }
 
+/// Read `capacity` from a sysfs power_supply directory.
+/// Empty path or unreadable node → `None`. Never invent 0%.
+pub fn battery_pct(power_supply: &str) -> Option<u8> {
+    let p = power_supply.trim();
+    if p.is_empty() {
+        return None;
+    }
+    std::fs::read_to_string(format!("{p}/capacity"))
+        .ok()
+        .and_then(|s| s.trim().parse().ok())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -275,6 +287,27 @@ mod tests {
         ); // D14-exempt
         assert_eq!(d.adb.serial, "aginxosredfin"); // D14-exempt
         assert_eq!(d.tz, "CST-8"); // D14-exempt: display TZ (kernel clock stays UTC)
+    }
+
+    #[test]
+    fn battery_pct_empty_path_is_none() {
+        assert_eq!(battery_pct(""), None);
+        assert_eq!(battery_pct("   "), None);
+    }
+
+    #[test]
+    fn battery_pct_reads_capacity_file() {
+        let dir = std::env::temp_dir().join(format!("hwd-bat-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("capacity"), "97\n").unwrap();
+        assert_eq!(battery_pct(dir.to_str().unwrap()), Some(97));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn battery_pct_missing_node_is_none() {
+        assert_eq!(battery_pct("/no/such/power_supply"), None);
     }
 
     /// [v1] registered sections parse and carry their data.
