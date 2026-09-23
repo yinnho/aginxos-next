@@ -558,7 +558,50 @@ pub(super) async fn cron_deliver_response(
             tracing::debug!(status = %resp.status(), "Cron webhook delivered");
             Ok(())
         }
+        CronDelivery::Card { title, template } => {
+            // 显示线刀A：应答落成首页卡片信封（{home}/cards/）。母体只包
+            // JSON 不写 HTML——渲染是浏览器被调起后按模板做的事（模板/
+            // 注册表在浏览器目录，FS.md）。
+            write_home_card(&kernel.config.home_dir, &agent_name, title, template, response)
+        }
     }
+}
+
+/// 首页卡片信封落盘（`CronDelivery::Card`）。应答按 workflow 规程应是
+/// JSON；不是就整段兜底 `{"text":…}`——卡片永远可渲染，坏格式不让
+/// fire 白跑。tmp+rename 原子写（tmp 名带前导点，term 扫目录跳过点文件
+/// 就不会读到半截）。文件名 `{本地时间戳}-{slugify(title)}.json`，同
+/// 一毫秒同标题的极端碰撞=后写覆盖（同一张卡，��接受）。
+fn write_home_card(
+    home: &std::path::Path,
+    agent_name: &str,
+    title: &str,
+    template: &str,
+    response: &str,
+) -> CarrierResult<()> {
+    let dir = home.join("cards");
+    std::fs::create_dir_all(&dir)
+        .map_err(|e| CarrierError::Config(format!("create cards dir failed: {e}")))?;
+    let data = serde_json::from_str::<serde_json::Value>(response)
+        .unwrap_or_else(|_| serde_json::json!({ "text": response }));
+    let envelope = serde_json::json!({
+        "title": title,
+        "template": template,
+        "data": data,
+        "created": chrono::Local::now().to_rfc3339(),
+        "source": agent_name,
+    });
+    let stamp = chrono::Local::now().format("%Y%m%d-%H%M%S%3f").to_string();
+    let path = dir.join(format!("{}-{}.json", stamp, slugify(title)));
+    let tmp = dir.join(format!(".{}.tmp", stamp));
+    let body = serde_json::to_string_pretty(&envelope)
+        .map_err(|e| CarrierError::Config(format!("card envelope serialize failed: {e}")))?;
+    std::fs::write(&tmp, body)
+        .map_err(|e| CarrierError::Config(format!("card tmp write failed: {e}")))?;
+    std::fs::rename(&tmp, &path)
+        .map_err(|e| CarrierError::Config(format!("card rename into place failed: {e}")))?;
+    tracing::info!(card = %path.display(), agent = agent_name, "Home card written");
+    Ok(())
 }
 
 /// Did a cron agent turn produce usable output at all?
@@ -1258,124 +1301,7 @@ impl CarrierKernel {
         self.start_clone_watchers();
         self.reconcile_self_growth();
 
-        // Cron scheduler tick loop — fires due jobs every 15 seconds
-        {
-            let kernel = Arc::clone(self);
-            tokio::spawn(async move {
-                let mut interval = tokio::time::interval(std::time::Duration::from_secs(15));
-                interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
-                let mut persist_counter = 0u32;
-                let mut reconcile_counter = 0u32;
-                interval.tick().await;
-                // Catch restart-stranded chained one-shots immediately — a
-                // deploy restart that killed a mid-fire turn leaves a job
-                // whose +100y sentinel next_run would otherwise never fire
-                // and never alert.
-                kernel.reconcile_chains().await;
-                loop {
-                    interval.tick().await;
-                    if kernel.runtime.supervisor.is_shutting_down() {
-                        let _ = kernel.cron_scheduler.persist();
-                        break;
-                    }
-
-                    // CLI（CARRIER.md §3.4-3 cron pause/resume/remove）与
-                    // 其他进程直写 cron 表；enabled/存在性以 DB 为协调真源，
-                    // 每 tick 对账采进内存。fire 收尾走定点写回，不会冲掉。
-                    if let Err(e) = kernel.cron_scheduler.reconcile_from_db() {
-                        tracing::warn!("Cron reconcile from DB failed: {e}");
-                    }
-
-                    let due = kernel.cron_scheduler.due_jobs();
-                    for job in due {
-                        let job_id = job.id;
-                        let job_name = job.name.clone();
-                        let agent_id = job.agent_id;
-                        // Chain forensics in the audit trail: plain job name
-                        // alone can't tie a fire back to its pipeline step.
-                        let chain_note = job
-                            .chain
-                            .as_ref()
-                            .map(|c| {
-                                format!(" chain={} step={}/{}", c.chain_id, c.step, c.total_steps)
-                            })
-                            .unwrap_or_default();
-                        let k = Arc::clone(&kernel);
-                        // Detached spawn (no tick barrier): one slow job no
-                        // longer stalls every other agent's crons. Re-entry
-                        // safety comes from the per-job in-flight guard set
-                        // in due_jobs — a due slot that lands while the
-                        // previous fire still runs is skipped, not queued.
-                        // The wrapper clears the guard on EVERY outcome
-                        // (including panic) so a crashed fire can never
-                        // leave a job permanently skipped, and records the
-                        // fire in the audit chain (cron forensics).
-                        tokio::spawn(async move {
-                            let outcome = cron_fire_job(&k, job).await;
-                            k.cron_scheduler.clear_running(job_id);
-                            let (status, detail) = match &outcome {
-                                Ok(()) => ("ok", format!("job={job_name}{chain_note}")),
-                                Err(e) => {
-                                    ("error", format!("job={job_name}{chain_note} error={e}"))
-                                }
-                            };
-                            k.audit_log.record(
-                                agent_id.to_string(),
-                                carrier_runtime::audit::AuditAction::CronFire,
-                                detail,
-                                status,
-                            );
-                        });
-                    }
-
-                    persist_counter += 1;
-                    if persist_counter >= 20 {
-                        persist_counter = 0;
-                        if let Err(e) = kernel.cron_scheduler.persist() {
-                            tracing::warn!("Cron persist failed: {e}");
-                        }
-                        // Periodically purge expired pending notifications.
-                        match kernel.memory.cron_delivery().purge_expired() {
-                            Ok(0) => {}
-                            Ok(n) => {
-                                tracing::debug!(deleted = n, "Purged expired pending notifications")
-                            }
-                            Err(e) => tracing::warn!("Purge expired notifications failed: {e}"),
-                        }
-                        // Abandoned cap-circuited chains must not accumulate.
-                        let cutoff = (chrono::Utc::now() - chrono::Duration::days(30)).to_rfc3339();
-                        match kernel.memory.chain_resume().purge_stale(&cutoff) {
-                            Ok(0) => {}
-                            Ok(n) => {
-                                tracing::debug!(
-                                    deleted = n,
-                                    "Purged stale chain-resume ledger rows"
-                                )
-                            }
-                            Err(e) => tracing::warn!("Chain-resume ledger purge failed: {e}"),
-                        }
-                    }
-
-                    // Reconcile self-growth crons every ~60s so config flips
-                    // (EVOLUTION.md self_growth_enabled) and new installs converge
-                    // without a restart. Cheap: iterates clones, reads small
-                    // frontmatter files, idempotent add/remove by name.
-                    reconcile_counter += 1;
-                    if reconcile_counter >= 4 {
-                        reconcile_counter = 0;
-                        kernel.reconcile_self_growth();
-                        // Stranded chained one-shots (mid-fire crash/restart).
-                        kernel.reconcile_chains().await;
-                    }
-                }
-            });
-            if self.cron_scheduler.total_jobs() > 0 {
-                info!(
-                    "Cron scheduler active with {} job(s)",
-                    self.cron_scheduler.total_jobs()
-                );
-            }
-        }
+        self.start_cron_loop();
 
         // Flow run expiry tick - reaps `waiting` flow runs whose `user_input`
         // deadline has passed, marking them `timed_out`. Mirrors the cron loop.
@@ -1434,6 +1360,127 @@ impl CarrierKernel {
                     }
                 });
             }
+        }
+    }
+
+    /// Cron scheduler tick loop — fires due jobs every 15 seconds.
+    ///
+    /// 从 `start_background_agents` 抽出（显示线刀A）：那个入口带着后台
+    /// agent 环/心跳/MCP/clone watcher 一整包 baggage，只有老 carrier
+    /// 守护会调；server 直调形态（AginxOS 母体）只需要这一个循环——
+    /// 定时是母体职能，Mother::boot 直接起它。两个入口共用同一份实现。
+    pub fn start_cron_loop(self: &Arc<Self>) {
+        let kernel = Arc::clone(self);
+        tokio::spawn(async move {
+            let mut interval = tokio::time::interval(std::time::Duration::from_secs(15));
+            interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+            let mut persist_counter = 0u32;
+            let mut reconcile_counter = 0u32;
+            interval.tick().await;
+            // Catch restart-stranded chained one-shots immediately — a
+            // deploy restart that killed a mid-fire turn leaves a job
+            // whose +100y sentinel next_run would otherwise never fire
+            // and never alert.
+            kernel.reconcile_chains().await;
+            loop {
+                interval.tick().await;
+                if kernel.runtime.supervisor.is_shutting_down() {
+                    let _ = kernel.cron_scheduler.persist();
+                    break;
+                }
+
+                // CLI（CARRIER.md §3.4-3 cron pause/resume/remove）与
+                // 其他进程直写 cron 表；enabled/存在性以 DB 为协调真源，
+                // 每 tick 对账采进内存。fire 收尾走定点写回，不会冲掉。
+                if let Err(e) = kernel.cron_scheduler.reconcile_from_db() {
+                    tracing::warn!("Cron reconcile from DB failed: {e}");
+                }
+
+                let due = kernel.cron_scheduler.due_jobs();
+                for job in due {
+                    let job_id = job.id;
+                    let job_name = job.name.clone();
+                    let agent_id = job.agent_id;
+                    // Chain forensics in the audit trail: plain job name
+                    // alone can't tie a fire back to its pipeline step.
+                    let chain_note = job
+                        .chain
+                        .as_ref()
+                        .map(|c| {
+                            format!(" chain={} step={}/{}", c.chain_id, c.step, c.total_steps)
+                        })
+                        .unwrap_or_default();
+                    let k = Arc::clone(&kernel);
+                    // Detached spawn (no tick barrier): one slow job no
+                    // longer stalls every other agent's crons. Re-entry
+                    // safety comes from the per-job in-flight guard set
+                    // in due_jobs — a due slot that lands while the
+                    // previous fire still runs is skipped, not queued.
+                    // The wrapper clears the guard on EVERY outcome
+                    // (including panic) so a crashed fire can never
+                    // leave a job permanently skipped, and records the
+                    // fire in the audit chain (cron forensics).
+                    tokio::spawn(async move {
+                        let outcome = cron_fire_job(&k, job).await;
+                        k.cron_scheduler.clear_running(job_id);
+                        let (status, detail) = match &outcome {
+                            Ok(()) => ("ok", format!("job={job_name}{chain_note}")),
+                            Err(e) => {
+                                ("error", format!("job={job_name}{chain_note} error={e}"))
+                            }
+                        };
+                        k.audit_log.record(
+                            agent_id.to_string(),
+                            carrier_runtime::audit::AuditAction::CronFire,
+                            detail,
+                            status,
+                        );
+                    });
+                }
+
+                persist_counter += 1;
+                if persist_counter >= 20 {
+                    persist_counter = 0;
+                    if let Err(e) = kernel.cron_scheduler.persist() {
+                        tracing::warn!("Cron persist failed: {e}");
+                    }
+                    // Periodically purge expired pending notifications.
+                    match kernel.memory.cron_delivery().purge_expired() {
+                        Ok(0) => {}
+                        Ok(n) => {
+                            tracing::debug!(deleted = n, "Purged expired pending notifications")
+                        }
+                        Err(e) => tracing::warn!("Purge expired notifications failed: {e}"),
+                    }
+                    // Abandoned cap-circuited chains must not accumulate.
+                    let cutoff = (chrono::Utc::now() - chrono::Duration::days(30)).to_rfc3339();
+                    match kernel.memory.chain_resume().purge_stale(&cutoff) {
+                        Ok(0) => {}
+                        Ok(n) => {
+                            tracing::debug!(deleted = n, "Purged stale chain-resume ledger rows")
+                        }
+                        Err(e) => tracing::warn!("Chain-resume ledger purge failed: {e}"),
+                    }
+                }
+
+                // Reconcile self-growth crons every ~60s so config flips
+                // (EVOLUTION.md self_growth_enabled) and new installs converge
+                // without a restart. Cheap: iterates clones, reads small
+                // frontmatter files, idempotent add/remove by name.
+                reconcile_counter += 1;
+                if reconcile_counter >= 4 {
+                    reconcile_counter = 0;
+                    kernel.reconcile_self_growth();
+                    // Stranded chained one-shots (mid-fire crash/restart).
+                    kernel.reconcile_chains().await;
+                }
+            }
+        });
+        if self.cron_scheduler.total_jobs() > 0 {
+            info!(
+                "Cron scheduler active with {} job(s)",
+                self.cron_scheduler.total_jobs()
+            );
         }
     }
 
@@ -1619,7 +1666,10 @@ impl CarrierKernel {
 
 #[cfg(test)]
 mod tests {
-    use super::{build_resume_job, cron_turn_degenerate, is_stranded, slugify, MAX_AUTO_RESUMES};
+    use super::{
+        build_resume_job, cron_turn_degenerate, is_stranded, slugify, write_home_card,
+        MAX_AUTO_RESUMES,
+    };
     use crate::registry::AgentRegistry;
     use chrono::Utc;
     use std::collections::HashMap;
@@ -1885,6 +1935,59 @@ mod tests {
         assert_eq!(slugify("a   b"), "a-b"); // spaces collapse
         assert_eq!(slugify("--weird--"), "weird"); // leading/trailing trimmed
         assert_eq!(slugify("   "), "job"); // all-hostile -> fallback
+    }
+
+    /// 首页卡片信封（显示线刀A）：JSON 应答原样进 data；非 JSON 应答兜底
+    /// `{"text":…}`；文件名=时间戳-slugify(title).json；目录里没有半截
+    /// tmp 残留（原子写收口）。
+    #[test]
+    fn write_home_card_envelope_and_fallback() {
+        let home = std::env::temp_dir().join(format!("carrier-kernel-card-test-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&home);
+
+        // JSON 应答：data 原样（对象保真）
+        write_home_card(&home, "小满", "晨报", "morning-report", r#"{"greeting":"早","items":["雨","降温"]}"#)
+            .unwrap();
+        let cards: Vec<_> = std::fs::read_dir(home.join("cards")).unwrap().flatten().collect();
+        assert_eq!(cards.len(), 1);
+        let path = cards[0].path();
+        let name = path.file_name().unwrap().to_string_lossy().to_string();
+        assert!(name.starts_with('2') || name.starts_with('1'), "timestamp-prefixed: {name}");
+        assert!(name.ends_with("-晨报.json"), "slugified title suffix: {name}");
+        let doc: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        assert_eq!(doc["title"], "晨报");
+        assert_eq!(doc["template"], "morning-report");
+        assert_eq!(doc["source"], "小满");
+        assert_eq!(doc["data"]["greeting"], "早");
+        assert_eq!(doc["data"]["items"][1], "降温");
+        assert!(doc["created"].as_str().is_some_and(|c| c.contains('T')), "RFC3339 created");
+
+        // 非 JSON 应答：整段兜底成 {"text":…}，不炸不丢。标题里的 `/` 被
+        // slugify 钉成 `-`——文件名不可能是穿越路径。
+        write_home_card(&home, "小满", "晨报/2026/09", "t", "今天多云，不是 JSON").unwrap();
+        let files: Vec<String> = std::fs::read_dir(home.join("cards"))
+            .unwrap()
+            .flatten()
+            .map(|e| e.file_name().to_string_lossy().to_string())
+            .collect();
+        assert_eq!(files.len(), 2, "two cards: {files:?}");
+        let fallback_name = files
+            .iter()
+            .find(|f| f.ends_with("-晨报-2026-09.json"))
+            .unwrap_or_else(|| panic!("path-hostile title slugged: {files:?}"));
+        let fallback =
+            std::fs::read_to_string(home.join("cards").join(fallback_name)).unwrap();
+        let doc: serde_json::Value = serde_json::from_str(&fallback).unwrap();
+        assert_eq!(doc["data"]["text"], "今天多云，不是 JSON", "raw text wrapped, not lost");
+        assert_eq!(doc["title"], "晨报/2026/09", "title kept verbatim for display");
+
+        // 原子写收口：目录里没有点开头 tmp 残留
+        assert!(
+            files.iter().all(|f| !f.starts_with('.')),
+            "no tmp residue: {files:?}"
+        );
+        let _ = std::fs::remove_dir_all(&home);
     }
 
 }

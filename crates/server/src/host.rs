@@ -202,6 +202,17 @@ impl Mother {
             home,
         };
         mother.reconcile()?;
+        // 定时是母体职能（显示线刀A）：cron tick 循环随母体起。老路只有
+        // aginx-carrier 守护会经 start_background_agents 触发它——server
+        // 直调形态此前装而不触发，定时任务全瘫。必须在 reconcile 之后：
+        // 循环启动即跑一次 reconcile_chains、每 tick 还会清孤儿 cron
+        // （registry 无此 agent → remove_job），agent 未在册就开闸会把
+        // 好好的 job 当孤儿误删。15s tick 是 tokio::spawn 的后台任务，
+        // 跑在 worker 上，与轮 future 不抢。
+        {
+            let _ctx = mother.rt.enter();
+            mother.kernel.start_cron_loop();
+        }
         Ok(mother)
     }
 
