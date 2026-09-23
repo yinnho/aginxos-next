@@ -20,6 +20,9 @@ pub struct Card {
     pub title: String,
     pub template: String,
     pub source: String,
+    /// 刀4 页=会话：页上按住续话的路由靶（化身名；空=cron 产物，续话落
+    /// 母体）。voice 出页时写；老卡/第三方卡没有此字段=空。
+    pub session: String,
 }
 
 /// 母体 home：AGINX_HOME 覆写（试跑隔离）> AGINX_CARRIER_HOME > /home。
@@ -77,6 +80,12 @@ pub fn scan(dir: &Path) -> Vec<Card> {
                 .get("source")
                 .and_then(|v| v.as_str())
                 .unwrap_or("")
+                .to_string(),
+            session: doc
+                .get("session")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .trim()
                 .to_string(),
         });
     }
@@ -159,7 +168,7 @@ mod tests {
         .unwrap();
         std::fs::write(
             dir.join("2026-09-23-morning.json"),
-            r#"{"title":"今天的晨报","template":"morning","data":{},"source":"cron"}"#,
+            r#"{"title":"今天的晨报","template":"morning","data":{},"source":"cron","session":"me"}"#,
         )
         .unwrap();
         std::fs::write(dir.join("2026-09-23-broken.json"), "{ not json").unwrap();
@@ -170,6 +179,9 @@ mod tests {
         assert_eq!(cards[1].title, "昨天的晨报");
         assert_eq!(cards[0].template, "morning");
         assert_eq!(cards[0].source, "cron");
+        // 刀4：session 读出；老卡（昨天的晨报）没有该字段=空
+        assert_eq!(cards[0].session, "me");
+        assert_eq!(cards[1].session, "");
         assert!(scan(Path::new("/nonexistent-aginx-cards")).is_empty());
     }
 

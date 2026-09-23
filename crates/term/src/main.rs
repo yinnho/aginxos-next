@@ -100,6 +100,12 @@ const VOICE_EYE: &str = "/run/aginx-voice/eye.jpg";
 // only for QR, which reads eye.jpg at 2 Hz). Preferred when present.
 const VOICE_EYE_RAW: &str = "/run/aginx-voice/eye.raw";
 const VOICE_HOLD: &str = "/run/aginx-voice/hold";
+// 刀4 页=会话：当前页的卡路径（开页者写——term 点卡 / voice 出页）。
+// 让位期按住时读它当 hold 靶：「在哪个页就是哪个对话的延续」。
+const VOICE_PAGE: &str = "/run/aginx-voice/page";
+// 刀4 让位期按住成军门槛：页上短按/轻扫是浏览器的手势（滚动/点击），
+// 按住不动这么久才收页对话——别把浏览误判成说话。
+const HOLD_ARM: Duration = Duration::from_millis(350);
 
 fn fill_rect(pix: &mut [u32], pitch: usize, w: usize, h: usize, x: i32, y: i32, rw: i32, rh: i32, c: u32) {
     let (mut x, mut y, mut rw, mut rh) = (x, y, rw, rh);
@@ -473,13 +479,15 @@ fn clip_caption(s: &str) -> String {
     }
 }
 
-fn talk_hold_set(on: bool) {
-    if on {
-        let _ = std::fs::create_dir_all("/run/aginx-voice");
-        let _ = std::fs::write(VOICE_HOLD, b"1");
-    } else {
-        let _ = std::fs::remove_file(VOICE_HOLD);
-    }
+fn talk_hold_set(target: &str) {
+    // 刀4 页=会话：hold 文件内容=页靶（当前页卡路径；空=首页/新任务）。
+    // voice 按下沿读内容定路由——文件在=按下，消失=松手的旧语义不变。
+    let _ = std::fs::create_dir_all("/run/aginx-voice");
+    let _ = std::fs::write(VOICE_HOLD, target);
+}
+
+fn talk_hold_clear() {
+    let _ = std::fs::remove_file(VOICE_HOLD);
 }
 
 // ---------------- voice face ----------------
@@ -2425,18 +2433,21 @@ fn host_ppm(out: &str) {
                 title: "晨报".into(),
                 template: "morning".into(),
                 source: "cron".into(),
+                session: "".into(),
             },
             cards::Card {
                 path: "/home/cards/2026-09-23-weather.json".into(),
                 title: "天气 · 南京".into(),
                 template: "weather".into(),
                 source: "cron".into(),
+                session: "me".into(),
             },
             cards::Card {
                 path: "/home/cards/2026-09-23-trip.json".into(),
                 title: "出行 · 下午三点".into(),
                 template: "trip".into(),
                 source: "cron".into(),
+                session: "".into(),
             },
         ];
         talk::paint_cards(&mut pixt, pitch, w, h, &font, &cards, 0, None);
@@ -2807,9 +2818,26 @@ fn main() {
     let mut cards_err: Option<String> = None;
     let mut cards_err_at = Instant::now();
     let mut hold_face_until: Option<Instant> = None;
+    // 刀4 让位期按住：浏览器持屏时手指按下的时刻。按住满 HOLD_ARM 仍没
+    // 抬/没拖 = 成军（收页回屏，hold 带页靶）；短按/拖动归浏览器。
+    let mut yield_down: Option<Instant> = None;
 
     loop {
         let mut redraw = false;
+        // 刀4 让位期按住成军：按住满 HOLD_ARM 还没抬/没拖 = 用户要说话，不是
+        // 在操作页面——收页（rm show.html，引擎见文件消失关 DRM fd 让位），
+        // hold 写页靶（PAGE_FILE=当前页的卡路径，空=首页新任务），下一拍
+        // 仲裁取回屏幕画对话框。
+        if let Some(t) = yield_down {
+            if !talk_holding && Instant::now() - t >= HOLD_ARM {
+                yield_down = None;
+                talk_holding = true;
+                let target =
+                    std::fs::read_to_string(VOICE_PAGE).unwrap_or_default().trim().to_string();
+                talk_hold_set(&target);
+                let _ = std::fs::remove_file(cards::SHOW_PAGE);
+            }
+        }
         // 刀C 屏幕所有权仲裁：show.html 在 = 浏览器持屏（panel.rs 同一谓词）。
         // 上升沿 drop Drm（关 fd 即释放 master）让位；下降沿取屏重画。
         if cards::page_showing() != yielded {
@@ -2818,9 +2846,10 @@ fn main() {
                 eprintln!("aginx-term: browser takes the screen — yielding");
                 d = None;
                 talk_holding = false;
-                talk_hold_set(false);
+                talk_hold_clear();
                 card_touch = None;
                 hold_face_until = None;
+                yield_down = None;
                 blanked = false;
             } else {
                 eprintln!("aginx-term: taking the screen back");
@@ -2908,8 +2937,9 @@ fn main() {
         } else if held.is_some() || power_down.is_some() {
             30
         } else if d.is_none() {
-            // 刀C: 让位中——盯 show.html 的所有权轮询
-            200
+            // 刀C: 让位中——盯 show.html 的所有权轮询；刀4: 按住在计时，
+            // 收紧到 50ms 让 HOLD_ARM 的成军误差不超半拍
+            if yield_down.is_some() { 50 } else { 200 }
         } else if card_touch.is_some() {
             // 刀C: 卡片长按计时（700 ms 判拖/删）
             100
@@ -2955,7 +2985,21 @@ fn main() {
                     let ev = touch.as_mut().unwrap().poll();
                     // 刀C: 让位中触摸 fd 留在 poll 集只为排空——evdev 双读者，
                     // 浏览器也收同一事件流，term 这边不能 Acting。
+                    // 刀4: 但按下记时刻、按住满 HOLD_ARM 成军（循环顶收页），
+                    // 拖/短按归浏览器。
                     if d.is_none() {
+                        match ev {
+                            Touch::Down(..) => yield_down = Some(Instant::now()),
+                            Touch::Drag(_) => yield_down = None,
+                            Touch::Tap(..) | Touch::Up => {
+                                yield_down = None;
+                                if talk_holding {
+                                    talk_holding = false;
+                                    talk_hold_clear();
+                                }
+                            }
+                            Touch::None => {}
+                        }
                     } else {
                     last_input = Instant::now();
                     if blanked {
@@ -2994,7 +3038,7 @@ fn main() {
                                 consumed = true;
                             } else if matches!(mode, Mode::Talk) && talk::hold_hit(w, x, y) {
                                 talk_holding = true;
-                                talk_hold_set(true);
+                                talk_hold_set(""); // Talk 面按住 = 新对话，无页靶
                                 consumed = true;
                                 redraw = true;
                             } else if y < lg.toolbar_h {
@@ -3241,7 +3285,7 @@ fn main() {
                                     }
                                     Some(home::App::Talk) => {
                                         talk_holding = false;
-                                        talk_hold_set(false);
+                                        talk_hold_clear();
                                         mode = Mode::Talk;
                                         redraw = true;
                                     }
@@ -3286,7 +3330,7 @@ fn main() {
                                 )
                             {
                                 talk_holding = true;
-                                talk_hold_set(true);
+                                talk_hold_set(""); // 首页/系统面按住 = 新任务，空靶
                                 redraw = true;
                             }
                         }
@@ -3301,7 +3345,16 @@ fn main() {
                                 if !ct.dragged {
                                     if let Some(card) = cards.iter().find(|c| c.path == ct.path) {
                                         match cards::post_open(card) {
-                                            Ok(()) => {}
+                                            // 刀4: 开页记账——当前页的卡路径。
+                                            // 该页上再按住说话时 voice 拿它当路由靶
+                                            // （读卡的 session 续对话、原地重写）。
+                                            Ok(()) => {
+                                                let _ = std::fs::create_dir_all("/run/aginx-voice");
+                                                let _ = std::fs::write(
+                                                    VOICE_PAGE,
+                                                    card.path.to_string_lossy().as_bytes(),
+                                                );
+                                            }
                                             Err(e) => {
                                                 cards_err = Some(e);
                                                 cards_err_at = Instant::now();
@@ -3313,7 +3366,7 @@ fn main() {
                             }
                             if talk_holding {
                                 talk_holding = false;
-                                talk_hold_set(false);
+                                talk_hold_clear();
                                 if !matches!(mode, Mode::Talk) {
                                     // 对话框再留 90s——答完显示
                                     hold_face_until = Some(Instant::now() + Duration::from_secs(90));
@@ -3367,7 +3420,7 @@ fn main() {
                             card_touch = None; // 拖完不算点开
                             if talk_holding {
                                 talk_holding = false;
-                                talk_hold_set(false);
+                                talk_hold_clear();
                                 if !matches!(mode, Mode::Talk) {
                                     hold_face_until = Some(Instant::now() + Duration::from_secs(90));
                                 }
