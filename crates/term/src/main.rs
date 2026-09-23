@@ -2,7 +2,8 @@
 //
 // bootcard paints the AginxOS wordmark then drops master; term's first
 // frame is the same wordmark, then Home (status + clock + 相机/相册/对话/设置).
-// 对话 is the old Idle prompt (breathing cursor / transcript / result page).
+// 对话 is voice-in; results render in aginxbrowser — term POSTs /open and
+// yields the panel (show.html is the screen-ownership file).
 // Eye 取景, Install 软件清单, Cam 圆快门, Photos /home/photos. Debug pty via
 // AGINX_TERM_START or 设置→终端. Started by rcS's aginx-term-handoff.
 //
@@ -19,7 +20,7 @@
 // Host verification: `aginx-term --ppm out.ppm` renders the console faces
 // into P6 PPMs without touching DRM (same pattern as bootcard --ppm).
 
-mod browser; // v4⑥ 活体结果面 CDP 面板客户端（接线于 main loop）
+mod cards; // 刀C: {home}/cards 信封扫描 + /open 客户端 + show.html 所有权谓词
 mod cjk;
 mod drm;
 mod font;
@@ -29,6 +30,7 @@ mod kb;
 mod launch;
 mod photos;
 mod pinyin;
+mod talk;
 mod term;
 
 use drm::Drm;
@@ -97,115 +99,7 @@ const VOICE_EYE: &str = "/run/aginx-voice/eye.jpg";
 // term blits it with no JPEG decode (the encode+decode round trip stays
 // only for QR, which reads eye.jpg at 2 Hz). Preferred when present.
 const VOICE_EYE_RAW: &str = "/run/aginx-voice/eye.raw";
-// v4⑥: the live result page source — voice publishes the full phosphor
-// HTML here (atomic tmp+rename) before flipping face.result; term attaches
-// it to the engine as a data: URL (browser.rs) and the panel shows the
-// LIVE page (scrollable). The v4④ result.img PNG fallback is retired
-// (v4⑥S5); ①a replaces the do-nothing gap: a missing/empty file now
-// rebuilds the page from the session ledger (below) instead of silently
-// keeping the prompt face.
-const VOICE_RESULT_HTML: &str = "/run/aginx-voice/result.html";
-
-// ---------------- ①a 账本恢复（结果页重建） ----------------
-//
-// 结果旗立着但 result.html 没了（voice 死在 rename 前、/run 被清、term
-// 自己重启撞上文件丢失）——从会话账 fold 出最后一个 done(ok) 文本重建
-// 降级页。稳态不变：result.html 文件接力仍是正路，这里只买崩溃恢复，
-// 显示来自真源（D8 账）而不是又一个旁路文件。
-
-/// 化身根：AGINX_HOME 覆写（试跑隔离），否则直钉平台默认 /home/.aginx
-/// ——与 server unit 钉的 AGINX_HOME=/home/.aginx 同一处（M25 HOME=/home）。
-/// 不走 HOME 推导：term 由 init.d 拉起、环境里 HOME=/（设备实测），按
-/// HOME 解析会落 /.aginx 的空处。
-fn workspaces_root() -> std::path::PathBuf {
-    if let Ok(h) = std::env::var("AGINX_HOME") {
-        return std::path::PathBuf::from(h).join("workspaces");
-    }
-    std::path::PathBuf::from("/home/.aginx/workspaces")
-}
-
-/// 账尾最后一个非空 done(ok) 文本。err/空文本 done 不算结果——旗只在
-/// 成功轮收口后立起。坏行跳过（账可能截在半行上）。
-fn fold_last_done_ok(log: &std::path::Path) -> Option<String> {
-    let content = std::fs::read_to_string(log).ok()?;
-    let mut last: Option<String> = None;
-    for line in content.lines() {
-        if let Ok(agi::Frame::Done(d)) = serde_json::from_str(line.trim()) {
-            if d.ok && !d.text.trim().is_empty() {
-                last = Some(d.text);
-            }
-        }
-    }
-    last
-}
-
-/// 降级壳：三钉（黑底 / min-height 满屏高 px / 视口=面板宽——引擎收据，
-/// voice render.rs render_html 同款）+ 磷光可读性地板。panel 尺寸是参数
-/// （D14）：产品走 hwd [panel]，host 测试喂 fixture。**不做 markdown 化**
-/// ——排版归 aginxbrowser（①b 起 term 递原文给引擎 /render），恢复页
-/// 就是原文。
-fn degraded_shell(md: &str, pw: u32, ph: u32) -> String {
-    let mut esc = String::with_capacity(md.len());
-    for c in md.chars() {
-        match c {
-            '&' => esc.push_str("&amp;"),
-            '<' => esc.push_str("&lt;"),
-            '>' => esc.push_str("&gt;"),
-            other => esc.push(other),
-        }
-    }
-    format!(
-        "<!doctype html><html><head><meta charset=\"utf-8\">\
-<meta name=\"viewport\" content=\"width={pw}\">\
-<style>body{{background:#000;min-height:{ph}px}}\
-pre{{white-space:pre-wrap;color:#8cffb0;font-size:36px;\
-line-height:1.75;padding:24px;margin:0}}</style></head>\
-<body><pre>{}</pre></body></html>",
-        esc
-    )
-}
-
-/// 从账重建结果页 HTML。等值护栏：fold 出的文本必须与 face.line 一致
-/// ——母体直答不走账（v0 无账），对不上时账尾是别的化身（或旧轮）的
-/// 结果，投上去就是张冠李戴；对不上就放弃恢复（文本面兜底=一等降级）。
-/// 多化身按账 mtime 从新到旧依次试——即便命中旧账，展示的字节也与
-/// line 全同，最坏只是出处歧义，没有内容错。
-fn recover_result_html(
-    root: &std::path::Path,
-    line: Option<&str>,
-    pw: u32,
-    ph: u32,
-) -> Option<String> {
-    let want = line?.trim();
-    if want.is_empty() {
-        return None;
-    }
-    // #283 问句常驻：face.line = 「问句\n回复」——账上的 done 文本只是
-    // 换行后的回复段。两种形状都认（问句自身含换行的罕见三段形状会取到
-    // 半截、等值失配→放弃恢复，安全向——文本面兜底照旧一等）。
-    let want_reply = want.split_once('\n').map(|(_, r)| r.trim());
-    let mut cands: Vec<(std::time::SystemTime, std::path::PathBuf)> = std::fs::read_dir(root)
-        .ok()?
-        .filter_map(|e| e.ok())
-        .filter(|e| e.file_type().map(|t| t.is_dir()).unwrap_or(false))
-        .filter_map(|e| {
-            let log = e.path().join("sessions").join("main.jsonl");
-            let mtime = std::fs::metadata(&log).ok()?.modified().ok()?;
-            Some((mtime, log))
-        })
-        .collect();
-    cands.sort();
-    cands.reverse();
-    for (_, log) in cands {
-        if let Some(text) = fold_last_done_ok(&log) {
-            let t = text.trim();
-            if t == want || want_reply.is_some_and(|w| t == w) {
-                return Some(degraded_shell(&text, pw, ph));
-            }
-        }
-    }
-    None
-}
+const VOICE_HOLD: &str = "/run/aginx-voice/hold";
 
 fn fill_rect(pix: &mut [u32], pitch: usize, w: usize, h: usize, x: i32, y: i32, rw: i32, rh: i32, c: u32) {
     let (mut x, mut y, mut rw, mut rh) = (x, y, rw, rh);
@@ -536,9 +430,10 @@ fn inject(mode: &mut Mode, term: &mut Term, parser: &mut vte::Parser, ev: &Input
 
 enum Mode {
     Running(Child),
-    /// 桌面：顶栏时间 / 📶、大时钟、四个图标。开机 wordmark 之后落在这里。
+    /// 旧四图标桌面。开机不再构造；paint 仍与 Talk 同面，以免漏网。
+    #[allow(dead_code)]
     Home,
-    /// 对话（旧待命面）：绿字 + 呼吸光标 + 语音稿 / 结果页。从图标进来。
+    /// 对话即首页：按住说话 + HTML 答页。
     Talk,
     /// 眼视图 (面法 09-07, promoted from the M42g voice-face sub-state):
     /// fullscreen viewfinder. Entered from ANY mode when the aginx-voice
@@ -561,12 +456,30 @@ enum Mode {
 fn toolbar_mode(mode: &Mode) -> bool {
     matches!(
         mode,
-        Mode::Running(_) | Mode::Install(_) | Mode::Talk | Mode::Settings | Mode::Photos(_)
+        Mode::Running(_) | Mode::Install(_) | Mode::Settings | Mode::Photos(_)
     )
 }
 
 fn home_status(pair_line: &Option<String>, install_line: &Option<String>) -> Option<String> {
     pair_line.clone().or_else(|| install_line.clone())
+}
+
+fn clip_caption(s: &str) -> String {
+    let n = s.chars().count();
+    if n <= 18 {
+        s.to_string()
+    } else {
+        s.chars().skip(n - 18).collect()
+    }
+}
+
+fn talk_hold_set(on: bool) {
+    if on {
+        let _ = std::fs::create_dir_all("/run/aginx-voice");
+        let _ = std::fs::write(VOICE_HOLD, b"1");
+    } else {
+        let _ = std::fs::remove_file(VOICE_HOLD);
+    }
 }
 
 // ---------------- voice face ----------------
@@ -1754,11 +1667,10 @@ fn selfnet_greet() -> String {
             Some(format!("{h}点{m}分"))
         })
         .unwrap_or_default();
-    let bat = std::fs::read_to_string(format!("{}/capacity", p.paths.power_supply))
-        .ok()
-        .and_then(|s| s.trim().parse::<u8>().ok())
-        .unwrap_or(0);
-    format!("{time}，电池{bat}%，网已连。")
+    match hwd::battery_pct(&p.paths.power_supply) {
+        Some(bat) => format!("{time}，电池{bat}%，网已连。"),
+        None => format!("{time}，网已连。"),
+    }
 }
 
 // ---------------- C6: 自持扫码配网（voice 眼的蛋面镜像） ----------------
@@ -2092,6 +2004,7 @@ fn spawn_pair_apply(payload: &str) -> Option<PairJob> {
 /// idle 面状态行的所有权（纯函数）：voice 在 → 它的面（term 状态行让位，
 /// 同 selfnet 让位律）；否则 配网行（String）> 装软件行 > selfnet 行
 /// > None。装软件行压过 selfnet：配网刚成的靴上 sync 是当下的事。
+#[allow(dead_code)]
 fn idle_status(
     voice_alive: bool,
     pair_line: &Option<String>,
@@ -2263,8 +2176,7 @@ fn install_page_hit(x: usize, y: usize, w: usize, kb_panel_y: usize) -> Option<i
 }
 
 /// The prompt face's render (开机剧情 v4): the transcript typewriter face.
-/// `breath` = cursor level 0..=16. The live result page never comes through
-/// here — its frames blit straight into the back buffer (result_frame).
+/// `breath` = cursor level 0..=16.
 /// C5 `selfnet` / C6 `pair_line`: term 自己的状态行（等待网/问候/配网进度）
 /// 画在 transcript 的位置，整行直显（状态不是台词，不打字机），光标在
 /// 行尾呼吸；voice 在时归让（idle_status 判所有权）。
@@ -2290,13 +2202,6 @@ fn render_prompt(
 /// v4⑥: fullscreen 1:1 row-copy of a live-panel screencast frame straight
 /// into the DRM back buffer — the eye raw path's `direct` sibling. No
 /// canvas, no 10 MB copy. Caller guarantees the frame is panel-sized.
-fn blit_result_direct(back: &mut [u32], pitch: usize, bm: &aginx_img::Bitmap) {
-    let bw = bm.w as usize;
-    for j in 0..bm.h as usize {
-        back[j * pitch..j * pitch + bw].copy_from_slice(&bm.pix[j * bw..j * bw + bw]);
-    }
-}
-
 // ---------------- PPM host mode ----------------
 
 fn ppm_dump(path: &str, pix: &[u32], w: usize, h: usize, pitch: usize) -> std::io::Result<()> {
@@ -2322,16 +2227,19 @@ fn kb0() -> Kb {
 
 /// M15 shutdown: draw a farewell frame, show it, then hand the machine to
 /// `aginx-reboot poweroff` (sync + reboot(RB_POWER_OFF) — the PMIC cuts power).
-/// Never returns.
-fn power_off(d: &mut Drm, font: &[[u8; 8]; 128], canvas: &mut [u32], blanked: bool) {
-    let (w, h, pitch) = (d.width as usize, d.height as usize, d.pitch_px());
-    fill_rect(canvas, pitch, w, h, 0, 0, w as i32, h as i32, BG);
-    draw_centered(canvas, pitch, w, h, font, (h as i32 - 8 * 5) / 2, "POWERING OFF", 5, GREEN);
-    d.back_buf().copy_from_slice(canvas);
-    if blanked {
-        d.dpms(true); // relatch the farewell frame even if we were blanked
-    } else {
-        d.present();
+/// Never returns. 刀C: while yielded (browser holds the panel) there is no
+/// frame to draw — just cut the power.
+fn power_off(d: Option<&mut Drm>, font: &[[u8; 8]; 128], canvas: &mut [u32], blanked: bool) {
+    if let Some(d) = d {
+        let (w, h, pitch) = (d.width as usize, d.height as usize, d.pitch_px());
+        fill_rect(canvas, pitch, w, h, 0, 0, w as i32, h as i32, BG);
+        draw_centered(canvas, pitch, w, h, font, (h as i32 - 8 * 5) / 2, "POWERING OFF", 5, GREEN);
+        d.back_buf().copy_from_slice(canvas);
+        if blanked {
+            d.dpms(true); // relatch the farewell frame even if we were blanked
+        } else {
+            d.present();
+        }
     }
     let _ = std::process::Command::new(launch::BIN_AGINX_REBOOT).arg("poweroff").spawn();
     std::process::exit(0);
@@ -2593,6 +2501,13 @@ fn ino_drain(_fd: libc::c_int) {}
 
 // ---------------- main ----------------
 
+/// 刀C 卡片带上的按触：路径钉住（2s 重扫可能换序），拖动转滚动。
+struct CardTouch {
+    path: std::path::PathBuf,
+    down: Instant,
+    dragged: bool,
+}
+
 fn main() {
     let args: Vec<String> = std::env::args().collect();
     if args.len() > 1 && args[1] == "--ppm" {
@@ -2601,18 +2516,32 @@ fn main() {
     }
 
     let font = font::font_init();
-    let mut d = match Drm::wait_up() {
-        Ok(d) => d,
-        Err(e) => {
-            eprintln!("aginx-term: {e}");
-            std::process::exit(1);
+    // 刀C 屏幕所有权：show.html 在 = 浏览器持屏。开机撞上残留页（term
+    // 重启、浏览器还留着上一页）就直接无屏起步——几何取 [panel] 真值
+    // （D14：非 DRM 消费者同款），回位时校验与 DRM 一致。
+    let mut d: Option<Drm> = if cards::page_showing() {
+        eprintln!("aginx-term: browser holds the screen — starting yielded");
+        None
+    } else {
+        match Drm::wait_up() {
+            Ok(d) => Some(d),
+            Err(e) => {
+                eprintln!("aginx-term: {e}");
+                std::process::exit(1);
+            }
         }
     };
-    let (w, h) = (d.width as usize, d.height as usize);
+    let (w, h) = match d.as_ref() {
+        Some(d) => (d.width as usize, d.height as usize),
+        None => {
+            let p = &hwd::load_or_exit().panel;
+            (p.width as usize, p.height as usize)
+        }
+    };
     // D14 软校验：DRM 枚举是显示真值；[panel] 供非 DRM 消费者（voice HTML
     // 三钉 / cam --aspect / 触摸缩放）。不符（烤错档案）大声警告，不致命
     // ——显示继续按 DRM 走，错的是数据侧该修数据。
-    {
+    if let Some(d) = d.as_ref() {
         let p = hwd::load_or_exit();
         if p.panel.width != d.width || p.panel.height != d.height {
             eprintln!(
@@ -2621,7 +2550,7 @@ fn main() {
             );
         }
     }
-    let pitch = d.pitch_px();
+    let mut pitch = d.as_ref().map(|d| d.pitch_px()).unwrap_or(w);
 
     let mut kb = Kb::new();
     let mut ime = pinyin::Ime::new(); // M40: 拼 buffer + candidate page
@@ -2645,25 +2574,21 @@ fn main() {
 
     let mut term = Term::new(term_cols, rows_for(kb_visible, scale));
     let mut parser = vte::Parser::new();
-    // Boot lands on Home (wordmark first frame, then the clock+icons).
-    // The eye race still wins if voice already flagged it.
+    // Boot lands on Talk (the home face). The eye race still wins if
+    // voice already flagged it.
     let mut voice = VoiceView::default();
     let mut mode = {
         voice.poll();
         if voice.alive && voice.doc.eye {
             Mode::Eye
         } else {
-            Mode::Home
+            Mode::Talk
         }
     };
     let tz = hwd::load_or_exit().tz.clone();
     let mut clock = home::read_clock(&tz);
     let mut clock_at = Instant::now();
-    let mut boot_logo_until = if matches!(mode, Mode::Home) {
-        Some(Instant::now() + Duration::from_millis(1500))
-    } else {
-        None
-    };
+    let mut boot_logo_until = None;
     let sg = launch::Geom::new(w, h, kg.extra_y, home::SETTINGS.len());
     let mut eye_from_settings = false;
     // 面法: the eye flag drives Mode::Eye transitions in the loop — this
@@ -2692,6 +2617,7 @@ fn main() {
     let mut snap_job: Option<SnapJob> = None;
     let mut snap_review: Option<aginx_img::Bitmap> = None;
     let mut cam: Option<CamSession> = None;
+    let mut talk_holding = false;
     // C7 装软件 job 槽（单飞）：auto 触发与清单面点击共用同一条引擎。
     // install_line 是 idle 面与清单面共用的状态行；install_auto 只点火一次
     // ——把 provision resync 在配网当靴补跑（蛋首启 provision 早退在
@@ -2700,7 +2626,7 @@ fn main() {
     let mut install_line: Option<String> = None;
     let mut install_auto = false;
     // 面法: mode boxed away while Mode::Eye has the screen — restored on
-    // eye close; None (boot straight into the eye) → Home.
+    // eye close; None (boot straight into the eye) → Talk.
     let mut mode_before_eye: Option<Box<Mode>> = None;
     // M47⑤t: last affinity decision from the eye flag (see the main-loop
     // watcher) — keeps sched_setaffinity off the no-change path.
@@ -2744,23 +2670,25 @@ fn main() {
     // double-buffer semantics survive partial redraws.
     let mut canvas = vec![0u32; pitch * h];
     // First frame BEFORE the mode set (panel snapshots at SETCRTC).
-    // Home starts as the boot wordmark so dropping bootcard does not flash
-    // a different face.
-    {
+    // 刀C: 无屏起步（开机时浏览器持屏）整个跳过——回位走 render 全量
+    // 重画 + rescreen→initial_modeset，不复制这一块。
+    if let Some(d) = d.as_mut() {
         let r = Render { font: &font, w, h, pitch };
         let buf = &mut canvas[..];
         match &mut mode {
-            Mode::Home => home::paint_wordmark(buf, pitch, w, h, &font),
-            Mode::Talk => {
-                render_prompt(
-                    &r,
+            Mode::Home | Mode::Talk => {
+                talk::paint_wait(
                     buf,
-                    &voice,
+                    pitch,
+                    w,
+                    h,
+                    &font,
                     16,
-                    &warns,
-                    idle_status(voice.alive, &pair_line, &install_line, selfnet.line.as_deref()).as_deref(),
+                    false,
+                    false,
+                    None,
+                    talk::hint(voice.alive, false, false),
                 );
-                r.toolbar(buf, lg.m, lg.toolbar_h);
             }
             Mode::Eye => r.eye(buf, &voice, &lg),
             Mode::Install(v) => {
@@ -2800,10 +2728,10 @@ fn main() {
             }
         }
         d.back_buf().copy_from_slice(&canvas);
-    }
-    if let Err(e) = d.initial_modeset() {
-        eprintln!("aginx-term: modeset: {e}");
-        std::process::exit(1);
+        if let Err(e) = d.initial_modeset() {
+            eprintln!("aginx-term: modeset: {e}");
+            std::process::exit(1);
+        }
     }
 
     let mut last_blink = Instant::now();
@@ -2823,16 +2751,61 @@ fn main() {
     // M47⑤f frame-arrival watch (armed lazily — the directory may not
     // exist yet when term starts at boot).
     let (ino_fd, mut ino_wd) = ino_init();
-    // v4⑥: the live result page — a CDP panel client (browser.rs). Lives
-    // exactly while face.result is set; screencast frames land in
-    // result_frame and present under the Idle && result && !blanked gate.
-    let mut live: Option<browser::Browser> = None;
-    let mut result_frame: Option<aginx_img::Bitmap> = None;
-    let mut result_prev = false;
+    // 刀C: 屏幕让位 + 卡片带 + 按住对话框状态（CDP screencast 腿已退役，
+    // 结果页归 aginxbrowser——term 点卡 POST /open 后让位即可）。
+    let mut yielded = d.is_none();
+    let mut rescreen = false;
+    let cards_dir = cards::home_cards_dir();
+    let mut cards = cards::scan(&cards_dir);
+    let mut cards_key: Vec<std::path::PathBuf> = cards.iter().map(|c| c.path.clone()).collect();
+    let mut cards_at = Instant::now();
+    let mut cards_scroll = 0usize;
+    let mut card_touch: Option<CardTouch> = None;
+    let mut cards_err: Option<String> = None;
+    let mut cards_err_at = Instant::now();
+    let mut hold_face_until: Option<Instant> = None;
 
     loop {
-        // drain pty output
         let mut redraw = false;
+        // 刀C 屏幕所有权仲裁：show.html 在 = 浏览器持屏（panel.rs 同一谓词）。
+        // 上升沿 drop Drm（关 fd 即释放 master）让位；下降沿取屏重画。
+        if cards::page_showing() != yielded {
+            yielded = !yielded;
+            if yielded {
+                eprintln!("aginx-term: browser takes the screen — yielding");
+                d = None;
+                talk_holding = false;
+                talk_hold_set(false);
+                card_touch = None;
+                hold_face_until = None;
+                blanked = false;
+            } else {
+                eprintln!("aginx-term: taking the screen back");
+                match Drm::wait_up() {
+                    Ok(nd) => {
+                        if nd.width as usize != w || nd.height as usize != h {
+                            eprintln!("aginx-term: panel size changed — refusing to continue");
+                            std::process::exit(1);
+                        }
+                        pitch = nd.pitch_px();
+                        canvas = vec![0u32; pitch * h];
+                        for row in 0..term.rows {
+                            term.mark_row(row);
+                        }
+                        kb_dirty = true;
+                        rescreen = true;
+                        redraw = true;
+                        d = Some(nd);
+                    }
+                    Err(e) => {
+                        eprintln!("aginx-term: {e}");
+                        std::process::exit(1);
+                    }
+                }
+            }
+        }
+
+        // drain pty output
         if let Mode::Running(child) = &mut mode {
             let mut buf = [0u8; 8192];
             loop {
@@ -2852,7 +2825,7 @@ fn main() {
                 }
             }
             if child_exited(child.pid) {
-                mode = Mode::Home;
+                mode = Mode::Talk;
                 kb_visible = false;
                 scale = 5;
                 term_cols = cols_for(scale);
@@ -2882,39 +2855,21 @@ fn main() {
         }
         // M47⑤f: the frame-arrival watch rides the poll set while the
         // eye view is on screen — every eye.raw / eye.jpg / face publish
-        // then wakes the loop the instant it lands. 开机剧情 v4: same while
-        // the result face shows (face / result.html publishes wake the loop).
-        if ino_wd >= 0
-            && (matches!(mode, Mode::Eye)
-                || (matches!(mode, Mode::Talk) && voice.doc.result))
-        {
+        // then wakes the loop the instant it lands.
+        if ino_wd >= 0 && matches!(mode, Mode::Eye) {
             fds[nfds].fd = ino_fd;
             nfds += 1;
-        }
-        // v4⑥: the live page's CDP socket — POLLIN wakes the pump the
-        // instant a screencast frame (or Setup reply) lands; POLLOUT arms
-        // only while a large command (the ~130 KB navigate) is mid-drain.
-        if let Some(b) = live.as_ref() {
-            if let Some(fd) = b.fd() {
-                fds[nfds].fd = fd;
-                fds[nfds].events = libc::POLLIN
-                    | if b.wants_write() {
-                        libc::POLLOUT
-                    } else {
-                        0
-                    };
-                nfds += 1;
-            }
         }
         let timeout: libc::c_int = if redraw {
             0
         } else if held.is_some() || power_down.is_some() {
             30
-        } else if live.as_ref().and_then(|b| b.fd()).is_some() {
-            // v4⑥: the panel pump cadence — frames and Setup replies wake
-            // via POLLIN; this timer only carries the 0.3 s heartbeat and
-            // the Setup op pacing.
-            60
+        } else if d.is_none() {
+            // 刀C: 让位中——盯 show.html 的所有权轮询
+            200
+        } else if card_touch.is_some() {
+            // 刀C: 卡片长按计时（700 ms 判拖/删）
+            100
         } else if matches!(mode, Mode::Eye | Mode::Cam) {
             // M47⑤b: the eye polls files on this cadence — 400 ms capped
             // the viewfinder display at 2.5 fps even with cam-shot
@@ -2929,6 +2884,11 @@ fn main() {
             } else if voice.doc.eye || matches!(mode, Mode::Cam) { 12 } else { 30 }
         } else if boot_logo_until.is_some() {
             50
+        } else if !matches!(mode, Mode::Talk)
+            && (talk_holding || hold_face_until.is_some_and(|t| Instant::now() < t))
+        {
+            // 刀C: 按住对话框在顶——识别句活更新走 face 文件轮询
+            125
         } else if matches!(mode, Mode::Home) {
             1000
         } else if matches!(mode, Mode::Talk) && voice.typing() {
@@ -2937,9 +2897,9 @@ fn main() {
             90
         } else if snap_job.is_some() {
             50
-        } else if matches!(mode, Mode::Talk) && !voice.doc.result {
+        } else if matches!(mode, Mode::Talk) {
             // v4⑤: the breathing cursor cadence (16 levels × 125 ms ≈ 4 s
-            // period); a result on the panel is static — keep the idle 400 ms
+            // period)
             125
         } else {
             400
@@ -2950,13 +2910,17 @@ fn main() {
             if touch.is_some() {
                 if fds[i].revents & libc::POLLIN != 0 {
                     let ev = touch.as_mut().unwrap().poll();
+                    // 刀C: 让位中触摸 fd 留在 poll 集只为排空——evdev 双读者，
+                    // 浏览器也收同一事件流，term 这边不能 Acting。
+                    if d.is_none() {
+                    } else {
                     last_input = Instant::now();
                     if blanked {
                         // Any touch wakes the screen; the waking gesture
                         // itself is swallowed so it doesn't also type or
                         // scroll.
                         blanked = false;
-                        d.dpms(true);
+                        d.as_mut().unwrap().dpms(true);
                         // wake keeps the face you were on
                         redraw = true;
                     } else {
@@ -2970,7 +2934,27 @@ fn main() {
                             if std::env::var("AGINX_TERM_DEBUG").is_ok() {
                                 eprintln!("aginx-term: touch down {x},{y} kbvis={kb_visible} mode={}", matches!(mode, Mode::Running(_)));
                             }
-                            if y < lg.toolbar_h {
+                            // 刀C 卡片带：widget 优先于按住说话——短按开、
+                            // 长按删（主循环计时）、拖动滚。
+                            let card_idx = if matches!(mode, Mode::Talk) {
+                                talk::card_row_at(w, h, cards_scroll, y)
+                                    .filter(|i| *i < cards.len())
+                            } else {
+                                None
+                            };
+                            if let Some(idx) = card_idx {
+                                card_touch = Some(CardTouch {
+                                    path: cards[idx].path.clone(),
+                                    down: Instant::now(),
+                                    dragged: false,
+                                });
+                                consumed = true;
+                            } else if matches!(mode, Mode::Talk) && talk::hold_hit(w, x, y) {
+                                talk_holding = true;
+                                talk_hold_set(true);
+                                consumed = true;
+                                redraw = true;
+                            } else if y < lg.toolbar_h {
                                 // BACK fires on press, same as keys
                                 if lg.toolbar_hit(x, y, toolbar_mode(&mode))
                                     == Some(launch::Toolbar::Back)
@@ -2979,13 +2963,13 @@ fn main() {
                                         unsafe { libc::kill(c.pid, libc::SIGHUP) };
                                     } else if matches!(mode, Mode::Install(_)) {
                                         mode = Mode::Settings;
-                                    } else if matches!(mode, Mode::Talk | Mode::Settings) {
-                                        mode = Mode::Home;
+                                    } else if matches!(mode, Mode::Settings) {
+                                        mode = Mode::Talk;
                                     } else if let Mode::Photos(p) = &mut mode {
                                         if p.view.is_some() {
                                             p.close_view();
                                         } else {
-                                            mode = Mode::Home;
+                                            mode = Mode::Talk;
                                         }
                                     }
                                     consumed = true;
@@ -3017,10 +3001,11 @@ fn main() {
                                     }
                                     redraw = true;
                                 } else if matches!(mode, Mode::Settings) {
-                                    match home::settings_hit(&sg, x, y) {
+                                    let hit = home::settings_hit(&sg, x, y);
+                                    match hit {
                                         Some(home::Setting::Pair) => {
                                             if pair_job.is_none() && term_eye.is_none() {
-                                                {
+                                                if let Some(d) = d.as_mut() {
                                                     let r = Render { font: &font, w, h, pitch };
                                                     r.eye(&mut canvas[..], &voice, &lg);
                                                     d.back_buf().copy_from_slice(&canvas);
@@ -3063,16 +3048,24 @@ fn main() {
                                             redraw = true;
                                         }
                                         Some(home::Setting::PowerOff) => {
-                                            power_off(&mut d, &font, &mut canvas, blanked);
+                                            power_off(d.as_mut(), &font, &mut canvas, blanked);
                                         }
                                         None => {}
                                     }
-                                    consumed = true;
+                                    // 刀C: 命中才消费——没命中的落点要让位给
+                                    // 「按住任意面对话」的兜底。
+                                    consumed = hit.is_some();
                                 } else if let Mode::Install(v) = &mut mode {
                                     // C7 清单面：翻页条优先（条在 kb_panel_y-150，
                                     // 与行区不重叠）；行点按按态分诊催装（单飞槽，
                                     // job 在跑就只重画）。Ready 不点。
-                                    if let Some(dp) = install_page_hit(x, y, w, lg.kb_panel_y) {
+                                    let pager = install_page_hit(x, y, w, lg.kb_panel_y);
+                                    let row = if pager.is_none() {
+                                        lg.button_at(x, y, INSTALL_ROWS_PAGE)
+                                    } else {
+                                        None
+                                    };
+                                    if let Some(dp) = pager {
                                         let pages = v.pages();
                                         let np =
                                             ((v.page as isize + dp as isize).clamp(0, pages as isize - 1)) as usize;
@@ -3080,7 +3073,7 @@ fn main() {
                                             v.page = np;
                                             redraw = true;
                                         }
-                                    } else if let Some(i2) = lg.button_at(x, y, INSTALL_ROWS_PAGE) {
+                                    } else if let Some(i2) = row {
                                         if let Some(row) = v.rows.get(v.page * INSTALL_ROWS_PAGE + i2) {
                                             match row.state {
                                                 RowState::Missing | RowState::Stale => {
@@ -3104,7 +3097,8 @@ fn main() {
                                             }
                                         }
                                     }
-                                    consumed = true;
+                                    // 刀C: 命中才消费
+                                    consumed = pager.is_some() || row.is_some();
                                 }
                             }
                             if kb_visible && y >= kg.extra_y {
@@ -3161,7 +3155,7 @@ fn main() {
                                 if cam_close_hit(x, y) {
                                     cam_view_stop(&mut cam);
                                     snap_review = None;
-                                    mode = Mode::Home;
+                                    mode = Mode::Talk;
                                     redraw = true;
                                 } else if cam_shutter_hit(x, y, w, h) {
                                     if let Some(c) = cam.as_mut() {
@@ -3180,7 +3174,8 @@ fn main() {
                                     }
                                 }
                             } else if matches!(mode, Mode::Home) && boot_logo_until.is_none() {
-                                match home::hit(w, h, x, y) {
+                                let app = home::hit(w, h, x, y);
+                                match app {
                                     Some(home::App::Camera) => {
                                         pair_line = None;
                                         redraw = true;
@@ -3202,6 +3197,8 @@ fn main() {
                                         redraw = true;
                                     }
                                     Some(home::App::Talk) => {
+                                        talk_holding = false;
+                                        talk_hold_set(false);
                                         mode = Mode::Talk;
                                         redraw = true;
                                     }
@@ -3211,13 +3208,17 @@ fn main() {
                                     }
                                     None => {}
                                 }
+                                // 刀C: 命中才消费——没命中的落点给按住兜底
+                                consumed = app.is_some();
                             } else if let Mode::Photos(p) = &mut mode {
                                 if p.view.is_some() {
                                     p.close_view();
                                     redraw = true;
+                                    consumed = true;
                                 } else if let Some(i) = p.grid_hit(w, h, lg.toolbar_h, x, y) {
                                     let _ = p.open(i, w as u32, h as u32);
                                     redraw = true;
+                                    consumed = true;
                                 }
                             } else if matches!(mode, Mode::Eye) && term_eye.is_some() {
                                 // C6 自持取景的点按退出（voice 的眼由音量键
@@ -3227,8 +3228,22 @@ fn main() {
                                     eye_from_settings = false;
                                     Mode::Settings
                                 } else {
-                                    Mode::Home
+                                    Mode::Talk
                                 };
+                                redraw = true;
+                            }
+                            // 刀C 按住任意面对话：非 Talk 面没有 transcript，
+                            // 按下即顶起对话框。终端（键击优先）/取景/相机
+                            // （控件优先）不参与。
+                            if !consumed
+                                && !kb_visible
+                                && matches!(
+                                    mode,
+                                    Mode::Home | Mode::Settings | Mode::Install(_) | Mode::Photos(_)
+                                )
+                            {
+                                talk_holding = true;
+                                talk_hold_set(true);
                                 redraw = true;
                             }
                         }
@@ -3237,6 +3252,31 @@ fn main() {
                         // dismisses the keyboard; rows resize + SIGWINCH.
                         Touch::Tap(_x, y) => {
                             held = None;
+                            // 刀C 卡片：没拖过的短按 = 点开（POST /open，浏览器
+                            // 落 show.html，让位仲裁下一拍接管）。
+                            if let Some(ct) = card_touch.take() {
+                                if !ct.dragged {
+                                    if let Some(card) = cards.iter().find(|c| c.path == ct.path) {
+                                        match cards::post_open(card) {
+                                            Ok(()) => {}
+                                            Err(e) => {
+                                                cards_err = Some(e);
+                                                cards_err_at = Instant::now();
+                                            }
+                                        }
+                                        redraw = true;
+                                    }
+                                }
+                            }
+                            if talk_holding {
+                                talk_holding = false;
+                                talk_hold_set(false);
+                                if !matches!(mode, Mode::Talk) {
+                                    // 对话框再留 90s——答完显示
+                                    hold_face_until = Some(Instant::now() + Duration::from_secs(90));
+                                }
+                                redraw = true;
+                            }
                             // lift without a drag — the normal end of a key
                             // tap: drop the touch-feedback highlight
                             if kb.clear_pressed_if_any() {
@@ -3281,6 +3321,15 @@ fn main() {
                         // nothing and scrolls nothing).
                         Touch::Up => {
                             held = None;
+                            card_touch = None; // 拖完不算点开
+                            if talk_holding {
+                                talk_holding = false;
+                                talk_hold_set(false);
+                                if !matches!(mode, Mode::Talk) {
+                                    hold_face_until = Some(Instant::now() + Duration::from_secs(90));
+                                }
+                                redraw = true;
+                            }
                             // lift after a drag that started on a key:
                             // drop the touch-feedback highlight
                             if kb.clear_pressed_if_any() {
@@ -3290,9 +3339,15 @@ fn main() {
                         }
                         Touch::Drag(dy) => {
                             held = None; // finger slid off the key
-                            if matches!(mode, Mode::Talk) && voice.doc.result {
-                                if let Some(b) = live.as_mut() {
-                                    b.scroll_by(dy as isize);
+                            if let Some(ct) = card_touch.as_mut() {
+                                // 刀C 卡片带拖动 = 滚动
+                                ct.dragged = true;
+                                let max = talk::cards_max_scroll(w, h, cards.len());
+                                let next =
+                                    (cards_scroll as isize - dy as isize).clamp(0, max as isize) as usize;
+                                if next != cards_scroll {
+                                    cards_scroll = next;
+                                    redraw = true;
                                 }
                             } else {
                                 let kb_bot = if kb_visible { kg.extra_y } else { h };
@@ -3308,6 +3363,7 @@ fn main() {
                             }
                         }
                         Touch::None => {}
+                    }
                     }
                     }
                 }
@@ -3326,13 +3382,18 @@ fn main() {
                             // short press toggles blank; a long press was
                             // already acted on by the hold check below
                             if t.elapsed() < POWER_HOLD {
-                                if blanked {
+                                if d.is_none() {
+                                    // 刀C 让位中：短按 = 看完了——删页文件，
+                                    // 浏览器交屏，term 回位
+                                    let _ = std::fs::remove_file(cards::SHOW_PAGE);
                                     blanked = false;
-                                    d.dpms(true);
+                                } else if blanked {
+                                    blanked = false;
+                                    d.as_mut().unwrap().dpms(true);
                                     redraw = true;
                                 } else {
                                     blanked = true;
-                                    d.dpms(false);
+                                    d.as_mut().unwrap().dpms(false);
                                 }
                             }
                         }
@@ -3346,12 +3407,9 @@ fn main() {
                     redraw = true;
                 }
             }
-            // M47⑤f: frame-arrival wake — just drain; the eye/result poll
-            // below stats and renders if anything actually changed.
-            if ino_wd >= 0
-                && (matches!(mode, Mode::Eye)
-                    || (matches!(mode, Mode::Talk) && voice.doc.result))
-            {
+            // M47⑤f: frame-arrival wake — just drain; the eye poll below
+            // stats and renders if anything actually changed.
+            if ino_wd >= 0 && matches!(mode, Mode::Eye) {
                 let ij = i + if matches!(mode, Mode::Running(_)) { 1 } else { 0 };
                 if ij < nfds && fds[ij].revents & libc::POLLIN != 0 {
                     ino_drain(ino_fd);
@@ -3362,13 +3420,21 @@ fn main() {
         // power key held >= POWER_HOLD: shutdown (fires while still down)
         if let Some(t) = power_down {
             if t.elapsed() >= POWER_HOLD {
-                power_off(&mut d, &font, &mut canvas, blanked);
+                power_off(d.as_mut(), &font, &mut canvas, blanked);
             }
         }
-        // idle blank
-        if !blanked && last_input.elapsed() >= IDLE_BLANK {
+        // idle blank. Null SETCRTC runs dsi_backlight_early_dpms and
+        // suspends the touch controller (drm.rs) — hold-to-talk then has
+        // no wake path. Talk is home: do not auto-blank it. Power key
+        // still toggles blank.
+        // 刀C: 让位中没有屏可灭。
+        if !blanked
+            && d.is_some()
+            && last_input.elapsed() >= IDLE_BLANK
+            && !matches!(mode, Mode::Talk | Mode::Home)
+        {
             blanked = true;
-            d.dpms(false);
+            d.as_mut().unwrap().dpms(false);
         }
 
         // hold-to-repeat for DEL / arrows
@@ -3388,6 +3454,14 @@ fn main() {
         // M42g: the viewfinder frame polls too — a frame landing ~1/s is
         // activity; decode box is the whole panel.
         let face = voice.poll();
+        if face {
+            last_input = Instant::now();
+            if blanked {
+                blanked = false;
+                d.as_mut().unwrap().dpms(true);
+            }
+            redraw = true;
+        }
         // C6 相机互斥护栏：voice 复活边沿（face 文件首次可读）即让路——
         // 整机态相机归 voice 独占，同路径输出只是兜底不是协议。让路同时
         // 清 term 状态行（idle 面归还 voice，同 selfnet 让位律）。
@@ -3396,7 +3470,7 @@ fn main() {
             term_eye_stop(&mut term_eye);
             pair_line = None;
             if matches!(mode, Mode::Eye) {
-                mode = Mode::Home;
+                mode = Mode::Talk;
             }
             redraw = true;
         }
@@ -3405,7 +3479,7 @@ fn main() {
             cam_view_stop(&mut cam);
             snap_review = None;
             if matches!(mode, Mode::Cam) {
-                mode = Mode::Home;
+                mode = Mode::Talk;
             }
             redraw = true;
         }
@@ -3428,77 +3502,51 @@ fn main() {
             if eye_on {
                 mode_before_eye = Some(Box::new(std::mem::replace(&mut mode, Mode::Eye)));
             } else {
-                mode = mode_before_eye.take().map(|m| *m).unwrap_or(Mode::Home);
+                mode = mode_before_eye.take().map(|m| *m).unwrap_or(Mode::Talk);
             }
             redraw = true;
         }
-        // v4⑥: face.result edges drive the live panel client. Rising: read
-        // result.html (voice publishes it BEFORE the flag; atomic rename)
-        // and dial the engine. ①a: file missing/empty (voice died before
-        // the rename, /run wiped) → rebuild a degraded page from the
-        // session ledger; ledger doesn't corroborate (mother-direct turns
-        // keep no ledger) → keep the prompt face (text stays first-class).
-        // Falls: teardown — closeTarget must go out even best-effort (滞留 target
-        // 会让引擎 RSS 爬坡).
-        let result_on = voice.alive && voice.doc.result;
-        if result_on != result_prev {
-            result_prev = result_on;
-            if result_on {
-                let mut html: Option<String> = None;
-                if let Ok(h) = std::fs::read_to_string(VOICE_RESULT_HTML) {
-                    if !h.trim().is_empty() {
-                        html = Some(h);
-                    }
-                }
-                if html.is_none() {
-                    let pn = &hwd::load_or_exit().panel;
-                    if let Some(h) = recover_result_html(
-                        &workspaces_root(),
-                        voice.doc.line.as_deref(),
-                        pn.width,
-                        pn.height,
-                    ) {
-                        eprintln!("aginx-term: result.html missing, rebuilt from ledger");
-                        html = Some(h);
-                    }
-                }
-                if let Some(h) = html {
-                    live = Some(browser::Browser::start(&h));
-                    result_frame = None;
-                }
-                if matches!(mode, Mode::Home) {
-                    mode = Mode::Talk;
-                }
-            } else {
-                if let Some(b) = live.as_mut() {
-                    b.teardown();
-                }
-                live = None;
-                result_frame = None;
-            }
-            redraw = true;
-        }
-        // v4⑥: pump the panel client every pass — Setup advances one CDP op,
-        // Live drains the socket (screencast frames: ack first, then decode)
-        // and keeps the 0.3 s heartbeat going. Decode is gated on the frame
-        // actually being presentable (Idle && result && !blanked): with the
-        // eye open or the panel blanked we still ack — the stream must not
-        // stall — but skip the ~70 ms jpeg decode.
-        if let Some(b) = live.as_mut() {
-            let can_present = matches!(mode, Mode::Talk) && voice.doc.result && !blanked;
-            if let Some(bm) = b.pump(Instant::now(), can_present) {
-                if bm.w as usize == w && bm.h as usize == h {
-                    result_frame = Some(bm);
-                } else {
-                    // 帧解出但尺寸不合门——不进 result_frame，仍触发重绘
-                    eprintln!(
-                        "aginx-term: frame size {}x{} != panel {}x{}",
-                        bm.w, bm.h, w, h
-                    );
-                }
-                last_input = Instant::now();
+        // 刀C 卡片带 upkeep：2s 重扫（行集变才重画）、长按删卡、错误行 4s
+        // 自消、对话框 90s 窗到期。
+        if cards_at.elapsed() >= Duration::from_secs(2) {
+            cards_at = Instant::now();
+            let fresh = cards::scan(&cards_dir);
+            let key: Vec<std::path::PathBuf> = fresh.iter().map(|c| c.path.clone()).collect();
+            if key != cards_key {
+                cards = fresh;
+                cards_key = key;
+                cards_scroll = cards_scroll.min(talk::cards_max_scroll(w, h, cards.len()));
                 redraw = true;
             }
+        }
+        let fire = card_touch
+            .as_ref()
+            .is_some_and(|ct| !ct.dragged && ct.down.elapsed() >= Duration::from_millis(700));
+        if fire {
+            let path = card_touch.as_ref().unwrap().path.clone();
+            card_touch = None;
+            if let Some(i) = cards.iter().position(|c| c.path == path) {
+                match std::fs::remove_file(&path) {
+                    Ok(()) => {
+                        cards.remove(i);
+                        cards_key.retain(|p| *p != path);
+                        cards_scroll = cards_scroll.min(talk::cards_max_scroll(w, h, cards.len()));
+                    }
+                    Err(e) => {
+                        cards_err = Some(format!("删不掉：{e}"));
+                        cards_err_at = Instant::now();
+                    }
+                }
+                redraw = true;
+            }
+        }
+        if cards_err.is_some() && cards_err_at.elapsed() >= Duration::from_secs(4) {
+            cards_err = None;
+            redraw = true;
+        }
+        if hold_face_until.is_some_and(|t| Instant::now() >= t) {
+            hold_face_until = None;
+            redraw = true;
         }
         // 开机剧情 typewriter (#246): the daemon swaps doc.line, term owns
         // the reveal (~90 ms/char, the bootcard END cadence). An extension
@@ -3546,13 +3594,6 @@ fn main() {
                 }
             }
         }
-        // 开机剧情 v4: a result on the panel is activity — the page must
-        // not idle-blank while the user reads it (结果页不超时, 面法
-        // 09-07). The bare prompt face blanks normally (60 s): the console
-        // sleeps when you do.
-        if voice.doc.result {
-            last_input = Instant::now();
-        }
         if matches!(mode, Mode::Eye) {
             let (_, _, eye_w, eye_h) = lg.eye_box();
             let eye = voice.poll_eye(eye_w as u32, eye_h as u32, term_eye.is_some());
@@ -3560,7 +3601,7 @@ fn main() {
                 last_input = Instant::now();
                 if blanked {
                     blanked = false;
-                    d.dpms(true);
+                    d.as_mut().unwrap().dpms(true);
                 }
                 redraw = true;
             }
@@ -3572,7 +3613,7 @@ fn main() {
                 last_input = Instant::now();
                 if blanked {
                     blanked = false;
-                    d.dpms(true);
+                    d.as_mut().unwrap().dpms(true);
                 }
                 redraw = true;
             }
@@ -3580,7 +3621,7 @@ fn main() {
             if cam_dead {
                 eprintln!("aginx-term: cam-view exited");
                 cam_view_stop(&mut cam);
-                mode = Mode::Home;
+                mode = Mode::Talk;
                 pair_line = Some("取景停了。".into());
                 redraw = true;
             } else if let Some(c) = cam.as_mut() {
@@ -3707,7 +3748,7 @@ fn main() {
             };
             if hit_payload.is_some() {
                 pair_line = Some("配网中…".into());
-                {
+                if let Some(d) = d.as_mut() {
                     let r = Render { font: &font, w, h, pitch };
                     render_prompt(&r, &mut canvas[..], &voice, 16, &warns, Some("配网中…"));
                     d.back_buf().copy_from_slice(&canvas);
@@ -3720,7 +3761,7 @@ fn main() {
                     eye_from_settings = false;
                     Mode::Settings
                 } else {
-                    Mode::Home
+                    Mode::Talk
                 };
             }
             if let Some(payload) = hit_payload {
@@ -3972,137 +4013,178 @@ fn main() {
         }
         // while blanked the framebuffer is not scanned out — skip render
         // and present entirely (pty keeps draining above, output renders
-        // at wake)
-        if !blanked && (redraw || term.dirty) {
-            term.dirty = false;
-            let r = Render { font: &font, w, h, pitch };
-            let buf = &mut canvas[..];
-            // M47⑤f: true when the eye frame went straight into the back
-            // buffer — the canvas copy below is then skipped
-            let mut direct = false;
-            match &mut mode {
-                Mode::Home => {
-                    if boot_logo_until.is_some() {
-                        home::paint_wordmark(buf, pitch, w, h, &font);
-                    } else {
-                        home::paint(
+        // at wake). 刀C: 让位中同样跳过——屏在浏览器手里。
+        if let Some(d) = d.as_mut() {
+            if !blanked && (redraw || term.dirty) {
+                term.dirty = false;
+                let r = Render { font: &font, w, h, pitch };
+                let buf = &mut canvas[..];
+                // M47⑤f: true when the eye frame went straight into the back
+                // buffer — the canvas copy below is then skipped
+                let mut direct = false;
+                match &mut mode {
+                    Mode::Home | Mode::Talk => {
+                        let level = if breath_tick <= 16 { breath_tick } else { 32 - breath_tick };
+                        let cap = voice.doc.line.as_deref().and_then(|s| {
+                            let t = s.trim();
+                            if t.is_empty() {
+                                None
+                            } else {
+                                Some(clip_caption(t))
+                            }
+                        });
+                        let miss = cap.as_deref() == Some("没听懂");
+                        let thinking =
+                            voice.alive && cap.is_some() && !voice.typing() && !voice.doc.result && !miss;
+                        talk::paint_wait(
                             buf,
                             pitch,
                             w,
                             h,
                             &font,
-                            &clock,
-                            boot_state_has_internet(),
+                            level,
+                            talk_holding,
+                            thinking,
+                            cap.as_deref(),
+                            talk::hint(voice.alive, talk_holding, thinking),
+                        );
+                        // 刀C 卡片带：hint 行下到底边（FS.md {home}/cards）
+                        talk::paint_cards(
+                            buf,
+                            pitch,
+                            w,
+                            h,
+                            &font,
+                            &cards,
+                            cards_scroll,
+                            cards_err.as_deref(),
+                        );
+                    }
+                    Mode::Eye => {
+                        // M47⑤f: a fresh raw viewfinder frame blits fused
+                        // (565→888 + upscale) straight into the back buffer — no
+                        // Bitmap, no canvas detour, no 10 MB copy. Everything
+                        // else (取景中… / the JPEG fallback frame) renders into
+                        // the canvas as before.
+                        direct = voice.blit_eye_raw(d.back_buf(), pitch, w, h);
+                        if !direct {
+                            // eye() full-covers the canvas
+                            r.eye(buf, &voice, &lg);
+                        }
+                        let level = if breath_tick <= 16 { breath_tick } else { 32 - breath_tick };
+                        if direct {
+                            talk::paint_eye_chrome(
+                                d.back_buf(),
+                                pitch,
+                                w,
+                                h,
+                                &font,
+                                talk_holding,
+                                level,
+                            );
+                        } else {
+                            talk::paint_eye_chrome(buf, pitch, w, h, &font, talk_holding, level);
+                        }
+                    }
+                    Mode::Cam => {
+                        if let Some(bm) = snap_review.as_ref() {
+                            r.snap_photo(buf, bm);
+                        } else {
+                            if voice.raw_dirty {
+                                voice.raw_dirty = false;
+                                voice.raw_buf.clear();
+                                if let Ok(mut f) = std::fs::File::open(VOICE_EYE_RAW) {
+                                    let _ = std::io::Read::read_to_end(&mut f, &mut voice.raw_buf);
+                                }
+                            }
+                            fill_rect(buf, pitch, w, h, 0, 0, w as i32, h as i32, BG);
+                            let dock = cam_dock_y(h);
+                            if !voice.blit_eye_cover(buf, pitch, 0, 0, w, dock) {
+                                r.eye(buf, &voice, &lg);
+                            }
+                            let snapping = cam.as_ref().map(|c| c.snap_at.is_some()).unwrap_or(false);
+                            let af = cam.as_ref().and_then(|c| {
+                                c.af_box.and_then(|(x, y, t)| {
+                                    (t.elapsed() < Duration::from_millis(CAM_AF_MS)).then_some((x, y))
+                                })
+                            });
+                            r.cam_chrome(buf, snapping, af);
+                        }
+                    }
+                    Mode::Install(v) => {
+                        r.install_list(buf, v, install_line.as_deref(), boot_state_has_internet(), &lg);
+                    }
+                    Mode::Photos(p) => {
+                        if let Some(bm) = p.view.as_ref() {
+                            r.snap_photo(buf, bm);
+                        } else {
+                            p.paint(buf, pitch, w, h, &font, &lg);
+                            r.toolbar(buf, lg.m, lg.toolbar_h);
+                        }
+                    }
+                    Mode::Settings => {
+                        home::paint_settings(
+                            buf,
+                            pitch,
+                            w,
+                            h,
+                            &font,
+                            &sg,
                             !std::path::Path::new(WIFI_CONF_PATH).exists(),
                             home_status(&pair_line, &install_line).as_deref(),
                         );
-                    }
-                }
-                Mode::Talk => {
-                    // 对话面 — prompt/result. Result frames blit direct.
-                    if let Some(bm) = result_frame.as_ref() {
-                        blit_result_direct(d.back_buf(), pitch, bm);
-                        direct = true;
-                    } else {
-                        let level = if breath_tick <= 16 { breath_tick } else { 32 - breath_tick };
-                        render_prompt(
-                            &r,
-                            buf,
-                            &voice,
-                            level,
-                            &warns,
-                            idle_status(voice.alive, &pair_line, &install_line, selfnet.line.as_deref())
-                                .as_deref(),
-                        );
                         r.toolbar(buf, lg.m, lg.toolbar_h);
                     }
-                }
-                Mode::Eye => {
-                    // M47⑤f: a fresh raw viewfinder frame blits fused
-                    // (565→888 + upscale) straight into the back buffer — no
-                    // Bitmap, no canvas detour, no 10 MB copy. Everything
-                    // else (取景中… / the JPEG fallback frame) renders into
-                    // the canvas as before.
-                    direct = voice.blit_eye_raw(d.back_buf(), pitch, w, h);
-                    if !direct {
-                        // eye() full-covers the canvas
-                        r.eye(buf, &voice, &lg);
-                    }
-                }
-                Mode::Cam => {
-                    if let Some(bm) = snap_review.as_ref() {
-                        r.snap_photo(buf, bm);
-                    } else {
-                        if voice.raw_dirty {
-                            voice.raw_dirty = false;
-                            voice.raw_buf.clear();
-                            if let Ok(mut f) = std::fs::File::open(VOICE_EYE_RAW) {
-                                let _ = std::io::Read::read_to_end(&mut f, &mut voice.raw_buf);
+                    Mode::Running(_) => {
+                        r.terminal(buf, &term, area_top, scale, blink_on, lg.m);
+                        if kb_dirty {
+                            r.toolbar(buf, lg.m, lg.toolbar_h);
+                            if kb_visible {
+                                r.keyboard(buf, &kg, &kb);
                             }
                         }
-                        fill_rect(buf, pitch, w, h, 0, 0, w as i32, h as i32, BG);
-                        let dock = cam_dock_y(h);
-                        if !voice.blit_eye_cover(buf, pitch, 0, 0, w, dock) {
-                            r.eye(buf, &voice, &lg);
+                        // every pass, not just kb_dirty: the strip floats over
+                        // terminal rows that repaint on cursor blink
+                        if kb_visible && kb.pinyin_on() {
+                            r.ime_strip(buf, &ime, &kg);
                         }
-                        let snapping = cam.as_ref().map(|c| c.snap_at.is_some()).unwrap_or(false);
-                        let af = cam.as_ref().and_then(|c| {
-                            c.af_box.and_then(|(x, y, t)| {
-                                (t.elapsed() < Duration::from_millis(CAM_AF_MS)).then_some((x, y))
-                            })
-                        });
-                        r.cam_chrome(buf, snapping, af);
                     }
                 }
-                Mode::Install(v) => {
-                    r.install_list(buf, v, install_line.as_deref(), boot_state_has_internet(), &lg);
-                }
-                Mode::Photos(p) => {
-                    if let Some(bm) = p.view.as_ref() {
-                        r.snap_photo(buf, bm);
-                    } else {
-                        p.paint(buf, pitch, w, h, &font, &lg);
-                        r.toolbar(buf, lg.m, lg.toolbar_h);
-                    }
-                }
-                Mode::Settings => {
-                    home::paint_settings(
+                // 刀C 按住对话框：非 Talk 面上按住说话（或释放后 90s 窗内）
+                // 顶部落下的对话条——hint + 当前识别句，活更新。
+                if (talk_holding || hold_face_until.is_some_and(|t| Instant::now() < t))
+                    && !matches!(mode, Mode::Talk)
+                {
+                    talk::paint_dialog(
                         buf,
                         pitch,
                         w,
                         h,
                         &font,
-                        &sg,
-                        !std::path::Path::new(WIFI_CONF_PATH).exists(),
-                        home_status(&pair_line, &install_line).as_deref(),
+                        talk::hint(voice.alive, talk_holding, voice.typing()),
+                        voice.doc.line.as_deref(),
                     );
-                    r.toolbar(buf, lg.m, lg.toolbar_h);
                 }
-                Mode::Running(_) => {
-                    r.terminal(buf, &term, area_top, scale, blink_on, lg.m);
-                    if kb_dirty {
-                        r.toolbar(buf, lg.m, lg.toolbar_h);
-                        if kb_visible {
-                            r.keyboard(buf, &kg, &kb);
-                        }
+                term.clear_row_dirty();
+                kb_dirty = false;
+                if !direct {
+                    d.back_buf().copy_from_slice(&canvas);
+                }
+                if rescreen {
+                    // 刀C 回位首帧：SETCRTC 重挂我们的 fb（面板在 modeset
+                    // 时快照）；此后走正常 present 节奏
+                    rescreen = false;
+                    if let Err(e) = d.initial_modeset() {
+                        eprintln!("aginx-term: modeset: {e}");
                     }
-                    // every pass, not just kb_dirty: the strip floats over
-                    // terminal rows that repaint on cursor blink
-                    if kb_visible && kb.pinyin_on() {
-                        r.ime_strip(buf, &ime, &kg);
+                } else {
+                    let t0 = Instant::now();
+                    d.present();
+                    let el = t0.elapsed();
+                    if el > Duration::from_millis(25) {
+                        eprintln!("aginx-term: slow present {}ms", el.as_millis());
                     }
                 }
-            }
-            term.clear_row_dirty();
-            kb_dirty = false;
-            if !direct {
-                d.back_buf().copy_from_slice(&canvas);
-            }
-            let t0 = Instant::now();
-            d.present();
-            let el = t0.elapsed();
-            if el > Duration::from_millis(25) {
-                eprintln!("aginx-term: slow present {}ms", el.as_millis());
             }
         }
         // live panel dump: `touch /run/aginx-term.dump` → /run/aginx-term.ppm
@@ -4350,120 +4432,6 @@ mod tests {
         );
         fs::remove_dir_all(&dir).unwrap();
         assert!(read_warnings_dir("/nonexistent-aginx-warn").is_empty(), "missing dir = no warnings");
-    }
-
-    // ---- ①a 账本恢复 ----
-
-    fn write_ledger(root: &std::path::Path, avatar: &str, turns: &[(&str, &str)]) {
-        let d = root.join(avatar).join("sessions");
-        std::fs::create_dir_all(&d).unwrap();
-        let mut s = String::new();
-        for (i, (q, a)) in turns.iter().enumerate() {
-            s.push_str(&format!(
-                concat!(
-                    r#"{{"t":"request","avatar":"{av}","session":"main","text":"{q}","turn":{n}}}"#,
-                    "\n",
-                    r#"{{"t":"done","ok":true,"text":"{a}","error":null,"turn":{n}}}"#,
-                    "\n"
-                ),
-                av = avatar,
-                q = q,
-                a = a,
-                n = i + 1,
-            ));
-        }
-        std::fs::write(d.join("main.jsonl"), s).unwrap();
-    }
-
-    /// host 测试统一入口：fixture 面板（真机首目标尺寸，纯数据不碰
-    /// /etc——browser.rs 的 browser() 同款 D14 切法）。
-    fn recover(root: &std::path::Path, line: Option<&str>) -> Option<String> {
-        recover_result_html(root, line, 1080, 2340) // D14-exempt: fixture panel
-    }
-
-    #[test]
-    fn fold_takes_last_nonempty_ok_done() {
-        let root = std::env::temp_dir().join("aginx-term-test-fold");
-        let _ = std::fs::remove_dir_all(&root);
-        // 旧账（无 turn 字段）+ err 轮 + 空 done 轮 + 尾部截断的半行
-        std::fs::create_dir_all(root.join("a/sessions")).unwrap();
-        std::fs::write(
-            root.join("a/sessions/main.jsonl"),
-            concat!(
-                r#"{"t":"request","avatar":"a","session":"main","text":"q1"}"#,
-                "\n",
-                r#"{"t":"done","ok":true,"text":"答1","error":null}"#,
-                "\n",
-                r#"{"t":"request","avatar":"a","session":"main","text":"q2"}"#,
-                "\n",
-                r#"{"t":"done","ok":false,"text":"","error":{"code":"brain","message":"x"}}"#,
-                "\n",
-                r#"{"t":"done","ok":true,"text":"","error":null}"#,
-                "\n",
-                r#"{"t":"requ"#, // 崩溃截断的半行
-            ),
-        )
-        .unwrap();
-        assert_eq!(
-            fold_last_done_ok(&root.join("a/sessions/main.jsonl")).as_deref(),
-            Some("答1")
-        );
-        assert_eq!(fold_last_done_ok(&root.join("nope.jsonl")), None);
-    }
-
-    #[test]
-    fn recover_requires_line_match_and_wraps_raw() {
-        let root = std::env::temp_dir().join("aginx-term-test-recover");
-        let _ = std::fs::remove_dir_all(&root);
-        std::fs::create_dir_all(&root).unwrap();
-        write_ledger(&root, "小喜", &[("报状态", "电量 87% <正常> & 信号 3 格")]);
-        let h = recover(&root, Some("电量 87% <正常> & 信号 3 格")).unwrap();
-        // 三钉 + 磷光地板
-        assert!(h.contains("min-height:2340px")); // D14-exempt: fixture panel height
-        assert!(h.contains("width=1080")); // D14-exempt: fixture panel width
-        assert!(h.contains("background:#000"));
-        // 原文直进 pre：转义生效、不做 markdown 化（无 h1/li/blockquote）
-        assert!(h.contains("电量 87% &lt;正常&gt; &amp; 信号 3 格"));
-        assert!(!h.contains("<h1>") && !h.contains("<li>") && !h.contains("<blockquote>"));
-        // 等值护栏：对不上（母体直答、账尾是旧结果）→ 放弃恢复
-        assert!(recover(&root, Some("别的回复")).is_none());
-        // line 缺席/空白 → 无法验证归属，放弃
-        assert!(recover(&root, None).is_none());
-        assert!(recover(&root, Some("  ")).is_none());
-        // 空根（没化身）→ None
-        let empty = std::env::temp_dir().join("aginx-term-test-recover-empty");
-        let _ = std::fs::remove_dir_all(&empty);
-        std::fs::create_dir_all(&empty).unwrap();
-        assert!(recover(&empty, Some("什么")).is_none());
-    }
-
-    #[test]
-    fn recover_walks_ledgers_newest_first() {
-        // 站立结果出自旧化身，但新化身账更晚（后台轮写账）：从新到旧
-        // 依次试等值护栏，旧账命中也照常恢复——展示字节与 line 全同。
-        let root = std::env::temp_dir().join("aginx-term-test-recover-order");
-        let _ = std::fs::remove_dir_all(&root);
-        std::fs::create_dir_all(&root).unwrap();
-        write_ledger(&root, "旧", &[("问", "旧答")]);
-        std::thread::sleep(std::time::Duration::from_millis(20));
-        write_ledger(&root, "新", &[("问", "新答")]);
-        assert!(recover(&root, Some("新答")).is_some());
-        assert!(recover(&root, Some("旧答")).is_some());
-        assert!(recover(&root, Some("谁的都不是")).is_none());
-    }
-
-    #[test]
-    fn recover_accepts_question_prefix_line() {
-        // #283 问句常驻：face.line = 「问句\n回复」——账上 done 文本只对
-        // 回复段；旧形状（纯回复行）也照常认。
-        let root = std::env::temp_dir().join("aginx-term-test-recover-q");
-        let _ = std::fs::remove_dir_all(&root);
-        std::fs::create_dir_all(&root).unwrap();
-        write_ledger(&root, "小喜", &[("现在几点", "17 点 24 分")]);
-        let h = recover(&root, Some("现在几点\n17 点 24 分")).unwrap();
-        assert!(h.contains("17 点 24 分"));
-        // 问句含换行的罕见形状（三段）→ 尾段对不上整行 → 放弃（安全向）
-        assert!(recover(&root, Some("多行\n问句\n17 点 24 分")).is_none());
     }
 
     /// C5 自持等网行：四门真值表（16 行全枚举——门多一个都不许漏）。
