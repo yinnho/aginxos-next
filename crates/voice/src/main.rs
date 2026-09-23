@@ -35,8 +35,14 @@ mod ptt;
 mod screen;
 
 use protocol::{Act, Ev, NetState, Out, PowerAction, Vm};
+use std::path::PathBuf;
 use std::process::Command;
 use std::time::{Duration, Instant};
+
+/// 刀4 页=会话：屏上 hold 带来的页靶（当前页卡路径）。采集起步时定值
+/// （屏上 hold=term 写的页靶；PTT=清空新任务），本回合 Chat 臂一次取用
+/// ——「在哪个页就是哪个对话的延续」。主循环单线程 set/take，无竞争。
+static CHAT_PAGE: std::sync::Mutex<Option<PathBuf>> = std::sync::Mutex::new(None);
 
 const JOIN_BUDGET_SECS: u32 = 90;
 /// 母体一轮（真 brain，含工具往返）的等待预算——超了杀掉落地板话。
@@ -344,6 +350,9 @@ fn daemon() {
                             continue;
                         }
                         ptt_down = Some(Instant::now());
+                        // 刀4：PTT 无页上下文——清靶（新任务；清掉可能残留的
+                        // 上一轮屏上 hold 靶）。
+                        *CHAT_PAGE.lock().unwrap() = None;
                         if capturing.is_none() {
                             match audio::capture_start() {
                                 Ok(c) => {
@@ -424,10 +433,18 @@ fn daemon() {
         }
 
         // 屏上按住说话（term 写 /run/aginx-voice/hold）。松手=提交，无短按音量。
+        // 刀4：hold 文件内容=页靶（当前页卡路径；空=首页/新任务）。
         {
             let want = std::path::Path::new(face::HOLD_FILE).exists();
             if want && !screen_hold {
                 screen_hold = true;
+                // 按下沿读靶：文件由 term 一次写成，出现即内容完整。
+                let target = std::fs::read_to_string(face::HOLD_FILE)
+                    .ok()
+                    .map(|s| s.trim().to_string())
+                    .filter(|s| !s.is_empty())
+                    .map(PathBuf::from);
+                *CHAT_PAGE.lock().unwrap() = target;
                 if capturing.is_none() {
                     match audio::capture_start() {
                         Ok(c) => {
@@ -743,18 +760,49 @@ fn run_outs(
                     if let Some(n) = &hit {
                         eprintln!("aginx-voice: roster {n}");
                     }
-                    let reply = match chat_front(&text, hit.as_deref()) {
+                    // 刀4 页=会话：路由靶=花名册点名（显式意图）> 页卡
+                    // session（屏上 hold 带来的页靶）> 母体 me。页上追问
+                    // 由 term 写的当前页卡路径指路；PTT/首页按住=新任务。
+                    let page = CHAT_PAGE.lock().unwrap().take();
+                    let sess = hit.clone().or_else(|| {
+                        page.as_deref()
+                            .and_then(screen::card_session)
+                            .or_else(|| Some("me".to_string()))
+                    });
+                    if let Some(s) = &sess {
+                        eprintln!("aginx-voice: session {s}");
+                    }
+                    let mut front_ok = true;
+                    let reply = match chat_front(&text, sess.as_deref()) {
                         Ok(r) => r,
                         Err(e) => {
+                            front_ok = false;
                             eprintln!("aginx-voice: front {e}");
                             "现在连不上母体。固定说法还在：连接无线网络，或扫码，或念一下。".to_string()
                         }
                     };
                     // 刀D done 信封：信封 → 浏览器按模板出页；非 JSON →
                     // reply 模板兜底。缺模板报母体安排写一次并登记。
-                    let (line, missing) = screen::show_reply(&text, &reply);
+                    let (line, missing, shown) = screen::show_reply(&text, &reply);
                     if let Some((tpl, known)) = missing {
                         report_missing_template(&tpl, &known);
+                    }
+                    // 刀4 页=卡=会话：页开成了才落账——新任务新卡，页上
+                    // 追问原地重写同卡；前台没答上（地板话）不落卡。
+                    if front_ok {
+                        if let Some(sh) = shown {
+                            let s = sess.unwrap_or_else(|| "me".into());
+                            if let Some(p) = screen::save_card(
+                                &screen::cards_dir(),
+                                page.as_deref(),
+                                &text,
+                                &sh.template,
+                                &sh.data,
+                                &s,
+                            ) {
+                                screen::note_page(&p);
+                            }
+                        }
                     }
                     // 拉式：回复上脸不出声，点名（你说给我听）才 Speak。
                     // #283 问句常驻：行=「问句\n上脸句」——信封时上脸句是
