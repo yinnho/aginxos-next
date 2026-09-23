@@ -8293,3 +8293,11 @@ brain.json 推 /home（OpenClone 桥格式，秘密走 adb push 不进命令行�
 **疑点待裁决：gateway id 冒名。** `/etc/aginx/env` 的 AGINX_GATEWAY_ID=enchilada，但本机 uname 4.19.278-g7b0944645172 / sm7250 实锤 redfin；E5 收据里 enchilada 是 OP6 正主 id。两机同在线会互踢（网关 register→closed→reconnect 循环实证过）。未擅改。
 
 **设备终态**：槽 _a（a0257a8 血统）+ aginx-server 38657719（dev-push 领先镜像）、aginx-carrier 18f0d394 在役；term pid 1252 持屏 Talk 面，卡片带含测试卡可扫；晨报 cron 待明晨首触发；vendor_boot 未动。
+
+## 2026-09-23 — gateway id 冒名修正：AGINX_GATEWAY_ID=enchilada→redfin（redfin/Pixel 5）
+
+env 里网关身份沿用了 OP6 的 enchilada（公共包刷机日配对码复用所致），两机同在线互踢。`/etc/aginx/env` 只改该行（sed，不回显其余键值），`aginx-svc restart aginx-gateway` 后日志 `registered id=redfin url=agent://redfin.relay.aginx.net`。Mac 侧 `agc agent://redfin.relay.aginx.net/me` 真答往返：首轮 110s turn gate 超（模型绕 kv_list 死路耗时，回合服务侧仍完成）；改问快题后干净真答「今天是2026年9月23日，星期三」。id 即 `agent://<id>.relay.<域名>` 的 DNS 子域（relay.rs 头注），Mac 侧零改动。enchilada（OP6 正主）不动。
+
+顺带发现新缺口：母体 `kv_list` 报 agmem CLI 不可用——设备未装 agmem 包，memory 工具断（待修，本次未动）。
+
+**设备终态**：网关 id=redfin 在役；其余同前（server 38657719、term 持屏 Talk 面）。
