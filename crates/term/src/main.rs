@@ -495,9 +495,10 @@ struct FaceDoc {
     #[serde(default)]
     /// M42g: viewfinder on — Mode::Eye takes the whole panel.
     eye: bool,
-    /// 开机剧情 v4: the live result page is on the panel (term attached
-    /// result.html to the engine on this flag's rising edge). Any new turn
-    /// (PTT down / ASR landing) clears it — voice writes result=false.
+    /// 刀D: the voice turn has finished — its result went to aginxbrowser
+    /// (show.html owns the screen) or degraded to the text line. term stops
+    /// the "thinking" animation and holds the frame. Any new turn (PTT down
+    /// / ASR landing) clears it — voice writes result=false.
     #[serde(default)]
     result: bool,
     /// The text typed onto the prompt face — the ASR transcript (v4③) or

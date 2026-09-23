@@ -32,7 +32,7 @@ mod audio;
 mod face;
 mod protocol;
 mod ptt;
-mod render;
+mod screen;
 
 use protocol::{Act, Ev, NetState, Out, PowerAction, Vm};
 use std::process::Command;
@@ -317,6 +317,7 @@ fn daemon() {
     let mut boot_net = boot_net_arm();
 
     let mut capturing: Option<std::process::Child> = None;
+    let mut screen_hold = false;
     // 音量下键按下时刻：短按(<300ms)=音量−10、长按=PTT（M42e 产品面）
     let mut ptt_down: Option<Instant> = None;
     // 眼取景（M42g→M47⑤）：Some = 取景中（常驻子进程 + 命中轮询）。音量+
@@ -347,6 +348,8 @@ fn daemon() {
                             match audio::capture_start() {
                                 Ok(c) => {
                                     capturing = Some(c);
+                                    eprintln!("aginx-voice: cap start");
+                                    face::set_line(None);
                                     face::write(false);
                                 }
                                 Err(e) => eprintln!("aginx-voice: cap start {e}"),
@@ -358,15 +361,13 @@ fn daemon() {
                             .take()
                             .is_some_and(|d| d.elapsed() < Duration::from_millis(300));
                         if short_tap {
-                            // 短按=音量−：采集立即弃（无 600ms 词尾冲刷）
+                            // 短按不再减音量（enchilada 对话是按住屏幕；
+                            // 音量下短按会把 TTS 打到听不见）。采集弃掉。
                             if let Some(mut c) = capturing.take() {
                                 let _ = c.kill();
                                 let _ = c.wait();
                             }
                             face::write(false);
-                            let v = audio::adjust_vol(-10);
-                            eprintln!("aginx-voice: vol {v}");
-                            say(&format!("音量{v}"), brain.as_ref());
                             continue;
                         }
                         if let Some(mut c) = capturing.take() {
@@ -392,15 +393,12 @@ fn daemon() {
                                     }
                                     Err(e) => {
                                         eprintln!("aginx-voice: asr {e}");
-                                        // asr 失败提示本身也要能说——但 asr
-                                        // 挂了多半网络不通，TTS 也挂；只刷屏
-                                        let _ = vm.step(Ev::Heard("没听懂".into()));
-                                        face::write(false);
+                                        miss_on_face();
                                     }
                                 }
                             } else {
-                                // 误触（<0.1s）
-                                face::write(false);
+                                // 静音闸 / 过短：上脸「没听懂」，不出声。
+                                miss_on_face();
                             }
                             // 尾部不得再写 face：run_outs 尾部 flush_pending
                             // 刚翻 result:true，此处写会亚 60ms 清旗，term
@@ -423,6 +421,51 @@ fn daemon() {
             }
         } else {
             std::thread::sleep(Duration::from_millis(200));
+        }
+
+        // 屏上按住说话（term 写 /run/aginx-voice/hold）。松手=提交，无短按音量。
+        {
+            let want = std::path::Path::new(face::HOLD_FILE).exists();
+            if want && !screen_hold {
+                screen_hold = true;
+                if capturing.is_none() {
+                    match audio::capture_start() {
+                        Ok(c) => {
+                            capturing = Some(c);
+                            eprintln!("aginx-voice: cap start");
+                            face::set_line(None);
+                            face::write(false);
+                        }
+                        Err(e) => eprintln!("aginx-voice: cap start {e}"),
+                    }
+                }
+            } else if !want && screen_hold {
+                screen_hold = false;
+                if let Some(mut c) = capturing.take() {
+                    std::thread::sleep(Duration::from_millis(600));
+                    let _ = c.kill();
+                    let _ = c.wait();
+                    if let Some(wav) = audio::capture_take() {
+                        face::write(false);
+                        match hear(&wav, brain.as_ref()) {
+                            Ok(text) => {
+                                eprintln!("aginx-voice: heard {text:?}");
+                                face::set_line(Some(&text));
+                                face::write(false);
+                                let outs = vm.step(Ev::Heard(text));
+                                run_outs(&mut vm, outs, brain.as_ref(), &mut eye);
+                            }
+                            Err(e) => {
+                                eprintln!("aginx-voice: asr {e}");
+                                miss_on_face();
+                            }
+                        }
+                    } else {
+                        eprintln!("aginx-voice: cap empty");
+                        miss_on_face();
+                    }
+                }
+            }
         }
 
         // ---- 眼取景（M47⑤：常驻子进程 + 命中轮询）----
@@ -545,6 +588,12 @@ fn daemon() {
             run_outs(&mut vm, outs, brain.as_ref(), &mut eye);
         }
     }
+}
+
+/// 静音闸 / ASR 失败：只上脸。Say 不出声（拉式语音：点名才 TTS）。
+fn miss_on_face() {
+    face::set_line(Some("没听懂"));
+    face::write(false);
 }
 
 /// 嘴：本地 aginx-tts 优先（M42d，离线即产品），失败/缺件落 brain TTS。
@@ -698,21 +747,21 @@ fn run_outs(
                         Ok(r) => r,
                         Err(e) => {
                             eprintln!("aginx-voice: front {e}");
-                            "现在连不上母体。固定说法还在：连接无线网络，或扫码，或念一下。"
-                                .to_string()
+                            "现在连不上母体。固定说法还在：连接无线网络，或扫码，或念一下。".to_string()
                         }
                     };
+                    // 刀D done 信封：信封 → 浏览器按模板出页；非 JSON →
+                    // reply 模板兜底。缺模板报母体安排写一次并登记。
+                    let (line, missing) = screen::show_reply(&text, &reply);
+                    if let Some((tpl, known)) = missing {
+                        report_missing_template(&tpl, &known);
+                    }
                     // 拉式：回复上脸不出声，点名（你说给我听）才 Speak。
-                    // #283 问句常驻：行=「问句\n回复」——问句整段打完，回复
-                    // 换行续打（term 前缀续打识别）；下一次用户说话
-                    // set_line(transcript) 整行替换，即自然清场。
-                    eprintln!("aginx-voice: say {reply}");
-                    face::set_line(Some(&format!("{text}\n{reply}")));
-                    // v4⑥：文本已上脸，同步写结果页（term 独立 attach 上屏）；
-                    // 翻旗归 run_outs 尾部 flush_pending——这里早翻会被本回合
-                    // 后续 face::write 清掉。写失败则文本就是结果（降级一等）。
-                    // 结果页同律带问句块（#283：问句在答句上方）。
-                    render::stage_reply(&text, &reply);
+                    // #283 问句常驻：行=「问句\n上脸句」——信封时上脸句是
+                    // say 摘要，脸行永远不 dump JSON。
+                    eprintln!("aginx-voice: say {line}");
+                    face::set_line(Some(&format!("{text}\n{line}")));
+                    face::stage_result();
                 }
             },
         }
@@ -727,9 +776,9 @@ fn run_outs(
         let outs = vm.step(ev);
         run_outs(vm, outs, brain, eye);
     }
-    // v4⑥ 翻旗点（全程序唯一）：本回合若有 Chat 暂存了结果页，这里统一
+    // v4⑥ 翻旗点（全程序唯一）：本回合若有 Chat 暂存了收尾，这里统一
     // 翻 result:true——在出口 face::write 清旗之后、followups 跑完之后。
-    render::flush_pending();
+    face::flush_pending();
 }
 
 /// 开眼（VolUp 与协议 Act::Eye 同一条路）。已开=守门话不双开——双会话
@@ -775,11 +824,13 @@ fn eye_shut(vm: &mut Vm, eye: &mut Option<EyeView>) {
 /// 自由文本 → 母体/新前台（N2②）。spawn VOICED_FRONT 的路由器
 /// （`aginx agent send`——不带名字=住当前光标），成功 stdout 就是回复
 /// 文本；挂死有预算（wait_limited kill）。AGINX_SOCK 由环境继承。
-/// 花名册点名（v4③ v0，D11）：化身=workspaces 文件夹，目录即注册——
-/// voice 读与 server 同一几何（AGINX_HOME 或 ~/.aginx 下的 workspaces/），
-/// transcript 含化身名子串 = 显式点名（server resolve_send 显式臂），不
-/// 命中不点名落母体（D10 住）。字典序取首个命中；ASR 转写不保证名字还
-/// 原，v0 宁落母体不误投。
+/// 花名册点名（v4③ v0，D11）：助理=workflows 目录（母体迁移后新几何，
+/// FS.md），目录即注册——voice 读与 server 同一优先级表（AGINX_HOME >
+/// AGINX_CARRIER_HOME > /home，母体 types config.rs home_dir 同源；不走
+/// HOME 推导——voice 的 HOME 与 term 一样不作数）。transcript 含助理名
+/// 子串 = 显式点名，不命中不点名落母体（母体 resolve_send 不点名臂自己
+/// 派活，#285）。字典序取首个命中；ASR 转写不保证名字还原，v0 宁落母体
+/// 不误投。
 fn roster_hit_in(root: &std::path::Path, text: &str) -> Option<String> {
     let mut names: Vec<String> = std::fs::read_dir(root)
         .ok()?
@@ -792,13 +843,14 @@ fn roster_hit_in(root: &std::path::Path, text: &str) -> Option<String> {
 }
 
 fn roster_hit(text: &str) -> Option<String> {
-    let home = std::env::var("AGINX_HOME")
-        .map(std::path::PathBuf::from)
-        .unwrap_or_else(|_| {
-            std::path::PathBuf::from(std::env::var("HOME").unwrap_or_else(|_| "/root".into()))
-                .join(".aginx")
-        });
-    roster_hit_in(&home.join("workspaces"), text)
+    let root = match std::env::var("AGINX_HOME") {
+        Ok(h) if !h.is_empty() => std::path::PathBuf::from(h),
+        _ => match std::env::var("AGINX_CARRIER_HOME") {
+            Ok(h) if !h.is_empty() => std::path::PathBuf::from(h),
+            _ => std::path::PathBuf::from("/home"),
+        },
+    };
+    roster_hit_in(&root.join("workflows"), text)
 }
 
 fn chat_front(text: &str, name: Option<&str>) -> Result<String, String> {
@@ -830,6 +882,30 @@ fn chat_front(text: &str, name: Option<&str>) -> Result<String, String> {
         return Err("empty reply".into());
     }
     Ok(reply)
+}
+
+/// 缺模板报母体（HANDOFF-显示：没模板时告诉母体，由母体安排模型写
+/// 一次并登记）。v0 通道=send me；同一名模板本进程只报一次——母体没
+/// 补好之前反复点同一张卡不该刷屏。fire-and-forget：母体回文不上脸
+/// 不念，那是母体自己的派活收尾。90s 预算够写一个模板+登记。
+fn report_missing_template(tpl: &str, known: &[String]) {
+    static REPORTED: std::sync::OnceLock<std::sync::Mutex<std::collections::HashSet<String>>> =
+        std::sync::OnceLock::new();
+    let mut seen = REPORTED
+        .get_or_init(|| std::sync::Mutex::new(std::collections::HashSet::new()))
+        .lock()
+        .unwrap_or_else(|p| p.into_inner());
+    if !seen.insert(tpl.to_string()) {
+        return;
+    }
+    let msg = format!(
+        "浏览器缺模板「{tpl}」：/open 返回 unknown_template，在册只有 {}。请安排写一次 {tpl}.html 放进 /var/lib/aginxbrowser/templates/ 并登记 registry.json。",
+        known.join("、")
+    );
+    eprintln!("aginx-voice: report missing template {tpl}");
+    if let Err(e) = chat_front(&msg, Some("me")) {
+        eprintln!("aginx-voice: report: {e}");
+    }
 }
 
 /// Act::NetConnect 判定（命令优先 2026-09-06）：有 IP=Up；无 IP 先试

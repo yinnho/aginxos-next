@@ -87,6 +87,10 @@ OTA 不覆盖 `/home`。
 
 出厂 CLI 已经在 `/usr/bin`（同样 `.aginxmd`）。母体找命令：**先 `providers/`，再 `tools/`，再 PATH**。不必把 `aginx-qr` 再复制一份进 `/home`。
 
+### cards — 首页卡片 + 结果信封
+
+定时任务自备数据落盘 JSON 进 `cards/`（信封 `title/template/data/created/source`），term 扫目录列小框，删卡片=删文件。按住说话链的**结果信封**不落盘：母体 send 回包整段是 JSON 对象、带非空 `template` 与 `data`（可选 `say` 上脸一句话）即信封，voice 原样 POST /open 交浏览器按模板出页；非 JSON 回包走 `reply` 模板兜底。不许把数据拆成 markdown 改写成文章再包回 HTML。浏览器缺模板（/open 返 `unknown_template`）→ voice 报母体安排写一次并登记。
+
 ### tools — 普通 CLI
 
 git、aginxbrowser 客户端、扫码装的小命令。二进制 + sidecar，不是人格。用户不对它说话。

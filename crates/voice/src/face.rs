@@ -13,6 +13,8 @@ use std::sync::Mutex;
 
 pub const FACE_DIR: &str = "/run/aginx-voice";
 pub const FACE_FILE: &str = "/run/aginx-voice/face";
+/// term 按住说话圆：文件在 = 按下，消失 = 松开。与音量下 PTT 并列。
+pub const HOLD_FILE: &str = "/run/aginx-voice/hold";
 /// 眼取景当前帧（M42g）。voice 原子换名写，term 轮询 mtime 重渲染。
 pub const EYE_JPG: &str = "/run/aginx-voice/eye.jpg";
 /// AF 握手（cam-shot --af-state 落笔）：scan=扫描中 / focus=终码落 /
@@ -23,11 +25,14 @@ pub const AF_STATE: &str = "/run/aginx-voice/af.state";
 // 本地 ~90ms/char 打字机，换串即换行）。
 static BOOT_LINE: Mutex<Option<String>> = Mutex::new(None);
 
-/// 结果页站立中（v4⑥：真人不看日志——结果页不超时是产品线）。唯一置位
-/// 点 write_doc(result=true)，任何 result=false 落盘即清。run_outs 尾部的
-/// 例行刷脸凭它跳过——否则 tick 超时/纯 say 再入 run_outs 会把站立页踩回
-/// 光标面（真人实测第二雷：live 几秒后必 teardown）。
+/// 回合完成旗站立中（结果已交浏览器或降级文本——真人实测雷：结果
+/// 出来后 tick 超时/纯 say 再入 run_outs 的例行刷脸会把站立行踩掉）。
+/// 唯一置位点 write_doc(result=true)，任何 result=false 落盘即清。
 static RESULT_STANDING: Mutex<bool> = Mutex::new(false);
+
+/// 本回合已收尾待翻旗（刀D：Chat 臂不早翻——本回合后续 face::write 会
+/// 清掉早翻的旗，统一挪到 run_outs 尾部 flush_pending）。
+static PENDING: Mutex<bool> = Mutex::new(false);
 
 /// 换打字文本。前缀延长由 term 识别并续打，其余换串从头打。
 pub fn set_line(line: Option<&str>) {
@@ -44,7 +49,9 @@ pub fn current_line() -> Option<String> {
 pub struct FaceDoc {
     /// 眼取景中：Mode::Eye 整屏取景
     pub eye: bool,
-    /// 开机剧情 v4 结果面（#246）：result.html 已发布，term 挂活体面板上屏
+    /// 回合已完成（刀D）：结果已交浏览器（show.html 接管屏幕）或降级为
+    /// 文本。term 据此停「在想」动画、持帧不超时；新用户动作（PTT down/
+    /// 闭眼）face::write 即清。
     pub result: bool,
     /// 打字文本（transcript/文本回复，'\n' 强制换行）
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -74,13 +81,27 @@ pub fn write(eye: bool) {
     write_doc(eye, false);
 }
 
-/// 结果面（v4⑥）：Chat 臂 stage_reply 已写 result.html，run_outs 尾部
-/// flush_pending 调到这里——result=true 让 term 挂活体面板。
+/// 回合完成旗（刀D）：Chat 臂收尾 stage_result 暂存，run_outs 尾部
+/// flush_pending 统一翻——result=true 让 term 停动画、持帧。
 pub fn write_result() {
     write_doc(false, true);
 }
 
-/// 结果页站立中（v4⑥）：run_outs 尾部例行刷脸的门。
+/// Chat 臂收尾：暂存待翻旗。不早翻——本回合后续 face::write 会清掉。
+pub fn stage_result() {
+    *PENDING.lock().unwrap() = true;
+}
+
+/// run_outs 尾部（followups 循环后）调用：全程序唯一翻旗点。无暂存=空转。
+pub fn flush_pending() {
+    let mut p = PENDING.lock().unwrap();
+    if *p {
+        *p = false;
+        write_result();
+    }
+}
+
+/// 回合完成旗站立中：run_outs 尾部例行刷脸的门。
 pub fn result_standing() -> bool {
     *RESULT_STANDING.lock().unwrap()
 }
