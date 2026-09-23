@@ -8313,3 +8313,19 @@ env 里网关身份沿用了 OP6 的 enchilada（公共包刷机日配对码复�
 修复属 aginxbrowser 线：`Drm` 补 `Drop`（munmap 两条 map；理想再加 RMFB2+DESTROY_DUMB 清 dumb buffer 泄漏），munmap 落地即 vma 撤→file 末引用→master 释放。**待用户点头才动他线仓。**
 
 **设备终态**：aginx-reboot 后四单元 ready，引擎 pid 454 持屏演测试卡结果页（设计内），term 让位等待，网关 id=redfin 在役，晨报 cron 待 09-24 08:00 首触发。
+
+## 2026-09-23 — aginxbrowser DRM Drop 修复上机：babff45 两轮全收据，maps 泄漏反转（redfin/Pixel 5）
+
+aginxbrowser 线修复（`Drm` 补 Drop：munmap→RMFB→DESTROY_DUMB 同序清理；锚点 babff45 + issue #85）按其执行单 `HANDOFF-DRM-DROP-VERIFY.md`（该仓根，未跟踪）上机验证。换装前三律（staging 同 fs `.new` + 双端 md5 `6483aa5b…dafbca` 一致 + rename 原子换），树在 babff45。
+
+**before 活体（12:04:06–12:11:56）**：旧引擎 12:04:06 `waiting for the screen (master busy)` 后死等，杀 term 释放 master 仍不接屏；查该 pid：fd 表零 card0、maps 留 2 段 card0 rw-s——上一条根因条目的可证伪预言（释放后 fd 消失而 maps 留存）当天上午已被动发生，无需再主动触发。换装杀旧进程（内核拆 mmap）后新引擎 pid 28865 于 12:11:56 启动即接屏（took→cached 49ms→showing）。
+
+**/health `commit:"unknown"` 定性**：`main.rs:488` 用 `option_env!("AGINXBROWSER_BUILD_COMMIT")` 编译期盖章，`deploy-redfin.sh` 未设该变量——非烧错版本，版本真证=md5。建议他线 deploy 编译前补 `AGINXBROWSER_BUILD_COMMIT=$(git rev-parse --short HEAD)`。
+
+**Round 1（12:12:48–12:13:07）**：`POST /open`（reply 模板 702B）→ `cached 1080x2620 in 128ms` + `new page`，引擎持屏 maps card0=2 → `rm show.html` → 12:13:07 `page gone, releasing the screen` → **engine maps card0: 0 + engine fd 表 card0: 0**（修复前此态恒 2）+ term maps card0: 2 回夺成功。
+
+**Round 2（12:13:34–12:15:51）**：term 持屏下 `POST /open`（694B）→ 12:13:34.947 `waiting (master busy)` → 12:13:35.450 `took the screen`（503ms 内接管；term 见 show.html 自让渡）→ showing 12:13:35.890，maps=2 → `rm show.html` → 12:15:51 `page gone, releasing the screen` → engine maps 0 + term（重生 pid 29126）maps=2 回夺。busy-poll 接管路径即旧引擎 wedge 死的路径，新引擎两轮皆通。
+
+**两轮连跑 maps 每轮清零——执行单核心断言全过，上机门通过。** GEM 观察：`/sys/kernel/debug` 挂载点不存在且 sysfs 拒 mkdir（此 4.19 内核未暴露 debugfs），`gem_objects` 结构性不可读；maps 即同一可观察量（mmap 撤=GEM 钉子拔），两轮已证。
+
+**设备终态**：引擎 pid 28865（babff45）在役空闲（maps 0）；term pid 29126 持屏；show.html 不在；网关 id=redfin 在役；晨报 cron 待 09-24 08:00 首触发。
