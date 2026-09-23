@@ -212,6 +212,16 @@ pub enum CronDelivery {
         /// Webhook URL (must start with `http://` or `https://`).
         url: String,
     },
+    /// 落成首页卡片（AginxOS 显示线）：fire 的应答包装成信封 JSON 写进
+    /// `{home}/cards/`，开机画面扫这个目录排横条小框；点开才由系统调
+    /// 浏览器按模板渲染（模板/注册表在浏览器目录，母体不写 HTML）。
+    /// 应答文本按 workflow 规程应是 JSON——不是就整段兜底 `{"text":…}`。
+    Card {
+        /// 卡片标题（首页小框上的一行）。
+        title: String,
+        /// 浏览器模板名（/open 的 template 参数）。
+        template: String,
+    },
 }
 
 // ---------------------------------------------------------------------------
@@ -483,6 +493,20 @@ impl CronJob {
             CronDelivery::None => {}
             CronDelivery::LastChannel => {}
             CronDelivery::Admins => {}
+            CronDelivery::Card { title, template } => {
+                // 信封的两根柱子：标题是首页小框的一行，模板名是浏览器
+                // /open 的参数——空了卡片永远点不开。
+                if title.trim().is_empty() {
+                    return Err(CarrierError::InvalidInput(
+                        "card delivery requires a non-empty title".into(),
+                    ));
+                }
+                if template.trim().is_empty() {
+                    return Err(CarrierError::InvalidInput(
+                        "card delivery requires a non-empty template name".into(),
+                    ));
+                }
+            }
         }
         Ok(())
     }
@@ -669,6 +693,36 @@ mod tests {
             bot_id: "".into(),
         };
         assert!(job.validate(0).is_err());
+    }
+
+    /// Card 交付（显示线）：{"kind":"card",title,template} 蛇形 tag 往返；
+    /// 空标题/空模板名在创建期就拒。
+    #[test]
+    fn validate_card_delivery() {
+        let mut job = valid_job();
+        job.delivery = CronDelivery::Card {
+            title: "晨报".into(),
+            template: "morning-report".into(),
+        };
+        assert!(job.validate(0).is_ok());
+
+        let json = serde_json::to_value(&job.delivery).unwrap();
+        assert_eq!(json["kind"], "card");
+        assert_eq!(json["title"], "晨报");
+        assert_eq!(json["template"], "morning-report");
+        let back: CronDelivery = serde_json::from_value(json).unwrap();
+        assert!(matches!(back, CronDelivery::Card { ref title, ref template } if title == "晨报" && template == "morning-report"));
+
+        // 空标题/空模板名/纯空白 → 创建期拒绝
+        job.delivery = CronDelivery::Card { title: "  ".into(), template: "t".into() };
+        assert!(job.validate(0).is_err());
+        job.delivery = CronDelivery::Card { title: "晨报".into(), template: String::new() };
+        assert!(job.validate(0).is_err());
+
+        // 老档不受新变体影响（additive）
+        let legacy = serde_json::json!({"kind": "none"});
+        let back: CronDelivery = serde_json::from_value(legacy).unwrap();
+        assert!(matches!(back, CronDelivery::None));
     }
 
     // -- CronJobId --

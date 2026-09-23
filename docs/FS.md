@@ -47,6 +47,7 @@ OTA 不覆盖 `/home`。
 ├── sessions/               # 人对母体的会话账
 │   └── main.jsonl
 ├── data/                   # kernel 自账（carrier.db：会话史/记忆/计量）
+├── cards/                  # 首页卡片信封（定时任务产物；term 扫目录列小框，删卡片=删文件）
 │
 ├── tools/                  # 普通 CLI
 │   └── <name>/
