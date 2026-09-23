@@ -8301,3 +8301,15 @@ env 里网关身份沿用了 OP6 的 enchilada（公共包刷机日配对码复�
 顺带发现新缺口：母体 `kv_list` 报 agmem CLI 不可用——设备未装 agmem 包，memory 工具断（待修，本次未动）。
 
 **设备终态**：网关 id=redfin 在役；其余同前（server 38657719、term 持屏 Talk 面）。
+
+## 2026-09-23 — 屏卡测试页诊断：引擎释放后 4.19 master 卡死二发 + mmap 持 file 根因定谳（redfin/Pixel 5）
+
+用户报「界面停在测试界面」。诊断链（ssh root@192.168.3.93，USB adb 已断）：`/run/aginxbrowser/show.html` 不在、引擎已 release，但 term（pid 先 1252 后 15223，重启过）日志 06:14:15Z `taking the screen back` 之后 87× `DRM never came up`——每 153s 一轮（wait_up 600 次×250ms busy 快轮询），死循环 2h+。全系统扫 `/proc/*/fd` 零 card0 持有者，debugfs 无 dri clients，无 kmsg 报错。`aginx-reboot` 归零（起机慢，host 侧须 >90s 等待）。
+
+重启后不是故障：term 读帧账重建最新结果页 → POST /open → 引擎 08:33:04Z 接屏——**#264 崩溃恢复设计行为**，屏上是测试卡 reply 结果页（744B），结果页不超时是产品规则。voice face `result:false` 排除语音重放。
+
+**根因定谳（源码研究，非设备观测）**：aginxbrowser `src/panel_drm.rs` 的 `Drm` **无 `impl Drop`**——两个 dumb buffer 的 mmap（`maps: [*mut u32; 2]`）从不 munmap，也不 RMFB/DESTROY_DUMB。drop 只关 fd；Linux vma 的 `vm_file` 持 struct file 引用，**mmap 不撤则 `drm_release`/`drm_master_release` 永不执行**，master 一直挂在仍存活的引擎进程上。这解释了全部「内核级卡死」表象：fd 表全空（mmap 不走 fd 表）、无 dri clients、无 kmsg。在役佐证：引擎持屏时 pid 454 的 fd 表（card0 fd 15）与 maps（两条 `/dev/dri/card0` rw-s 映射）并存。可证伪预言：引擎释放后 fd 消失而 **maps 留存**→term 必再卡死（2/2）；本段未执行（会再触发一次卡死+重启）。今晨 SIGKILL 路径同机制：进程被杀时 mmap 才由内核拆除，窗口期内 master 同样悬空。
+
+修复属 aginxbrowser 线：`Drm` 补 `Drop`（munmap 两条 map；理想再加 RMFB2+DESTROY_DUMB 清 dumb buffer 泄漏），munmap 落地即 vma 撤→file 末引用→master 释放。**待用户点头才动他线仓。**
+
+**设备终态**：aginx-reboot 后四单元 ready，引擎 pid 454 持屏演测试卡结果页（设计内），term 让位等待，网关 id=redfin 在役，晨报 cron 待 09-24 08:00 首触发。
