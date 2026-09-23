@@ -8275,3 +8275,21 @@ adb `aginxosredfin` 回来。uptime 约 42s 时 `/run/boot.state`：`pkg ok`、`
 换上含 hold 的 musl `aginx-voice`（2581400 字节）。`aginx-svc stop` 后覆盖 `/var/bin/aginx-voice` 再 start，ready pid 2583。再写 hold 1.2 秒：日志 `cap start`，随后 `asr aginx-asr unusable "T."`（空房间，静音闸）。
 
 **设备终态**：槽 b。按住屏幕才会采集。语音 ready pid 2583，`local=true`。母体仍 failed。Wi-Fi 仍无。
+
+## 2026-09-23 — 显示线刀E 上机日：四件换装 + cron 落卡首收据 + 显示环全收据（redfin/Pixel 5）
+
+brain.json 推 /home（OpenClone 桥格式，秘密走 adb push 不进命令行）；`/var/lib/aginxbrowser/templates/listen.html` 删（刀D 退役件，scp 不删旧件）。四件换装全走三律（staging 同 fs `.new` + 双端 md5 + rename）：`/var/bin/aginx-carrier`（18f0d394）、`aginx-voice`（02882cff）、`aginx-term`（a4798c9c）、`aginxbrowser`（1c30d56b）。fresh boot 四单元 ready，term 拿 master 直进 Talk 面，引擎无 show.html 不抢屏。
+
+**缺口一：设备在跑的 aginx-server 是公共包 v0.1.2 时代老二进制，刀A 的 cron tick 从未上过机。** 母体经 agc 建的晨报+测试卡两 job 入库后到点不 fire（`late=true` 挂死），`/home/cards` 不存在。源码 `crates/server/src/host.rs:212` 的 `start_cron_loop()` 早在刀A `c4fffe9` 就在——前一段会话误诊「代码里没有这个调用」是 grep 范围只搜了 mother/ 子树漏了外层 crates/server。修法零代码：musl 重编 aginx-server（24749040B，md5 38657719）三律换装 `/var/lib/aginx/pkgfiles/aginx/bin/aginx-server`，`aginx-svc restart aginx`，pid 435。
+
+**缺口二：母体建 job 时把卡片参数写进了 prompt，delivery 字段落空→默认 last_channel。** `aginx-carrier cron remove` 旧晨报后用显式 delivery 重建两 job（CLI job JSON 本就吃该字段）：晨报 `b60d8ee4`（cron `0 8 * * *` tz Asia/Shanghai，card{晨报,reply}）；测试卡 `ce563bf3`（`{"kind":"at","in_secs":90}` one_shot，card{测试卡,reply}）。
+
+**cron→卡片全链首收据**：测试卡 06:09:46Z fire，真脑答「收到，测试任务已确认，随时可以开始。」，`/home/cards/20260923-060946820-测试卡.json` 落卡（信封 `{title:测试卡, template:reply, data:{question:测试确认, body:…}, created, source:me}`），one_shot 成功自删。晨报 job 在库，next_fire 2026-09-24 08:00 Asia/Shanghai，待次日收据。
+
+**显示环全收据**（引擎 REST 从 Mac 直连 192.168.3.93:8089）：POST /open `{template:reply, data}` → `{"ok":true,"bytes":744}`；引擎日志三行 `panel: took the screen 1080x2340`（term 让位）→ `cached 1080x2620 in 164ms` → `showing the page`。截图腿：GET /screenshot.png 与 file:// 均不可用（后者被禁），Mac http.server+私网 IP 被 SSRF 防护拦（"Access to private/internal IP address not allowed"），`data:text/html;base64` 喂 /screenshot 出 1080×2620 PNG——reply 模板渲染的测试卡开页（黑底磷光绿，落款 —— AginxOS）。`rm show.html` → `panel: page gone, releasing the screen`（06:14:15Z），term（pid 1252）夺回。
+
+**内核级 DRM master 泄漏（本段更早发现）**：引擎 SIGKILL 后 SET_MASTER 对所有来者 EINVAL，零 fd 持有、debugfs 无 dri clients——4.19 msm_drm 内核态卡死，用户态无解。`aginx-reboot` 归零后 fresh boot term 正常拿 master。
+
+**疑点待裁决：gateway id 冒名。** `/etc/aginx/env` 的 AGINX_GATEWAY_ID=enchilada，但本机 uname 4.19.278-g7b0944645172 / sm7250 实锤 redfin；E5 收据里 enchilada 是 OP6 正主 id。两机同在线会互踢（网关 register→closed→reconnect 循环实证过）。未擅改。
+
+**设备终态**：槽 _a（a0257a8 血统）+ aginx-server 38657719（dev-push 领先镜像）、aginx-carrier 18f0d394 在役；term pid 1252 持屏 Talk 面，卡片带含测试卡可扫；晨报 cron 待明晨首触发；vendor_boot 未动。
