@@ -8347,3 +8347,17 @@ M48① 的 rvoip spike 客户端 `aginx-call`（out/sip-spike，gitignored）交
 **进程收尾**：腿B 25s 超时挂断 → 腿A `remote ended the call` 干净退出（PCM 线程随进程退）。设备清点：`pidof aginx-call` 空、全系统无 snd fd 持有者——PCM 设备释放干净，voice 采集通道无残留。
 
 **设备终态**：/root/aginx-call 留机（dev spike，不入镜像不动在役面）；四单元+引擎 28865+term 29126 持屏如前；网关 id=redfin 在役。剩刀3（LAN redfin↔Mac 互通，Linphone 真人手拨在此验证）。
+
+## 2026-09-23 — M48刀3 LAN 互通：redfin↔Mac 跨机 SIP+Opus 媒体全收据（#373）
+
+刀2 同机环的跨机版：redfin 192.168.3.93（wlan0）被叫腿，Mac 192.168.3.26（en0）主叫腿，走真局域网（华为 AP）。改动一桩：vendored rvoip 的 `Config::local` 把 127.0.0.1 硬编进 `local_ip`/`bind_addr`/`local_uri` 三字段（unified.rs:2923）——loopback 绑定的 UDP socket 发不出 LAN 包，spike 加 `AGINX_CALL_BIND` env 构造后直改三字段（正解；带 PBX 默认值的 `Config::lan_pbx` 弃用）。双端重编：Mac opus feature 7m45s（CMake 4 放行 env 照旧），musl 1m46s，redfin /root/aginx-call 换装 md5 `c603bf12`。
+
+**自动化 LAN 环测（Mac dial → redfin talk）**：redfin `AGINX_CALL_BIND=192.168.3.93 RUST_LOG=error /root/aginx-call talk 5060`，Mac `AGINX_CALL_BIND=192.168.3.26 RUST_LOG=error target/debug/aginx-call dial sip:aginx@192.168.3.93:5060 25 5061`。信令一杆过：redfin 腿 `incoming call from User <sip:aginx@192.168.3.26:5061>`（From URI 带真 IP，两腿 env 均生效），call up，Opus **跨机**协商 `rx format negotiated: 48000Hz/2ch`，25.1s `✅ interop media received`（1255 帧/2409600 样本）。
+
+**rms 三段交叉验证跨机闭环**：Mac 发 440Hz amp0.30 理论 0.212 → redfin 腿 `rx-rms 0.211–0.214`（WiFi→Opus 解码→喇叭，与刀2 同机 0.213 同级，跨机无损）→ redfin 腿 `tx-rms 0.023`（DMIC 声学回环 ≈-19dB，比刀2 的 0.031 略低=手机静置环境差）→ Mac `recent-rms 0.014–0.022` 稳 25s（≈redfin tx，对账成立）。Goertzel dominant 首秒 450Hz（基频）→ 稳 3300Hz（刀2 是 2200）——「次谐波锁相」解释自我推翻，改判：DMIC 拾音频谱被机身声学链高频着色主导、落点随环境漂移，环完整性判据就是 rms 三段交叉验证，dominant 只记观察。两处 tx-rms 瞬时跌 0.0007/0.0015（mic underrun 补静音帧，节奏法则按设计兜住）。
+
+**PCM 协商与刀2 逐字一致**（cap pcmC0D0c 48000/1 period 160、play pcmC0D0p 48000/2 period 6000）——alsa.rs 桥跨机复用零改动。化妆级：waiting 横幅仍印硬编 127.0.0.1 字符串，实际绑定已遵 env（来电真到为证），spike 不重编、记档。
+
+**进程收尾**：Mac 25s 超时挂断 → redfin 腿 `remote ended the call` 干净退（exit 0）。设备清点：`pidof aginx-call` 空、全系统无 snd fd 持有者。
+
+**设备终态**：/root/aginx-call 留机（刀3 版 md5 c603bf12）；四单元+引擎+term 如前；网关 id=redfin 在役。真人 talk↔talk 对讲未做（可选，命令对在 spike 文档）；剩刀4 服务器中继 → 刀5 产品接线。
