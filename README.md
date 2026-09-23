@@ -1,6 +1,6 @@
 <div align="center">
 
-<img src="docs/images/home.png" width="264" alt="AginxOS wordmark — boot card, frame 30" />
+<img src="docs/images/home.png" width="264" alt="AginxOS boot home — hold-to-speak with the scheduled-cards band" />
 
 # AginxOS
 
