@@ -8361,3 +8361,11 @@ M48① 的 rvoip spike 客户端 `aginx-call`（out/sip-spike，gitignored）交
 **进程收尾**：Mac 25s 超时挂断 → redfin 腿 `remote ended the call` 干净退（exit 0）。设备清点：`pidof aginx-call` 空、全系统无 snd fd 持有者。
 
 **设备终态**：/root/aginx-call 留机（刀3 版 md5 c603bf12）；四单元+引擎+term 如前；网关 id=redfin 在役。真人 talk↔talk 对讲未做（可选，命令对在 spike 文档）；剩刀4 服务器中继 → 刀5 产品接线。
+
+## 2026-09-23 — M48刀3补：真人 talk↔talk 对讲收据（redfin↔Mac，产品向判据）
+
+刀3 自动化环测后的真人腿：redfin `talk 5060`（被叫自动接听）+ Mac `talk sip:aginx@192.168.3.93:5060`（主叫），两端各绑本机 LAN IP（AGINX_CALL_BIND），Opus 48000/2 协商，约 64s 双向对讲，用户实测认可（"可以了"）。
+
+**双向 VU 判据（2s 粒度）**：redfin 腿 tx-rms 0.05→0.73（凑近手机说话）、rx-rms 0.02→0.70（Mac 侧人声到机）；Mac 腿 tx-rms 至 0.29（对 Mac 说话）、rx-rms 至 0.55（手机人声到 Mac）。两方向时间上交叠=全双工真人对话。Mac tx 两格 1.41/1.37（浮点域过 1.0 的语音峰值，i16 编码处 clamp，化妆级）。挂断后 redfin 腿 SIGTERM 宽限内自退（pidof 空、无 snd fd 残留）。
+
+真人手拨 Linphone 参照不再需要——自有两端已覆盖真人判据。M48 音频线收口，剩刀5 产品接线（刀4 服务器中继按用户裁决挂起，多机器时再做）。
