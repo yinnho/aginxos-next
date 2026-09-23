@@ -8369,3 +8369,15 @@ M48① 的 rvoip spike 客户端 `aginx-call`（out/sip-spike，gitignored）交
 **双向 VU 判据（2s 粒度）**：redfin 腿 tx-rms 0.05→0.73（凑近手机说话）、rx-rms 0.02→0.70（Mac 侧人声到机）；Mac 腿 tx-rms 至 0.29（对 Mac 说话）、rx-rms 至 0.55（手机人声到 Mac）。两方向时间上交叠=全双工真人对话。Mac tx 两格 1.41/1.37（浮点域过 1.0 的语音峰值，i16 编码处 clamp，化妆级）。挂断后 redfin 腿 SIGTERM 宽限内自退（pidof 空、无 snd fd 残留）。
 
 真人手拨 Linphone 参照不再需要——自有两端已覆盖真人判据。M48 音频线收口，剩刀5 产品接线（刀4 服务器中继按用户裁决挂起，多机器时再做）。
+
+## 2026-09-23 — UI线刀4 页=会话：部署收据（84f3c18，四条真人收据待验）
+
+**改动**（host 门全绿 check.sh，voice 51/term 45 单测含刀4 新例三枚）：会话单位=卡——voice Chat 臂每回合落卡 {home}/cards（title=问句截16字、source=chat、session=路由靶），页上追问原地重写同卡；hold 文件内容=页靶（VOICE_PAGE 由开页者写：term 点卡 / voice 出页），voice 采集起步定值 CHAT_PAGE（屏上 hold=term 写的页靶、PTT=清空），路由序=花名册点名 > 页卡 session > 母体 me；front 失败（地板话）或 /open 失败不落卡。term 让位期按住满 HOLD_ARM=350ms 成军：hold 带页靶 + rm show.html（引擎让位路）→ 仲裁下一拍取屏画对话框，拖动/短按归浏览器；让位期 poll 收紧 50ms。
+
+**部署**：zigbuild musl 双件（voice md5 86657e7f、term 31f8b906）→ /var/stage-knife4 同 fs 落位（voice→/var/bin 裸件、term→pkgfiles 真身）→ 终点 md5 双对上 → aginx-reboot。
+
+**观察**（换装后）：开机链全绿（wifi HUAWEI-凌霄 → dhcp .93 → internet ok → time ok）；voice 443/term 1249/引擎 447 三进程新件在跑；voice 零 panic、`up (local=true, brain=true)`、boot net up 已问候。让位仲裁真机回归：POST /open → show.html 落盘（reply 模板 744B）→ term 让位；rm show.html → term 回收。
+
+**待真人收据四条**（未验不记）：①首页按住问天气→出页+新卡 ②该页按住≥350ms 追问→页刷新+同卡原地更新 ③回首页再问→第二张新卡 ④cron 页（session 空）按住→落母体。busybox wget POST 段错误是工具件（页已落），与引擎无关。
+
+**设备终态**：redfin 新双件在役；晨报 cron 明晨 08:00 待验；他线脏件（kb.rs/audio.rs/protocol.rs/enchilada）仍在工作区未裹挟。
