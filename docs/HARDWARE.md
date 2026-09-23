@@ -8329,3 +8329,21 @@ aginxbrowser 线修复（`Drm` 补 Drop：munmap→RMFB→DESTROY_DUMB 同序清
 **两轮连跑 maps 每轮清零——执行单核心断言全过，上机门通过。** GEM 观察：`/sys/kernel/debug` 挂载点不存在且 sysfs 拒 mkdir（此 4.19 内核未暴露 debugfs），`gem_objects` 结构性不可读；maps 即同一可观察量（mmap 撤=GEM 钉子拔），两轮已证。
 
 **设备终态**：引擎 pid 28865（babff45）在役空闲（maps 0）；term pid 29126 持屏；show.html 不在；网关 id=redfin 在役；晨报 cron 待 09-24 08:00 首触发。
+
+## 2026-09-23 — M48刀2 redfin 音频环：aginx-call musl 上机 + ALSA ioctl 桥 + 同机两腿 Opus 全链收据（redfin/Pixel 5）
+
+M48① 的 rvoip spike 客户端 `aginx-call`（out/sip-spike，gitignored）交叉上 redfin。cpal 裁决前���：其 ALSA host 链 alsa-sys→libasound，L0 镜像无 alsa-lib（snd-mixer 注释明言），故设备腿自写裸 ALSA PCM ioctl 桥（`alsa.rs`，snd-cap/snd-play 咒语逐条移植：O_NONBLOCK open→转阻塞、HW_REFINE 全开只钉 ACCESS/FORMAT/rate/ch、几何松钳、HW_PARAMS 读回真 period、sw_params capture/playback 分野、PREPARE 后每 period 一 READI/WRITEI、play 收尾 DRAIN）。节奏法则与 Mac/cpal 版逐字一致（20ms interval 恰发一帧、underrun 补静音、mic 累积 0.5s 封顶、播放 300ms 封顶、发送格式从首收帧学习）。voice 让渡判无需改码：voice 采集是按需 spawn snd-cap，实测 voice pid 448 持 0 个 snd fd，通话期无人按 PTT 即无撞车；让渡协议留刀3/产品接线。
+
+**交叉三坑（host 侧）**：① vendored libopus 的 audiopus_sys-0.2.2 走 CMake 编译，本机 CMake 4 拒 `cmake_minimum_required(<3.5)`——`CMAKE_POLICY_VERSION_MINIMUM=3.5` 环境变量放行，opus 0.3.1 + zig cc 一次编过；② APFS 容器满（630Mi 余量）rustc LLVM 写盘崩——spike 的 Mac debug(6.2G)+host release(1.1G) 已完成使命删掉让路，musl target 增量保留；③ python 批量替换漏裸函数引用（talk.rs `float_to_i16` 无括号用法）+ alsa.rs 首编暴露 OpenOptionsExt 未引入/dump_caps 同表达式多 &mut 借——三轮修净。产物：30M static stripped aarch64-musl（opus 折入；对照基线未 strip 35.86M），scp /root/aginx-call 双端 md5 `0229509e` 一致。
+
+**两腿环测（同机 127.0.0.1，跑两轮复现一致）**：腿A `/root/aginx-call talk 5060`（SIP 5060，自动接听，mic/speaker 桥）；腿B `/root/aginx-call dial sip:aginx@127.0.0.1:5060 25 5061`（SIP 5061，发 440Hz 音 + Goertzel 判收）。media 端口两腿同为 17600-17699 段，同机未撞（rvoip 自动避让）。
+
+**PCM 协商一次过**（两轮同值）：`[pcm] /dev/snd/pcmC0D0c: 48000 Hz / 1 ch / S16_LE, period 160 (3.3 ms) (capture)`、`[pcm] /dev/snd/pcmC0D0p: 48000 Hz / 2 ch / S16_LE, period 6000 (125.0 ms) (playback)`——snd-cap/snd-play 咒语的 Rust 移植成立，q6 FE 默认 quantum 照旧（capture period 160 自选）。
+
+**Opus 协商成功**：两腿 fmt 均 `48000Hz/2ch`（Opus 全带宽签名；PCMU 是 8k/1）——libopus musl 静态折入后编解码真跑。
+
+**rms 三段交叉验证（环完整性判据）**：腿B 发 440Hz 正弦 amp 0.30 → 理论 rms 0.212；腿A rx-rms **0.213**（RTP→Opus 解码→喇叭，VOL=60 整数缩放，分毫不差）；腿A tx-rms **0.031**（DMIC 拾喇叭声学回环，≈-17dB 空气衰减）；腿B rx-rms **0.029** 25s 稳定（≈腿A tx，Opus 编码解码保持）。腿B Goertzel dominant **2200Hz=440×5 次谐波锁相**（稳 25s，非基频 440）——与 M42e「破音终审=机身震动」、M43 功放 DSP 校准的机身声学链非线性谐波着色一致；环完整性由 rms 三段交叉验证兜底，非缺陷、记观察。喇叭进麦（声学回环）即本验收判据本身；AEC 按前置裁决后置。
+
+**进程收尾**：腿B 25s 超时挂断 → 腿A `remote ended the call` 干净退出（PCM 线程随进程退）。设备清点：`pidof aginx-call` 空、全系统无 snd fd 持有者——PCM 设备释放干净，voice 采集通道无残留。
+
+**设备终态**：/root/aginx-call 留机（dev spike，不入镜像不动在役面）；四单元+引擎 28865+term 29126 持屏如前；网关 id=redfin 在役。剩刀3（LAN redfin↔Mac 互通，Linphone 真人手拨在此验证）。
