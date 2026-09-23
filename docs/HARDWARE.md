@@ -8381,3 +8381,17 @@ M48① 的 rvoip spike 客户端 `aginx-call`（out/sip-spike，gitignored）交
 **待真人收据四条**（未验不记）：①首页按住问天气→出页+新卡 ②该页按住≥350ms 追问→页刷新+同卡原地更新 ③回首页再问→第二张新卡 ④cron 页（session 空）按住→落母体。busybox wget POST 段错误是工具件（页已落），与引擎无关。
 
 **设备终态**：redfin 新双件在役；晨报 cron 明晨 08:00 待验；他线脏件（kb.rs/audio.rs/protocol.rs/enchilada）仍在工作区未裹挟。
+
+## 2026-09-24 — 刀4 拦路虎：母体 aginx-server 执行位丢失（连不上母体根因+修复收据）
+
+用户实测刀4 报「连不上母体」。voice 日志：`session me`（刀4 路由行正常）→ `front front exit exit status: 1` → 地板话。逐层排查：router `agent send me` 两失败臂（UDS 不通 / ok=false）均 exit 1 且 voice 把子进程 stderr `Stdio::null()` 吞掉；设备实查 `pidof aginx-server` 空、`aginx-svc status aginx` = **failed（5 exits in breaker window）**、aginx.log 零新行。
+
+**根因**：`/var/lib/aginx/pkgfiles/aginx/bin/aginx-server` 09-23 06:07 换装（母体刀2 直调件，24749040B）落位时**丢执行位（0644）**，且换装后未重启——老进程带旧 inode 一直活到刀4 部署的 aginx-reboot（15:53），重启后 svcd 每次 spawn exec 失败（EACCES，零输出零日志），5 次进断路器钉死 failed。前台手跑实证 `timeout 6 …aginx-server → rc=126 Permission denied`。同批扫描：全 pkgfiles/var/bin/libexec 无第二件漏位（其余非执行位件全是模型/字体/.aginxmd 数据）。
+
+**修复**：`chmod 755` + `aginx-svc restart aginx` → ready（pid 2968，listening /run/aginx.sock）。母体直答腿真机收据：`aginx agent send me 就一句话回我:在吗` → **「在。」rc=0**（正是刀4 `Some("me")` 走的 SendTarget::Mother 臂——路由本身无罪，此前头号嫌疑排除）。`agent status`：前台母体、在册化身 1。
+
+**附带观察**：①svcd 对 exec 失败完全无声（单元日志零行，只能靠 status 识别）——observability 缺口记档；②断路器 5 连失败后 failed 状态无人唤醒会躺 ~9h+（本次 15:53 钉死到 00:0x 手动 restart）；③brain.json 缺失的 kernel boot fail 在早启也出现过 5 连（/home 晚于单元就绪），同会进断路器。三者皆 svcd 小刀候选，未动手。
+
+**教训入律**：换在跑 binary 三律→四律：staging 必同 fs / 落位后必 md5 / **落位后必验 -x（scp/cat 新写文件 0644，rename 旧件才保位）** / 重启用 aginx-reboot（换装不重启=验证的是旧进程）。
+
+**设备终态**：aginx 单元 ready（执行位已修，06:07 件首次真上线）；刀4 四条真人收据恢复可测。
