@@ -8568,3 +8568,20 @@ user 4=owner，key 本体只落服务器 0600 临时文件、经 env 传给 dup�
 
 **复验**：零凭据 fresh clone → 12 文件，skill 文件与本地 diff 字节一致。
 分身在 duphub 的新版本快照即含本 skill。
+
+### 2026-09-24 — #380 订正：分身结构只有 flows/，没有 skills/
+
+用户纠错后对源核实（opencarrier crates/kernel/prompt_sources.rs）：
+runtime 只扫 **`workspace/flows/`**（目录格式 `flows/<name>/flow.md`，
+legacy `flows/<name>/SKILL.md` 仍可读，或平铺 `flows/<name>.md`）；
+frontmatter 只认 `name/description/max_iterations/tools/entry`，`description`
+为空则整个 flow 从目录静默消失。**`skills/` 目录从不被扫描**。
+
+上一条的 `skills/aginxbrowser-template.md` 双重错（目录不扫+frontmatter
+键不认），已订正为 `flows/aginxbrowser-template/flow.md`（canonical
+格式，name+description 齐全），重推 duphub 新版本快照（skills/ 下那件
+从快照消失，duphub 快照模型删除=缺席）。零凭据 clone 复验：flows/ 件
+在、旧 skills/ 件无。
+
+**连带发现**：hub 分身原有的 `skills/design-and-implement.md` 同样是
+死件（同样不被扫）——迁移 flows/ 与否待裁决，未动。
