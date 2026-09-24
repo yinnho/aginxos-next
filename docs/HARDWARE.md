@@ -8549,3 +8549,22 @@ source_url），纯视觉换代：
 **教训**：手写 PNG unfilter 验证器本轮两次产出与眼见矛盾的垃圾数（透明
 1.87M/纯白 59.8万），PIL+numpy 仲裁得真相全绿——**像素回验一律 PIL，手搓
 unfilter 弃用**。
+
+### 2026-09-24 — 模板生成 workflow 固化为分身 skill（#380）
+
+分叉③收讫：workflow 写成 `skills/aginxbrowser-template.md` 进
+frontend-design 分身（契约六条+磷光宪法���板+五步流程+设备事实），并
+推上 duphub——分身从此自带「给 AginxOS 出结果页模板」的完整 flow。
+
+**push 中间撞出一处真缺口**：dup CLI 的 push 只实现过 runtime 形状
+（`{base_hash, files, deletes}` 增量快进），duphub 端点是快照模型
+（`{hash, files}` 全量、响应 `{name,version,status}`）——首推 422
+missing field `hash`。修=push/remote 双形状分支（aginx-carrier 97b855e，
+templates=全量快照+推后回拉 manifest 当新基准），11/11 测试绿。
+
+**凭据**：duphub 无在册 key——服务器侧临时铸 key（api_keys 直插
+user 4=owner，key 本体只落服务器 0600 临时文件、经 env 传给 dup、全程
+零回显），推完即删行+删文件（复查 count=0）。
+
+**复验**：零凭据 fresh clone → 12 文件，skill 文件与本地 diff 字节一致。
+分身在 duphub 的新版本快照即含本 skill。
