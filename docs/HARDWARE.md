@@ -8433,3 +8433,17 @@ M48① 的 rvoip spike 客户端 `aginx-call`（out/sip-spike，gitignored）交
 用户看二修后：①「aginxos要离顶一个现在aginxos字体大小的距离」——二修的顶距从屏幕顶算（104px），但视觉顶=状态行，字标距状态行底只剩 ~16px 显得贴顶；改 wordmark_home_y = STATUS_BOTTOM(96) + 一个字标字高(104) = 200。②「用户输入的那个字是跟在按住屏幕说话的下面的」——二修把输入输出行钉到卡带上方钉错了，归位 prompt_y + 8×PROMPT_SCALE + 64（提示行正下方，同字号 6）。
 
 host 门 46/46。换装四律：md5 924c99c7 双验、-x、kill 重生 pid 9962、readlink 对真身。`--ppm` face3-talk 眼验：状态行→空一字体→字标→空一字体→提示行+光标，空态文案居下半屏带。
+
+### 2026-09-24 — 刀7 四修：顶部落条对话框退役（4d9a3eb）
+
+用户裁决：「顶部屏幕出对话框去掉，按住屏幕说话下面那个就是对话框」。
+`paint_dialog`（300px 顶带+绿分割线）连函数带测试带调用点全删——按住
+说话不再在任何面顶部落条；对话面=首页提示行（`> 正在听/正在想`）+ 其
+正下方的输入输出行（识别句活更新，doc mtime 轮询+125ms 呼吸重画本来
+就在驱动）。按住/90s 窗内 125ms 收紧轮询保留（caption 活更新+页开让
+位检测跟手）。
+
+部署：musl 构建 3a8aac88，四律换装（staging 同 fs rename、md5 双验、
+755、kill 后 pid 10901 `/proc/exe` 无 `(deleted)`=新 inode 在跑）。
+离屏眼验：`--ppm /tmp/face4` 的 talk/prompt-typing 两面顶部无落条，
+prompt-typing 提示行正下方有识别句。真人手验挂账。
