@@ -8508,3 +8508,23 @@ build_cache 高）复测纯白归零。
 slow-read, in-template markdown render」。物理屏当前即新模板渲染的股价
 结果页，真人眼验挂账。待拍板三叉：①hub 下载鉴权放开与否；②weather.html
 是否同流程过一遍；③流程沉淀 skill/文档与否。
+
+### 2026-09-24 — hub 下载鉴权放开（#378，用户裁决「放开」）
+
+上条收据的待拍板分叉①已裁决：duphub 对 **public+免费模板匿名开放下载**
+（GitHub 式），付费/私有仍强制认证。落刀两处：
+
+- **aginx-hub**（本地 6a0f404→推 deploy bare 仓 + scp handlers.rs 上服务器
+  增量编译换装重启）：resolve_version_record 的 viewer 改可选——
+  `anonymous_ok = public && price==0` 时无凭据放行，付费/私有路径仍
+  `401/402/403`。服务器在跑 checkout（/data/www/aginx-hub）有大量未提交
+  工作树改动，未动其 git 状态，纯文件级换装（换装走 mv 防 text file busy，
+  旧二进制留 bin/aginx-hub.bak-08f9 回滚点）。
+- **dup CLI**（aginx-carrier 8c958fd）：clone/pull/init 读操作 key 改可选
+  （空=不发 Authorization 头），push 仍强制。装 v0.2.0 替换 Mac 上残留的
+  **上游 opencarrier-clones dup**——它是第一跑 404 的真根因（默认打
+  `/api/clones/` runtime 形状，hub 无此路由），非鉴权。
+
+**复验**：零凭据（无 ~/.dupconfig、无 env key）`OPENCARRIER_URL=https://duphub.com
+dup clone frontend-design` → 11 文件落地，与 operator-scp 参照 `diff -r`
+零差异。curl 匿名打 manifest 200。dup 11/11 测试绿。
