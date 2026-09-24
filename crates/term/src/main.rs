@@ -2992,8 +2992,8 @@ fn main() {
         } else if boot_logo_until.is_some() {
             50
         } else if talk_holding || hold_face_until.is_some_and(|t| Instant::now() < t) {
-            // 刀C→09-24 解禁: 对话框在任何面（含首页/Talk）都在顶——识别
-            // 句活更新走 face 文件轮询
+            // 按住中/释放后 90s 窗内收紧轮询：识别句（首页 caption）活
+            // 更新 + 回复落地页开检测跟手（顶部对话框已随 09-24 四修退役）
             125
         } else if matches!(mode, Mode::Home) {
             1000
@@ -4301,20 +4301,6 @@ fn main() {
                             r.ime_strip(buf, &ime, &kg);
                         }
                     }
-                }
-                // 刀C→09-24 解禁 按住对话框：任何面（含首页/Talk）按住
-                // 说话（或释放后 90s 窗内）顶部落下的对话条——hint +
-                // 当前识别句，活更新。
-                if talk_holding || hold_face_until.is_some_and(|t| Instant::now() < t) {
-                    talk::paint_dialog(
-                        buf,
-                        pitch,
-                        w,
-                        h,
-                        &font,
-                        talk::hint(voice.alive, talk_holding, voice.typing()),
-                        voice.doc.line.as_deref(),
-                    );
                 }
                 term.clear_row_dirty();
                 kb_dirty = false;
