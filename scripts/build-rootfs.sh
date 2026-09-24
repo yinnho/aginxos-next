@@ -510,6 +510,13 @@ chmod 600 "${TREE}/etc/shadow"
 if [ "${BOOT_STYLE}" != "vendor-boot" ]; then
   sed -i '' '/init\.d\/adbd/d' "${TREE}/etc/inittab"
 fi
+
+# /home 出厂整树（结构刀④）：真源=仓里 home/（docs/FS.md）——SOUL/
+# MEMORY、photos/files 空树占位、workflows/clone-creator 出厂助理。
+# 内嵌种子机制已退役（结构刀②③），镜像不带这棵树=裸 L0 首启无母体
+# 人格、无助理。「OTA 不覆盖 /home」只管升级通道——烤线是全新盘灌注，
+# 不受此限。
+cp -R "${ROOT}/home/." "${TREE}/home/"
 # 机型数据注入（D14）：bringup 脚本与 device.toml 都来自 devices/<codename>/。
 # bringup 内容 verbatim 搬运（211 行 mixer recipe 那种收据流不重排）；
 # device.toml 落 /etc/aginx/（hwd::load_or_exit 的读点——烤错档案=开机
