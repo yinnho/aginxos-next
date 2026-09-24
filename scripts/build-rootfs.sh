@@ -585,8 +585,8 @@ cp -R "${RECIPE}/libexec/aginx/." "${TREE}/usr/libexec/aginx/"
 STAMP="$(git -C "${ROOT}" log -1 --format="aginxos ${DEVICE} %h %cd" --date=short 2>/dev/null || echo "aginxos ${DEVICE} unknown") l0"
 echo "${STAMP}" > "${TREE}/etc/aginx-version"
 
-# L0（刀4）：router/server/runtime 三件不烤——母体=`aginx` 树包
-# （bin/{aginx,aginx-server,aginx-runtime}，exec=bin/aginx → face
+# L0（刀4；结构刀① 起两件）：router/server 不烤——母体=`aginx` 树包
+# （bin/{aginx,aginx-server}，exec=bin/aginx → face
 # /var/bin/aginx，[service] 单元随包走——pkgs/aginx/pkg.toml）。
 # Platform CLIs (new-repo builds; N4③b 改姓四件)。
 # 刀F（2026-09-12）：qr/pair/update 出镜像走包——L0 是 Linux，不预生成

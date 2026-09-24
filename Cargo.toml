@@ -1,6 +1,10 @@
 [workspace]
 resolver = "2"
+# 单 workspace（2026-09-24 结构刀①合并：原 mother/ 独立 workspace 并入，
+# 两把锁合一，check.sh 从此盖全部 34 件）。crates/runtime 现指母体引擎
+# carrier-runtime（原 aginx-runtime 已退役删除）。
 members = [
+    # ── OS 面（aginx-*）──
     "crates/agi",
     "crates/agio",
     "crates/qr",
@@ -22,10 +26,21 @@ members = [
     "crates/gateway",
     "crates/pair",
     "crates/hwd",
+    # ── 母体引擎面（carrier-*，自 mother/ 并入）──
+    "crates/carrier",
+    "crates/types",
+    "crates/memory",
+    "crates/clone",
+    "crates/dup",
+    "crates/carrier-gateway",
+    "crates/lifecycle",
+    "crates/kernel",
+    "crates/ilink",
+    "crates/webhook",
+    "crates/web",
+    "crates/agf",
+    "crates/agmem",
 ]
-# mother/ 自成 workspace（母体引擎子树，刀2 起 server 直依赖）——
-# 不隔离的话它的 workspace.dependencies 继承会被错认到本根上
-exclude = ["mother"]
 
 [workspace.package]
 version = "0.1.0"
@@ -33,16 +48,100 @@ edition = "2021"
 license = "MIT"
 repository = "https://github.com/yinnho/aginxos"
 authors = ["yinnho"]
+rust-version = "1.75"
 
 [workspace.dependencies]
-libc = "0.2"
-anyhow = "1"
-async-trait = "0.1"
-thiserror = "1"
+# Async runtime
+tokio = { version = "1", features = ["full"] }
+futures = "0.3"
+bytes = "1"
+
+# Serialization
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-tokio = { version = "1", features = ["full"] }
+toml = "0.8"
+
+# Error handling
+thiserror = "2"
+anyhow = "1"
+
+# Logging / Tracing
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+# CLI
+clap = { version = "4", features = ["derive"] }
+
+# Time
+chrono = { version = "0.4", features = ["serde"] }
+chrono-tz = "0.10"
+sha1 = "0.10"
+# IDs
+uuid = { version = "1", features = ["v4", "v5", "serde"] }
+async-trait = "0.1"
+dirs = "6"
+# Security
+sha2 = "0.10"
+hex = "0.4"
+rand = "0.8"
+ed25519-dalek = { version = "2", features = ["rand_core"] }
+# Testing
+rmp-serde = "1"
+tempfile = "3"
+
+# Storage / misc
+rusqlite = { version = "0.31", features = ["bundled", "serde_json"] }
+regex = "1"
+regex-lite = "0.1"
+lazy_static = "1.4"
+dashmap = "6"
+once_cell = "1"
+libc = "0.2"
+
+reqwest = { version = "0.12", default-features = false, features = ["json", "stream", "rustls-tls", "gzip", "deflate", "brotli", "blocking", "multipart", "cookies"] }
+base64 = "0.22"
+urlencoding = "2"
+flate2 = "1"
+tar = "0.4"
+wasmtime = "47"
+hmac = "0.12"
+zeroize = { version = "1", features = ["derive"] }
+libloading = "0.8"
+shlex = "1"
+
+# agent:// 客户端所在 crate（经网关路由外部 CLI 工具），版本对齐 agc
+tokio-rustls = "0.26"
+rustls = { version = "0.23", default-features = false, features = ["ring", "std"] }
+rustls-pki-types = "1"
+webpki-roots = "1"
+
+# Webhook inbound channel HTTP server (first server-side HTTP surface)
+axum = "0.8"
+
+# ilink channel deps
+md-5 = "0.10"
+roxmltree = "0.20"
+aes = "0.8"
+cbc = "0.1"
+
+# Internal crates (OS 面)
+agi = { path = "crates/agi" }
+agio = { path = "crates/agio" }
+
+# Internal crates (母体引擎面)
+carrier-types = { path = "crates/types" }
+carrier-memory = { path = "crates/memory" }
+carrier-clone = { path = "crates/clone" }
+carrier-gateway = { path = "crates/carrier-gateway" }
+carrier-lifecycle = { path = "crates/lifecycle" }
+carrier-runtime = { path = "crates/runtime" }
+carrier-kernel = { path = "crates/kernel" }
+carrier-ilink = { path = "crates/ilink" }
+carrier-webhook = { path = "crates/webhook" }
+carrier = { path = "crates/carrier" }
 
 [profile.release]
 lto = true
+codegen-units = 1
 strip = true
+opt-level = 3

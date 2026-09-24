@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # n2 acceptance — 平台心脏上机并行试跑（N2①，旧宪法 D4–D12——ARCH.md 已删，现行=docs/FS.md）。
 #
-# 在现役设备上以隔离树并行验证新仓三件（aginx / aginx-server /
-# aginx-runtime）：不碰老 carrier 的 ~/.aginx（宪法两线并行），不注册
+# 在现役设备上以隔离树并行验证新仓两件（aginx / aginx-server；
+# aginx-runtime 已随结构刀①退役删除）：不碰老 carrier 的 ~/.aginx（宪法两线并行），不注册
 # 单元（那是 N3 agpkg 的事），不进 PATH（避免与老 relay 的 aginx 撞名，
 # 一律显式路径调用）。
 #
@@ -44,23 +44,22 @@ cleanup() {
 }
 trap cleanup EXIT
 
-[ -x "$BIN_DIR/aginx" ] && [ -x "$BIN_DIR/aginx-server" ] && [ -x "$BIN_DIR/aginx-runtime" ] \
+[ -x "$BIN_DIR/aginx" ] && [ -x "$BIN_DIR/aginx-server" ] \
   || { echo "n2: musl binaries missing under $BIN_DIR — cargo zigbuild first"; exit 1; }
 
-echo "==> push 三件 + 隔离树起手"
+echo "==> push 两件 + 隔离树起手"
 drv "rm -rf $TREE && mkdir -p $TREE/bin $TREE/cmds"
 adbx push "$BIN_DIR/aginx"         "$TREE/bin/aginx"         >/dev/null
 adbx push "$BIN_DIR/aginx-server"  "$TREE/bin/aginx-server"  >/dev/null
-adbx push "$BIN_DIR/aginx-runtime" "$TREE/bin/aginx-runtime" >/dev/null
-drv "chmod +x $TREE/bin/aginx $TREE/bin/aginx-server $TREE/bin/aginx-runtime"
-expect_rc "三件就位（exec 位补上）"
+drv "chmod +x $TREE/bin/aginx $TREE/bin/aginx-server"
+expect_rc "两件就位（exec 位补上）"
 
 # 试跑工具面：一个 sh 回声命令（真工具派发走它；真包工具 N3 接）
 drv "printf '#!/bin/sh\n# aginx:summary=回声（N2 试跑）\nprintf \"echo: %%s\\\\n\" \"\$*\"\n' > $TREE/cmds/aginx-dev-echo && chmod +x $TREE/cmds/aginx-dev-echo"
 expect_rc "aginx-dev-echo 工具落位"
 
 # launcher：key 从 /etc/aginx/env 单行取（不整读文件），其余全是显式路径
-drv "printf '#!/bin/sh\nset -eu\nexport %s=\$(grep \"^%s=\" /etc/aginx/env | sed \"s/^[^=]*=//\")\nexport AGINX_HOME=/home/.aginx-n AGINX_SOCK=$SOCK\nexport AGINX_BIN=$TREE/bin/aginx AGINX_RUNTIME_BIN=$TREE/bin/aginx-runtime\nexport AGINX_CMD_PATH=$TREE/cmds\nexec $TREE/bin/aginx-server\n' $KEYVAR $KEYVAR > $TREE/bin/n2-launch.sh && chmod 700 $TREE/bin/n2-launch.sh"
+drv "printf '#!/bin/sh\nset -eu\nexport %s=\$(grep \"^%s=\" /etc/aginx/env | sed \"s/^[^=]*=//\")\nexport AGINX_HOME=/home/.aginx-n AGINX_SOCK=$SOCK\nexport AGINX_BIN=$TREE/bin/aginx\nexport AGINX_CMD_PATH=$TREE/cmds\nexec $TREE/bin/aginx-server\n' $KEYVAR $KEYVAR > $TREE/bin/n2-launch.sh && chmod 700 $TREE/bin/n2-launch.sh"
 expect_rc "launcher 落位（key 只进 env 不进参数表）"
 
 start_server() {

@@ -17,8 +17,8 @@
   crontabs（N5④：备份 now 定时行）、agpkg.manifest
   （N4 切净：8 条，删 aginx/aginx-carrier 两行，sig 由烤机脚本重签）。
 - `libexec/aginx/` — 守护的家（D13：libexec 不进路由器命令扫描）。net-watch/
-  net-rejoin 两个 sh 在此；aginx-svcd/aginx-server/aginx-runtime/aginx-secretd/
-  aginx-gateway 由脚本落位。
+  net-rejoin 两个 sh 在此；aginx-svcd 由脚本落位（L0 刀4 起 server/secretd/
+  gateway 走包不烤；结构刀① 起 aginx-runtime 物理删除——引擎在 server 进程内）。
 - `usr/bin/` — **命令宇宙的元数据层**：16 个 `.aginxmd` sidecar（编译命令的
   门面说明，二进制由脚本落位改名后与 sidecar 同名相邻）+ 4 个 sh 面
   （aginx-web/file/mem = 桥到 provision 后的包二进制 aginx-web/agf/agmem，
@@ -32,14 +32,14 @@
 
 | 来源 | 产物 | 落位 |
 |---|---|---|
-| 本仓 target/musl | aginx | /usr/bin（裸名，路由器） |
-| 本仓 target/musl | aginx-server, aginx-runtime | /usr/libexec/aginx/ |
-| 本仓 target/musl | aginx-voice, aginx-term, aginx-pkg, aginx-svc, aginx-boot-ok | /usr/bin |
+| 本仓 target/musl | aginx-pkg, aginx-svc, aginx-boot-ok（vendor-boot 机型）, aginx-done, aginx-secret, aginx-download | /usr/bin |
 | 本仓 target/musl | aginx-svcd | /usr/libexec/aginx/ |
-| 老仓 target/musl | aginxos-init, aginxos-agent | /aginxos/（trampoline） |
-| 本仓 target/musl | aginx-download, aginx-update | /usr/bin（N5① 吸收重编，修三死路径） |
-| 本仓 target/musl | aginx-qr（第二次独立 zigbuild，feature 陷阱）, aginx-done, aginx-secret | /usr/bin（N5② 吸收重编） |
-| 本仓 target/musl | aginx-secretd | /usr/libexec/aginx/（N5② 吸收重编） |
+| 冻结资产（.local，非老仓） | aginxos-init, aginxos-agent | /aginxos/（trampoline 对；device.toml 有 [update] 节才烤——redfin 烤、enchilada 不烤） |
+
+L0 起不烤（一切皆包）：aginx/aginx-server（母体=`aginx` 树包，bin 两件 +
+`[service]` 单元随包走）、aginx-voice/term/qr/update/secretd/gateway。
+aginx-runtime 已随结构刀①（2026-09-24 workspace 合一）物理删除——引擎在
+aginx-server 进程内直跑，再无独立二进制。
 | 本仓 target/musl | aginx-gateway | /usr/libexec/aginx/（N5⑤ 远端通道守护；id/secret 不进镜像，刷机日灌注） |
 | 本仓 rootfs/src/*.c（zig cc） | nlscan→aginx-net-scan, wifi-join→aginx-net-join, reboot2→aginx-reboot, paneloff→aginx-panel-off | /usr/bin |
 | devices/${DEVICE}/cam + 本仓 rootfs/src/jpegenc_tj.c | cam-shot→aginx-cam-shot（build-cam.sh 带机型 cam 目录；传感器源=机型数据 D14） | /usr/bin |

@@ -1,5 +1,5 @@
 # aginx — 母体包（D11 母体=aginx）。刀2 起 server 进程内直调 kernel，
-# 不再 spawn aginx-runtime（该二进制的物理删除是刀5）。
+# 不再 spawn aginx-runtime（该二进制已随结构刀①物理删除）。
 # tree 包：/var/bin/aginx 是指进 pkgfiles 的 symlink（exec=bin/aginx）；
 # server 真身由单元直接指 pkgfiles 路径 spawn——/proc/exe 解析到真身，
 # secret.policy brain.primary 已加该路径（必修①，不补=绿灯无脑）。

@@ -221,7 +221,7 @@ pub fn ensure_template_version(files: &mut BTreeMap<String, Vec<u8>>) -> bool {
 }
 
 /// Install-time hard format validation (the "law enforcement" half of
-/// `docs/CLONE-FORMAT.md`). Rejects definition-layer layouts the runtime
+/// `crates/clone/CLONE-FORMAT.md`). Rejects definition-layer layouts the runtime
 /// silently mis-parses — the two historical killers:
 ///
 /// 1. Top-level `skills/` directory: `scan_flows` only scans `flows/`, so every

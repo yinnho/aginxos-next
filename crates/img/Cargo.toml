@@ -1,8 +1,8 @@
 [package]
 name = "aginx-img"
-version = "0.1.0"
-edition = "2021"
-license = "MIT"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
 description = "JPEG decode for aginx-term's photo viewer (M39) — vendored libjpeg-turbo"
 
 [dependencies]

@@ -63,7 +63,8 @@ tools: [system_time, web_search, web_fetch, knowledge_list, knowledge_read, know
 
 /// The clone format spec, seeded into every new clone's `knowledge/format-spec.md`.
 ///
-/// Source of truth is `docs/CLONE-FORMAT.md` in this repo — the runtime parser
+/// Source of truth is `crates/clone/CLONE-FORMAT.md` (moved from the old
+/// mother/docs/ at the 2026-09-24 workspace merge) — the runtime parser
 /// (`carrier_types::flow::parse_flow_def`, `manifest_builder::scan_flows`) is the
 /// legislator, this doc is its published translation. Keeping it `include_str!`
 /// from the repo doc means the spec ships with the binary version: upgrading
@@ -72,7 +73,7 @@ tools: [system_time, web_search, web_fetch, knowledge_list, knowledge_read, know
 ///
 /// A golden-sample test parses the flow example embedded in this doc with
 /// `parse_flow_def`; if the doc and the parser disagree, CI fails.
-pub const CLONE_FORMAT_SPEC: &str = include_str!("../../../docs/CLONE-FORMAT.md");
+pub const CLONE_FORMAT_SPEC: &str = include_str!("../CLONE-FORMAT.md");
 
 /// Marker stamped at the top of the seeded spec file so the reseeding
 /// reconciler can tell "system-seeded spec" (version-tracked, may overwrite)

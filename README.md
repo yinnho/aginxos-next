@@ -42,8 +42,8 @@ re-cut around the agent's body:
   Display is request semantics: pages, not apps.
 - **One machine, one server.** The platform is a single web server — the
   mother (`aginx-server`): front desk, routing, session ledger. Avatars
-  (agent personas) are folders under `~/.aginx/workspaces/`, run by one
-  runtime engine over a stdio frame protocol — hot when busy, cold when not.
+  (agent personas) are folders under `{AGINX_HOME}/workflows/`, run by one
+  engine in-process — hot when busy, cold when not.
 - **Everything external is a CLI.** Capabilities enter as `aginx-*`
   binaries registered by the filesystem itself; a single bare `aginx`
   router dispatches. Outbound is a CLI, inbound is a webhook — no in-process
@@ -134,7 +134,7 @@ flowchart TB
     K["Linux 4.19 stock kernel + vendor modules"]
     subgraph U["Rust userspace · musl static"]
         S["aginx-server — the mother<br/>front desk · routing · session ledger"]
-        R["aginx-runtime — one engine<br/>runs avatar folders over fast-agi stdio"]
+        R["carrier-* engine — kernel / runtime / clone / memory<br/>runs avatar folders in-process"]
         V["aginx-voice — ear + mouth<br/>local ASR/TTS, closed-vocab offline floor"]
         T["aginx-term — panel terminal<br/>agent canvas: HTML → DRM"]
         C["aginx-* CLIs — file-is-registry<br/>one bare aginx router"]
@@ -158,7 +158,7 @@ flowchart TB
 |-------|--------|------|
 | `crates/router` | `aginx` | the bare command — mother's face, file-is-registry dispatch |
 | `crates/server` | `aginx-server` | front desk (进/住/切/退), session cursor, request routing, session ledger |
-| `crates/runtime` | `aginx-runtime` | fast-agi engine: runs an avatar folder |
+| `crates/runtime` | — | `carrier-runtime` — the mother engine's agent loop + tool layer, in-process in the server (the standalone `aginx-runtime` binary was deleted at the 2026-09-24 workspace merge) |
 | `crates/agi` | — | fast-agi v0 frame types |
 | `crates/agio` | — | D1 output envelope for every CLI |
 | `crates/hwd` | — | device profile reader — the single legal source of machine facts (D14) |
@@ -176,6 +176,7 @@ flowchart TB
 | `crates/done` | `aginx-done` | provision done markers |
 | `crates/secret` | `aginx-secretd`/`aginx-secret` | secret sidecar daemon + admin face |
 | `crates/gateway` | `aginx-gateway` | remote channel — registers to the relay, collapses external JSON-RPC onto the server's UDS front |
+| `crates/{carrier,types,memory,clone,dup,carrier-gateway,lifecycle,kernel,ilink,webhook,web,agf,agmem}` | — | the mother engine (ex-`aginx-carrier`, merged 2026-09-24): kernel, agent runtime, clone format, memory tree, `agent://` client, inbound channels |
 
 ## Building & discipline
 

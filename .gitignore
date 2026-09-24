@@ -1,5 +1,13 @@
 /target
-/mother/target
+**/*.rs.bk
+*.pdb
+.env
+.env.*
+*.db
+*.db-shm
+*.db-wal
+*.sqlite
+*.sqlite3
 /out
 /.local
 /dist

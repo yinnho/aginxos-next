@@ -2,7 +2,8 @@
 name = "aginx-web"
 # D13 改名（2026-09-09）：原 agb v0.2.0 → aginx-web v0.3.0。包名/二进制名/
 # clap 名同步换，行为零变化；设备侧经 aginx-pkg 换装（manifest 行随迁）。
-version = "0.3.0"
+# 2026-09-24 结构刀①：版本并入 workspace 统一 0.1.0。
+version.workspace = true
 edition.workspace = true
 license.workspace = true
 repository.workspace = true

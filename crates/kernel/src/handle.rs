@@ -1056,7 +1056,7 @@ impl CarrierKernel {
             tracing::info!(name = %clone_name, "Added missing `version` field to template.json (DupHub listing metadata requires it)");
         }
 
-        // Install-time hard format gate (docs/CLONE-FORMAT.md enforcement):
+        // Install-time hard format gate (crates/clone/CLONE-FORMAT.md enforcement):
         // reject the two layouts the runtime silently mis-parses — top-level
         // `skills/` (invisible to scan_flows) and flow files without a
         // non-empty description (flow never injected, tools dead). The
