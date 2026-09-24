@@ -63,6 +63,15 @@ pub fn hold_hit(w: usize, x: usize, y: usize) -> bool {
     true
 }
 
+/// 刀1 让位期右划回主页的净位移阈值（屏幕像素，约面板宽的 15%）。
+pub const SWIPE_HOME_PX: isize = 160;
+
+/// 刀1 让位期右划判据：净位移向右过阈值，且横向占优（竖向滚动不误触）。
+/// 左划不触发（那是往后翻页的方向，归刀2 的 pager）。
+pub fn swipe_home_hit(dx: isize, dy: isize) -> bool {
+    dx > SWIPE_HOME_PX && dx > dy.abs() * 2
+}
+
 
 
 fn keyed(a: u32, b: u32) -> bool {
@@ -396,6 +405,17 @@ mod tests {
         assert_eq!(hint(true, true, false), "正在听");
         assert_eq!(hint(true, false, true), "正在想");
         assert_eq!(hint(true, false, false), "按住屏幕说话");
+    }
+
+    #[test]
+    fn swipe_home_gesture() {
+        assert!(swipe_home_hit(200, 20)); // 清晰右划
+        assert!(swipe_home_hit(SWIPE_HOME_PX + 1, 0)); // 刚过阈值
+        assert!(!swipe_home_hit(SWIPE_HOME_PX, 0)); // 阈值本身不触发
+        assert!(!swipe_home_hit(100, 0)); // 太短（页面内小拖动）
+        assert!(!swipe_home_hit(-300, 0)); // 左划 = 翻页方向（刀2）
+        assert!(!swipe_home_hit(300, 200)); // 斜拖，竖滚主导
+        assert!(!swipe_home_hit(300, -250)); // 斜拖，向上滚主导
     }
 
     #[test]
