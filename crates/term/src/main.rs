@@ -103,9 +103,12 @@ const VOICE_HOLD: &str = "/run/aginx-voice/hold";
 // 刀4 页=会话：当前页的卡路径（开页者写——term 点卡 / voice 出页）。
 // 让位期按住时读它当 hold 靶：「在哪个页就是哪个对话的延续」。
 const VOICE_PAGE: &str = "/run/aginx-voice/page";
-// 刀4 让位期按住成军门槛：页上短按/轻扫是浏览器的手势（滚动/点击），
-// 按住不动这么久才收页对话——别把浏览误判成说话。
-const HOLD_ARM: Duration = Duration::from_millis(350);
+// 按住成军门槛（09-24 二修用户裁决：按住 2 秒才是说话——短按/轻触
+// 一律不算语音，防误触）。让位期（浏览器持屏）同一门槛。
+const HOLD_ARM: Duration = Duration::from_millis(2000);
+// 按住期间净位移超过这个值 = 滑动（滚动/手势），不算语音输入——计时的、
+// 已成军的都撤。指头微抖不该撤，24px 起步（约面板宽 2%）。
+const SLIDE_CANCEL_PX: isize = 24;
 
 fn fill_rect(pix: &mut [u32], pitch: usize, w: usize, h: usize, x: i32, y: i32, rw: i32, rh: i32, c: u32) {
     let (mut x, mut y, mut rw, mut rh) = (x, y, rw, rh);
@@ -2828,6 +2831,12 @@ fn main() {
     // 刀4 让位期按住：浏览器持屏时手指按下的时刻。按住满 HOLD_ARM 仍没
     // 抬/没拖 = 成军（收页回屏，hold 带页靶）；短按/拖动归浏览器。
     let mut yield_down: Option<Instant> = None;
+    // 09-24 二修：term 持屏时的按住计时（Talk 面/系统面）。满 HOLD_ARM
+    // (2s) 没抬没滑才成军说话；抬/滑即弃。
+    let mut hold_pending: Option<Instant> = None;
+    // 本次触摸累计净位移——超 SLIDE_CANCEL_PX 判滑动，撤语音。
+    let mut slide_dx: isize = 0;
+    let mut slide_dy: isize = 0;
     // 刀1 让位期右划：本次触摸累计的净位移（屏幕像素）。右向过
     // SWIPE_HOME_PX 且横向占优 = 收页回主页（同按住成军的取屏路）。
     let mut yield_dx: isize = 0;
@@ -2849,6 +2858,16 @@ fn main() {
                 let _ = std::fs::remove_file(cards::SHOW_PAGE);
             }
         }
+        // 09-24 二修：term 持屏按住满 HOLD_ARM(2s) 没抬没滑 = 说话成军。
+        // 系统面/Talk 面按住 = 新任务（空靶；页靶只在让位路有）。
+        if let Some(t) = hold_pending {
+            if Instant::now() - t >= HOLD_ARM {
+                hold_pending = None;
+                talk_holding = true;
+                talk_hold_set("");
+                redraw = true;
+            }
+        }
         // 刀C 屏幕所有权仲裁：show.html 在 = 浏览器持屏（panel.rs 同一谓词）。
         // 上升沿 drop Drm（关 fd 即释放 master）让位；下降沿取屏重画。
         if cards::page_showing() != yielded {
@@ -2861,6 +2880,7 @@ fn main() {
                 card_touch = None;
                 hold_face_until = None;
                 yield_down = None;
+                hold_pending = None;
                 blanked = false;
             } else {
                 eprintln!("aginx-term: taking the screen back");
@@ -2951,8 +2971,11 @@ fn main() {
             // 刀C: 让位中——盯 show.html 的所有权轮询；刀4: 按住在计时，
             // 收紧到 50ms 让 HOLD_ARM 的成军误差不超半拍
             if yield_down.is_some() { 50 } else { 200 }
+        } else if hold_pending.is_some() {
+            // 09-24 二修：按住在计时——收紧到 50ms 让 2s 成军点得准
+            50
         } else if card_touch.is_some() {
-            // 刀C: 卡片长按计时（700 ms 判拖/删）
+            // 刀C: 卡片按住（拖动判滚在 Drag 事件里）
             100
         } else if matches!(mode, Mode::Eye | Mode::Cam) {
             // M47⑤b: the eye polls files on this cadence — 400 ms capped
@@ -3041,6 +3064,8 @@ fn main() {
                         // keystroke — the main source of "typing lag".
                         Touch::Down(x, y) => {
                             down_y = y;
+                            slide_dx = 0;
+                            slide_dy = 0;
                             let mut consumed = false;
                             if std::env::var("AGINX_TERM_DEBUG").is_ok() {
                                 eprintln!("aginx-term: touch down {x},{y} kbvis={kb_visible} mode={}", matches!(mode, Mode::Running(_)));
@@ -3060,10 +3085,10 @@ fn main() {
                                 });
                                 consumed = true;
                             } else if matches!(mode, Mode::Talk) && talk::hold_hit(w, x, y) {
-                                talk_holding = true;
-                                talk_hold_set(""); // Talk 面按住 = 新对话，无页靶
+                                // 09-24 二修：按住 2s 才是说话——按下只记
+                                // 时刻，成军在循环顶
+                                hold_pending = Some(Instant::now());
                                 consumed = true;
-                                redraw = true;
                             } else if y < lg.toolbar_h {
                                 // BACK fires on press, same as keys
                                 if lg.toolbar_hit(x, y, toolbar_mode(&mode))
@@ -3343,8 +3368,8 @@ fn main() {
                                 redraw = true;
                             }
                             // 刀C 按住任意面对话：非 Talk 面没有 transcript，
-                            // 按下即顶起对话框。终端（键击优先）/取景/相机
-                            // （控件优先）不参与。
+                            // 按下起计——满 2s 成军（09-24 二修）。终端（键
+                            // 击优先）/取景/相机（控件优先）不参与。
                             if !consumed
                                 && !kb_visible
                                 && matches!(
@@ -3352,9 +3377,7 @@ fn main() {
                                     Mode::Home | Mode::Settings | Mode::Install(_) | Mode::Photos(_)
                                 )
                             {
-                                talk_holding = true;
-                                talk_hold_set(""); // 首页/系统面按住 = 新任务，空靶
-                                redraw = true;
+                                hold_pending = Some(Instant::now());
                             }
                         }
                         // Finger lifted: everything fired at Down already.
@@ -3362,6 +3385,7 @@ fn main() {
                         // dismisses the keyboard; rows resize + SIGWINCH.
                         Touch::Tap(_x, y) => {
                             held = None;
+                            hold_pending = None; // 09-24 二修：2s 内抬手 = 短按，不是语音
                             // 刀C 卡片：没拖过的短按 = 点开（POST /open，浏览器
                             // 落 show.html，让位仲裁下一拍接管）。
                             if let Some(ct) = card_touch.take() {
@@ -3440,6 +3464,7 @@ fn main() {
                         Touch::Up => {
                             held = None;
                             card_touch = None; // 拖完不算点开
+                            hold_pending = None; // 09-24 二修：滑动结束，成军计时作废
                             if talk_holding {
                                 talk_holding = false;
                                 talk_hold_clear();
@@ -3455,11 +3480,35 @@ fn main() {
                                 redraw = true;
                             }
                         }
-                        Touch::Drag(dy, _dx) => {
+                        Touch::Drag(dy, dx) => {
                             held = None; // finger slid off the key
+                            // 09-24 二修：滑动不算语音输入——累计净位移过阈
+                            // 值即撤（计时的、已成军的都撤）
+                            slide_dx = slide_dx.saturating_add(dx);
+                            slide_dy = slide_dy.saturating_add(dy);
+                            if slide_dx.abs() > SLIDE_CANCEL_PX || slide_dy.abs() > SLIDE_CANCEL_PX {
+                                hold_pending = None;
+                                if talk_holding {
+                                    talk_holding = false;
+                                    talk_hold_clear();
+                                    redraw = true;
+                                }
+                            }
                             if let Some(ct) = card_touch.as_mut() {
                                 // 刀C 卡片带拖动 = 滚动
                                 ct.dragged = true;
+                                let max = talk::cards_max_scroll(w, h, cards.len());
+                                let next =
+                                    (cards_scroll as isize - dy as isize).clamp(0, max as isize) as usize;
+                                if next != cards_scroll {
+                                    cards_scroll = next;
+                                    redraw = true;
+                                }
+                            } else if matches!(mode, Mode::Talk)
+                                && down_y >= talk::cards_top(w, h) as usize
+                            {
+                                // 09-24 二修：卡带缝上的拖动也算滚（卡多下拉
+                                // 查看）
                                 let max = talk::cards_max_scroll(w, h, cards.len());
                                 let next =
                                     (cards_scroll as isize - dy as isize).clamp(0, max as isize) as usize;
