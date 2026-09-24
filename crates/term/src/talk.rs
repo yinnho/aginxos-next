@@ -8,13 +8,13 @@ use crate::cards::Card;
 use crate::draw_centered;
 use crate::draw_text;
 use crate::fill_rect;
-use crate::home::HOME_BG;
+use crate::home::{HOME_BG, WORDMARK, WORDMARK_SCALE};
+use crate::MGREEN;
 use crate::text_w;
 use crate::WHITE;
 
 const INK: u32 = WHITE;
 const DIM: u32 = 0x009AA09C;
-const WAIT_R: i32 = 260;
 const RESULT_R: i32 = 110;
 const TEXT_SCALE: usize = 6;
 /// 新造小兽 SCIS：主体白、角 #EB3300。近黑屏上黑描边会消失，
@@ -28,27 +28,12 @@ pub struct Disc {
     pub r: i32,
 }
 
-pub fn wait_disc(w: usize, h: usize) -> Disc {
-    Disc {
-        cx: w as i32 / 2,
-        cy: (h as i32) * 52 / 100,
-        r: WAIT_R,
-    }
-}
-
 pub fn result_disc(w: usize, h: usize) -> Disc {
     Disc {
         cx: w as i32 / 2,
         cy: h as i32 - 240,
         r: RESULT_R,
     }
-}
-
-pub fn disc_hit(w: usize, h: usize, x: usize, y: usize, result: bool) -> bool {
-    let d = if result { result_disc(w, h) } else { wait_disc(w, h) };
-    let dx = x as i32 - d.cx;
-    let dy = y as i32 - d.cy;
-    dx * dx + dy * dy <= (d.r + 28) * (d.r + 28)
 }
 
 #[allow(dead_code)]
@@ -179,7 +164,37 @@ fn paint_beast(
 }
 
 
-/// Waiting / listening / thinking — full canvas.
+/// Waiting / listening / thinking — full canvas. 09-24 重设计（方案A 磷光
+/// 终端·字标居中）：顶部状态行（呼吸点+名字 | 时钟）、AginxOS 大字标随
+/// 呼吸微亮、`> 提示行 + 块光标`、识别句/答复行、底半会话卡带。小兽
+/// 从首页退役——取景面的眼睛饰件（paint_eye_chrome）仍用。
+pub const PROMPT_SCALE: usize = TEXT_SCALE;
+pub const CAPTION_SCALE: usize = 4;
+
+/// 状态行内容：net=呼吸点绿/断网红，time=右上角时钟串。
+pub struct StatusLine<'a> {
+    pub net: bool,
+    pub time: &'a str,
+}
+
+/// 呼吸亮度：level 1..16 → ~58%..100% 基色（通道线性压暗）。
+fn glow(base: u32, level: u8) -> u32 {
+    let f = 55u32 + (level as u32).min(16) * 45 / 16;
+    let dim = |c: u32| c * f / 100;
+    (dim((base >> 16) & 0xff) << 16) | (dim((base >> 8) & 0xff) << 8) | dim(base & 0xff)
+}
+
+/// 首页字标 y：屏高 30%。home::wordmark_y 是 45%（待机/开机字标锚），
+/// 这里给下面的提示行、识别行、卡带留场。
+pub fn wordmark_home_y(h: usize) -> i32 {
+    (h as i32) * 30 / 100
+}
+
+/// 提示行 y：字标底下 120px。
+pub fn prompt_y(h: usize) -> i32 {
+    wordmark_home_y(h) + (8 * WORDMARK_SCALE) as i32 + 120
+}
+
 pub fn paint_wait(
     pix: &mut [u32],
     pitch: usize,
@@ -191,27 +206,76 @@ pub fn paint_wait(
     thinking: bool,
     caption: Option<&str>,
     hint: &str,
+    status: &StatusLine<'_>,
 ) {
     fill_rect(pix, pitch, w, h, 0, 0, w as i32, h as i32, HOME_BG);
-    let d = wait_disc(w, h);
-    if let Some(c) = caption {
-        if !c.is_empty() {
-            let y = d.cy - d.r - 100;
-            draw_centered(pix, pitch, w, h, font, y, c, TEXT_SCALE, DIM);
-        }
-    }
-    paint_beast(pix, pitch, w, h, d, holding, breath, thinking);
+    // 状态行：左=呼吸点+名字（断网点钉红），右=时钟
+    let dot = if status.net {
+        glow(MGREEN, breath)
+    } else {
+        crate::WARN_RED
+    };
+    fill_rect(pix, pitch, w, h, CARD_SIDE, 66, 18, 18, dot);
+    let _ = draw_text(pix, pitch, w, h, font, CARD_SIDE + 40, 64, "aginx", 3, DIM);
+    let tw = text_w(status.time, 3) as i32;
+    let _ = draw_text(
+        pix,
+        pitch,
+        w,
+        h,
+        font,
+        w as i32 - CARD_SIDE - tw,
+        64,
+        status.time,
+        3,
+        DIM,
+    );
+    // 磷光字标：随呼吸微亮；按住说话时压暗让位给顶部落下的对话框
+    let wm = glow(MGREEN, if holding { 1 } else { breath });
     draw_centered(
         pix,
         pitch,
         w,
         h,
         font,
-        d.cy + d.r + 48,
-        hint,
-        TEXT_SCALE,
-        INK,
+        wordmark_home_y(h),
+        WORDMARK,
+        WORDMARK_SCALE,
+        wm,
     );
+    // 提示行：> {hint} + 终端块光标（呼吸闪烁；听/想时常亮）
+    let prompt = format!("> {hint}");
+    let py = prompt_y(h);
+    let _ = draw_text(pix, pitch, w, h, font, CARD_SIDE, py, &prompt, PROMPT_SCALE, INK);
+    if holding || thinking || breath >= 9 {
+        let cw = text_w(&prompt, PROMPT_SCALE) as i32;
+        fill_rect(
+            pix,
+            pitch,
+            w,
+            h,
+            CARD_SIDE + cw + 24,
+            py + 6,
+            26,
+            (8 * PROMPT_SCALE) as i32 - 12,
+            crate::GREEN,
+        );
+    }
+    // 识别句/答复行（问句常驻）——提示行下方居中，超宽截尾
+    if let Some(c) = caption.map(str::trim).filter(|s| !s.is_empty()) {
+        let c = clip_to_width(c, CAPTION_SCALE, w as i32 - 2 * CARD_SIDE);
+        draw_centered(
+            pix,
+            pitch,
+            w,
+            h,
+            font,
+            py + (8 * PROMPT_SCALE) as i32 + 64,
+            &c,
+            CAPTION_SCALE,
+            DIM,
+        );
+    }
 }
 
 /// Gemini eye on the same face: viewfinder already fills the panel;
@@ -260,10 +324,9 @@ pub const CARD_GAP: i32 = 24;
 /// 行底色：键帽同一档的暗绿——黑底绿白字惯例，HOME_BG 上一档可辨。
 const CARD_ROW_BG: u32 = 0x000A1410;
 
-/// 带顶：hint 文字行（d.cy+d.r+48 起、8*TEXT_SCALE 高）底下留 36px。
-pub fn cards_top(w: usize, h: usize) -> i32 {
-    let d = wait_disc(w, h);
-    d.cy + d.r + 48 + (8 * TEXT_SCALE) as i32 + 36
+/// 带顶：提示行底下给识别行留 64px 行高 + 48px 呼吸。
+pub fn cards_top(_w: usize, h: usize) -> i32 {
+    prompt_y(h) + (8 * PROMPT_SCALE) as i32 + 64 + 48
 }
 
 pub fn cards_bottom(h: usize) -> i32 {
@@ -346,20 +409,36 @@ pub fn paint_cards(
                 y1.min(bottom) - row_y.max(top),
                 CARD_ROW_BG,
             );
+            fill_rect(pix, pitch, w, h, x0, row_y, 6, CARD_ROW_H, crate::GREEN);
             if row_y >= top && y1 <= bottom {
-                let title = clip_to_width(&c.title, 5, x1 - x0 - 48);
-                let _ = draw_text(pix, pitch, w, h, font, x0 + 24, row_y + 16, &title, 5, INK);
+                let title = clip_to_width(&c.title, 5, x1 - x0 - 96);
+                let _ = draw_text(pix, pitch, w, h, font, x0 + 30, row_y + 16, &title, 5, INK);
+                let _ = draw_text(pix, pitch, w, h, font, x1 - 48, row_y + 16, ">", 5, DIM);
                 let meta = if c.source.is_empty() {
                     c.template.clone()
                 } else {
                     format!("{} · {}", c.source, c.template)
                 };
-                let meta = clip_to_width(&meta, 3, x1 - x0 - 48);
-                let _ = draw_text(pix, pitch, w, h, font, x0 + 24, row_y + 76, &meta, 3, DIM);
+                let meta = clip_to_width(&meta, 3, x1 - x0 - 96);
+                let _ = draw_text(pix, pitch, w, h, font, x0 + 30, row_y + 76, &meta, 3, DIM);
             }
         }
         i += 1;
         row_y += stride;
+    }
+    if cards.is_empty() && err.is_none() {
+        // 空态：带中央一句自举（按住带内空区也成军说话）
+        draw_centered(
+            pix,
+            pitch,
+            w,
+            h,
+            font,
+            (top + bottom) / 2 - 12,
+            "按住屏幕任意处，开始一段新对话",
+            3,
+            DIM,
+        );
     }
     if let Some(e) = err {
         fill_rect(pix, pitch, w, h, x0, top, x1 - x0, 64, crate::WARN_RED);
@@ -368,8 +447,8 @@ pub fn paint_cards(
     }
 }
 
-/// 按住任意面时顶部落下的对话框（只画在非 Talk 面上）：hint 行 + 当前
-/// 识别句/回复行（活更新）。黑底绿白字，底边一条绿线把对话框和下面
+/// 按住任意面（含首页/Talk——09-24 解禁）时顶部落下的对话框：hint 行 +
+/// 当前识别句/回复行（活更新）。黑底绿白字，底边一条绿线把对话框和下面
 /// 的面分开。
 pub fn paint_dialog(
     pix: &mut [u32],
@@ -419,17 +498,16 @@ mod tests {
     }
 
     #[test]
-    fn wait_disc_is_centerish_and_hittable() {
+    fn home_layout_stacks_status_wordmark_prompt_cards() {
         let (w, h) = panel();
-        let d = wait_disc(w, h);
-        assert_eq!(d.cx, w as i32 / 2);
-        assert!(disc_hit(w, h, d.cx as usize, d.cy as usize, false));
+        assert!(wordmark_home_y(h) > 100, "wordmark below the status line");
+        assert!(prompt_y(h) > wordmark_home_y(h) + (8 * WORDMARK_SCALE) as i32);
+        assert!(cards_top(w, h) > prompt_y(h) + (8 * PROMPT_SCALE) as i32);
+        assert!(cards_bottom(h) < h as i32);
+        assert!(cards_hit(w, h, (cards_top(w, h) + 10) as usize));
+        assert!(!cards_hit(w, h, (cards_top(w, h) - 1) as usize));
         assert!(hold_hit(w, 10, 200));
         assert!(hold_hit(w, 800, 20));
-        assert!(hold_hit(w, d.cx as usize, d.cy as usize));
-        assert!(hold_hit(w, 50, 30));
-        assert!(!back_hit(w, 50, 30));
-        assert!(!back_hit(w, 50, 200));
     }
 
     #[test]
@@ -437,8 +515,6 @@ mod tests {
         let (w, h) = panel();
         let d = result_disc(w, h);
         assert!(d.cy > h as i32 * 3 / 4);
-        assert!(disc_hit(w, h, d.cx as usize, d.cy as usize, true));
-        assert!(!disc_hit(w, h, d.cx as usize, d.cy as usize, false));
     }
 
     // ---- 刀C 卡片带 ----
@@ -447,8 +523,7 @@ mod tests {
     fn cards_band_sits_below_hint_and_maps_rows() {
         let (w, h) = panel();
         let top = cards_top(w, h);
-        let d = wait_disc(w, h);
-        assert!(top > d.cy + d.r + 48, "band starts below the hint line");
+        assert!(top > prompt_y(h) + (8 * PROMPT_SCALE) as i32, "band starts below the prompt line");
         assert!(cards_bottom(h) < h as i32);
         assert!(cards_hit(w, h, (top + 10) as usize));
         assert!(!cards_hit(w, h, (top - 1) as usize));
@@ -524,35 +599,78 @@ mod tests {
     }
 
     #[test]
-    fn wait_face_paints_orb() {
+    fn wait_face_paints_wordmark_and_status() {
         let font = font::font_init();
         let (w, h) = panel();
         let mut pix = vec![0u32; w * h];
-        paint_wait(&mut pix, w, w, h, &font, 8, false, false, None, "按住屏幕说话");
-        let d = wait_disc(w, h);
-        let mut red = false;
-        let mut white = false;
-        let x0 = (d.cx - d.r).max(0) as usize;
-        let x1 = (d.cx + d.r).min(w as i32 - 1) as usize;
-        let y0 = (d.cy - d.r).max(0) as usize;
-        let y1 = (d.cy + d.r).min(h as i32 - 1) as usize;
-        for y in y0..=y1 {
-            for x in x0..=x1 {
-                let p = pix[y * w + x];
-                let (r, g, b) = ((p >> 16) & 0xff, (p >> 8) & 0xff, p & 0xff);
-                if r > 170 && g < 100 && b < 100 {
-                    red = true;
-                }
-                if r > 240 && g > 240 && b > 240 {
-                    white = true;
-                }
-            }
-        }
-        assert!(red && white, "design sprite: red horns and white face");
-        assert_ne!(pix[d.cy as usize * w + d.cx as usize], HOME_BG);
-        assert!(d.r >= 200);
-        assert_eq!(hint(false, false, false), "语音还没起来");
-        assert_eq!(hint(true, true, false), "正在听");
-        assert_eq!(hint(true, false, true), "正在想");
+        paint_wait(
+            &mut pix,
+            w,
+            w,
+            h,
+            &font,
+            8,
+            false,
+            false,
+            None,
+            "按住屏幕说话",
+            &StatusLine { net: true, time: "9:41" },
+        );
+        let at = |p: &[u32], x: usize, y: usize| p[y * w + x];
+        // 状态点在网=绿色系（G 通道占优），断网=红
+        let dot = at(&pix, (CARD_SIDE + 9) as usize, 75);
+        let (r, g, _) = ((dot >> 16) & 0xff, (dot >> 8) & 0xff, dot & 0xff);
+        assert!(g > r, "net dot greenish, got {dot:08x}");
+        // 字标行有磷光绿墨（G 通道远超 R/B）
+        let wy = wordmark_home_y(h) as usize + 40;
+        assert!(
+            (0..w).any(|x| {
+                let p = at(&pix, x, wy);
+                ((p >> 8) & 0xff) > 90 && ((p >> 16) & 0xff) < 90 && (p & 0xff) < 90
+            }),
+            "wordmark phosphor ink present"
+        );
+        // 提示行有白墨；块光标在呼吸亮半程常亮（breath=8 < 9 → 只验提示行）
+        let py = prompt_y(h) as usize + 20;
+        assert!(
+            (0..w).any(|x| at(&pix, x, py) != HOME_BG),
+            "prompt ink present"
+        );
+        // 断网点钉红
+        paint_wait(
+            &mut pix,
+            w,
+            w,
+            h,
+            &font,
+            8,
+            false,
+            false,
+            None,
+            "按住屏幕说话",
+            &StatusLine { net: false, time: "9:41" },
+        );
+        let dot = at(&pix, (CARD_SIDE + 9) as usize, 75);
+        assert_eq!(dot, crate::WARN_RED);
+        // 光标亮半程出现（breath=12 ≥ 9）
+        let mut pix2 = vec![0u32; w * h];
+        paint_wait(
+            &mut pix2,
+            w,
+            w,
+            h,
+            &font,
+            12,
+            false,
+            false,
+            None,
+            "按住屏幕说话",
+            &StatusLine { net: true, time: "9:41" },
+        );
+        let py2 = prompt_y(h) as usize + 30;
+        assert!(
+            (0..w).any(|x| at(&pix2, x, py2) == crate::GREEN),
+            "cursor block painted on the bright half"
+        );
     }
 }

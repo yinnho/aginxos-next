@@ -2426,6 +2426,10 @@ fn host_ppm(out: &str) {
             false,
             None,
             talk::hint(true, false, false),
+            &talk::StatusLine {
+                net: true,
+                time: &clock.time,
+            },
         );
         let cards = vec![
             cards::Card {
@@ -2558,7 +2562,6 @@ fn ino_drain(_fd: libc::c_int) {}
 /// 刀C 卡片带上的按触：路径钉住（2s 重扫可能换序），拖动转滚动。
 struct CardTouch {
     path: std::path::PathBuf,
-    down: Instant,
     dragged: bool,
 }
 
@@ -2742,6 +2745,10 @@ fn main() {
                     false,
                     None,
                     talk::hint(voice.alive, false, false),
+                    &talk::StatusLine {
+                        net: boot_state_has_internet(),
+                        time: &clock.time,
+                    },
                 );
             }
             Mode::Eye => r.eye(buf, &voice, &lg),
@@ -2961,10 +2968,9 @@ fn main() {
             } else if voice.doc.eye || matches!(mode, Mode::Cam) { 12 } else { 30 }
         } else if boot_logo_until.is_some() {
             50
-        } else if !matches!(mode, Mode::Talk)
-            && (talk_holding || hold_face_until.is_some_and(|t| Instant::now() < t))
-        {
-            // 刀C: 按住对话框在顶——识别句活更新走 face 文件轮询
+        } else if talk_holding || hold_face_until.is_some_and(|t| Instant::now() < t) {
+            // 刀C→09-24 解禁: 对话框在任何面（含首页/Talk）都在顶——识别
+            // 句活更新走 face 文件轮询
             125
         } else if matches!(mode, Mode::Home) {
             1000
@@ -3039,8 +3045,8 @@ fn main() {
                             if std::env::var("AGINX_TERM_DEBUG").is_ok() {
                                 eprintln!("aginx-term: touch down {x},{y} kbvis={kb_visible} mode={}", matches!(mode, Mode::Running(_)));
                             }
-                            // 刀C 卡片带：widget 优先于按住说话——短按开、
-                            // 长按删（主循环计时）、拖动滚。
+                            // 刀C 卡片带：widget 优先于按住说话——短按开页；
+                            // 拖动滚（09-24 长按删卡已退役，挪刀3 确认步）。
                             let card_idx = if matches!(mode, Mode::Talk) {
                                 talk::card_row_at(w, h, cards_scroll, y)
                                     .filter(|i| *i < cards.len())
@@ -3050,7 +3056,6 @@ fn main() {
                             if let Some(idx) = card_idx {
                                 card_touch = Some(CardTouch {
                                     path: cards[idx].path.clone(),
-                                    down: Instant::now(),
                                     dragged: false,
                                 });
                                 consumed = true;
@@ -3385,10 +3390,9 @@ fn main() {
                             if talk_holding {
                                 talk_holding = false;
                                 talk_hold_clear();
-                                if !matches!(mode, Mode::Talk) {
-                                    // 对话框再留 90s——答完显示
-                                    hold_face_until = Some(Instant::now() + Duration::from_secs(90));
-                                }
+                                // 对话框再留 90s——答完显示（09-24 起首页
+                                // 同样留守）
+                                hold_face_until = Some(Instant::now() + Duration::from_secs(90));
                                 redraw = true;
                             }
                             // lift without a drag — the normal end of a key
@@ -3633,27 +3637,8 @@ fn main() {
                 redraw = true;
             }
         }
-        let fire = card_touch
-            .as_ref()
-            .is_some_and(|ct| !ct.dragged && ct.down.elapsed() >= Duration::from_millis(700));
-        if fire {
-            let path = card_touch.as_ref().unwrap().path.clone();
-            card_touch = None;
-            if let Some(i) = cards.iter().position(|c| c.path == path) {
-                match std::fs::remove_file(&path) {
-                    Ok(()) => {
-                        cards.remove(i);
-                        cards_key.retain(|p| *p != path);
-                        cards_scroll = cards_scroll.min(talk::cards_max_scroll(w, h, cards.len()));
-                    }
-                    Err(e) => {
-                        cards_err = Some(format!("删不掉：{e}"));
-                        cards_err_at = Instant::now();
-                    }
-                }
-                redraw = true;
-            }
-        }
+        // 09-24: 长按删卡退役——首页按住说话大面积压在卡带上，700ms
+        // 静默删卡=误删雷（无确认）。删除挪刀3 确认步（卡上 ✕）。
         if cards_err.is_some() && cards_err_at.elapsed() >= Duration::from_secs(4) {
             cards_err = None;
             redraw = true;
@@ -4161,6 +4146,10 @@ fn main() {
                             thinking,
                             cap.as_deref(),
                             talk::hint(voice.alive, talk_holding, thinking),
+                            &talk::StatusLine {
+                                net: boot_state_has_internet(),
+                                time: &clock.time,
+                            },
                         );
                         // 刀C 卡片带：hint 行下到底边（FS.md {home}/cards）
                         talk::paint_cards(
@@ -4264,11 +4253,10 @@ fn main() {
                         }
                     }
                 }
-                // 刀C 按住对话框：非 Talk 面上按住说话（或释放后 90s 窗内）
-                // 顶部落下的对话条——hint + 当前识别句，活更新。
-                if (talk_holding || hold_face_until.is_some_and(|t| Instant::now() < t))
-                    && !matches!(mode, Mode::Talk)
-                {
+                // 刀C→09-24 解禁 按住对话框：任何面（含首页/Talk）按住
+                // 说话（或释放后 90s 窗内）顶部落下的对话条——hint +
+                // 当前识别句，活更新。
+                if talk_holding || hold_face_until.is_some_and(|t| Instant::now() < t) {
                     talk::paint_dialog(
                         buf,
                         pitch,
