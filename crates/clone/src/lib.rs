@@ -9,7 +9,6 @@ mod loader;
 pub mod manifest;
 pub mod manifest_builder;
 pub mod market;
-pub mod system_creator;
 pub mod tar_source;
 
 pub use defaults::{CLONE_FORMAT_SPEC, CLONE_FORMAT_SPEC_VERSION, DEFAULT_SELF_GROWTH_FLOW};
