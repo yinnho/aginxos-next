@@ -8419,3 +8419,11 @@ M48① 的 rvoip spike 客户端 `aginx-call`（out/sip-spike，gitignored）交
 设备换装（四律全过）：staging /var/.stage-term → mv rename；readlink 对真身 pkgfiles；落位 md5 双验 + -x 验讫；`kill $(pidof aginx-term)` 经 handoff 重生 → **term 4cb5b0aa pid 5803 在役**。`--ppm` 离屏渲染拉回 /tmp/face-talk.png 眼验：状态行绿点+aginx|9:41、字标磷光绿居中、`> 按住说话`+绿块光标、卡带绿竖条+箭头——方案A 全落位。对话框活体表现（按住顶部落条+识别句实时刷新）paint_dialog 有金测但无法离屏验，待真人按住收据。
 
 设备态：浏览器仍持 01:08 知乎真结果页（真页非残页，不清）——term yielded，右划（刀1 路径）自然回新首页；voice 35a9f84c 不变。
+
+## 2026-09-24 — UI刀7 二修（用户验收反馈六条）
+
+用户验首页（右划回屏后）给六条优化，全部落：①AginxOS 字标提到顶部——顶上留一个字标字高（8×13=104px，状态行住其上）；②「按住屏幕说话」提示行离字标一个字标字高；③输入输出行（识别句/答复，原 CAPTION_SCALE=4）与提示行同字号（6），并从「提示行下方」改钉到卡带上方；④卡带第一行（问句）同字号 6；卡带半屏（h/2）起排；⑤卡多可下拉——原有滚动，新增「带内缝上拖动也算滚」；⑥**按住 2s 才成军**（HOLD_ARM 350ms→2000ms，term 持屏路+让位路同一门槛）+**滑动不算语音**（累计净位移 >24px 撤计时/撤成军，SLIDE_CANCEL_PX）。
+
+触摸状态机变化：Talk 面/系统面按下不再立即 talk_holding——记 hold_pending，循环顶满 2s 成军（写 hold、落对话框）；Tap/Up 即弃。evdev Drag 累计 slide_dx/dy 过阈值撤语音。host 门全绿（check.sh + term 46/46）。
+
+设备换装（四律）：staging /var/.stage-term→mv rename，md5 bdccba3e 双验、-x 验讫，kill 后 handoff 重生 pid 9093、readlink 对真身。`--ppm` 离屏眼验 face2-talk：字标提顶、提示行隔一字体、空态文案居下半屏带。屏权：浏览器仍持页时 term 让位路同享 2s 门槛。voice 35a9f84c 不动。真人收据挂账：右划看新布局、按住 2s 验对话框、滑动撤、卡带滚。
