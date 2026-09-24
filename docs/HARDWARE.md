@@ -8585,3 +8585,33 @@ frontmatter 只认 `name/description/max_iterations/tools/entry`，`description`
 
 **连带发现**：hub 分身原有的 `skills/design-and-implement.md` 同样是
 死件（同样不被扫）——迁移 flows/ 与否待裁决，未动。
+
+### 2026-09-24 — 结构刀④ 设备快验：出厂树上机 + 新 server 收编 clone-creator（不刷机）
+
+MERGE-PLAN 刀④挂账可选项收讫。redfin（192.168.3.93，gateway id 复核）
+dev-push 通道，四律走全：
+
+- **换装**：aginx-server 0d7aeb4 构建件 22,485,792 B（md5
+  `8b2e22f6ad2a950d05d87a41df0c495d`，落位后与 `/proc/$(pidof)/exe`
+  复核一致）；老件退 `aginx-server.prev`（09-23 显示线时代件
+  24,749,040 B）。同目录轮换（同 fs）、chmod +x、md5 先行、真重启。
+- **上树**：仓 `home/workflows/clone-creator` 19 件 scp →
+  `/home/workflows/`（重启前置）。
+
+重启后观测：
+
+1. **home 零种零碰**：`/home` 内容与换装前逐项一致（MEMORY.md/SOUL.md/
+   brain.json/data/cards/sessions 原样），无 identity 脚手架新落——
+   刀④ host.rs「boot 只保 sessions/」契约上机兑现。
+2. **老会话无损**：`ledger: repaired 1 frame(s) before turn 40`——me
+   会话跨换装续上。
+3. **树上机即收编**：`aginx agent send clone-creator "自检…"` 真脑
+   中文自报家门（「研究型分身架构师」——人格来自树上
+   SOUL/system_prompt，非种子）。flows/ 两件与 runtime 扫描律
+   （只扫 `flows/<name>/flow.md`）相符。
+4. **本次 boot 零 kernel boot failed**。日志内 5 条 brain config 失败
+   为老 server 时代旧账（序在 roastduck/nanjing 模板注册之前，即
+   brain.json 未就位时段），与本次换装无关。
+
+**设备结束态**：dev-push 换装态——刀④ server 在役，回滚件
+`.prev` 在位；镜像未刷（刀④ 37M 镜像留待下次刷机日整折）。
