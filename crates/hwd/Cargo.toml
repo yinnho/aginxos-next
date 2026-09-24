@@ -1,6 +1,6 @@
 [package]
 name = "hwd"
-version = "0.1.0"
+version.workspace = true
 edition.workspace = true
 publish = false
 description = "device profile reader — the single legal source of machine facts (D14)"

@@ -5,7 +5,7 @@ edition.workspace = true
 license.workspace = true
 repository.workspace = true
 authors.workspace = true
-description = "fast-agi v0: stdio JSONL frames shared by aginx-server and aginx-runtime"
+description = "fast-agi v0: stdio JSONL frames for aginx-server's in-process engine (ex aginx-runtime consumer, deleted at the 2026-09-24 workspace merge)"
 
 [dependencies]
 serde = { workspace = true }

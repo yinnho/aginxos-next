@@ -18,7 +18,8 @@ platform honest — machines are data (D14), living in `devices/<codename>/`.
   in-tree (`rootfs/`). The trampoline pair stays deliberately first-gen:
   the swapper of the rootfs swap is frozen (see assets.md).
 - `~/Documents/aginx` — ecosystem (aginx gateway daemon + relay,
-  aginxbrowser, aginxbrain; aginx-carrier migrated into `mother/` here).
+  aginxbrowser, aginxbrain; aginx-carrier's product line lives here —
+  engine crates merged into `crates/` 2026-09-24, `mother/` is gone).
   Source of import seams, not development.
 
 ## Constitution
@@ -31,7 +32,7 @@ skills (the clone format rejects `skills/`). The session log is the
 truth source. Externals enter as CLI-only (D12), every command carries
 the aginx surname (D13), and machines are data, not code (D14 — full
 text in `devices/README.md`). The assistant definition-layer format is
-`mother/docs/CLONE-FORMAT.md`. The old constitution (`docs/ARCH.md`,
+`crates/clone/CLONE-FORMAT.md`. The old constitution (`docs/ARCH.md`,
 local-only) and the public `docs/ARCHITECTURE.md` were retired
 2026-09-24 — superseded by FS.md.
 
@@ -62,7 +63,9 @@ local-only) and the public `docs/ARCHITECTURE.md` were retired
   nothing else — kernel + init + supervisor + network + ssh (dropbear,
   password AND pubkey channels) + pkg + the bootcard lamp; image svc.d
   ships exactly 2 units (net-watch + absent-tolerant aginxbrowser).
-  The mother (one `aginx` tree package: router/server/runtime), term,
+  The mother (one `aginx` tree package: router/server; the standalone
+  `aginx-runtime` binary was retired at 刀2 and deleted at the
+  2026-09-24 workspace merge — the engine lives in-process), term,
   voice, gateway, secretd and the three model trees all ride packages
   carrying their own `[service]` units; provision installs NOTHING
   (manifest is all-opt) — `aginx-pkg opt-in <name>` pulls a package
@@ -87,8 +90,9 @@ local-only) and the public `docs/ARCHITECTURE.md` were retired
   legal source. Machine strings in crates are unconstitutional, there is
   no default machine (a missing profile fails fast at boot), and device
   dirs never import each other.
-- The avatar root is `~/.aginx/workspaces` on the device (unit sets
-  `AGINX_HOME=/home/.aginx`); `AGINX_HOME` overrides it for host runs.
+- Assistants live under `{AGINX_HOME}/workflows/` (FS.md; the device
+  unit sets `AGINX_HOME=/home`). Host runs must point `AGINX_HOME` at a
+  scratch dir — never a hidden `~/.aginx/carrier`.
 - Naming law D13: `aginx` is the only bare command (the router); every
   external command is `aginx-<domain>-<object>-<verb>`, verb last.
   Compiled commands in scan dirs (/usr/bin, /var/bin) REQUIRE a
@@ -107,6 +111,28 @@ local-only) and the public `docs/ARCHITECTURE.md` were retired
   re-housed on fast-agi frames and D13 names in the same commit it
   arrives; no compatibility shims to the old kernel types.
 
+## Engine subtree conventions (carrier-*)
+
+Folded from the standalone `mother/CLAUDE.md` at the 2026-09-24 merge —
+still binding for engine work:
+
+- **OpenCarrier relationship (iron law)**: the source repo
+  `~/Documents/opencarrier/opencarrier/` is read-only reference — copy
+  from it, never modify it back. This tree is an independent port, not a
+  fork (zero shared git objects); each evolves on its own — no
+  keep-up obligation, no cherry-pick duty.
+- **Crate naming**: `carrier-*`; the daemon bin is `aginx-carrier`.
+  User-facing copy says 「助理/化身」; internal code keeps `clone`.
+- **Inbound channels**: exactly two — iLink (human→agent) and webhook
+  (machine→agent, `daemon start` only, default off, not on mobile).
+  The webui / `web` subcommand is retired.
+- **Gotchas inherited from the port**: config struct fields need a
+  matching `Default` impl in the same change; `AgentLoopResult`'s field
+  is `.response`, not `.response_text`; a flow's frontmatter
+  `description` must be non-empty or the flow silently disappears;
+  slice Chinese text with `char_boundary` fallback, never bare
+  `&s[..N]`.
+
 ## Hosts & Toolchains
 
 Host builds/tests run on macOS and Linux with stable Rust (the aginx-svc
@@ -124,8 +150,8 @@ dropbear sftp subsystem is a Go static (`tools/sftp-server` +
 | Path | What |
 |------|------|
 | `crates/router` | `aginx` — the bare command, mother's face |
-| `crates/server` | `aginx-server` — front desk, cursor, routing, ledger |
-| `crates/runtime` | `aginx-runtime` — fast-agi engine (avatar runner) |
+| `crates/server` | `aginx-server` — front desk, cursor, routing, ledger (boots the carrier kernel in-process, 刀2) |
+| `crates/runtime` | `carrier-runtime` — the mother engine's agent loop/tool layer (since the 2026-09-24 merge; the old standalone `aginx-runtime` binary is deleted) |
 | `crates/agi` | fast-agi v0 frame types (both ends share) |
 | `crates/agio` | D1 output envelope |
 | `crates/hwd` | device profile reader — the single legal source of machine facts (D14) |
@@ -141,6 +167,7 @@ dropbear sftp subsystem is a Go static (`tools/sftp-server` +
 | `crates/done` | `aginx-done` — provision done-marker discipline |
 | `crates/secret` | `aginx-secretd`/`aginx-secret` — the secret sidecar + its admin face |
 | `crates/gateway` | `aginx-gateway` — remote channel daemon: registers to relay.aginx.net, collapses external JSON-RPC onto the server's UDS front (ACP.md wire authority = ecosystem repo) |
+| `crates/{carrier,types,memory,clone,dup,carrier-gateway,lifecycle,kernel,ilink,webhook,web,agf,agmem}` | the mother engine (ex-`aginx-carrier`, merged 2026-09-24): kernel spawns/turns/sessions, runtime = agent loop + tools, clone = assistant format + install chain + dup VCS, memory/agmem = the memory tree, ilink/webhook = inbound channels, `carrier-gateway` = agent:// client + contacts ledger (NOT the remote-channel daemon above) |
 | `crates/testkit` | test helpers |
 | `rootfs/` | the image recipe — see `rootfs/README.md` (placement matrix, asset split) |
 | `devices/` | per-machine data, one dir per codename: `device.toml`, `modules.txt`, `bringup/`, `boot/` (pack line), `cam/` — add-a-machine checklist in `devices/README.md` |

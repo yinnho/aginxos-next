@@ -2324,7 +2324,7 @@ mod report_matrix_tests {
         assert_eq!(extract_json_span("{"), None);
     }
 
-    /// Golden sample: the flow example embedded in `docs/CLONE-FORMAT.md` must
+    /// Golden sample: the flow example embedded in the clone-format spec must
     /// parse with THIS parser exactly as the doc promises. The doc is the
     /// published format spec (also seeded into every clone's
     /// `knowledge/format-spec.md`); if someone changes the parser without the
@@ -2334,7 +2334,7 @@ mod report_matrix_tests {
     /// `description`/`flow.md`.
     #[test]
     fn clone_format_doc_golden_sample() {
-        let doc = include_str!("../../../docs/CLONE-FORMAT.md");
+        let doc = include_str!("../../clone/CLONE-FORMAT.md");
         // Extract the fenced flow example under the flow definition heading.
         let canonical = doc
             .split("flows/<name>/flow.md — 流程定义")

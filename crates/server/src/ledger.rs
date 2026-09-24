@@ -11,7 +11,10 @@
 use agi::Frame;
 use std::fs::OpenOptions;
 use std::io::{self, BufRead, BufReader, Write};
-use std::path::{Path, PathBuf};
+use std::path::Path;
+// session_log（测试辅助）独用——release 面不引，免 unused 警告。
+#[cfg(test)]
+use std::path::PathBuf;
 
 /// 会话账路径（测试辅助）：{root}/{化身}/sessions/{会话}.jsonl。生产
 /// 路径归 host::agent_log——me 走 home 根，助理走 home/workflows。

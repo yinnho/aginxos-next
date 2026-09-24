@@ -1,17 +1,42 @@
 [package]
-name = "aginx-runtime"
+name = "carrier-runtime"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
-repository.workspace = true
-authors.workspace = true
-description = "fast-agi engine: runs an avatar folder — carrier agent_loop + llm_driver ported onto frames"
+description = "Agent runtime and execution environment for aginx-carrier"
 
 [dependencies]
-agi = { path = "../agi" }
+carrier-types = { path = "../types" }
+carrier-clone = { path = "../clone" }
+carrier-gateway = { path = "../carrier-gateway" }
+carrier-memory = { path = "../memory" }
+carrier-lifecycle = { path = "../lifecycle" }
+libc = "0.2"
+tokio = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
-tokio = { workspace = true }
-async-trait = { workspace = true }
+urlencoding = { workspace = true }
+once_cell = { workspace = true }
+reqwest = { workspace = true }
 thiserror = { workspace = true }
-reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+async-trait = { workspace = true }
+tracing = { workspace = true }
+uuid = { workspace = true }
+chrono = { workspace = true }
+futures = { workspace = true }
+base64 = { workspace = true }
+bytes = { workspace = true }
+wasmtime = { workspace = true }
+sha2 = { workspace = true }
+hex = { workspace = true }
+hmac = { workspace = true }
+zeroize = { workspace = true }
+dashmap = { workspace = true }
+regex-lite = { workspace = true }
+rusqlite = { workspace = true }
+libloading = { workspace = true }
+toml = { workspace = true }
+shlex = "1"
+
+[dev-dependencies]
+tempfile = { workspace = true }
