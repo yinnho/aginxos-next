@@ -2426,7 +2426,6 @@ fn host_ppm(out: &str) {
             &font,
             8,
             false,
-            false,
             None,
             talk::hint(true, false, false),
             &talk::StatusLine {
@@ -2744,7 +2743,6 @@ fn main() {
                     h,
                     &font,
                     16,
-                    false,
                     false,
                     None,
                     talk::hint(voice.alive, false, false),
@@ -4192,7 +4190,6 @@ fn main() {
                             &font,
                             level,
                             talk_holding,
-                            thinking,
                             cap.as_deref(),
                             talk::hint(voice.alive, talk_holding, thinking),
                             &talk::StatusLine {

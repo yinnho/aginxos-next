@@ -207,7 +207,6 @@ pub fn paint_wait(
     font: &[[u8; 8]; 128],
     breath: u8,
     holding: bool,
-    thinking: bool,
     caption: Option<&str>,
     hint: &str,
     status: &StatusLine<'_>,
@@ -247,11 +246,12 @@ pub fn paint_wait(
         WORDMARK_SCALE,
         wm,
     );
-    // 提示行：> {hint} + 终端块光标（呼吸闪烁；听/想时常亮）
+    // 提示行：> {hint} + 终端块光标（呼吸闪烁；听时常亮。09-24 五修：
+    // 想时同呼吸，不再常亮）
     let prompt = format!("> {hint}");
     let py = prompt_y(h);
     let _ = draw_text(pix, pitch, w, h, font, CARD_SIDE, py, &prompt, PROMPT_SCALE, INK);
-    if holding || thinking || breath >= 9 {
+    if holding || breath >= 9 {
         let cw = text_w(&prompt, PROMPT_SCALE) as i32;
         fill_rect(
             pix,
@@ -575,7 +575,6 @@ mod tests {
             &font,
             8,
             false,
-            false,
             None,
             "按住屏幕说话",
             &StatusLine { net: true, time: "9:41" },
@@ -609,7 +608,6 @@ mod tests {
             &font,
             8,
             false,
-            false,
             None,
             "按住屏幕说话",
             &StatusLine { net: false, time: "9:41" },
@@ -625,7 +623,6 @@ mod tests {
             h,
             &font,
             8,
-            false,
             false,
             Some("今天下午的日程"),
             "按住屏幕说话",
@@ -645,7 +642,6 @@ mod tests {
             h,
             &font,
             12,
-            false,
             false,
             None,
             "按住屏幕说话",
