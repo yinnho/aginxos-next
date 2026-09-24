@@ -1,5 +1,9 @@
 # aginx — 母体包（D11 母体=aginx）。刀2 起 server 进程内直调 kernel，
 # 不再 spawn aginx-runtime（该二进制已随结构刀①物理删除）。
+# v0.1.1（2026-09-24）：结构四刀后重出——workspace 合一引擎入 server、
+# host.rs 内嵌种子退役（出厂树走镜像 home/ 整树，包不再种）；设备快验
+# 收据见 docs/HARDWARE.md 当日条。v0.1.0 镜像件保留不动（在役 manifest
+# 钉 sha）。
 # tree 包：/var/bin/aginx 是指进 pkgfiles 的 symlink（exec=bin/aginx）；
 # server 真身由单元直接指 pkgfiles 路径 spawn——/proc/exe 解析到真身，
 # secret.policy brain.primary 已加该路径（必修①，不补=绿灯无脑）。
@@ -8,11 +12,11 @@
 # AGINX_BIN 指 /var/bin/aginx（face symlink）。刀F 起 depends 锚
 # aginx-update（装母体自动带自更新器；裸箱升级=重刷）。
 name = "aginx"
-version = "0.1.0"
+version = "0.1.1"
 summary = "母体：路由器 face /var/bin/aginx + 心脏 server（进程内直调 kernel）"
 group = "agent"
 depends = "aginx-update"
-url = "https://pkgs.aginx.net/aginx/v0.1.0/aginx-v0.1.0-4pc.tar"
+url = "https://pkgs.aginx.net/aginx/v0.1.1/aginx-v0.1.1-4pc.tar"
 exec = "bin/aginx"
 
 [service]

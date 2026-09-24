@@ -8615,3 +8615,16 @@ dev-push 通道，四律走全：
 
 **设备结束态**：dev-push 换装态——刀④ server 在役，回滚件
 `.prev` 在位；镜像未刷（刀④ 37M 镜像留待下次刷机日整折）。
+
+### 2026-09-24 — 镜像源：母体包 v0.1.1 重出（结构四刀后新车）
+
+- `build-pkg.sh aginx`（zigbuild 双件，release profile 3m14s）→
+  `out/pkgs/aginx-v0.1.1-4pc.tar` 22,970,880 B，sha256
+  `0e0ab538ca19981d462822200ddfc1dcc255e6fdf51848ca3b30425ca9fee9c3`。
+- scp → `86quan:/data/pkgs.aginx.net/aginx/v0.1.1/`；服务器侧 sha +
+  公网 URL 下载复核，三方一致（本地构建=服务器=公网）。
+- **v0.1.0 镜像件原样保留**——在役机 manifest 钉着它的 sha，覆盖 =
+  sync 校验断。下次 bake 的 opt 附加行自动指 v0.1.1（manifest 片段已
+  由 build-pkg 吐出）。
+- 在役 redfin 无需动作：dev push 的 server 与本包同代代码（profile
+  不同字节不同，行为面等价）。
