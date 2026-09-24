@@ -8528,3 +8528,24 @@ slow-read, in-template markdown render」。物理屏当前即新模板渲染的
 **复验**：零凭据（无 ~/.dupconfig、无 env key）`OPENCARRIER_URL=https://duphub.com
 dup clone frontend-design` → 11 文件落地，与 operator-scp 参照 `diff -r`
 零差异。curl 匿名打 manifest 200。dup 11/11 测试绿。
+
+### 2026-09-24 — weather.html v2 同流程重做（#379，frontend-design 分身）
+
+上条待拍板分叉②收讫：weather.html 走 reply v2 同一条分身流程重做（提案→
+实现→自检）。槽位契约不变（city/temp/condition/low/high/humidity/uv/
+source_url），纯视觉换代：
+
+- **版式**：巨型温度读数（300px accent 等宽数字）+ man-page 式点线引导行
+  （今日区间/湿度/紫外线）替掉旧三等分卡片——分身反AI清单「禁三等分卡片」
+  的正解。`> weather --now {{city}}` 命令回显行与 reply 的问句行同一语言。
+- **家族**：与 reply v2 同色板（--bg #060a07 / --accent #3dfd8f）同 CRT
+  底（扫描线+顶部辉光+下缘暗角）同等宽栈，aginxbrowser 92ba6a2。
+
+**验收**：scp 落设备 md5 双侧一致（17bf20138716cb18e4cc2ad82af88b2f）→
+`POST /open` 真数据（南京 21° 多云零星小雨 82% 弱 wttr.in）ok 3989B →
+全页截图 1080×2620 眼验+像素回验双绿：**纯白 0、磷光绿 20,586、底部底色
+(6,10,7) 精确、全图不透明**。物理屏当前即 weather v2 页，真人眼验挂账。
+
+**教训**：手写 PNG unfilter 验证器本轮两次产出与眼见矛盾的垃圾数（透明
+1.87M/纯白 59.8万），PIL+numpy 仲裁得真相全绿——**像素回验一律 PIL，手搓
+unfilter 弃用**。
