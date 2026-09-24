@@ -8447,3 +8447,23 @@ host 门 46/46。换装四律：md5 924c99c7 双验、-x、kill 重生 pid 9962�
 755、kill 后 pid 10901 `/proc/exe` 无 `(deleted)`=新 inode 在跑）。
 离屏眼验：`--ppm /tmp/face4` 的 talk/prompt-typing 两面顶部无落条，
 prompt-typing 提示行正下方有识别句。真人手验挂账。
+
+### 2026-09-24 — 刀7 五修：正在想光标改呼吸（未单列 sha，随下一提交）
+
+用户裁决：「正在想的那个光标要变成呼吸光标」。paint_wait 光标条件
+`holding || thinking || breath >= 9` → `holding || breath >= 9`——听（录音）
+时常亮不变，想时同待机呼吸闪烁；`thinking` 参数从 paint_wait 退役。
+musl 构建 74c5a5d4 上机（pid 11681，md5 三验+readlink 无 (deleted)）。
+
+### 2026-09-24 — 「没反应」定案：WAN 棕化 + 母体 stall 实锤 #3
+
+用户 02:17 问「看一下小米的股价」无答复（face=「现在连不上母体」兜底）。
+日志链：①02:06 aginxbrowser 搜索引擎直连全灭（bing RSS 地理重定向、
+ddg/hf operation timed out）——上游棕化窗口；②02:17 回合死在 brain 阶段
+（浏览器日志零行）；③02:2x ping/DNS 全通、Mac 访问 brain.aginx.net 401
+仅 0.1s，但设备侧 `aginx agent send me` 60s 探针仍 Terminated、server
+schedstat 仅 47ms（纯挂等）——**棕化过去的死回合把会话钉死，新 send 排队
+挂死**；④`aginx-svc restart aginx` 后同问真答「恢复」。net-watch 全程
+零日志（探的是链路不是 WAN）——棕化不可见，另立案。voice 兜底文案
+「连不上母体」在 WAN/brain 场景误导，硬化刀一并改。run_turn 超时+err done
+帧硬化刀第 3 次实锤，升级为急件。
