@@ -1,8 +1,8 @@
 // Talk — the home face. Voice in. Hold anywhere to speak.
 // The reply renders in aginxbrowser (term POSTs /open and yields the panel).
 // No keyboard. 刀C: below the hint line, the cards band lists the scheduled
-// products ({home}/cards); holding any non-Talk face drops a dialog from
-// the top (those faces have no transcript of their own).
+// products ({home}/cards). 09-24 四修：顶部落条对话框退役——对话框就是
+// 提示行下面的输入输出行（识别句活更新），别的面按住不再有浮层。
 
 use crate::cards::Card;
 use crate::draw_centered;
@@ -234,7 +234,7 @@ pub fn paint_wait(
         3,
         DIM,
     );
-    // 磷光字标：随呼吸微亮；按住说话时压暗让位给顶部落下的对话框
+    // 磷光字标：随呼吸微亮；按住说话（录音态）时压暗
     let wm = glow(MGREEN, if holding { 1 } else { breath });
     draw_centered(
         pix,
@@ -453,28 +453,6 @@ pub fn paint_cards(
     }
 }
 
-/// 按住任意面（含首页/Talk——09-24 解禁）时顶部落下的对话框：hint 行 +
-/// 当前识别句/回复行（活更新）。黑底绿白字，底边一条绿线把对话框和下面
-/// 的面分开。
-pub fn paint_dialog(
-    pix: &mut [u32],
-    pitch: usize,
-    w: usize,
-    h: usize,
-    font: &[[u8; 8]; 128],
-    hint: &str,
-    line: Option<&str>,
-) {
-    const DLG_H: i32 = 300;
-    fill_rect(pix, pitch, w, h, 0, 0, w as i32, DLG_H, HOME_BG);
-    fill_rect(pix, pitch, w, h, 0, DLG_H - 6, w as i32, 6, crate::GREEN);
-    let _ = draw_text(pix, pitch, w, h, font, CARD_SIDE, 64, hint, TEXT_SCALE, INK);
-    if let Some(l) = line.map(str::trim).filter(|s| !s.is_empty()) {
-        let l = clip_to_width(l, TEXT_SCALE, w as i32 - 2 * CARD_SIDE);
-        let _ = draw_text(pix, pitch, w, h, font, CARD_SIDE, 160, &l, TEXT_SCALE, DIM);
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -582,30 +560,6 @@ mod tests {
         // 错误行钉在带顶
         paint_cards(&mut pix, w, w, h, &font, &cards, 0, Some("浏览器拒了：404"));
         assert_ne!(pix[(top + 4) * w + w / 2], HOME_BG);
-    }
-
-    /// 按住对话框：黑底 + 底边绿线 + 两行字；空 line 只画 hint。
-    #[test]
-    fn dialog_paints_hint_and_line() {
-        let font = font::font_init();
-        let (w, h) = panel();
-        let mut pix = vec![0u32; w * h];
-        paint_dialog(&mut pix, w, w, h, &font, "正在听", Some("帮我看下今天下午的日程"));
-        let at = |p: &[u32], x: usize, y: usize| p[y * w + x];
-        assert_eq!(at(&pix, w / 2, 20), HOME_BG, "black top");
-        assert_eq!(at(&pix, w / 2, 297), crate::GREEN, "green divider (rows 294..300)");
-        assert_eq!(at(&pix, w / 2, 300), 0, "first row below the bar untouched");
-        // 单像素探针会落在笔画间隙——hint 带整行扫一遍找墨
-        assert!(
-            (0..w).any(|x| at(&pix, x, 72) != HOME_BG),
-            "hint ink present"
-        );
-        assert!(
-            (0..w).any(|x| at(&pix, x, 170) != HOME_BG),
-            "recognized line ink present"
-        );
-        paint_dialog(&mut pix, w, w, h, &font, "正在听", None);
-        assert_eq!(at(&pix, w / 2, 297), crate::GREEN);
     }
 
     #[test]
