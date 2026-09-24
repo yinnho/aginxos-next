@@ -634,10 +634,8 @@ fn say(text: &str, brain: Option<&audio::Brain>) {
 /// 见 audio.rs 法医收据——本地在位时实际不会走到云）。
 fn hear(wav: &[u8], brain: Option<&audio::Brain>) -> Result<String, String> {
     if audio::local_voice_ready() {
-        match audio::local_asr(wav) {
-            Ok(t) => return Ok(t),
-            Err(e) => eprintln!("aginx-voice: local asr {e}"),
-        }
+        // 本地在就不走云：redfin 收据是云 ASR 对未校准麦幻听。 // D14-exempt: device receipt note
+        return audio::local_asr(wav);
     }
     match brain {
         Some(b) => b.asr(wav),
@@ -783,7 +781,14 @@ fn run_outs(
                     };
                     // 刀D done 信封：信封 → 浏览器按模板出页；非 JSON →
                     // reply 模板兜底。缺模板报母体安排写一次并登记。
-                    let (line, missing, shown) = screen::show_reply(&text, &reply);
+                    // 刀1 复修（09-24）：前台没答上（地板话）不开页——失败
+                    // 回合照样 /open 会在用户已划走结果页后 90s 内又把屏抢
+                    // 回去（「还是回不到主页」拉锯根因）。地板话只上脸+说。
+                    let (line, missing, shown) = if front_ok {
+                        screen::show_reply(&text, &reply)
+                    } else {
+                        (reply.clone(), None, None)
+                    };
                     if let Some((tpl, known)) = missing {
                         report_missing_template(&tpl, &known);
                     }
@@ -1337,13 +1342,12 @@ fn status_text() -> String {
             Some(format!("{h}点{m}分"))
         })
         .unwrap_or_default();
-    let bat = std::fs::read_to_string(format!("{}/capacity", p.paths.power_supply))
-        .ok()
-        .and_then(|s| s.trim().parse::<u8>().ok())
-        .unwrap_or(0);
     // 只报连没连——IP 逐位念出来又长又难听（数字展开还多 10s 合成+播放）
     let net = if wlan0_ip().is_some() { "网已连" } else { "没联网" };
-    format!("{time}，电池{bat}%，{net}。")
+    match hwd::battery_pct(&p.paths.power_supply) {
+        Some(bat) => format!("{time}，电池{bat}%，{net}。"),
+        None => format!("{time}，{net}。"),
+    }
 }
 
 #[cfg(test)]
