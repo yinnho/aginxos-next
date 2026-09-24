@@ -190,39 +190,14 @@ pub fn seed_brain_skeleton_if_missing() {
     }
 }
 
-/// 系统分身种子：未注册 clone-creator（克隆大师）时，用内嵌定义层走正规
-/// 安装管线装上。此后所有分身由它生成——分身不手工摆文件。
-///
-/// 已注册即跳过（升级定义层走 dup 管线或 REINSTALL，boot 不覆盖）。
-/// 失败只告警不挡启动：裸系统（无克隆大师）仍可跑，修复后重启补种。
-pub async fn seed_system_creator(kernel: &Arc<CarrierKernel>) {
-    if kernel
-        .registry
-        .find_by_name(carrier_clone::system_creator::SYSTEM_CREATOR_NAME)
-        .is_some()
-    {
-        return;
-    }
-    let files = carrier_clone::system_creator::system_creator_files();
-    match kernel
-        .clone_install_files(carrier_clone::system_creator::SYSTEM_CREATOR_NAME, files)
-        .await
-    {
-        Ok((id, name, display_name)) => {
-            tracing::info!(id = %id, name = %name, display_name = %display_name, "系统分身已种子：clone-creator");
-        }
-        Err(e) => {
-            tracing::warn!(error = %e, "clone-creator 种子失败（不影响启动，重启重试）");
-        }
-    }
-}
-
 /// 系统身份种子：母体（"me"）住在家根——她的人格就是家目录本身
 /// （SOUL.md / MEMORY.md 在 {AGINX_HOME} 根上，docs/FS.md）。不走 clone
 /// 安装管线：那会清空重装目录，家根绝不能进。
 ///
-/// 未注册时：家根缺的人格文件补种（if !exists，不覆盖用户编辑），再以
-/// workspace=家根 spawn。已注册即跳过；失败只告警不挡启动，重启重试。
+/// 未注册时：建家目录 + sessions/，再以 workspace=家根 spawn。家根人格
+/// 文件不在这里种——出厂树随镜像烤进 /home（结构刀②③④，真源=仓里
+/// `home/` 整树），这里只管注册。已注册即跳过；失败只告警不挡启动，
+/// 重启重试。
 pub async fn seed_system_me(kernel: &Arc<CarrierKernel>) {
     use carrier_types::agent::AgentManifest;
 
@@ -240,23 +215,6 @@ pub async fn seed_system_me(kernel: &Arc<CarrierKernel>) {
         return;
     }
 
-    // 家根人格缺则补。SOUL.md / MEMORY.md 是母体在 FS.md 树上的全部定义
-    // 层；助理形状的 template/profile/flows 不种到家根。
-    let files = carrier_clone::system_creator::system_me_files();
-    for file in ["SOUL.md", "MEMORY.md"] {
-        let dst = home.join(file);
-        if dst.exists() {
-            continue;
-        }
-        match files.get(file) {
-            Some(bytes) => {
-                if let Err(e) = std::fs::write(&dst, bytes) {
-                    tracing::warn!(path = %dst.display(), error = %e, "me 人格文件补种失败");
-                }
-            }
-            None => tracing::warn!(file = file, "me 内嵌定义层缺文件"),
-        }
-    }
     if let Err(e) = std::fs::create_dir_all(home.join("sessions")) {
         tracing::warn!(error = %e, "me sessions 目录创建失败");
     }

@@ -1,4 +1,4 @@
-# AginxOS 文件结构（2026-09-22）
+# AginxOS 文件结构（2026-09-24）
 
 交接入口（做到哪、别读哪）：`docs/HANDOFF-母体.md`。本页只定机上树。
 
@@ -47,7 +47,9 @@ OTA 不覆盖 `/home`。
 ├── sessions/               # 人对母体的会话账
 │   └── main.jsonl
 ├── data/                   # kernel 自账（carrier.db：会话史/记忆/计量）
-├── cards/                  # 首页卡片信封（定时任务产物；term 扫目录列小框，删卡片=删文件）
+├── cards/                  # 首页卡片信封（定时任务产物；term 扫目录列���框，删卡片=删文件）
+├── photos/                 # 相册（相机照片归档）
+├── files/                  # 文件（普通文档，母体可见可管）
 │
 ├── tools/                  # 普通 CLI
 │   └── <name>/
@@ -120,6 +122,8 @@ git、aginxbrowser 客户端、扫码装的小命令。二进制 + sidecar，不
 
 新助理 = 在 `workflows/` 下多一个目录（扫码装的是助理包，不是人设操作系统）。顶层 `skills/` 拒收。流程步骤可以调用 tool 或 provider 名，二进制不进这个目录。
 
+出厂助理（clone-creator）随镜像烤进 `workflows/`——真源是仓里 `home/workflows/clone-creator`，金样本闸钉死件数与安装校验；内嵌种子机制已退役。
+
 `/home/SOUL.md` 是总管自己，不要再做一个 `workflows/me`。
 
 ### peers
@@ -155,9 +159,9 @@ name = "某店"
 
 ---
 
-## 母体引擎（从 aginx-carrier 迁入）
+## 母体引擎（原 aginx-carrier）
 
-独立仓 `~/Documents/aginx/aginx-carrier` **停作产品**。源码副本在本仓 `mother/`（自有 Cargo workspace，不含 uniffi）。入口将并进 `crates/server`（aginx-server），不再安装 `aginx-carrier` 二进制。
+独立仓 `~/Documents/aginx/aginx-carrier` **停作产品**。源码已并入本仓 `crates/`（2026-09-24 workspace 合一，`carrier-*` 各件进根 workspace），引擎跑在 `crates/server`（aginx-server）进程内，不再安装 `aginx-carrier` 二进制。
 
 默认家目录已改为 `AGINX_HOME` → `/home`；助理根已改为 `{home}/workflows`。按 clone 名的 ACP 桥不再作为 OS 入口。
 
@@ -167,15 +171,16 @@ name = "某店"
 
 ```
 aginxos-next/
-├── mother/                 # 母体引擎（原 aginx-carrier）
-├── crates/
-│   ├── server/             # 母体前台（将链上 mother/）
-│   ├── runtime/            # 跑 workflow、spawn tool
+├── crates/                 # 单一 workspace（OS 面 + 母体引擎 carrier-* 面）
+│   ├── server/             # 母体前台，引擎在进程内
+│   ├── kernel/ runtime/ …  # 母体引擎件（carrier-kernel / carrier-runtime / …）
 │   ├── gateway/            # agent://
 │   ├── router/             # /usr/bin 宇宙
 │   └── term/ voice/ …
-├── home/                   # 出厂 SOUL/MEMORY 两件，server include_str! 内嵌种子
-├── workflows/              # 烤进出厂助理（可空）
+├── home/                   # 出厂整树真源，烤线整树拷进机上 /home
+│   ├── SOUL.md MEMORY.md   # 母体人格（总管 + 门面）
+│   ├── photos/ files/      # 相册、文件
+│   └── workflows/          # 出厂助理编制（clone-creator）
 ├── devices/<codename>/
 ├── rootfs/
 ├── pkgs/                   # 出厂 tool 的签名包 → /usr/bin

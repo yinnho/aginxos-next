@@ -24,10 +24,9 @@ pub fn run() -> anyhow::Result<()> {
 async fn async_main() -> anyhow::Result<()> {
     let kernel = aginx_carrier::wiring::boot_kernel()?;
 
-    // ── 系统分身：clone-creator（克隆大师）未注册则用内嵌定义层装上。
-    // 分身只经它生成，不手工摆文件。──
-    aginx_carrier::wiring::seed_system_creator(&kernel).await;
-    // ── 系统身份：「我」——主人的统一身份（总管/门面），开箱即聊。──
+    // ── 系统身份：「我」——主人的统一身份（总管/门面），开箱即聊。
+    // 出厂助理（clone-creator）与家根人格文件不再内嵌种子——出厂树随
+    // 镜像烤进 /home（结构刀②③④，真源=仓里 home/ 整树）。──
     aginx_carrier::wiring::seed_system_me(&kernel).await;
 
     let cm = aginx_carrier::wiring::boot_channels(&kernel).await?;

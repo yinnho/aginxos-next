@@ -697,4 +697,51 @@ mod tests {
             validate_install_format(&files).unwrap()
         );
     }
+
+    /// 出厂助理金样本闸（结构刀③）：clone-creator 定义层随结构刀②搬进
+    /// 仓里 `home/workflows/clone-creator`（烤线整树拷的源头，docs/FS.md）。
+    /// 内嵌种子机制（system_creator.rs）退役后，资产漂移在这里拦——扫真树
+    /// 过安装期硬校验，件数/名字/default_flow 三锚不许漂。
+    #[test]
+    fn factory_workflow_golden() {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../home/workflows/clone-creator");
+        let mut files = BTreeMap::new();
+        fn walk(dir: &std::path::Path, prefix: &str, files: &mut BTreeMap<String, Vec<u8>>) {
+            for entry in std::fs::read_dir(dir).expect("read_dir factory tree") {
+                let entry = entry.expect("entry");
+                let path = entry.path();
+                let name = format!("{prefix}{}", entry.file_name().to_string_lossy());
+                if path.is_dir() {
+                    walk(&path, &format!("{name}/"), files);
+                } else {
+                    files.insert(name, std::fs::read(&path).expect("read file"));
+                }
+            }
+        }
+        walk(&root, "", &mut files);
+        assert_eq!(
+            files.len(),
+            19,
+            "出厂助理树件数漂移：{:?}",
+            files.keys().collect::<Vec<_>>()
+        );
+
+        let errors = validate_install_format(&files).expect("validate panicked");
+        assert!(
+            errors.is_empty(),
+            "出厂 clone-creator 未过安装校验：\n- {}",
+            errors.join("\n- ")
+        );
+
+        // template.json 必须可解析且 name 对齐（安装注册用）。
+        let tpl = crate::loader::parse_template_manifest_lenient(
+            std::str::from_utf8(&files["template.json"]).unwrap(),
+        )
+        .expect("template.json unparseable");
+        assert_eq!(tpl.name, "clone-creator");
+
+        // default_flow 兜底指向的 flow 必须真的在（否则装完空转）。
+        assert!(files.contains_key("flows/clone-generate/flow.md"));
+    }
 }
