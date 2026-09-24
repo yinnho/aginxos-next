@@ -2821,6 +2821,10 @@ fn main() {
     // 刀4 让位期按住：浏览器持屏时手指按下的时刻。按住满 HOLD_ARM 仍没
     // 抬/没拖 = 成军（收页回屏，hold 带页靶）；短按/拖动归浏览器。
     let mut yield_down: Option<Instant> = None;
+    // 刀1 让位期右划：本次触摸累计的净位移（屏幕像素）。右向过
+    // SWIPE_HOME_PX 且横向占优 = 收页回主页（同按住成军的取屏路）。
+    let mut yield_dx: isize = 0;
+    let mut yield_dy: isize = 0;
 
     loop {
         let mut redraw = false;
@@ -2985,12 +2989,26 @@ fn main() {
                     let ev = touch.as_mut().unwrap().poll();
                     // 刀C: 让位中触摸 fd 留在 poll 集只为排空——evdev 双读者，
                     // 浏览器也收同一事件流，term 这边不能 Acting。
-                    // 刀4: 但按下记时刻、按住满 HOLD_ARM 成军（循环顶收页），
-                    // 拖/短按归浏览器。
+                    // 刀4: 但按下记时刻、按住满 HOLD_ARM 成军（循环顶收页）。
+                    // 刀1: 横向右划 = 收页回主页；短按/竖向拖动归浏览器。
                     if d.is_none() {
                         match ev {
-                            Touch::Down(..) => yield_down = Some(Instant::now()),
-                            Touch::Drag(_) => yield_down = None,
+                            Touch::Down(..) => {
+                                yield_down = Some(Instant::now());
+                                yield_dx = 0;
+                                yield_dy = 0;
+                            }
+                            Touch::Drag(dy, dx) => {
+                                yield_down = None; // 拖动不是按住成军
+                                yield_dy = yield_dy.saturating_add(dy);
+                                yield_dx = yield_dx.saturating_add(dx);
+                                if talk::swipe_home_hit(yield_dx, yield_dy) {
+                                    eprintln!("aginx-term: swipe right — taking the screen back");
+                                    let _ = std::fs::remove_file(cards::SHOW_PAGE);
+                                    yield_dx = 0;
+                                    yield_dy = 0;
+                                }
+                            }
                             Touch::Tap(..) | Touch::Up => {
                                 yield_down = None;
                                 if talk_holding {
@@ -3433,7 +3451,7 @@ fn main() {
                                 redraw = true;
                             }
                         }
-                        Touch::Drag(dy) => {
+                        Touch::Drag(dy, _dx) => {
                             held = None; // finger slid off the key
                             if let Some(ct) = card_touch.as_mut() {
                                 // 刀C 卡片带拖动 = 滚动

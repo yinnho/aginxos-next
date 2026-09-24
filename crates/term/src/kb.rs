@@ -426,7 +426,7 @@ pub enum Touch {
     Down(usize, usize), // finger landed (keys fire here, not at lift)
     Tap(usize, usize),  // finger lifted without a drag
     Up,                 // finger lifted after a drag (still ends any hold)
-    Drag(isize),        // signed pixel delta (positive = finger moved down)
+    Drag(isize, isize), // (dy, dx) signed pixel deltas (positive = down / right)
     None,
 }
 
@@ -451,6 +451,18 @@ pub struct TouchReader {
     y_in_frame: bool,
     start_y: i32,
     last_y: i32,
+    /// X-axis mirror of `fresh`/`y_in_frame` (刀1): the x of THIS touch
+    /// anchors at its first POSITION_X, never inheriting the previous
+    /// touch's position — both event orders stay safe.
+    fresh_x: bool,
+    x_in_frame: bool,
+    start_x: i32,
+    last_x: i32,
+    /// Per-frame drag deltas (screen-scaled), flushed into one Drag event
+    /// at EV_SYN — a horizontal swipe with zero vertical movement must
+    /// still report (the old y-only emission dropped it).
+    frame_dy: isize,
+    frame_dx: isize,
     dragged: bool,
     screen_w: i32,
     screen_h: i32,
@@ -476,6 +488,12 @@ impl TouchReader {
             y_in_frame: false,
             start_y: 0,
             last_y: 0,
+            fresh_x: false,
+            x_in_frame: false,
+            start_x: 0,
+            last_x: 0,
+            frame_dy: 0,
+            frame_dx: 0,
             dragged: false,
             screen_w,
             screen_h,
@@ -538,9 +556,39 @@ impl TouchReader {
                         } else {
                             self.fresh = true; // first y anchors
                         }
+                        // X anchor mirrors the y_in_frame/fresh pair above.
+                        if self.x_in_frame {
+                            self.start_x = self.raw_x;
+                            self.last_x = self.raw_x;
+                            self.fresh_x = false;
+                        } else {
+                            self.fresh_x = true; // first x anchors
+                        }
                     }
                 }
-                (EV_ABS, ABS_MT_POSITION_X) => self.raw_x = ev.value,
+                (EV_ABS, ABS_MT_POSITION_X) => {
+                    self.raw_x = ev.value;
+                    self.x_in_frame = true;
+                    if self.fresh_x {
+                        // first x of this touch: anchor, no drag judgment
+                        self.fresh_x = false;
+                        self.start_x = ev.value;
+                        self.last_x = ev.value;
+                    } else if self.down {
+                        if (self.raw_x - self.start_x).abs() > 30 {
+                            self.dragged = true;
+                        }
+                        if self.dragged {
+                            let dx = self.raw_x - self.last_x;
+                            if dx != 0 {
+                                self.frame_dx = self
+                                    .frame_dx
+                                    .saturating_add((dx as f32 * self.sx) as isize);
+                                self.last_x = self.raw_x;
+                            }
+                        }
+                    }
+                }
                 (EV_ABS, ABS_MT_POSITION_Y) => {
                     self.raw_y = ev.value;
                     self.y_in_frame = true;
@@ -550,13 +598,17 @@ impl TouchReader {
                         self.start_y = ev.value;
                         self.last_y = ev.value;
                     } else if self.down {
-                        let dy = self.raw_y - self.last_y;
                         if (self.raw_y - self.start_y).abs() > 30 {
                             self.dragged = true;
                         }
-                        if self.dragged && dy != 0 {
-                            out = Touch::Drag((dy as f32 * self.sy) as isize);
-                            self.last_y = self.raw_y;
+                        if self.dragged {
+                            let dy = self.raw_y - self.last_y;
+                            if dy != 0 {
+                                self.frame_dy = self
+                                    .frame_dy
+                                    .saturating_add((dy as f32 * self.sy) as isize);
+                                self.last_y = self.raw_y;
+                            }
                         }
                     }
                 }
@@ -571,7 +623,24 @@ impl TouchReader {
                             y.min(self.screen_h as usize - 1),
                         );
                     }
+                    // 刀1: both axes flush at the frame boundary. Batches
+                    // that pile up during a decode merge via the Drag(prev)
+                    // arm — same accumulate rule as the old y-only path, so
+                    // scroll totals are unchanged.
+                    if self.dragged && (self.frame_dy != 0 || self.frame_dx != 0) {
+                        let (dy, dx) = (self.frame_dy, self.frame_dx);
+                        self.frame_dy = 0;
+                        self.frame_dx = 0;
+                        out = match out {
+                            Touch::Drag(pdy, pdx) => Touch::Drag(
+                                pdy.saturating_add(dy),
+                                pdx.saturating_add(dx),
+                            ),
+                            _ => Touch::Drag(dy, dx),
+                        };
+                    }
                     self.y_in_frame = false; // frame boundary
+                    self.x_in_frame = false;
                 }
                 _ => {}
             }
