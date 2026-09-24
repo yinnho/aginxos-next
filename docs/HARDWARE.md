@@ -8407,3 +8407,15 @@ M48① 的 rvoip spike 客户端 `aginx-call`（out/sip-spike，gitignored）交
 **母体挂死第二次**：Okay. 回合 00:53 front timeout（90s），01:02 probe `aginx agent send me 你还在吗`→「在的，主人。」rc=0——同昨日模式：一次性 stall 自愈，非必现。硬化刀（run_turn 包 timeout+落 err done 帧）挂账待点头，实锤已两条。
 
 **设备终态**：redfin 在役 term 8c36d314 / voice 35a9f84c；刀1+刀4 四条真人收据可测（母体已复活）；左划=刀2 pager 未实现（右划才是回主页）。
+
+## 2026-09-24 — UI刀7 首页重设计（磷光终端·字标居中）+ 对话框全面解禁
+
+用户报「对话框没有，首页还是之前的显示方式」。破案：首页=Mode::Talk（boot 落 Talk，Mode::Home 从未被赋值=死代码），而对话框三处——poll 125ms 分支、paint_dialog 渲染门、Tap 后 90s hold_face_until——全部明确排除 Talk（刀C 遗留设计：对话框条只给设置/安装/相册面）；视觉上刀4 只接会话路由没动 paint_wait（小兽）+paint_cards 老首页。下半屏卡带 700ms 静默长按=删卡（无确认）误删雷，一并退役。
+
+用户三案选 A「磷光终端·字标居中」（黑底绿白字基调不变）：AginxOS 大字标随呼吸微亮居中（glow 55%..100% 线性压暗，按住时钉满亮）、小兽+状态圆盘从首页退役（取景面 Eye chrome 的 result_disc 保留不动）、顶部状态行（呼吸点/断网红点 + aginx|时钟）、提示行 `> 按住说话` + 块光标（holding/thinking/breath≥9 时点亮）、会话卡带翻新（左绿竖条 + 右 `>` 箭头 + 空态文案）。三案共同项：对话框三处解禁（不再排除任何面）+ 长按删卡拆除（删除挪刀3 确认步，卡上 ✕）。
+
+实现 64257ba（term talk.rs+main.rs）：新 paint_wait 带 StatusLine{net,time}；删 wait_disc/disc_hit/WAIT_R；hold 分支渲染门收拢为 `talk_holding || hold_face_until 活着`；Tap 无条件续 90s；CardTouch 删 down 字段。host 门全绿（check.sh + term 46/46，含新金测 home_layout_stacks_status_wordmark_prompt_cards / wait_face_paints_wordmark_and_status）。
+
+设备换装（四律全过）：staging /var/.stage-term → mv rename；readlink 对真身 pkgfiles；落位 md5 双验 + -x 验讫；`kill $(pidof aginx-term)` 经 handoff 重生 → **term 4cb5b0aa pid 5803 在役**。`--ppm` 离屏渲染拉回 /tmp/face-talk.png 眼验：状态行绿点+aginx|9:41、字标磷光绿居中、`> 按住说话`+绿块光标、卡带绿竖条+箭头——方案A 全落位。对话框活体表现（按住顶部落条+识别句实时刷新）paint_dialog 有金测但无法离屏验，待真人按住收据。
+
+设备态：浏览器仍持 01:08 知乎真结果页（真页非残页，不清）——term yielded，右划（刀1 路径）自然回新首页；voice 35a9f84c 不变。
