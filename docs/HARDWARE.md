@@ -8395,3 +8395,15 @@ M48① 的 rvoip spike 客户端 `aginx-call`（out/sip-spike，gitignored）交
 **教训入律**：换在跑 binary 三律→四律：staging 必同 fs / 落位后必 md5 / **落位后必验 -x（scp/cat 新写文件 0644，rename 旧件才保位）** / 重启用 aginx-reboot（换装不重启=验证的是旧进程）。
 
 **设备终态**：aginx 单元 ready（执行位已修，06:07 件首次真上线）；刀4 四条真人收据恢复可测。
+
+## 2026-09-24 — UI刀1 上机 + 右划拉锯根修（voice 失败回合抢屏）
+
+刀1（让位期右划回主页）四律换装收据：term 非 svcd unit——由 `/etc/init.d/aginx-term-handoff` 守护循环拉起，`aginx-svc restart aginx-term`=no such unit、busybox `pkill -x` 也匹配不上（comm=aginx-term 却 rc=1）；重生法=`kill $(pidof aginx-term)`，handoff 2s 内接新 binary。新 pid 31749 md5 8c36d314。
+
+**右划 5 次全命中**（term log `swipe right — taking the screen back` ×5）但用户体感「还是回不到主页」。浏览器/voice 日志对时间轴破案：每次右划收页后 2–90s，**回合收尾的 POST /open 又把页弹回来**——00:31 天气兜底页、00:51 Yeah. 兜底页（front timeout 90s）、00:53 知乎真答页、00:54 Okay. 兜底页（又一次 front timeout）。show.html 唯一写点=引擎 REST /open（tmp+rename），voice 每回合收尾必调一次 show_reply——**前台失败的回合也把「连不上母体」地板话当整页结果开页抢屏**。这就是拉锯根因：用户划走的是错误页，90s 后错误页自己回来。
+
+**根修**（9358068）：voice Chat 臂 `front_ok=false` 时跳过 show_reply（不开页、不落卡、缺模板报告），line=地板话只上脸+说。成功回合照旧。设备换装：voice pid 2397 md5 35a9f84c；屏上残留兜底页 rm 收页、term 回屏、watcher 见 01:04:38 absent。
+
+**母体挂死第二次**：Okay. 回合 00:53 front timeout（90s），01:02 probe `aginx agent send me 你还在吗`→「在的，主人。」rc=0——同昨日模式：一次性 stall 自愈，非必现。硬化刀（run_turn 包 timeout+落 err done 帧）挂账待点头，实锤已两条。
+
+**设备终态**：redfin 在役 term 8c36d314 / voice 35a9f84c；刀1+刀4 四条真人收据可测（母体已复活）；左划=刀2 pager 未实现（右划才是回主页）。
