@@ -8467,3 +8467,44 @@ schedstat 仅 47ms（纯挂等）——**棕化过去的死回合把会话钉死
 零日志（探的是链路不是 WAN）——棕化不可见，另立案。voice 兜底文案
 「连不上母体」在 WAN/brain 场景误导，硬化刀一并改。run_turn 超时+err done
 帧硬化刀第 3 次实锤，升级为急件。
+
+### 2026-09-24 — 模板生成 workflow 第一跑：frontend-design 分身重做 reply 模板（#377）
+
+用户定调流程（纠正手写理解）：缺模板时 **dup clone frontend-design
+（duphub 分身=模板生产者）→ 按其 SOUL+技能+知识库生成模板 → 登记
+aginxbrowser 模板库 → 消费线不变**：`/open {template: id, data: 结果json}`
+填槽上屏。本跑把兜底正文页 reply.html 从旧版重做。
+
+**duphub 对账**（踩坑记录）：真 hub=**duphub.com**（86quan 106.75.32.216，
+aginx-hub 服务）；~/.dupconfig 被指到 carrier.yinnho.cn（OpenCarrier
+runtime API，另一套）→ `dup clone` 404；且 **`OPENCARRIER_URL` 环境变量
+（shell profile）盖过配置文件**，命令级 `OPENCARRIER_URL=https://duphub.com`
+才真连上。hub 代码（aginx-hub/src/handlers.rs resolve_version_record）对
+`GET /api/templates/{name}/dup/manifest` **强制鉴权**（裸 401）——与用户
+「下载应该和 GitHub 一样免密钥」预期冲突，**产品分叉待拍板**（改 hub 放开
+public 匿名下载 vs 配 key）。本跑绕行=operator 直读服务器 storage
+（/data/www/openclone-hub/storage/frontend-design/v3/）scp 拉下 v3 全件
+（11 件 48K，SOUL+skills+六篇知识库），产物等价。
+
+**分身产出**：frontend-design 知识库（反AI美学七标志/排版/配色五角色/
+空间构图/动效/Grid）驱动设计——磷光终端·慢读页：`#060a07` 带绿调深黑底
+（非纯黑）+ `#3dfd8f` 单一磷光绿强调（配色指南「叛逆/前卫」档恰与产品
+宪法黑底绿字同构）；等宽字体栈（离线设备无 web fonts，且绕开禁用字体表
+Inter/Roboto/system-ui）；问句=`> ` 命令行回显式；列表=▸+左竖线行；
+锐角零圆角；body::before 三层背景（扫描线+顶部磷光辉光+下缘暗角）；
+**markdown 由模板内 JS 渲染**（引擎 tmpl.rs 纯字符串替换零改动，面板跑
+V8 执行）。自检清单过：背景非纯色、无禁字体、无紫渐变、非三等分卡片。
+
+**设备收据**（redfin）：模板 scp 落 /var/lib/aginxbrowser/templates/
+（md5 e9118bdab 一致）；`POST /open {template:"reply", data:股价json}`
+→ ok（show.html 4781B）→ `POST /screenshot` data:URL 1080×2620 全页
+PNG 171,271B；python 逐行 unfilter 像素回验：**纯白 0px、accent 磷光绿
+4,963px**（markdown `**粗体**` 渲染成磷光绿实证）、底色全磷光暗底
+(6,10,7)、15 文本带 68px 行距节奏。中途修一处：文档高 2340<截图高 2620
+时溢出区被引擎填白（280px 白尾）→ `body min-height:2620px`（=面板
+build_cache 高）复测纯白归零。
+
+**提交**：aginxbrowser e77aa10「templates: reply v2 — phosphor
+slow-read, in-template markdown render」。物理屏当前即新模板渲染的股价
+结果页，真人眼验挂账。待拍板三叉：①hub 下载鉴权放开与否；②weather.html
+是否同流程过一遍；③流程沉淀 skill/文档与否。
