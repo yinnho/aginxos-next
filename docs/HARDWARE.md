@@ -8427,3 +8427,9 @@ M48① 的 rvoip spike 客户端 `aginx-call`（out/sip-spike，gitignored）交
 触摸状态机变化：Talk 面/系统面按下不再立即 talk_holding——记 hold_pending，循环顶满 2s 成军（写 hold、落对话框）；Tap/Up 即弃。evdev Drag 累计 slide_dx/dy 过阈值撤语音。host 门全绿（check.sh + term 46/46）。
 
 设备换装（四律）：staging /var/.stage-term→mv rename，md5 bdccba3e 双验、-x 验讫，kill 后 handoff 重生 pid 9093、readlink 对真身。`--ppm` 离屏眼验 face2-talk：字标提顶、提示行隔一字体、空态文案居下半屏带。屏权：浏览器仍持页时 term 让位路同享 2s 门槛。voice 35a9f84c 不动。真人收据挂账：右划看新布局、按住 2s 验对话框、滑动撤、卡带滚。
+
+## 2026-09-24 — UI刀7 三修（两条微调）
+
+用户看二修后：①「aginxos要离顶一个现在aginxos字体大小的距离」——二修的顶距从屏幕顶算（104px），但视觉顶=状态行，字标距状态行底只剩 ~16px 显得贴顶；改 wordmark_home_y = STATUS_BOTTOM(96) + 一个字标字高(104) = 200。②「用户输入的那个字是跟在按住屏幕说话的下面的」——二修把输入输出行钉到卡带上方钉错了，归位 prompt_y + 8×PROMPT_SCALE + 64（提示行正下方，同字号 6）。
+
+host 门 46/46。换装四律：md5 924c99c7 双验、-x、kill 重生 pid 9962、readlink 对真身。`--ppm` face3-talk 眼验：状态行→空一字体→字标→空一字体→提示行+光标，空态文案居下半屏带。
