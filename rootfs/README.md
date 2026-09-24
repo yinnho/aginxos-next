@@ -11,7 +11,8 @@
   aginx-term-handoff/state-restore/varlib-migrate）；net-bringup 与五个
   bringup 不在配方里——由 `devices/<codename>/bringup/` 烤机时注入
   （D14 机型是数据；E4b 起 net-bringup 同律：并网流程是机型数据）、
-  aginx/svc.d 六单元、
+  aginx/svc.d 两单元（net-watch + aginxbrowser——L0 刀4 起
+  server/secretd/gateway/voice 单元随包走）、
   aginx/（env 明文环境、gateway.toml 形状参数、groups.desc 命令分组、
   secret.policy sidecar 放行表）、
   crontabs（N5④：备份 now 定时行）、agpkg.manifest
@@ -34,16 +35,16 @@
 |---|---|---|
 | 本仓 target/musl | aginx-pkg, aginx-svc, aginx-boot-ok（vendor-boot 机型）, aginx-done, aginx-secret, aginx-download | /usr/bin |
 | 本仓 target/musl | aginx-svcd | /usr/libexec/aginx/ |
+| 仓里 `home/` 整树 | SOUL/MEMORY、photos/files 空树、workflows/clone-creator 出厂助理 | /home（结构刀④：出厂整树烤进，真源=仓里 home/，docs/FS.md） |
 | 冻结资产（.local，非老仓） | aginxos-init, aginxos-agent | /aginxos/（trampoline 对；device.toml 有 [update] 节才烤——redfin 烤、enchilada 不烤） |
+| 本仓 rootfs/src/*.c（zig cc） | nlscan→aginx-net-scan, wifi-join→aginx-net-join, reboot2→aginx-reboot, paneloff→aginx-panel-off | /usr/bin |
+| devices/${DEVICE}/cam + 本仓 rootfs/src/jpegenc_tj.c | cam-shot→aginx-cam-shot（build-cam.sh 带机型 cam 目录；传感器源=机型数据 D14） | /usr/bin |
+| 老仓 out/voice, out/ocr | ag-asr→aginx-asr, ag-tts→aginx-tts, ag-ocr→aginx-ocr + 模型→/var/models | /var/bin |
 
 L0 起不烤（一切皆包）：aginx/aginx-server（母体=`aginx` 树包，bin 两件 +
 `[service]` 单元随包走）、aginx-voice/term/qr/update/secretd/gateway。
 aginx-runtime 已随结构刀①（2026-09-24 workspace 合一）物理删除——引擎在
 aginx-server 进程内直跑，再无独立二进制。
-| 本仓 target/musl | aginx-gateway | /usr/libexec/aginx/（N5⑤ 远端通道守护；id/secret 不进镜像，刷机日灌注） |
-| 本仓 rootfs/src/*.c（zig cc） | nlscan→aginx-net-scan, wifi-join→aginx-net-join, reboot2→aginx-reboot, paneloff→aginx-panel-off | /usr/bin |
-| devices/${DEVICE}/cam + 本仓 rootfs/src/jpegenc_tj.c | cam-shot→aginx-cam-shot（build-cam.sh 带机型 cam 目录；传感器源=机型数据 D14） | /usr/bin |
-| 老仓 out/voice, out/ocr | ag-asr→aginx-asr, ag-tts→aginx-tts, ag-ocr→aginx-ocr + 模型→/var/models | /var/bin |
 
 不进镜像：老 `ag` 路由器、全部 `ag-*` 壳、carrier daemon、老 relay/ag-backup（继任者
 已由本仓烤入：aginx-gateway N5⑤⑥、aginx-backup N5④）。/bin 内部件（splash、

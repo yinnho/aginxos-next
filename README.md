@@ -176,7 +176,7 @@ flowchart TB
 | `crates/done` | `aginx-done` | provision done markers |
 | `crates/secret` | `aginx-secretd`/`aginx-secret` | secret sidecar daemon + admin face |
 | `crates/gateway` | `aginx-gateway` | remote channel — registers to the relay, collapses external JSON-RPC onto the server's UDS front |
-| `crates/{carrier,types,memory,clone,dup,carrier-gateway,lifecycle,kernel,ilink,webhook,web,agf,agmem}` | — | the mother engine (ex-`aginx-carrier`, merged 2026-09-24): kernel, agent runtime, clone format, memory tree, `agent://` client, inbound channels |
+| `crates/{carrier,types,memory,clone,dup,carrier-gateway,lifecycle,kernel,ilink,webhook,web,agf,agmem}` | — | the mother engine (ex-`aginx-carrier`, merged 2026-09-24): kernel, agent runtime, clone format, memory tree, `agent://` client + contacts ledger (`carrier-gateway` — NOT the remote-channel `aginx-gateway` above), inbound channels |
 
 ## Building & discipline
 

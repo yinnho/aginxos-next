@@ -2,13 +2,18 @@
 
 给下一棒：产品树已经定了，代码还没接到 OS 前台。先读这份，再动刀。
 
+> **2026-09-24 状态翻新（结构刀①–④）：** 下文「代码做到哪」是 09-22 快照。此后母体
+> 刀1–4 与 workspace 合一已完成——`mother/` 并入 `crates/`（引擎跑在 `crates/server`
+> 进程内，母体刀2）；出厂整树真源=仓里 `home/`（结构刀②③④：烤线整树拷，内嵌种子
+> 退役）。「没做」三项均已做或改道；真机段与硬约束照旧有效。
+
 ## 以哪份为准
 
 | 文件 | 管什么 |
 |------|--------|
 | **`docs/FS.md`** | **唯一**的机上文件树。母体 / 助理 / tools / providers / peers / run |
-| `mother/README.md` | 引擎副本怎么编译、家目录环境变量 |
-| `mother/docs/CLONE-FORMAT.md` | 助理文件夹里有哪些文件（分身翻本） |
+| 根 `README.md` + `AGENTS.md` crate 表 | 引擎怎么编译、家目录环境变量（`mother/` 已并入 `crates/`，2026-09-24） |
+| `crates/clone/CLONE-FORMAT.md` | 助理文件夹里有哪些文件（分身翻本） |
 | `docs/HARDWARE.md` | 真机实验日志。只追加目击，不写「应该会」 |
 | `docs/DECISIONS.md` | 已锁决策（boot、许可、不进 git 的固件） |
 
