@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# n2 acceptance — 平台心脏上机并行试跑（N2①，docs/ARCH.md 宪法 D4–D12）。
+# n2 acceptance — 平台心脏上机并行试跑（N2①，旧宪法 D4–D12——ARCH.md 已删，现行=docs/FS.md）。
 #
 # 在现役设备上以隔离树并行验证新仓三件（aginx / aginx-server /
 # aginx-runtime）：不碰老 carrier 的 ~/.aginx（宪法两线并行），不注册

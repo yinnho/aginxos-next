@@ -12,7 +12,7 @@
 | `docs/HARDWARE.md` | 真机实验日志。只追加目击，不写「应该会」 |
 | `docs/DECISIONS.md` | 已锁决策（boot、许可、不进 git 的固件） |
 
-**不要当现行产品读：** `docs/ARCH.md` / `docs/ARCHITECTURE.md` 里的「化身 = 用户切来切去的脸」「workspaces」「D16 派给字典序第一个化身」。那是旧环，已被 FS.md 替换。
+**不要当现行产品读（已删，2026-09-24 整档）：** 原 `docs/ARCH.md` / `docs/ARCHITECTURE.md` 的「化身 = 用户切来切去的脸」「workspaces」「D16 派给字典序第一个化身」是旧环，已被 FS.md 替换。
 
 仓：`/Users/sophiehe/Documents/aginxos-next`  
 独立仓 `~/Documents/aginx/aginx-carrier` **停作产品**，不要再往那边加功能。

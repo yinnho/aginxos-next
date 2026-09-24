@@ -13,7 +13,7 @@
 | `docs/FS.md` | **唯一**的机上文件树真源（刀3 会补三行，见下） |
 | `docs/DECISIONS.md` | 已锁决策 |
 | `docs/HARDWARE.md` | 真机目击。只本地提交 |
-| `docs/ARCH.md` / `ARCHITECTURE.md` | 旧模型，不当现行产品读 |
+| `docs/ARCH.md` / `ARCHITECTURE.md` | 已删（2026-09-24 设计文档整档，D14 全文迁 `devices/README.md`）；现行设计=`docs/FS.md` |
 | `docs/HANDOFF-母体.md` | 产品定调交接。**部分已被刀法超越**，见下节 |
 
 **HANDOFF-母体.md 已过时段落**（别被带偏）：

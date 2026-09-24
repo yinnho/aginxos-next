@@ -35,7 +35,7 @@
 7. `DEVICE=<codename> ./scripts/build-rootfs.sh` 出图，刷机走该机
    `boot/` 线。
 
-## D14 三律（全文见本地 docs/ARCH.md）
+## D14 三律
 
 1. crates 里出现机型字符串（redfin/1080/2340/event1/sm7250…）即违宪；
    `crates/hwd` 读 device.toml 是唯一合法来源，check.sh 设 grep 门。
@@ -43,5 +43,17 @@
    **默认机型**——device.toml 缺失 fail-fast。兜底=隐性机型假设回流。
 3. 机型目录之间不互相 import；共享资产上提 `scripts/` 或 `rootfs/`，
    不建 `devices/common/`（两台机不值得，三台再说）。
+
+细则（2026-09-08 同批立，自 docs/ARCH.md 整档迁入）：
+
+- 分辨率分层：运行时显示几何以 **DRM 枚举为真值**（term 主路径已是）；
+  device.toml `[panel]` 是**非 DRM 消费者**的唯一来源（voice HTML 三钉、
+  cam `--aspect`、host 测试、touch 原生范围）。不符时记警告不致命。
+- 老仓 boot/ 管线以 plain copy 迁入 `devices/redfin/boot/`（基线注记
+  `from aginxos@0534ea8`），老仓封存为只读档案。
+- 豁免注记：update 的 SWAP/BAK/STATE 偏移与冻结的 first-gen trampoline
+  对偶，暂留 crates（登记于 device.toml `[update.layout]`）；豁免解除时
+  连 trampoline 一起参数化。boot_ok 的 per-LUN GPT slot 语义同理——只抽
+  「值的来源」，不抽「方法」，第二种 slot 方法出现才抽象。
 
 当前机型：redfin（首目标，在役）· enchilada（bring-up 线，P5 另立计划）。

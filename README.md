@@ -198,16 +198,24 @@ flowchart TB
 - Experiment history and receipts live in `docs/HARDWARE.md`, kept local —
   device serials and the full experiment log stay out of the public repo
 
-Milestone history and working rules: `AGENTS.md`. Architecture:
-[`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md).
+Milestone history and working rules: `AGENTS.md`. Machine-tree design:
+[`docs/FS.md`](docs/FS.md).
 
 ## Ecosystem
 
+Independent products: **aginxbrowser** (panel HTML engine) and
+**aginxbrain** (OpenAI-format brain API). Everything else — gateway,
+clone runtime (the former aginx-carrier), tooling — lives in this repo.
+Surrounding infrastructure:
+
 | Repository | Role |
 |------------|------|
-| `aginxos-next` (this repo) | platform heart — owns the device and the bake chain |
-| [`aginxos`](https://github.com/yinnho/aginxos) | first generation, frozen — asset library: vendor ramdisk unpack, C tool sources, voice/OCR stacks and models, signing keys, busybox |
+| `aginxos-next` (this repo) | platform heart — owns the device, the bake chain, the mother (gateway + clone runtime) |
 | [`aginxbrowser`](https://github.com/yinnho/aginxbrowser) | the server-side HTML engine behind the panel canvas |
+| `aginxbrain` | the brain: OpenAI-format API the mother calls |
+| [`aginx`](https://relay.aginx.net) | the gateway daemon + `relay.aginx.net` — remote channel for machines off-LAN; wire protocol ACP lives in that repo |
+| [duphub.com](https://duphub.com) | clone directory + file-level distribution (`dup push` / anonymous `dup clone`) |
+| [`aginxos`](https://github.com/yinnho/aginxos) | first generation, frozen — asset library: vendor ramdisk unpack, C tool sources, voice/OCR stacks and models, signing keys, busybox |
 | [pkgs.aginx.net](https://pkgs.aginx.net) | signed package mirror for `aginx-pkg` |
 
 ## Status & license
