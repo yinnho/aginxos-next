@@ -185,10 +185,13 @@ fn glow(base: u32, level: u8) -> u32 {
     (dim((base >> 16) & 0xff) << 16) | (dim((base >> 8) & 0xff) << 8) | dim(base & 0xff)
 }
 
-/// 首页字标 y：09-24 二修——提到顶部，顶上留一个字标字高的距离（状态
-/// 行住在那段），不再压 30% 中腰。
+/// 状态行占的顶带（文本 y=64 + scale3 → 88，取 96 清爽锚）。
+const STATUS_BOTTOM: i32 = 96;
+
+/// 首页字标 y：09-24 三修——「离顶一个字标字高」的顶=状态行底，即
+/// 字标顶 = STATUS_BOTTOM + 一个字标字高。
 pub fn wordmark_home_y(_h: usize) -> i32 {
-    (8 * WORDMARK_SCALE) as i32
+    STATUS_BOTTOM + (8 * WORDMARK_SCALE) as i32
 }
 
 /// 提示行 y：字标底下再留一个字标字高（09-24 二修）。
@@ -262,7 +265,8 @@ pub fn paint_wait(
             crate::GREEN,
         );
     }
-    // 输入输出行（问句常驻）——钉在卡带上方居中（09-24 二修），超宽截尾
+    // 输入输出行（问句常驻）——跟在提示行下面（09-24 三修用户裁决），
+    // 超宽截尾
     if let Some(c) = caption.map(str::trim).filter(|s| !s.is_empty()) {
         let c = clip_to_width(c, CAPTION_SCALE, w as i32 - 2 * CARD_SIDE);
         draw_centered(
@@ -271,7 +275,7 @@ pub fn paint_wait(
             w,
             h,
             font,
-            cards_top(w, h) - (8 * CAPTION_SCALE) as i32 - 48,
+            py + (8 * PROMPT_SCALE) as i32 + 64,
             &c,
             CAPTION_SCALE,
             DIM,
@@ -503,10 +507,9 @@ mod tests {
     fn home_layout_stacks_status_wordmark_prompt_cards() {
         let (w, h) = panel();
         let font_h = (8 * WORDMARK_SCALE) as i32;
-        // 09-24 二修：字标提到顶部（顶上留一个字标字高），提示行再隔一个
-        // 字标字高，卡带半屏起排
-        assert_eq!(wordmark_home_y(h), font_h, "top margin = one wordmark font height");
-        assert!(wordmark_home_y(h) > 90, "wordmark clear of the status line");
+        // 09-24 三修：字标「离顶一个字标字高」——顶=状态行底
+        assert_eq!(wordmark_home_y(h), 96 + font_h, "one font below the status band");
+        assert!(wordmark_home_y(h) > 96, "wordmark clear of the status line");
         assert_eq!(prompt_y(h), wordmark_home_y(h) + 2 * font_h, "prompt one font below the wordmark");
         assert_eq!(cards_top(w, h), h as i32 / 2, "cards start at half screen");
         assert!(cards_top(w, h) > prompt_y(h) + (8 * PROMPT_SCALE) as i32);
@@ -674,10 +677,10 @@ mod tests {
             "按住屏幕说话",
             &StatusLine { net: true, time: "9:41" },
         );
-        let cy = (cards_top(w, h) - 48 - 24) as usize;
+        let cy = (prompt_y(h) + (8 * PROMPT_SCALE) as i32 + 64 + 24) as usize;
         assert!(
             (0..w).any(|x| at(&pix3, x, cy) != HOME_BG),
-            "caption ink just above the cards band"
+            "caption ink right below the prompt line"
         );
         // 光标亮半程出现（breath=12 ≥ 9）
         let mut pix2 = vec![0u32; w * h];
