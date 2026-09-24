@@ -169,7 +169,8 @@ fn paint_beast(
 /// 呼吸微亮、`> 提示行 + 块光标`、识别句/答复行、底半会话卡带。小兽
 /// 从首页退役——取景面的眼睛饰件（paint_eye_chrome）仍用。
 pub const PROMPT_SCALE: usize = TEXT_SCALE;
-pub const CAPTION_SCALE: usize = 4;
+/// 输入输出行（识别句/答复）与提示行同字号——09-24 二修用户裁决。
+pub const CAPTION_SCALE: usize = PROMPT_SCALE;
 
 /// 状态行内容：net=呼吸点绿/断网红，time=右上角时钟串。
 pub struct StatusLine<'a> {
@@ -184,15 +185,15 @@ fn glow(base: u32, level: u8) -> u32 {
     (dim((base >> 16) & 0xff) << 16) | (dim((base >> 8) & 0xff) << 8) | dim(base & 0xff)
 }
 
-/// 首页字标 y：屏高 30%。home::wordmark_y 是 45%（待机/开机字标锚），
-/// 这里给下面的提示行、识别行、卡带留场。
-pub fn wordmark_home_y(h: usize) -> i32 {
-    (h as i32) * 30 / 100
+/// 首页字标 y：09-24 二修——提到顶部，顶上留一个字标字高的距离（状态
+/// 行住在那段），不再压 30% 中腰。
+pub fn wordmark_home_y(_h: usize) -> i32 {
+    (8 * WORDMARK_SCALE) as i32
 }
 
-/// 提示行 y：字标底下 120px。
+/// 提示行 y：字标底下再留一个字标字高（09-24 二修）。
 pub fn prompt_y(h: usize) -> i32 {
-    wordmark_home_y(h) + (8 * WORDMARK_SCALE) as i32 + 120
+    wordmark_home_y(h) + 2 * (8 * WORDMARK_SCALE) as i32
 }
 
 pub fn paint_wait(
@@ -261,7 +262,7 @@ pub fn paint_wait(
             crate::GREEN,
         );
     }
-    // 识别句/答复行（问句常驻）——提示行下方居中，超宽截尾
+    // 输入输出行（问句常驻）——钉在卡带上方居中（09-24 二修），超宽截尾
     if let Some(c) = caption.map(str::trim).filter(|s| !s.is_empty()) {
         let c = clip_to_width(c, CAPTION_SCALE, w as i32 - 2 * CARD_SIDE);
         draw_centered(
@@ -270,7 +271,7 @@ pub fn paint_wait(
             w,
             h,
             font,
-            py + (8 * PROMPT_SCALE) as i32 + 64,
+            cards_top(w, h) - (8 * CAPTION_SCALE) as i32 - 48,
             &c,
             CAPTION_SCALE,
             DIM,
@@ -324,9 +325,9 @@ pub const CARD_GAP: i32 = 24;
 /// 行底色：键帽同一档的暗绿——黑底绿白字惯例，HOME_BG 上一档可辨。
 const CARD_ROW_BG: u32 = 0x000A1410;
 
-/// 带顶：提示行底下给识别行留 64px 行高 + 48px 呼吸。
+/// 带顶：半屏起排（09-24 二修）——上半屏留给字标/提示行/输入输出行。
 pub fn cards_top(_w: usize, h: usize) -> i32 {
-    prompt_y(h) + (8 * PROMPT_SCALE) as i32 + 64 + 48
+    h as i32 / 2
 }
 
 pub fn cards_bottom(h: usize) -> i32 {
@@ -411,9 +412,10 @@ pub fn paint_cards(
             );
             fill_rect(pix, pitch, w, h, x0, row_y, 6, CARD_ROW_H, crate::GREEN);
             if row_y >= top && y1 <= bottom {
-                let title = clip_to_width(&c.title, 5, x1 - x0 - 96);
-                let _ = draw_text(pix, pitch, w, h, font, x0 + 30, row_y + 16, &title, 5, INK);
-                let _ = draw_text(pix, pitch, w, h, font, x1 - 48, row_y + 16, ">", 5, DIM);
+                // 09-24 二修：卡带第一行（问句）与提示行同字号
+                let title = clip_to_width(&c.title, PROMPT_SCALE, x1 - x0 - 96);
+                let _ = draw_text(pix, pitch, w, h, font, x0 + 30, row_y + 12, &title, PROMPT_SCALE, INK);
+                let _ = draw_text(pix, pitch, w, h, font, x1 - 48, row_y + 12, ">", PROMPT_SCALE, DIM);
                 let meta = if c.source.is_empty() {
                     c.template.clone()
                 } else {
@@ -500,8 +502,13 @@ mod tests {
     #[test]
     fn home_layout_stacks_status_wordmark_prompt_cards() {
         let (w, h) = panel();
-        assert!(wordmark_home_y(h) > 100, "wordmark below the status line");
-        assert!(prompt_y(h) > wordmark_home_y(h) + (8 * WORDMARK_SCALE) as i32);
+        let font_h = (8 * WORDMARK_SCALE) as i32;
+        // 09-24 二修：字标提到顶部（顶上留一个字标字高），提示行再隔一个
+        // 字标字高，卡带半屏起排
+        assert_eq!(wordmark_home_y(h), font_h, "top margin = one wordmark font height");
+        assert!(wordmark_home_y(h) > 90, "wordmark clear of the status line");
+        assert_eq!(prompt_y(h), wordmark_home_y(h) + 2 * font_h, "prompt one font below the wordmark");
+        assert_eq!(cards_top(w, h), h as i32 / 2, "cards start at half screen");
         assert!(cards_top(w, h) > prompt_y(h) + (8 * PROMPT_SCALE) as i32);
         assert!(cards_bottom(h) < h as i32);
         assert!(cards_hit(w, h, (cards_top(w, h) + 10) as usize));
@@ -652,6 +659,26 @@ mod tests {
         );
         let dot = at(&pix, (CARD_SIDE + 9) as usize, 75);
         assert_eq!(dot, crate::WARN_RED);
+        // 输入输出行钉在卡带上方（09-24 二修），与提示行同字号
+        let mut pix3 = vec![0u32; w * h];
+        paint_wait(
+            &mut pix3,
+            w,
+            w,
+            h,
+            &font,
+            8,
+            false,
+            false,
+            Some("今天下午的日程"),
+            "按住屏幕说话",
+            &StatusLine { net: true, time: "9:41" },
+        );
+        let cy = (cards_top(w, h) - 48 - 24) as usize;
+        assert!(
+            (0..w).any(|x| at(&pix3, x, cy) != HOME_BG),
+            "caption ink just above the cards band"
+        );
         // 光标亮半程出现（breath=12 ≥ 9）
         let mut pix2 = vec![0u32; w * h];
         paint_wait(
