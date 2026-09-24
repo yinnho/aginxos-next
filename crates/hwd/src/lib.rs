@@ -13,7 +13,7 @@
 //! Schema sections marked "registered" (`update`, `slots`, `paths.wlan`,
 //! `paths.drm_card`) are parsed and carried but not yet consumed by any
 //! platform code — they exist so the data has a home before the code
-//! catches up. Everything else is live wiring (see ARCH.md D14).
+//! catches up. Everything else is live wiring (D14 — devices/README.md).
 
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
@@ -158,7 +158,7 @@ pub struct Paths {
 
 /// [v1] registered only. The SWAP/BAK/STATE offsets are dual-frozen with
 /// the first-gen trampoline; single-sided parameterization would break
-/// the update flow's rollback story (ARCH.md D14 exemption).
+/// the update flow's rollback story (D14 exemption — devices/README.md).
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct UpdateSection {

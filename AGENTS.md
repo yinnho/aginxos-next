@@ -17,19 +17,23 @@ platform honest — machines are data (D14), living in `devices/<codename>/`.
   `devices/redfin/boot/assets.md`); busybox, fonts and the C sources are
   in-tree (`rootfs/`). The trampoline pair stays deliberately first-gen:
   the swapper of the rootfs swap is frozen (see assets.md).
-- `~/Documents/aginx` — ecosystem (aginx-carrier, aginx daemon,
-  aginxbrowser, memory server). Source of import seams, not development.
+- `~/Documents/aginx` — ecosystem (aginx gateway daemon + relay,
+  aginxbrowser, aginxbrain; aginx-carrier migrated into `mother/` here).
+  Source of import seams, not development.
 
 ## Constitution
 
-`docs/ARCH.md` is the architecture constitution: one server per machine
-(the mother, aginx), avatars are folders run by a single runtime engine,
-display is request semantics, the session log is the truth source,
-addressing is front-desk registration (进/住/切/退), externals are
-CLI-only (D12), every command carries the aginx surname (D13), and
-machines are data, not code (D14).
-**ARCH.md is LOCAL ONLY — never commit or push it** (same treatment as
-the old repo's ARCH/CARRIER/SYSTEM docs; `.gitignore` enforces it).
+`docs/FS.md` is the machine-tree design authority: humans talk only to
+the mother (`aginx`, the one resident server per machine); assistants
+are folders under `{AGINX_HOME}/workflows/` — clone-format copies with
+their own flows, spawned on demand by a single engine; there are no
+skills (the clone format rejects `skills/`). The session log is the
+truth source. Externals enter as CLI-only (D12), every command carries
+the aginx surname (D13), and machines are data, not code (D14 — full
+text in `devices/README.md`). The assistant definition-layer format is
+`mother/docs/CLONE-FORMAT.md`. The old constitution (`docs/ARCH.md`,
+local-only) and the public `docs/ARCHITECTURE.md` were retired
+2026-09-24 — superseded by FS.md.
 
 ## Milestones (N series)
 
@@ -143,7 +147,7 @@ dropbear sftp subsystem is a Go static (`tools/sftp-server` +
 | `scripts/build-rootfs.sh` | the bake, `DEVICE=<codename>`: recipe + zigbuild + that machine's assets (`.local/device/<codename>`) → `out/rootfs.img` |
 | `scripts/accept/` | device acceptance suites: `n6-egg.sh` (L0 bake-day shape/equivalence: pre/paired/steady/egg2), `n7-l0.sh` (product flow: usbconf→netup→ssh→opt-in→steady), `m42c.sh` pairing gate; n4/n5 retired 2026-09-12 (headers say why) |
 | `shims/` | repo-local `aginx-*` command faces (host trial registry) |
-| `docs/ARCH.md` | the constitution (local only, gitignored) |
+| `docs/FS.md` | machine-tree design authority (this repo's constitution) |
 | `docs/HARDWARE.md` | device experiment log — this repo's receipts from N4 on |
 
 ## Device Safety

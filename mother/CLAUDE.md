@@ -2,7 +2,7 @@
 
 ## 项目定位
 
-**aginx-carrier 是分身 OS**：托管数字分身的 Agent 运行时，aginx Agent 互联网上"网站"之一（aginx=nginx，本仓=网站）。从 OpenCarrier **搬运移植**而来（独立仓，非 fork——零共享 git 历史，见下），定位/分层/借用机制见 `../docs/AGINX-CARRIER-VISION.md`。
+**aginx-carrier 是分身 OS**：托管数字分身的 Agent 运行时，aginx Agent 互联网上"网站"之一（aginx=nginx，本仓=网站）。从 OpenCarrier **搬运移植**而来（独立仓，非 fork——零共享 git 历史，见下）。2026-09-24 起：产品线并入 AginxOS——机上树真源 `docs/FS.md`、分身定义层格式 `mother/docs/CLONE-FORMAT.md`（原生态愿景稿已随文档整档删除）。
 
 **与 OpenCarrier 的关系（铁律）**：
 - 源仓库 `~/Documents/opencarrier/opencarrier/` 是**只读参考**——要搬代码从那里 cp，绝不反向修改
