@@ -8765,6 +8765,8 @@ server 不换：在跑的 #387 母体包 v0.1.2 系结构四刀后新车，源�
 
 测试卡手工落盘验渲染链：`/home/cards/20260925-195100000-欢迎回来.json`（adb push 整文件，同避引号坑），term 2s 扫描周期后存活无炸。
 
+**真人眼验收据**：信封卡片带上屏，用户确认「现在对了」——回灌链全通。
+
 **adb 复合命令静默失败（本段新坑，记录在案）**：含中文/JSON/多语句的 `adb shell '…; …'` 整条零输出零执行（pids 不变、目录不生），单条简单命令正常——本段一切设备操作改单命令+文件推送。PATH 坑同段复发：`aginx-svc` 须全路径 `/usr/bin/aginx-svc`。
 
 **缺口（挂账）**：aginxbrowser 引擎 absent（`aginxbrowser` 单元在但 `/var/bin/aginxbrowser` 缺）——信封能上桌面，点开的 /open POST（127.0.0.1:8089）无人接；reply.html 模板同被 #388 清掉，Mac 无备份。两件归「引擎 opt-in + 模板生成 workflow 重跑」一揽子，未动。
