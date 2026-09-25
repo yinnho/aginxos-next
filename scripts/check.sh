@@ -79,12 +79,13 @@ cargo build -p aginx-router --release >/dev/null
 SCRATCH="$(mktemp -d)"
 trap 'rm -rf "${SCRATCH}"' EXIT
 
-mkdir -p "${SCRATCH}/usr/bin"
+mkdir -p "${SCRATCH}/usr/bin" "${SCRATCH}/home"
 cp -R "${ROOT}/shims/." "${SCRATCH}/usr/bin/"
 chmod 755 "${SCRATCH}"/usr/bin/aginx-* 2>/dev/null || true
 
 echo "==> aginx commands --check (scratch shim tree)"
 AGINX_CMD_PATH="${SCRATCH}/usr/bin" \
+AGINX_HOME="${SCRATCH}/home" \
 AGINX_GROUPS_DESC="${ROOT}/shims/groups.desc" \
   "${ROOT}/target/release/aginx" commands --check \
   || { echo "aginx commands --check failed — fix the shims" >&2; exit 1; }

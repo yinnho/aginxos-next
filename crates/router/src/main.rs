@@ -1,12 +1,14 @@
 // aginx — AginxOS single-entry command router (D13: the bare command is
 // the mother's face — typing a command is calling the mother by name).
 //
-// The command universe is a flat set of `aginx-*` executables; the
-// filename IS the route and the filesystem IS the registry — dropping an
-// executable into a cmd dir registers the command, no rebuild, no
-// central list. Resolution is stat-only on the fast path; dispatch is
-// execve, so exit codes and signals pass straight through (this process
-// IS the target).
+// The command universe spans three tiers, tier-major (FS.md): home
+// providers/ and tools/ (`<name>/<name>` dirs, route = dir name) shadow
+// the flat `aginx-*` executables in the cmd dirs. The filename/dirname
+// IS the route and the filesystem IS the registry — dropping an
+// executable into place registers the command, no rebuild, no central
+// list. Resolution is stat-only on the fast path; dispatch is execve,
+// so exit codes and signals pass straight through (this process IS the
+// target).
 //
 // Builtins: bare `aginx` / `aginx help` → menu; `aginx commands
 // [--all|--json|--check]` → listing / D1 envelope / lint gate; `aginx

@@ -48,7 +48,7 @@
 
 - `mother/` **没有**链进 `crates/server`（aginx-server）。机上跑的还是旧前台：`crates/server/src/mother.rs` + `aginx agent create` 那种 workspace 化身。
 - 仓里还没有烤进镜像的 `/home/SOUL.md` 默认树（FS.md 写了 `aginxos-next/home/`，磁盘上可能还没有）。
-- 查找命令顺序（providers → tools → PATH）只是设计，router 未改。
+- ~~查找命令顺序（providers → tools → PATH）只是设计，router 未改。~~（已改，母体刀4，2026-09-25）
 
 所以：**文档是新的，活系统还是旧的。** 不要在 term/voice 里先做「切助理」。先把母体引擎接到 server，再让 Talk 只打母体。
 
