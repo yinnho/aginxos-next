@@ -8693,3 +8693,60 @@ dev-push 通道，四律走全：
 - **设备结束态**：新镜像 `f56cc16-l0` 在役（slot _b，test
   vendor_boot HOLD/USBADB/ROOTFS）；aginx v0.1.2 包 opt-in 装态、
   单元 ready、真脑在答；wifi 192.168.3.93；时钟 2026-09-25。
+
+### 2026-09-25 — M49a 刀A：vidc 链在新 L0 镜像复活（模块+移植+回环）
+
+- **模块最小链**（全量 modules.load panic 前科，只走子链）：
+  `strings msm-vidc.ko` 读出 depends=smem,fastcvpd,llcc-slice,
+  msm_bus,subsystem-restart,qtee_shm_bridge,ion-alloc；镜像 20 枚
+  在载集已含 smem/msm_bus/subsystem-restart/qtee_shm_bridge/
+  ion-alloc/llcc-slice/clk-qcom（fastcvpd 仅要 rpmsg_core+
+  secure_buffer，皆在载）。**实推三枚即通**：fastcvpd →
+  videocc-lito → msm-vidc（vendor-modules 原 ko，已存
+  /lib/modules/）；vidc0+vidc1 双 probe（IOMMU 组 17–22 全配），
+  mknod /dev/video32 c 81 32、/dev/video33 c 81 33（无 devtmpfs
+  自动节点）。ko 已持久、**insmod 未持久**——重启须重跑（折叠
+  进 modules.txt+bringup 待下刀）。
+- **移植零改动**：老仓 aginxos-probe 的 vidc.rs(2591 行)+
+  snd.rs(451 行) 逐字拷入 `out/sip-spike/aginx-video/`（脱离
+  workspace，仅 libc 依赖）；`cargo zigbuild --target
+  aarch64-unknown-linux-musl --release` 一次过（510,784 B 静态）。
+- **enc 回环**（同镜像 4.19.278，与 M41b 同核）：合成 320x240×30
+  帧 yuv420p（对角梯度+移动白条，3,456,000 B）→ `enc` → **30 帧全
+  喂、8026 B/32 chunks、首块 CONFIG、EOS 厂商旗标 0x2004000**——
+  M41b 契约逐字复现。
+- **dec 回环**：同文件 `decode` → 30/30 帧解出（p0 393216 B=venus
+  512×512×1.5 几何），帧间 md5 不同（真运动保真）。
+- **host 独立眼**：ffprobe=h264/320x240/yuv420p 合法流；帧0 亮度
+  PSNR **27.72 dB**（全序列均值 17.5 dB 系对角梯度+时基配对伪影，
+  非编码缺陷）。
+- 设备终态：三 ko 在载、video32/33 在位、/tmp 供试件在。
+
+### 2026-09-25 — M49a 刀B：redfin→Mac 单向视频腿（venc 节拍流 → TCP → host 解码）
+
+`aginx-video stream`（spike 新子命令，vidc.rs 零 ABI 改动，encode() 骨架
++ TcpListener）：合成图（对角梯度+移动白条+循环色度）逐帧喂 venc，
+CAPTURE 块直接 write_all 进已连接的 TCP 客户端；节拍律=M48（每 tick 恰
+一帧，欠载跳帧不补发，poll 等到下一 deadline）。用法：
+`stream [w h fps secs port]`，默认 320 240 15 30 9000。
+
+- **30s 长跑**：450 帧 / 452 块 / 118,698 B / 30.0s（**15.0 fps 有效
+  速率，0 underrun**），首块 CONFIG(26B SPS+PPS)、次块 KEY(IDR)、尾块
+  vendor EOS 0x2004000 干净收尾。
+- **10s 复跑字节对账**：设备侧 total_bytes=39,082 B，Mac `nc` 裸收
+  =**39,082 B 整**；文件头 `00 00 00 01 67 / …68 / …65`（SPS/PPS/IDR
+  齐全）。TCP 零丢失。
+- **host 解码**：ffprobe 全量 **150/150 帧**，h264/320x240 无错。
+- **像素级运动验证**（PIL 量亮柱位置 vs 合成公式 bar=(n*8)%w）：
+  帧0=0..39 ✓、帧50=79..119 ✓、帧100=160..199 ✓、帧140（模回绕）
+  =160..199 ✓ —— 内容与时序双正确。
+- **工具事故两枚（host 侧，非链路缺陷）**：① ffmpeg `-c copy` 采集会
+  被 find_stream_info 探测吃掉流头（落盘 23,744 B/缺 SPS/PPS，全帧
+  "non-existing PPS 0"）——裸字节核对用 `nc`，勿信 `-c copy` 的头；
+  ② zsh 裸 glob 无匹配即中止整行，采集命令别带裸 `rm /tmp/*.png` 前清。
+- **venus 编码器流行为（新 ABI 事实）**：周期性重发 IDR（中途入流的
+  ffmpeg 探测后首包即 IDR），但 **SPS/PPS 只在流头发一次**——中途加入
+  的客户端拿到 IDR 也解不了。v0 客户端均为「先连接后开流」不受影响；
+  标准化（#371）或 repeat-header 属性再解。
+- 真人眼看入口（随时可复跑）：设备 `stream` 后
+  `ffplay -f h264 -fflags nobuffer tcp://192.168.3.93:9000`。
