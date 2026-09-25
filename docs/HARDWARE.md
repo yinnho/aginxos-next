@@ -8650,3 +8650,46 @@ dev-push 通道，四律走全：
   裁剪车带脑全链对话收讫。
 - **设备结束态**：v0.1.2 裁剪车在役（pid 442），回滚件 `.prev` 在位；
   镜像未刷。
+
+### 2026-09-25 — 刷机日：裸 L0 首启自带出厂树（结构四刀+刀5 新镜像整折）
+
+- Host 重烤：`DEVICE=redfin ./scripts/build-rootfs.sh` →
+  `out/rootfs.img` **37M used**；manifest opt 附加 11 行自动指
+  aginx **v0.1.2**（sha f2f03443…）；版本戳 `f56cc16-l0`；svc.d=2
+  （net-watch + aginxbrowser 缺席容忍）。
+- 刷前 stash：wifi.conf + brain.json 落
+  `.local/device/redfin/preflash-stash-20260925/`——**漏
+  /etc/aginx/env，见下真脑翻车条**。
+- GO=1 刷机（serial gate 13201FDD4001N8）：userdata 先、
+  vendor_boot_b 后（commit 点）→ reboot。恢复点
+  stock-vendor_boot.img 在位。
+- **首启收据（出厂形态）**：adb 枚举 `aginxosredfin`（需
+  kill-server/start-server 一轮）；`f56cc16-l0` 戳在；**/home 出厂树
+  （SOUL.md + workflows）由镜像自带**——结构刀④的整树拷首验；零包
+  （stamps 空）；provision 自动 resize sda19 2G→109G；net-watch
+  ready。
+- 配置后置三件：wifi.conf（net-watch 拾起→wlan0 192.168.3.93）、
+  brain.json（600）、/etc/aginx/env（600）；**时钟 1970**（ntpd 早于
+  wifi 起）手设 `date -s`——不设则 TLS 全断。
+- **镜像源漂移事故+修复**：opt-in 预检 10/11 sha 不齐——manifest 钉
+  host 重构件 sha（09-24 重出），镜像在役件还是 09-12 旧字节（tar
+  非确定性→同版本新 sha，系统性债）。修复：86quan 旧件 10 个备份至
+  `/data/pkgs.aginx.net/.backup-20260925-pre-refill/`，host
+  out/pkgs 重灌（**全 tag 陷阱复发**：上传目录须 `<pkg>/v<版本>/`
+  带 v 前缀，无 v 静默成平行死目录），公网 11/11 三方一致。
+  **enchilada 挂账**：其 manifest 可能钉旧 sha，回网后推刷新签名
+  manifest。
+- opt-in aginx：依赖先装 aginx-update → aginx v0.1.2
+  （20,145,152 B）→ 落位 md5 `0f7125d4d57c01871ebda4d8edc48b41`
+  （与构建件一致）→ stamps {aginx, aginx-update}。
+- **真脑断言首跑翻车+根因**：`agent send me` → Auth error（401 真回
+  包，时钟/env 均查过后定位）。根因：**brain.json 不含 key**（只有
+  base_url + `api_key_env` 指针），真 key `AGINXBRAIN_API_KEY` 住
+  /etc/aginx/env（state tar 骑行件，刷机即失）——stash 漏救。修复：
+  host `.local/aginx-env` 推回 `/etc/aginx/env`（600）+
+  `aginx-svc restart aginx` → **真脑中文真答**（「我是『母体』——
+  这台机器主人的统一身份……」）。刷前 stash 清单自此三件：
+  wifi.conf + brain.json + **/etc/aginx/env**。
+- **设备结束态**：新镜像 `f56cc16-l0` 在役（slot _b，test
+  vendor_boot HOLD/USBADB/ROOTFS）；aginx v0.1.2 包 opt-in 装态、
+  单元 ready、真脑在答；wifi 192.168.3.93；时钟 2026-09-25。
