@@ -8628,3 +8628,25 @@ dev-push 通道，四律走全：
   由 build-pkg 吐出）。
 - 在役 redfin 无需动作：dev push 的 server 与本包同代代码（profile
   不同字节不同，行为面等价）。
+
+### 2026-09-25 — 镜像源：母体包 v0.1.2 重出（母体刀5 wasmtime 裁剪车）
+
+- `build-pkg.sh aginx` → `out/pkgs/aginx-v0.1.2-4pc.tar` 20,145,152 B
+  （v0.1.1 22,970,880 → **-2,825,728 / -12.3%**），sha256
+  `f2f034439aace5ae7da9bd4729048cc3aca1c85c3e53d1082fe3b9792c13a801`。
+- scp → `86quan:/data/pkgs.aginx.net/aginx/v0.1.2/`；服务器侧 sha +
+  公网 URL 下载复核，**三方一致**（本地=服务器=公网）。
+- v0.1.0/v0.1.1/v0.3.2 镜像件原样保留（在役 manifest 钉 sha）；下次
+  bake 的 opt 附加行自动指 v0.1.2（manifest 片段已由 build-pkg 吐出）。
+- **设备冒烟**（redfin 192.168.3.93，ssh 通道，换装四律走全）：新
+  aginx-server 19,650,552 B（md5 `0f7125d4d57c01871ebda4d8edc48b41`）
+  scp 落位 `.new` → chmod+md5 先行 → 老件退 `.prev`（0d7aeb4 车）→
+  轮换 → 真重启。重启后：单元 aginx **ready（1 spawn / 0 exits）**、
+  `/proc/442/exe` md5 与构建件一致；日志 5 条 kernel boot failed 全
+  在头部（brain.json 未就位时代旧账，09-24 收据同款），本次 boot 干净
+  `listening on /run/aginx.sock` 收尾——**kernel 无条件 WasmSandbox
+  init（裁剪版 wasmtime Engine）上机过关**。
+- `aginx agent send me` 真脑中文真答（「母体——统一身份大管家」）——
+  裁剪车带脑全链对话收讫。
+- **设备结束态**：v0.1.2 裁剪车在役（pid 442），回滚件 `.prev` 在位；
+  镜像未刷。
