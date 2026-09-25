@@ -8750,3 +8750,23 @@ CAPTURE 块直接 write_all 进已连接的 TCP 客户端；节拍律=M48（每 
   标准化（#371）或 repeat-header 属性再解。
 - 真人眼看入口（随时可复跑）：设备 `stream` 后
   `ffplay -f h264 -fflags nobuffer tcp://192.168.3.93:9000`。
+
+## 2026-09-25 — 调好界面复活：#388 刷机后被清的显示线 UI 回灌（redfin/Pixel 5）
+
+#388 刷机装的是公共包（裸 L0 + 出厂树），显示线调好的 UI（信封卡片桌面）只存在于工作区 HEAD，镜像包不含——用户发现桌面信封没了。回灌方案：临时 worktree（`/tmp/aginxos-head-build`，HEAD=6bbbf19，避开他线脏件 voice/audio.rs、protocol.rs）cargo zigbuild musl 三件，全部三律换装：
+
+- `aginx-term` 1624008 B md5 03e351db → `/var/lib/aginx/pkgfiles/aginx-term/bin/aginx-term`；kill 后 init respawn 换血（pid 14107）。
+- `aginx-voice` 2417976 B md5 aef1799f → `/var/bin/aginx-voice`；`aginx-svc restart aginx-voice`（pid 12849→13983，ready）。
+- `aginx-carrier` 24639456 B md5 c9178cf9 → `/var/bin/aginx-carrier`（CLI 件，无单元）。
+
+server 不换：在跑的 #387 母体包 v0.1.2 系结构四刀后新车，源系含 `start_cron_loop()`（crates/server/src/host.rs:199），刀E 缺口一不复存在。
+
+晨报 job 重建（#388 清库）：`aginx-carrier cron create --agent me`（JSON 从 stdin 喂，绕 adb 引号坑）——`{"name":"晨报","schedule":{"kind":"cron","expr":"0 8 * * *","tz":"Asia/Shanghai"},"action":{"kind":"agent_turn","message":"给我今天的晨报"},"delivery":{"kind":"card","title":"晨报","template":"reply"}}`，落库 id 7a28b62f，`cron list` 确认 next_fire 2026-09-26T00:00:00Z（=08:00 Asia/Shanghai）、late=false。首触发待明晨收据。
+
+测试卡手工落盘验渲染链：`/home/cards/20260925-195100000-欢迎回来.json`（adb push 整文件，同避引号坑），term 2s 扫描周期后存活无炸。
+
+**adb 复合命令静默失败（本段新坑，记录在案）**：含中文/JSON/多语句的 `adb shell '…; …'` 整条零输出零执行（pids 不变、目录不生），单条简单命令正常——本段一切设备操作改单命令+文件推送。PATH 坑同段复发：`aginx-svc` 须全路径 `/usr/bin/aginx-svc`。
+
+**缺口（挂账）**：aginxbrowser 引擎 absent（`aginxbrowser` 单元在但 `/var/bin/aginxbrowser` 缺）——信封能上桌面，点开的 /open POST（127.0.0.1:8089）无人接；reply.html 模板同被 #388 清掉，Mac 无备份。两件归「引擎 opt-in + 模板生成 workflow 重跑」一揽子，未动。
+
+**设备终态**：aginx ready 450（未动）、aginx-voice ready 13983（dev-push）、term 14107 init respawn（dev-push）、carrier c9178cf9 CLI 件、晨报 job 在库待明晨 08:00、欢迎卡在桌面卡片带、vendor_boot 未动。
