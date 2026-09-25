@@ -40,3 +40,6 @@ shlex = "1"
 
 [dev-dependencies]
 tempfile = { workspace = true }
+# Tests feed .wat text to Module::new; feature unification adds wat to
+# test builds only, keeping it out of the release binary (母体刀5).
+wasmtime = { version = "47", default-features = false, features = ["cranelift", "runtime", "std", "wat"] }

@@ -90,7 +90,7 @@ rmp-serde = "1"
 tempfile = "3"
 
 # Storage / misc
-rusqlite = { version = "0.31", features = ["bundled", "serde_json"] }
+rusqlite = { version = "0.31", features = ["bundled"] }
 regex = "1"
 regex-lite = "0.1"
 lazy_static = "1.4"
@@ -103,7 +103,10 @@ base64 = "0.22"
 urlencoding = "2"
 flate2 = "1"
 tar = "0.4"
-wasmtime = "47"
+# Phone-size kernel: core-WASM sandbox only. No component-model/gc/threads/
+# async/parallel-compilation/cache — 母体刀5 (裁死重不裁可选性). wat is
+# test-only (dev-dependencies in crates/runtime re-adds it for fixtures).
+wasmtime = { version = "47", default-features = false, features = ["cranelift", "runtime", "std"] }
 hmac = "0.12"
 zeroize = { version = "1", features = ["derive"] }
 libloading = "0.8"
