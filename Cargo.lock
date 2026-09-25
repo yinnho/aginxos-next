@@ -157,6 +157,7 @@ dependencies = [
  "agio",
  "libc",
  "serde_json",
+ "testkit",
 ]
 
 [[package]]
