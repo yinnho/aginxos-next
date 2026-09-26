@@ -29,9 +29,10 @@
 
 ## 账四摊（2026-09-26 清点）
 
-1. **GitHub 未推**：aginx-relay `ff1a949`（shared secret 认证+TOCTOU）；
-   aginx-carrier `b3a42c7`/`8c958fd`/`97b855e`（aginx-web 改姓、dup 读免钥、
-   dup push 双形状）。
+1. **GitHub 未推——已清（09-26 晚）**：aginx-carrier `b3a42c7`/`8c958fd`/
+   `97b855e` 上 GitHub（d64f2fb..97b855e）+ 86quan deploy 腿同步
+   （9e8ddd2..97b855e 快进 33 件）；aginx-relay GitHub 仓**新建私仓**
+   `yinnho/aginx-relay` 并推 `ff1a949`（deploy 腿本已在 ff1a949）。
 2. **本仓未推——已清（09-26 晚）**：历史积压的 22 件代码（含
    `fa26fd3`→重排后 `e7f9ed1`）经历史重排整批上推（`f56cc16..d0fe1c8`）；
    13 件 docs(hardware) 收据按纪律永不上推，重排后**垫在本地 master 顶**。
