@@ -1,5 +1,5 @@
-//! browser_* 工具实现 — AginxBrowser HTTP API 客户端（M31 从
-//! carrier-runtime tools/browser.rs 整体搬来，行为同构）。
+//! browser_* 工具实现 — aginxbrowser HTTP API 客户端（M31 从
+//! carrier-runtime tools/browser.rs 外置；2026-09-26 回迁，行为同构）。
 //!
 //! - navigate/read_page: fetch 页面（markdown/html/text，CSS selector 提取）
 //! - click: JS element.click() 后回读页面文本
@@ -11,9 +11,9 @@
 use carrier_types::error::{CarrierError, CarrierResult};
 use serde_json::Value;
 
-use crate::{aginxbrowser_url, AGINXBROWSER_TIMEOUT_SECS};
+use super::{aginxbrowser_url, AGINXBROWSER_TIMEOUT_SECS};
 
-/// Shared AginBrowser HTTP request — POST to a given path, return JSON response.
+/// Shared aginxbrowser HTTP request — POST to a given path, return JSON response.
 async fn do_aginxbrowser_request(path: &str, req_body: Value) -> CarrierResult<Value> {
     let client = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(AGINXBROWSER_TIMEOUT_SECS))

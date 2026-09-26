@@ -1,11 +1,10 @@
-//! web_fetch 引擎（M31 从 carrier-runtime web_fetch.rs 整体搬来，行为
-//! 同构）：SSRF 防护 → GET 缓存 → 风控站 AginxBrowser 兜底 → reqwest
-//! 直连（逐跳 SSRF 校验的手动重定向）→ HTML→Markdown → 截断 →
+//! web_fetch 引擎（M31 从 carrier-runtime web_fetch.rs 外置；2026-09-26
+//! 回迁，行为同构）：SSRF 防护 → GET 缓存 → 风控站 aginxbrowser 兜底 →
+//! reqwest 直连（逐跳 SSRF 校验的手动重定向）→ HTML→Markdown → 截断 →
 //! wrap_external_content。
 //!
-//! 缓存说明：原引擎常驻 kernel 进程内缓存跨调用复用；CLI 每调用一个
-//! 进程，缓存只在单次调用内有效（v1 接受的代价——工具结果层面的
-//! 截断/预算不受影响，重复抓取由调用方自己重试才发生）。
+//! 缓存回到常驻 kernel 进程内（once_cell Lazy）：回迁后跨调用复用
+//! （M31 CLI 时代每次调用一个进程、缓存形同虚设的代价消失）。
 
 use carrier_types::config::WebFetchConfig;
 use carrier_types::error::{CarrierError, CarrierResult};
@@ -15,23 +14,18 @@ use serde_json::Value;
 use std::sync::Arc;
 use tracing::{debug, warn};
 
-use crate::web_cache::WebCache;
-use crate::web_content::{html_to_markdown, wrap_external_content};
+use super::web_cache::WebCache;
+use super::web_content::{html_to_markdown, wrap_external_content};
+use super::{aginxbrowser_url, USER_AGENT};
 
-/// 外挂 AginxBrowser 需要兜底抓取的站点（JS 渲染或风控）。命中且 AginxBrowser 已启用时
-/// 走浏览器，其余走 reqwest 直连。这是 web_fetch 的私有路由策略，不暴露为配置。
+/// 外挂 aginxbrowser 需要兜底抓取的站点（JS 渲染或风控）。命中即走
+/// 浏览器，其余走 reqwest 直连。这是 web_fetch 的私有路由策略，不暴露为配置。
 const AGINXBROWSER_HOSTS: &[&str] = &[
     "mp.weixin.qq.com",   // 微信公众号文章（风控）
     "zhuanlan.zhihu.com", // 知乎专栏（JS 渲染）
     "search.jd.com",      // 京东搜索（动态）
     "github.com",         // GitHub（动态 + 需代理）
 ];
-
-/// 读 AGINXBROWSER_URL。未设/空 → None（不启用外挂，纯 reqwest，行为等同改造前）。
-fn aginxbrowser_url() -> Option<String> {
-    // carrier_types::env::get_env so ~/.aginx/carrier/.env values take effect.
-    carrier_types::env::get_env("AGINXBROWSER_URL").filter(|s| !s.is_empty())
-}
 
 /// 目标 URL 是否属于已知需要浏览器渲染/过风控的站点。
 fn should_use_aginxbrowser(url: &str) -> bool {
@@ -40,19 +34,22 @@ fn should_use_aginxbrowser(url: &str) -> bool {
 }
 
 /// 引擎默认配置（types WebFetchConfig::default：50k chars / 10MB / 30s /
-/// readability 开）。kernel 的 config.web.fetch 覆盖在进程内丢失——CLI 面
-/// v1 用默认值（`aginx-web fetch --max-chars` 可单调用覆盖）。
-pub fn default_engine_config() -> WebFetchConfig {
+/// readability 开）。kernel 的 config.web.fetch 覆盖在 v1 用默认值。
+fn default_engine_config() -> WebFetchConfig {
     WebFetchConfig::default()
 }
 
-/// 工具入口 `web_fetch`：taint 闸 + 引擎。搬自 runtime tools/web_fetch.rs
-/// 的 execute 主体（行为同构）。
+/// 常驻进程内 GET 缓存（15 分钟 TTL，跨调用复用）。
+static SHARED_CACHE: once_cell::sync::Lazy<Arc<WebCache>> = once_cell::sync::Lazy::new(|| {
+    Arc::new(WebCache::new(std::time::Duration::from_secs(15 * 60)))
+});
+
+/// 工具入口 `web_fetch`：taint 闸 + 引擎。
 pub async fn web_fetch_tool(input: &Value) -> CarrierResult<String> {
     let url = input["url"].as_str().unwrap_or("");
 
     // Taint check — block URLs containing API keys/tokens/secrets
-    if let Some(violation) = crate::check_taint_net_fetch(url) {
+    if let Some(violation) = super::check_taint_net_fetch(url) {
         return Err(CarrierError::Network(format!(
             "Taint violation: {violation}"
         )));
@@ -62,11 +59,10 @@ pub async fn web_fetch_tool(input: &Value) -> CarrierResult<String> {
     let headers = input.get("headers").and_then(|v| v.as_object());
     let body = input["body"].as_str();
 
-    let engine = WebFetchEngine::new(
-        default_engine_config(),
-        Arc::new(WebCache::new(std::time::Duration::from_secs(15 * 60))),
-    );
-    engine.fetch_with_options(url, method, headers, body).await
+    let engine = WebFetchEngine::new(default_engine_config(), SHARED_CACHE.clone());
+    engine
+        .fetch_with_options(url, method, headers, body)
+        .await
 }
 
 /// Enhanced web fetch engine with SSRF protection and readability extraction.
@@ -80,7 +76,7 @@ impl WebFetchEngine {
     /// Create a new fetch engine from config with a shared cache.
     pub fn new(config: WebFetchConfig, cache: Arc<WebCache>) -> Self {
         let client = reqwest::Client::builder()
-            .user_agent(crate::USER_AGENT)
+            .user_agent(USER_AGENT)
             .timeout(std::time::Duration::from_secs(config.timeout_secs))
             .redirect(reqwest::redirect::Policy::none())
             .gzip(true)
@@ -126,12 +122,12 @@ impl WebFetchEngine {
             }
         }
 
-        // Step 2b: 外挂 AginxBrowser —— 命中风控站 + 已启用时走浏览器抓取。
-        // 仅对 GET 生效；POST/PUT 等 API 调用永远走 reqwest。
-        // 注意：风控站（微信/知乎/JD/github）aginxbrowser 失败时【不降级 reqwest】——
-        // reqwest 对这些站必失败（JS 渲染/风控），降级只给 agent 外壳假数据，导致它
-        // 误以为"没读全"反复重试（实测 ai-writer web_fetch 循环）。失败直接报错。
-        if method_upper == "GET" && should_use_aginxbrowser(url) && aginxbrowser_url().is_some() {
+        // Step 2b: 风控站走 aginxbrowser —— 命中即浏览器抓取（GET 专属；
+        // POST/PUT 等 API 调用永远走 reqwest）。风控站（微信/知乎/JD/
+        // github）失败时【不降级 reqwest】——reqwest 对这些站必失败（JS
+        // 渲染/风控），降级只给 agent 外壳假数据，导致它误以为"没读全"
+        // 反复重试（实测 ai-writer web_fetch 循环）。失败直接报错。
+        if method_upper == "GET" && should_use_aginxbrowser(url) {
             match self.fetch_via_aginxbrowser(url).await {
                 Ok(content) => {
                     let truncated = if content.len() > self.config.max_chars {
@@ -177,7 +173,7 @@ impl WebFetchEngine {
         };
         req = req.header(
             "User-Agent",
-            format!("Mozilla/5.0 (compatible; {})", crate::USER_AGENT),
+            format!("Mozilla/5.0 (compatible; {USER_AGENT})"),
         );
 
         // Add custom headers
@@ -270,9 +266,10 @@ impl WebFetchEngine {
         Ok(result)
     }
 
-    /// 调外挂 AginxBrowser 的 /fetch，返回 markdown 正文。失败返回 Err（调用方回退 reqwest）。
+    /// 调 aginxbrowser 的 /fetch，返回 markdown 正文。失败返回 Err（风控站
+    /// 调用方不降级 reqwest）。
     async fn fetch_via_aginxbrowser(&self, url: &str) -> CarrierResult<String> {
-        let base = aginxbrowser_url().expect("caller guards aginxbrowser_url().is_some()");
+        let base = aginxbrowser_url();
         let body = serde_json::json!({
             "url": url,
             "format": "markdown",
@@ -340,7 +337,7 @@ impl WebFetchEngine {
 
             let req = self.client.get(&next_url).header(
                 "User-Agent",
-                format!("Mozilla/5.0 (compatible; {})", crate::USER_AGENT),
+                format!("Mozilla/5.0 (compatible; {USER_AGENT})"),
             );
 
             resp = req

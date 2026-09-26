@@ -1,28 +1,20 @@
-//! web_search 实现 — AginxBrowser /search 聚合（M31 从 carrier-runtime
-//! tools/web_search.rs 整体搬来，行为同构）。
+//! web_search 实现 — aginxbrowser /search 聚合（M31 从 carrier-runtime
+//! tools/web_search.rs 外置；2026-09-26 回迁，行为同构；默认端点不再门
+//! AGINXBROWSER_URL——设备上 aginxbrowser 是烤入单元，恒在）。
 //!
 //! /search 原生聚合（baidu/sogou 等）+ fetch_top>0 时自动抓正文
-//! （一步"搜→读"）。需要 `AGINXBROWSER_URL`（env 或
-//! ~/.aginx/carrier/.env）——未设时明确报"Search not available"。
+//! （一步"搜→读"）。
 
 use carrier_types::error::{CarrierError, CarrierResult};
 use serde_json::Value;
 
-use crate::{aginxbrowser_url_opt, AGINXBROWSER_TIMEOUT_SECS};
+use super::aginxbrowser_url;
 
 pub async fn web_search(input: &Value) -> CarrierResult<String> {
-    let base = match aginxbrowser_url_opt() {
-        Some(u) => u,
-        None => {
-            return Err(CarrierError::Internal(
-                "Search not available: AGINXBROWSER_URL not set".into(),
-            ))
-        }
-    };
-    do_search(&base, input).await
+    do_search(&aginxbrowser_url(), input).await
 }
 
-/// POST AginxBrowser /search and format results as Markdown.
+/// POST aginxbrowser /search and format results as Markdown.
 async fn do_search(base_url: &str, input: &Value) -> CarrierResult<String> {
     let q = input["q"].as_str().ok_or(CarrierError::InvalidInput(
         "Missing required parameter: q".into(),
@@ -51,7 +43,7 @@ async fn do_search(base_url: &str, input: &Value) -> CarrierResult<String> {
 
     let client = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(
-            AGINXBROWSER_TIMEOUT_SECS + 30,
+            super::AGINXBROWSER_TIMEOUT_SECS + 30,
         )) // search+fetch needs more time
         .build()
         .map_err(|e| CarrierError::Network(format!("Failed to create HTTP client: {e}")))?;

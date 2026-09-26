@@ -1,28 +1,28 @@
-//! web 桥 — browser_* / web_search / web_fetch 工具的外置实现桥（M31 D3 批1；
-//! 原 agb_bridge，D13 改姓 2026-09-09）。
+//! web 桥 — browser_* / web_search / web_fetch 工具（M31 D3 批1；
+//! 原 agb_bridge，D13 改姓 2026-09-09；2026-09-26 实现回迁进程内���。
 //!
-//! 实现已整体搬到 `aginx-web` CLI（crates/web，单真源）。本模块只留：
-//! - definitions()：与原 tools/browser.rs / web_search.rs / web_fetch.rs
-//!   **逐字节相同**的 ToolDefinition（名字/schema/description 不动——
-//!   flow `tools:` 加载期冻结、金样本、教学文本全部依赖这批名字）。
-//! - execute()：spawn `aginx-web tool <name>`，stdin 喂入参 JSON，stdout 收
-//!   D1 信封（{"ok":true,"data":…} / {"ok":false,"error":…}）。
+//! 实现住在 `super::web`（进程内 aginxbrowser HTTP 客户端 + web_fetch
+//! 引擎——M31 曾外置 `aginx-web` CLI，因设备缺包整线工具死亡而退役）。
+//! 本模块只留：
+//! - definitions()：名字/schema/description 不动——flow `tools:` 加载期
+//!   冻结、金样本、教学文本全部依赖这批名字。
+//! - execute()：直接分发 `super::web::execute_tool`。
 //!
-//! 语义：定义恒广播；执行在 aginx-web 未安装时干净报错（v1：包在场门执行，
-//! 不门广告——flow 冻结不因少包漂移）。
+//! 语义：定义恒广播；执行在 aginxbrowser 未就绪时报网络错误（它是
+//! L0 烤入的两大镜像单元之一，设备上恒在）。
 //!
 //! tool_search 同批退役（宪法性替代：`ag commands`）。见 types CORE_TOOL_NAMES。
 
 use super::ToolModule;
 use crate::tool_context::ToolContext;
 use async_trait::async_trait;
-use carrier_types::error::{CarrierError, CarrierResult};
+use carrier_types::error::CarrierResult;
 use carrier_types::tool::{PermissionLevel, ToolDefinition};
 use serde_json::Value;
 
 pub struct WebBridge;
 
-/// 桥承载的全部工具名（与 crates/web 的 aginx_web::TOOL_NAMES 一一对应）。
+/// 桥承载的全部工具名（与 `super::web::TOOL_NAMES` 一一对应）。
 pub const BRIDGE_TOOL_NAMES: &[&str] = &[
     "browser_navigate",
     "browser_read_page",
@@ -275,7 +275,7 @@ Use browser_navigate to extract page content instead."
         if !BRIDGE_TOOL_NAMES.contains(&name) {
             return None;
         }
-        Some(run_web_tool(name, input).await)
+        super::web::execute_tool(name, input).await
     }
 
     fn permission_level(&self, tool_name: &str) -> PermissionLevel {
@@ -287,67 +287,6 @@ Use browser_navigate to extract page content instead."
             }
             _ => PermissionLevel::Dangerous,
         }
-    }
-}
-
-/// Spawn `aginx-web tool <name>`（stdin=入参 JSON，stdout=D1 信封）并解信封。
-///
-/// sandbox 同 shell.rs 直接执行路径：env_clear 后只回 PATH/HOME 等
-/// SAFE_ENV_VARS —— aginx-web 启动时自己 load_dotenv()，故 ~/.aginx/carrier/.env
-/// 的 AGINXBROWSER_URL 在子进程内仍生效。kill_on_drop：超时/取消不留孤儿。
-async fn run_web_tool(name: &str, input: &Value) -> CarrierResult<String> {
-    use std::process::Stdio;
-    use tokio::io::AsyncWriteExt;
-
-    let mut cmd = tokio::process::Command::new("aginx-web");
-    cmd.arg("tool").arg(name);
-    crate::subprocess_sandbox::sandbox_command(&mut cmd, &[]);
-    cmd.stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .kill_on_drop(true);
-
-    let mut child = cmd.spawn().map_err(|e| {
-        CarrierError::Internal(format!(
-            "aginx-web CLI not available ({e}) — browser/web tools live in the `aginx-web` \
-             package. Install it (`ag pkg install aginx-web`) or check PATH."
-        ))
-    })?;
-
-    if let Some(mut stdin) = child.stdin.take() {
-        // Best-effort write; aginx-web reads stdin to EOF before executing.
-        let payload = serde_json::to_vec(input).unwrap_or_default();
-        let _ = stdin.write_all(&payload).await;
-        let _ = stdin.shutdown().await;
-    }
-
-    let output = child
-        .wait_with_output()
-        .await
-        .map_err(|e| CarrierError::Internal(format!("aginx-web tool {name} subprocess failed: {e}")))?;
-
-    let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
-    let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
-
-    let envelope: Value = serde_json::from_str(&stdout).map_err(|_| {
-        let tail = if stdout.is_empty() { stderr } else { stdout };
-        let preview = crate::str_utils::safe_truncate_str(&tail, 300);
-        CarrierError::Internal(format!(
-            "aginx-web tool {name} returned a non-JSON response (exit {:?}): {preview}",
-            output.status.code()
-        ))
-    })?;
-
-    if envelope["ok"].as_bool().unwrap_or(false) {
-        envelope["data"]
-            .as_str()
-            .map(|s| s.to_string())
-            .ok_or_else(|| {
-                CarrierError::Serialization("aginx-web envelope missing string data field".to_string())
-            })
-    } else {
-        let msg = envelope["error"].as_str().unwrap_or("unknown aginx-web error");
-        Err(CarrierError::Internal(msg.to_string()))
     }
 }
 
@@ -375,6 +314,15 @@ mod tests {
                 "{name} should stay ReadOnly"
             );
         }
+    }
+
+    #[test]
+    fn bridge_names_match_web_module() {
+        let mut a = BRIDGE_TOOL_NAMES.to_vec();
+        let mut b = super::super::web::TOOL_NAMES.to_vec();
+        a.sort_unstable();
+        b.sort_unstable();
+        assert_eq!(a, b, "web_bridge names must mirror web::TOOL_NAMES");
     }
 
     #[tokio::test]
@@ -416,21 +364,5 @@ mod tests {
             .execute("nope", &serde_json::json!({}), &ctx)
             .await
             .is_none());
-    }
-
-    #[tokio::test]
-    async fn spawn_without_web_cli_reports_clean_error() {
-        // PATH scrubbed → spawn must fail with the "aginx-web CLI not
-        // available" hint, never a panic and never a hang.
-        let r = run_web_tool("browser_close", &serde_json::json!({})).await;
-        // On dev hosts aginx-web may actually be on PATH (built earlier); then
-        // the call succeeds. Either way the contract is: Ok(string) or Err(hint).
-        match r {
-            Ok(s) => assert!(s.contains("stateless")),
-            Err(e) => assert!(
-                e.to_string().contains("aginx-web CLI not available"),
-                "unexpected error: {e}"
-            ),
-        }
     }
 }

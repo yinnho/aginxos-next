@@ -58,7 +58,7 @@ impl KernelA2a {
 }
 
 /// External service integrations (media, TTS, embeddings).
-/// （M31 D3 批1：web fetch 引擎已随 aginx-web CLI 外置成包，不再常驻 kernel。）
+/// （web fetch 引擎回迁 runtime 进程内 tools/web/，2026-09-26；不在此。）
 pub struct KernelServices {
     /// Media understanding engine (image description, audio transcription).
     pub media_engine: carrier_runtime::media_understanding::MediaEngine,

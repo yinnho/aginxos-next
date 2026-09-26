@@ -18,6 +18,7 @@ pub mod media;
 pub mod shell;
 pub mod sqlite;
 pub mod training;
+pub mod web;
 pub mod web_bridge;
 
 use crate::kernel_handle::KernelHandle;
@@ -30,17 +31,20 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 // ---------------------------------------------------------------------------
-// AginBrowser 客户端 helpers 已随实现整体搬进 `aginx-web` CLI（M31 D3 批1；
-// 原 agb，D13 改姓 2026-09-09）。工具面见 web_bridge.rs；配置键仍是
-// AGINXBROWSER_URL（~/.aginx/carrier/.env）。
+// web 工具（browser_* / web_search / web_fetch）：M31 曾外置 `aginx-web`
+// CLI，2026-09-26 回迁进程内（tools/web/，aginxbrowser HTTP 客户端 +
+// web_fetch 引擎）——设备缺包会让整线工具死亡的形态退役。工具面见
+// web_bridge.rs；配置键仍是 AGINXBROWSER_URL（默认
+// http://127.0.0.1:8089，设备上 aginxbrowser 恒在）。
 //
-// 文件面工具（file_* + image_analyze）已随实现整体搬进 `agf` CLI
-// （M32 D3 批2）。工具面见 agf_bridge.rs；路径解析/沙箱留在桥内。
+// 文件面工具（file_* + image_analyze）：spawn `aginx-file` CLI
+// （M32 D3 批2，原名 `agf`，D13 改姓 2026-09-26）。工具面见
+// agf_bridge.rs；路径解析/沙箱留在桥内。
 //
 // 记忆面工具（kv_* / memory_tree / knowledge_* / flow_* /
-// clone_evaluate）已随实现整体搬进 `agmem` CLI（M35）。工具面见
-// agmem_bridge.rs；tools/kv.rs 与 tools/memory.rs 已删，knowledge.rs
-// 只剩 apply_patch + session_summarize 两个内核耦合留守面。
+// clone_evaluate）：spawn `aginx-mem` CLI（M35，原名 `agmem`，D13 改姓
+// 2026-09-26）。工具面见 agmem_bridge.rs；knowledge.rs 只剩 apply_patch +
+// session_summarize 两个内核耦合留守面。
 // ---------------------------------------------------------------------------
 
 /// A category of related tools.
