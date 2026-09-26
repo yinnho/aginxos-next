@@ -9205,3 +9205,63 @@ env 文件含 key 已删）。
 重烤经 OPT_ADD 直读配方自动带上 v0.1.7。**enchilada manifest 挂账
 未清**（设备离线，回网后须推新签 manifest——其 aginx 行若在，同法
 升钉）。镜像 aginx/ 下旧版本目录永不覆盖（在役/历史 manifest 钉 sha）。
+
+## 2026-09-26 — #397 grok 上机+共享代理隧道包 aginx-proxy+aginxbrowser 接线（redfin/Pixel 5）
+
+**grok v1.0.41 换装（版本缺口关闭）**：1.0.12 无脚本模式（TTY 专属，
+ENXIO 判死）。上游不走 GitHub releases——真源是官方安装脚本
+`https://x.ai/cli/install.sh`（x.ai 被墙，须穿代理拉）解出的资产规律：
+`https://x.ai/cli/grok-<ver>-<platform>[.zst|.gz]`（fallback GCS
+`storage.googleapis.com/grok-build-public-artifacts/cli/`）。取
+`grok-1.0.41-linux-aarch64.zst`（47,236,537 B）→解压 138,577,144 B
+静态 musl ELF（`file`=statically linked + musl 串在），sha256
+`7c0b8c973af6a78e2037f19ed93033471b8c5e722f9ff04b86b092e066e60d74`。
+镜像 `grok/v1.0.41/grok-v1.0.41-aarch64-unknown-linux-musl`（裸二进制
+包味——安装器嗅 ustar 魔数，非 tar 直拷 /var/bin）三方 sha 一致。
+manifest grok 行换钉+重签+opt-in 一发过闸（GET 138577144 精确），
+`grok --version`=1.0.41 (4220f3b224a6)。D13 sidecar 手工补位
+（/var/bin/grok.aginxmd，裸件路径不自动写 sidecar）。
+
+**手机必须走代理的铁证**：裸连 headless 真跑，日志
+`shell.turn.inference_retry` attempt 10/11：`https://cli-chat-proxy.grok.com/v1/responses
+Connection reset by peer`——出墙端点被 RST，非缓存非抖动。
+
+**aginx-proxy 包（stunnel 客户端树包，git 包同工艺）**：Alpine v3.22
+community stunnel 5.75-r0 闭包 4 apk（musl-1.2.5-r12/libssl3-3.5.8/
+libcrypto3-3.5.8/stunnel-5.75-r0，前三与 git 包同钉同缓存），tar
+`aginx-proxy-v0.1.0-4pc.tar` 6,478,848 B，sha256
+`39871bb8cfafbfc182c001351d226311d3103ea2d3054e314e8335dca4efef46`，
+镜像 `aginx-proxy/v0.1.0/`。conf/PSK 不进包：设备侧
+`/etc/stunnel/aginx-proxy.conf`（client+foreground=yes——simple 单元
+要前台）+ `/etc/stunnel/psk.txt`（PSK 从 86quan `sudo cat` 管道直灌
+手机 0600，不过会话不落盘）。86quan 侧读 psk.txt 须 sudo（ubuntu
+直读 Permission denied——首管道灌了空文件的坑）。
+
+**隧道验活**：opt-in 后 `127.0.0.1:8800`（0x2260）LISTEN；
+`HTTPS_PROXY=socks5h://127.0.0.1:8800 grok -p "只回两个字：收到"` →
+**「收到」**——手机自有隧道→PSK-TLS→107.150.46.242:4433→socks5 出口
+→xAI 真答案回。grok 的 env 由调用方给（Mac 同款 wrapper 姿势，
+zshrc 先例）；母体 spawn 时带 env 是微信线的活。
+
+**aginxbrowser 接线（两坑一坑坑）**：
+- **坑 1（tomlish 逗号）**：单元 envs 是逗号切分数组，NO_PROXY 值里的
+  逗号打断引号解析→单元被判坏**静默丢弃**（`aginx-svc reload` 打
+  `- aginxbrowser`、restart 报 no such unit、environ 只剩 HOME/PATH）。
+  单元 envs 值禁逗号——要 NO_PROXY 走 env_file（行级 split_once）。
+  旧进程成孤儿继续占 8089（reload 丢单元的 stop 未及收尸，僵尸
+  待 svcd 收），kill 后新进程接住端口。
+- **坑 2（自家代理 env）**：aginxbrowser 显式忽略 HTTPS_PROXY（启动
+  WARN「set AGINXBROWSER_PROXY」）。正确姿势=单元 env
+  `AGINXBROWSER_PROXY=socks5h://127.0.0.1:8800`。
+- **坑 3（代理选择性）**：engine 只在 `use_proxy` 旗标或域在封锁名单
+  （github/google/wikipedia/x.com…，diting env_knobs.rs BLOCKED_DOMAINS
+  后缀匹配）时走代理，默认直连——国内流量不受隧道拖累，设计如此。
+
+**双向验收**：github（旗标）/wikipedia（名单免旗标）/x.ai（旗标，
+tier=browser 内容 1.0.41）全穿隧道 200；baidu search 直连 9 结果。
+穿外国出口的国内站可用性（Mac 同隧道实测 baidu 2.5s / x.ai 1.8s）。
+
+**盘面**：设备在役 grok=1.0.41、aginx-proxy=0.1.0（六单元外新添）、
+aginxbrowser 带 AGINXBROWSER_PROXY。bake #27 起 aginx-proxy 经 OPT_ADD
+自动进镜像族。微信→iLink→me→spawn grok 的路由层是下一步（安全
+闸门：grok 是持壳 agent，须 --allow 限定后才放微信进）。
