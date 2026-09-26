@@ -102,3 +102,36 @@ wire_api = "chat"           # chat completions 面（vs "responses"）
 - [ ] **实测回填**：按第二节阶梯跑 L0，把真实延迟/行为数据回填本文档
   （只接受真 turn 收据，见事实 2）。
 - [ ] codex provider 配置样例实测校对后更新本节。
+
+## 四、v0.4.2 musl 版五问的回复（aginxos-next 侧，2026-09-26）
+
+对应 `aginxbrain/docs/BRAIN-RELEASE-v0.4.2.md` 第三节，逐条：
+
+1. **架构**：都要，aarch64-musl 优先。全部在役设备（redfin/enchilada）
+   是 aarch64；ORIN-NX「本地大脑档」（docs/DEVICE-ORIN-NX.md，选型
+   中未立项）也是 aarch64——若立项，本机 brain 是该档核心件。
+   x86_64-musl 次优先（服务器/容器腿；86quan 现跑 glibc Ubuntu，
+   x86_64-musl 是容器化备胎，不阻塞任何线）。
+2. **形态**：GitHub Release 出 Linux 惯例的 tar.gz 即可；**我方安装器
+   拒收 gzip**（ustar 嗅探+gzip 拒绝，M32c 收据），镜像侧会放解压后
+   的**裸二进制**（grok 先例：上游件→我方镜像裸件→manifest 钉裸件
+   sha，flat-binary 包味直拷 /var/bin）。pkgs/ 树包配方（pkg.toml
+   +[service] 单元）是我侧的活，真上机时配；上游保持干净裸件。
+3. **命名**：`aginxbrain-v0.4.2-aarch64-unknown-linux-musl.tar.gz` 可；
+   包内二进制名 `aginxbrain`（D13 姓氏，与 aginxbrowser 同族）。
+   我方镜像路径将是 `pkgs.aginx.net/aginxbrain/v0.4.2/`。
+4. **配置路径**：设备上**必须可指定**（硬需求）——env `AGINXBRAIN_HOME`
+   （或 --home 旗标），默认 `~/.aginxbrain/` 兼容服务器不动。设备侧
+   目标形态：config+db 住 `/var/lib/aginx/aginxbrain`（state 世界统一
+   /var/lib/aginx，N5 裁决），provider 密钥走 `/etc/aginx/env`
+   （env_file；密钥永不进包进库——aginx-gateway 同款纪律）。
+5. **per-API-key 默认思考档**：排期做，值=兜底而非主路径。母体辅助
+   调用（摘要/压缩/分类）将逐请求带 `"reasoning_effort":"none"`
+   （引擎侧改，已立案的延迟优化点）；主答轮保默认思考（要质量）。
+   per-key default 的正确优先序：**请求参数 > per-key default >
+   全局默认**——这样 key 设 none 只兜住忘带参数的调用，主答显式
+   带 high 仍能思考。若你们实现成 per-key 强压请求参数，请说明。
+
+另：母体 me 的 agent:// 地址 = `agent://redfin.relay.aginx.net/me`
+（agc 配置腿需 AGC_RELAY_SECRET，Mac 侧已配）。brain 侧可直接发问；
+多设备铁律：relay 活≠id 不变，认准 id=redfin。
