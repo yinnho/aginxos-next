@@ -8877,3 +8877,44 @@ aginx-voice/aginxbrowser/net-watch）；stamps 全家含 aginx-file/aginx-mem；
   ——远端回合走的就是 v0.1.3 母体，新母体远端面也过。
 - **SKILL 裸跑配方自验**：`aginx-mem --db /home/data/carrier.db set/get/
   del` 三连与文档逐字吻合（测试键即测即清）。
+
+## 2026-09-26 — #391 点晨报卡黑屏：两根因叠案（写卡键形 + panel.on 缺线）（redfin/Pixel 5）
+
+**现象**：用户点「晨报复验」卡，整屏黑（两轮复现）。黑底磷光 UI 下
+「空渲染」与「没上屏」外观相同——按渲染链逐步分诊。
+
+**根因一（数据键形）**：cron 写卡器 `write_home_card` 兜底把纯文本包成
+`{"text":...}`，而 `reply.html` 模板只吃 `question`+`body`（body×8/
+question×2，无 text）→ 渲染空页。修：daemon.rs 兜底改包
+`{question:"", body:<text>}`（be01375，测试断言同步）；在役两张卡
+（晨报/晨报复验）sed 原位抢救，验 `"body"` 在 `"text"` 清零。
+
+**根因二（上屏门，真正的主案）**：修复一后用户点卡**仍黑**——隧道 POST
+/open 证渲染链全通（show.html 10265B、晨报全文×6 在页），term 让屏健康；
+引擎日志**零 `panel:` 行** = 面板线程从未起。aginxbrowser 面板线程只认
+`--panel` 参数或 `/etc/aginx/panel.on` 标记，而全仓 provisioning 无任何
+一处置它——L0 线「结果页上屏」腿**从未通过**（09-25 #389 收据所记
+「reply 页上手机屏」实为 term 卡带，此处勘误）。修：设备 touch
+`/etc/aginx/panel.on` + `aginx-svc restart aginxbrowser` → 日志
+「panel: took the screen 1080x2340 / showing the page」；repo 侧
+build-rootfs.sh 对 device.toml 带 `[panel]` 段的机器（redfin/enchilada
+均带）烤镜像落标记（67934cb）。
+
+**母体 v0.1.4 上机（换装三律全过）**：镜像 `/aginx/v0.1.4/` tar+.sha256
+落位（sha256 `49241d2b`，服务器侧比对相符）；redfin manifest aginx 行
+升钉重签推送（全文 grep 无旧条目复发）；`opt-in aginx` 实拉 v0.1.4
+（list 实证 stamp=49241d/version 0.1.4）；真身
+`/var/lib/aginx/pkgfiles/aginx/bin/aginx-server` md5 `a9c96d03`
+host tar↔设备逐字节、-rwxr-xr-x；`aginx-reboot` 真重启 → 六单元 ready、
+新 pid 436 exe 无 `(deleted)`（旧 pid 440 曾挂删除 inode，三律之三实证）。
+
+**跨重启面板收据**：panel.on 在 /etc 存活；aginxbrowser 日志 13 条
+`panel:` 行，含完整周期「夺屏 1080x2340 → cached → showing → page
+gone, releasing」——让/还屏回路健康。
+
+**晨报原件在挂**：cron `0 8 * * *` Asia/Shanghai enabled，next_fire
+2026-09-27T00:00Z（明晨 08:00）；写卡器已是 v0.1.4 新兜底，卡片形状
+应直接合规。明晨自然 fire = 本线终收据。
+
+**挂账**：真人眼验（当场看屏点卡）待用户补记；enchilada manifest 升钉
+（离网，回网后照 #390 补配方）。
