@@ -359,7 +359,7 @@ impl ToolModule for AgmemBridge {
 }
 
 // ---------------------------------------------------------------------------
-// spawn + 信封解包（web/agf 桥同款）
+// spawn + 信封解包（agf 桥同款）
 // ---------------------------------------------------------------------------
 
 /// 组装入参 + `_ctx`（身份三元组 + 库/workspace 定位）。抽出来单测：
@@ -399,7 +399,7 @@ fn build_payload(name: &str, input: &Value, ctx: &ToolContext<'_>) -> Value {
 
 /// Spawn `aginx-mem tool <name>`（stdin=入参 JSON 含 `_ctx`，stdout=D1 信封）。
 ///
-/// sandbox 同 web/agf 桥：env_clear 后只回 PATH/HOME 等 SAFE_ENV_VARS。
+/// sandbox 同 agf 桥：env_clear 后只回 PATH/HOME 等 SAFE_ENV_VARS。
 /// kill_on_drop：超时/取消不留孤儿。
 async fn run_agmem_tool(name: &str, input: &Value, ctx: &ToolContext<'_>) -> CarrierResult<String> {
     use std::process::Stdio;

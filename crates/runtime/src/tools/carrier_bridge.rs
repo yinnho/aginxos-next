@@ -12,7 +12,7 @@
 //!   `_ctx` 身份 + 递归深度），stdout 收 D1 信封
 //!   （{"ok":true,"data":…} / {"ok":false,"error":…}）。
 //!
-//! 与 web/agf 桥（M31/M32）的两点刻意差异：
+//! 与 agf/agmem 桥（M32/M35）的两点刻意差异：
 //! - **不 env_clear**。子进程是 carrier CLI 自己——内核的 CLI 面，与 runtime
 //!   同信任域（不是外置包代码）。agent_send 的目标轮要打 brain、开 carrier.db，
 //!   env（brain key、PATH、HOME）必须原样继承；秘密只会流回内核自己的手里。
@@ -22,7 +22,7 @@
 //!   而逃逸 MAX_AGENT_CALL_DEPTH。
 //!
 //! 语义：定义恒广播；执行在 aginx-carrier 不可用时干净报错（包在场门执行，
-//! 不门广告——flow 冻结不因缺 CLI 漂移；与 web/agf 桥同款）。
+//! 不门广告——flow 冻结不因缺 CLI 漂移；与 agf 桥同款）。
 
 use super::ToolModule;
 use crate::tool_context::ToolContext;
@@ -245,7 +245,7 @@ impl ToolModule for CarrierBridge {
 }
 
 // ---------------------------------------------------------------------------
-// spawn + 信封解包（web/agf 桥同款；env 策略见模块头"刻意差异"）
+// spawn + 信封解包（agf 桥同款；env 策略见模块头"刻意差异"）
 // ---------------------------------------------------------------------------
 
 /// Spawn `aginx-carrier tool <name>`（stdin=入参 JSON 含 `_ctx`，stdout=D1 信封）。
