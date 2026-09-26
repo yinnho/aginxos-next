@@ -9171,3 +9171,37 @@ fresh flash 镜像 manifest 要带上 v0.1.1 钉，须重烤才有（OPT_ADD 现
 `6de130a6…`），领先在役包 v0.1.6。母体包 v0.1.7 出包+镜像上架待排
 （公共包线动作）；bake #27 重烤自动带上。主机台面已清（测试 sock/
 env 文件含 key 已删）。
+
+## 2026-09-26 — #396 母体包 v0.1.7 出包上架+设备换装：延迟双刀修正式进包（redfin/Pixel 5）
+
+**#395 双刀修从 dev-push 件转正为公共包**。pkg.toml 0.1.6→0.1.7
+（头注版本史补 v0.1.7 条），`build-pkg.sh aginx` 冷缓存全量重编
+（此前 cargo clean 清 27.5G）。
+
+**包与镜像**：
+- tar `aginx-v0.1.7-4pc.tar` 47,258,112 B，sha256
+  `acb85a4edce393e01ba8b8a0be5ed4446214f45a674f514552812ca60479d12d`；
+  server 真身 md5 `3789deb69b87e09ed77afe2e7496fc1d`（≠dev-push 件
+  6de130a6——同源不同构建字节，manifest 钉新 sha 故无漂移）。
+- 镜像 v-prefix 目录陷阱按册操作：预建
+  `86quan:/data/pkgs.aginx.net/aginx/v0.1.7/`（scp 进无 v 目录=静默
+  平行死目录）。本地/服务器/公网 sha256 三方一致，公网 200
+  content-length 精确。
+
+**设备换装（manifest 合并纪律+换装三律）**：
+- manifest：拉回设备 `/etc/agpkg.manifest`（92 行，含安装追加行）
+  →仅改 aginx 行 v0.1.6→v0.1.7+新 sha→host `aginx-sign` 重签→
+  manifest+.sig 双件推回。绝不盲覆。
+- `aginx-pkg opt-in aginx` 一发过闸：`GET …v0.1.7-4pc.tar → 47258112
+  bytes` 精确；stamp=`acb85a4e…`、version 戳=0.1.7。
+- md5 四对四：host 构建 tar 成员 = 安装真身 = 真重启后 `/proc/429/exe`
+  = `3789deb6…`（无旧 inode 残留；重启走
+  `/usr/bin/aginx-reboot reboot`）。
+
+**turn 计时复验（包件）**：重启后首答 4.49s、暖发 5.99s/3.88s——
+#395 的 4-6s 档在包件上坐实，非 dev-push 特例。
+
+**盘面**：设备在役=包 v0.1.7（与 git 尖 e76a27d 同源）；bake #27
+重烤经 OPT_ADD 直读配方自动带上 v0.1.7。**enchilada manifest 挂账
+未清**（设备离线，回网后须推新签 manifest——其 aginx 行若在，同法
+升钉）。镜像 aginx/ 下旧版本目录永不覆盖（在役/历史 manifest 钉 sha）。
