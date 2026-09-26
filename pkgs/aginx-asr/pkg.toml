@@ -1,12 +1,16 @@
 # aginx-asr — 离线语音识别（C8 蛋案：二进制+模型一树）。
-# 冻结一代 bionic-static 件（.local/device/redfin/voice，再生路径
-# devices/redfin/boot/assets.md）——独立升级本不存在，模型路径是预编译
-# 二进制里的编译期常量，所以模型随包走，provision 每靴幂等 symlink
-# /var/models/asr 指进 pkgfiles（C9）。exec 指 files/bin/ag-asr，装机面
-# 是 /var/bin/aginx-asr 符号链（与整机烤机同形——voice spawn 同路径）。
+# bionic-static 件（.local/device/redfin/voice）——独立升级本不存在，模型
+# 路径是预编译二进制里的编译期常量，所以模型随包走，provision 每靴幂等
+# symlink /var/models/asr 指进 pkgfiles（C9）。exec 指 files/bin/ag-asr，
+# 装机面是 /var/bin/aginx-asr 符号链（与整机烤机同形——voice spawn 同路径）。
+# v0.1.1（2026-09-26）：中文默认修上机——`language` 默认从 "auto" 改 "zh"
+# （auto 把安静中文听成 Oh/The/I，enchilada 09-18 实测），新增
+# AG_ASR_LANG 覆盖（zh/en/ja/ko/yue/auto）；同批把 voice 源+构建脚本从
+# 一代仓搬进本仓（tools/voice/ + scripts/build-voice.sh，再生路径不再
+# 指封仓仓）。v0.1.0（09-22）为原冻结件。
 name = "aginx-asr"
-version = "0.1.0"
-summary = "离线语音识别：WAV 进文本出，sherpa-onnx int8 模型树随包"
+version = "0.1.1"
+summary = "离线语音识别：WAV 进文本出，sherpa-onnx int8 模型树随包（zh 默认 + AG_ASR_LANG 覆盖）"
 group = "snd"
 exec = "bin/ag-asr"
-url = "https://pkgs.aginx.net/aginx-asr/v0.1.0/aginx-asr-v0.1.0-4pc.tar"
+url = "https://pkgs.aginx.net/aginx-asr/v0.1.1/aginx-asr-v0.1.1-4pc.tar"

@@ -49,7 +49,8 @@ further evolution", not "cannot run" — its build scripts still execute.
 | vendor-ramdisk-root | `./devices/redfin/boot/pack-vendor-boot.sh` (unpacks stock-vendor_boot.img; also produces boot-out/) |
 | vendor-modules | unpack `vendor_dlkm.img` from the factory image (first-gen repo had the one-off; see its `docs/HARDWARE.md` M19a) |
 | initramfs binaries | `aginxos-init`/`aginxos-probe`: first-gen `./scripts/build-phone.sh musl` (source: sealed repo `src/`); `first_stage_init`: extracted from stock boot.img; `trampoline`: built automatically by pack-vendor-boot.sh from `trampoline.c` in this directory |
-| voice / ocr | first-gen `scripts/build-voice.sh` + `fetch-voice-models.sh`, `build-ocr.sh` + `fetch-ocr-models.sh` (bionic-static工艺, M42d/M45) |
+| voice | in-tree since 2026-09-26: `tools/voice/` sources + `./scripts/build-voice.sh` (bionic-static工艺, M42d; asr zh-default fix landed here, aginx-asr ≥v0.1.1) |
+| ocr | first-gen `build-ocr.sh` + `fetch-ocr-models.sh` (bionic-static工艺, M45) |
 | dropbear | first-gen `scripts/build-dropbear.sh` (zig cc; AR must be LLVM's) |
 | radio blobs | first-gen `scripts/build-radio-blobs.sh` (see `.local/radio/README.md` there) |
 | trampoline pair | first-gen `./scripts/build-phone.sh musl` → `target/aarch64-unknown-linux-musl/release/{aginxos-init,aginxos-agent}`. FROZEN deliberately: aginxos-init owns the userdata rootfs swap — swapping the swapper invalidates the update flow's rollback story |
