@@ -32,12 +32,14 @@
 1. **GitHub 未推**：aginx-relay `ff1a949`（shared secret 认证+TOCTOU）；
    aginx-carrier `b3a42c7`/`8c958fd`/`97b855e`（aginx-web 改姓、dup 读免钥、
    dup push 双形状）。
-2. **本仓 6 件本地未推**：5× docs(hardware) 按纪律永不上推；`fa26fd3`
-   （manifest 换钉 v0.5.8）夹在中间——推它必带 4 件文档，破例连推或留
-   本地，待裁决。
-3. **一代仓工作树**：`tools/voice/ag-asr.c` zh 默认修（09-18，完整未提交）；
-   204 件 `legacy/aginx-os/target/` 删除未提交；untracked 散件（apk/dmg/
-   ARCH.md/SCIS 设计稿）为他线工作件。
+2. **本仓未推——已清（09-26 晚）**：历史积压的 22 件代码（含
+   `fa26fd3`→重排后 `e7f9ed1`）经历史重排整批上推（`f56cc16..d0fe1c8`）；
+   13 件 docs(hardware) 收据按纪律永不上推，重排后**垫在本地 master 顶**。
+   此后推送姿势固定：`git push origin <代码尖>:master`（代码尖=收据堆
+   之下第一件；先推码、收据永远后落）。
+3. **一代仓工作树**：~~`tools/voice/ag-asr.c` zh 默认修~~（已搬本仓
+   落地=v0.1.1，#394）；204 件 `legacy/aginx-os/target/` 删除未提交；
+   untracked 散件（apk/dmg/ARCH.md/SCIS 设计稿）为他线工作件。
 4. **运行面**：服务器腿（86quan）router 换装状态未知（晨报三杀两杀在
    服务器；Mac 本机腿已换，`~/.aginx/spool/me` 有落件）；明早 08:00 晨报
    复验；enchilada manifest 挂账同上。
