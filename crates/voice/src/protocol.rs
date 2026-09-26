@@ -394,7 +394,13 @@ impl Vm {
     }
 
     fn step_idle(&mut self, text: &str, outs: &mut Vec<Out>) {
-        if is_scan(text) {
+        if is_close_eye(text) {
+            self.say(outs, "镜头关了。");
+            outs.push(Out::Act(Act::EyeClose));
+        } else if is_open_eye(text) {
+            self.say(outs, "镜头开了。");
+            outs.push(Out::Act(Act::Eye));
+        } else if is_scan(text) {
             // is_scan 判在 is_wifi 之前：「扫码连无线」含「无线」，但主动词
             // 是相机——口语里说要扫码，给相机。
             self.say(outs, "拍照扫码，对准二维码别动。");
@@ -588,6 +594,14 @@ fn is_speak_request(t: &str) -> bool {
     )
 }
 
+fn is_open_eye(t: &str) -> bool {
+    contains_any(t, &["打开镜头", "开镜头", "打开相机", "开相机"])
+}
+
+fn is_close_eye(t: &str) -> bool {
+    contains_any(t, &["关掉镜头", "关镜头", "关闭镜头", "关上镜头"])
+}
+
 fn is_scan(t: &str) -> bool {
     // 相机主动词。与口语「重新扫」不撞：重扫的诉求已由「连网」重新
     // 开眼覆盖（机器自己会再试）。
@@ -749,6 +763,19 @@ mod tests {
         let o = heard(&mut vm, "扫码连无线");
         assert!(acts(&o).contains(&Act::QrScan));
         assert!(!acts(&o).contains(&Act::NetConnect));
+    }
+
+    #[test]
+    fn open_lens_opens_eye() {
+        for w in ["打开镜头", "开镜头", "打开相机"] {
+            let mut vm = Vm::new();
+            let o = heard(&mut vm, w);
+            assert!(acts(&o).contains(&Act::Eye), "「{w}」应开眼");
+            assert!(!acts(&o).contains(&Act::QrScan));
+        }
+        let mut vm = Vm::new();
+        let o = heard(&mut vm, "关掉镜头");
+        assert!(acts(&o).contains(&Act::EyeClose));
     }
 
     #[test]

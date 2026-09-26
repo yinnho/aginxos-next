@@ -320,14 +320,24 @@ pub fn capture_start() -> std::io::Result<Child> {
         .spawn()
 }
 
-/// 读采集产物并封 WAV。过短（<0.1s）返回 None（误触）。
+/// 读采集产物并封 WAV。过短（<0.1s）或全静音返回 None。
+/// 静音仍喂 sense-voice 会听成「我。」「。」（enchilada 2026-09-19）。
 pub fn capture_take() -> Option<Vec<u8>> {
     let raw = fs::read("/tmp/aginx-voice-cap.raw").ok()?;
     let raw = &raw[..raw.len() - raw.len() % 2]; // 整样本截齐
     if raw.len() < (rate() as usize / 10) * 2 {
         return None;
     }
+    if !pcm_has_signal(raw) {
+        return None;
+    }
     Some(wav_wrap(raw, rate(), chans()))
+}
+
+fn pcm_has_signal(raw: &[u8]) -> bool {
+    raw.chunks_exact(2).any(|c| {
+        i16::from_le_bytes([c[0], c[1]]).unsigned_abs() > 64
+    })
 }
 
 // ---------------- wav ----------------
@@ -582,10 +592,26 @@ pub fn local_asr(wav: &[u8]) -> Result<String, String> {
             String::from_utf8_lossy(&out.stdout).trim().to_string()
         }
     };
-    if text.is_empty() {
-        return Err("aginx-asr empty".into());
+    if !asr_text_ok(&text) {
+        return Err(format!("aginx-asr unusable {text:?}"));
     }
     Ok(text)
+}
+
+/// sense-voice `auto` 把安静中文听成 Oh/The/I/"。"。中文机只收下汉字或较长文本。
+fn asr_text_ok(text: &str) -> bool {
+    let kept: String = text
+        .chars()
+        .filter(|c| c.is_ascii_alphanumeric() || ('\u{4e00}'..='\u{9fff}').contains(c))
+        .collect();
+    if kept.is_empty() {
+        return false;
+    }
+    let n = kept.chars().count();
+    if n <= 3 && kept.is_ascii() {
+        return false;
+    }
+    true
 }
 
 /// 文本 → 扬声器：分句流水（M42e 续：整段合成完才放是长句延迟的大头）。
@@ -1169,5 +1195,23 @@ mod tests {
         assert_eq!(expand_digit_chains("第3章 第5节"), "第3章 第5节");
         // 链前分隔不吞：空格留在原位
         assert_eq!(expand_digit_chains("验证码 654321"), "验证码 6 5 4 3 2 1");
+    }
+
+    #[test]
+    fn pcm_has_signal_rejects_silence() {
+        assert!(!pcm_has_signal(&[0, 0, 0, 0, 1, 0])); // 1 < 64
+        let loud = 1000i16.to_le_bytes();
+        assert!(pcm_has_signal(&[0, 0, loud[0], loud[1]]));
+    }
+
+    #[test]
+    fn asr_text_ok_keeps_chinese_drops_english_shards() {
+        assert!(asr_text_ok("你好。"));
+        assert!(asr_text_ok("好"));
+        assert!(!asr_text_ok("。"));
+        assert!(!asr_text_ok("I."));
+        assert!(!asr_text_ok("Oh."));
+        assert!(!asr_text_ok("The."));
+        assert!(!asr_text_ok(""));
     }
 }
