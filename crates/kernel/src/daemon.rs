@@ -582,8 +582,10 @@ fn write_home_card(
     let dir = home.join("cards");
     std::fs::create_dir_all(&dir)
         .map_err(|e| CarrierError::Config(format!("create cards dir failed: {e}")))?;
+    // 模板契约：reply.html 渲染 question+body——纯文本兜底必须包成模板
+    // 键（曾包 {"text"} → 点开黑屏，09-26 复验卡事故）。
     let data = serde_json::from_str::<serde_json::Value>(response)
-        .unwrap_or_else(|_| serde_json::json!({ "text": response }));
+        .unwrap_or_else(|_| serde_json::json!({ "question": "", "body": response }));
     let envelope = serde_json::json!({
         "title": title,
         "template": template,
@@ -1979,7 +1981,7 @@ mod tests {
         let fallback =
             std::fs::read_to_string(home.join("cards").join(fallback_name)).unwrap();
         let doc: serde_json::Value = serde_json::from_str(&fallback).unwrap();
-        assert_eq!(doc["data"]["text"], "今天多云，不是 JSON", "raw text wrapped, not lost");
+        assert_eq!(doc["data"]["body"], "今天多云，不是 JSON", "raw text wrapped, not lost");
         assert_eq!(doc["title"], "晨报/2026/09", "title kept verbatim for display");
 
         // 原子写收口：目录里没有点开头 tmp 残留
