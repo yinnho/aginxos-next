@@ -14,7 +14,7 @@
 //!   "error":…}）。
 //!
 //! 语义：定义恒广播；执行在 aginx-file 未安装时干净报错（包在场门执行，
-//! 不门广告——flow 冻结不因少包漂移；与 web 桥同款）。
+//! 不门广告——flow 冻结不因少包漂移；与 agmem 桥同款）。
 //!
 //! 截断策略不变：file_read 的 50k 结果帽在 tool_meta（按工具名），随桥
 //! 保留——信封只运字符串，不重复截一次。
@@ -290,13 +290,13 @@ fn resolve_analyze_path(path: &str, ctx: &ToolContext<'_>) -> CarrierResult<Path
 }
 
 // ---------------------------------------------------------------------------
-// spawn + 信封解包（web 桥同款）
+// spawn + 信封解包（agmem 桥同款）
 // ---------------------------------------------------------------------------
 
-/// Spawn `agf tool <name>`（stdin=入参 JSON 含 `_ctx`，stdout=D1 信封）。
+/// Spawn `aginx-file tool <name>`（stdin=入参 JSON 含 `_ctx`，stdout=D1 信封）。
 ///
-/// sandbox 同 web 桥：env_clear 后只回 PATH/HOME 等 SAFE_ENV_VARS —— agf
-/// 的 markitdown/pandoc 子进程靠 PATH。kill_on_drop：超时/取消不留孤儿。
+/// sandbox 同 agmem 桥：env_clear 后只回 PATH/HOME 等 SAFE_ENV_VARS ——
+/// aginx-file 的 markitdown/pandoc 子进程靠 PATH。kill_on_drop：超时/取消不留孤儿。
 /// 相对路径依赖 CWD 继承（与 runtime 进程同 CWD，语义同旧模块）。
 async fn run_agf_tool(name: &str, input: &Value, ctx: &ToolContext<'_>) -> CarrierResult<String> {
     use std::process::Stdio;
