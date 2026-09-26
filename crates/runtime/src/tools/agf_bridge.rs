@@ -1,18 +1,20 @@
 //! agf 桥 — 文件面工具的外置实现桥（M32 D3 批2）。
 //!
-//! 实现已整体搬到 `agf` CLI（crates/agf，单真源）：file_read / file_write /
-//! file_list / file_convert 四件来自 tools/filesystem.rs，image_analyze 来自
-//! tools/media.rs。本模块只留：
+//! 实现住在 `aginx-file` CLI（crates/aginx-file，单真源；原名 `agf`，
+//! D13 改姓 2026-09-26）：file_read / file_write / file_list / file_convert
+//! 四件来自 tools/filesystem.rs，image_analyze 来自 tools/media.rs。
+//! 本模块只留：
 //! - definitions()：与被删模块**逐字节相同**的 ToolDefinition（名字/schema/
 //!   description 不动——flow `tools:` 加载期冻结、CORE_TOOL_NAMES、教学文本
 //!   全部依赖这批名字）。
 //! - 路径解析：沙箱与用户数据目录路由留在 kernel 侧（单真源在此，§9 计划
 //!   随末模块退役），解析结果经 stdin JSON 保留键 `_ctx` 注入 CLI。
-//! - execute()：spawn `agf tool <name>`，stdin 喂入参 JSON（含 `_ctx`），
-//!   stdout 收 D1 信封（{"ok":true,"data":…} / {"ok":false,"error":…}）。
+//! - execute()：spawn `aginx-file tool <name>`，stdin 喂入参 JSON（含
+//!   `_ctx`），stdout 收 D1 信封（{"ok":true,"data":…} / {"ok":false,
+//!   "error":…}）。
 //!
-//! 语义：定义恒广播；执行在 agf 未安装时干净报错（包在场门执行，不门
-//! 广告——flow 冻结不因少包漂移；与 M31 web 桥同款）。
+//! 语义：定义恒广播；执行在 aginx-file 未安装时干净报错（包在场门执行，
+//! 不门广告——flow 冻结不因少包漂移；与 web 桥同款）。
 //!
 //! 截断策略不变：file_read 的 50k 结果帽在 tool_meta（按工具名），随桥
 //! 保留——信封只运字符串，不重复截一次。
@@ -27,7 +29,7 @@ use std::path::{Path, PathBuf};
 
 pub struct AgfBridge;
 
-/// 桥承载的全部工具名（与 agf::TOOL_NAMES ���一对应）。
+/// 桥承载的全部工具名（与 aginx_file::TOOL_NAMES 一一对应）。
 pub const BRIDGE_TOOL_NAMES: &[&str] = &[
     "file_read",
     "file_write",
@@ -358,7 +360,7 @@ async fn run_agf_tool(name: &str, input: &Value, ctx: &ToolContext<'_>) -> Carri
         }
     }
 
-    let mut cmd = tokio::process::Command::new("agf");
+    let mut cmd = tokio::process::Command::new("aginx-file");
     cmd.arg("tool").arg(name);
     crate::subprocess_sandbox::sandbox_command(&mut cmd, &[]);
     cmd.stdin(Stdio::piped())
@@ -368,22 +370,21 @@ async fn run_agf_tool(name: &str, input: &Value, ctx: &ToolContext<'_>) -> Carri
 
     let mut child = cmd.spawn().map_err(|e| {
         CarrierError::Internal(format!(
-            "agf CLI not available ({e}) — file tools live in the `agf` package. \
-             Install it (`ag pkg install agf`) or check PATH."
+            "aginx-file CLI not available ({e}) — file tools live in the `aginx-file` \
+             package. Install it (`aginx-pkg opt-in aginx-file`) or check PATH."
         ))
     })?;
 
     if let Some(mut stdin) = child.stdin.take() {
-        // Best-effort write; agf reads stdin to EOF before executing.
+        // Best-effort write; aginx-file reads stdin to EOF before executing.
         let bytes = serde_json::to_vec(&payload).unwrap_or_default();
         let _ = stdin.write_all(&bytes).await;
         let _ = stdin.shutdown().await;
     }
 
-    let output = child
-        .wait_with_output()
-        .await
-        .map_err(|e| CarrierError::Internal(format!("agf tool {name} subprocess failed: {e}")))?;
+    let output = child.wait_with_output().await.map_err(|e| {
+        CarrierError::Internal(format!("aginx-file tool {name} subprocess failed: {e}"))
+    })?;
 
     let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
     let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();

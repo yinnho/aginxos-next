@@ -1,15 +1,16 @@
-//! agf — 文件工具 CLI 的库面（M32 D3 批2）。
+//! aginx-file — 文件工具 CLI 的库面（M32 D3 批2；D13 改名 2026-09-26，原 agf）。
 //!
 //! file_read / file_write / file_list / file_convert / image_analyze 五个
 //! 工具的语义从 carrier-runtime 的 tools/filesystem.rs 与 media.rs 整体搬来
 //! （行为同构：同样的二进制/文档识别、同样的纠偏提示、同样的
 //! markitdown/pandoc 编排、同样的 view_url 拼法）。runtime 侧只留
-//! `agf_bridge`：同名 ToolDefinition + spawn `agf tool <name>`。
+//! `agf_bridge`：同名 ToolDefinition + spawn `aginx-file tool <name>`。
 //!
 //! 两张脸：
-//! - 人/流程脚本：`agf read <path>`、`agf ls <path>`、`agf write <path>`、
-//!   `agf convert <in> <fmt>`、`agf inspect <img>` — 路径按 CWD 解析。
-//! - 机读（runtime 桥用）：`agf tool <name>`，stdin 收工具入参 JSON，
+//! - 人/流程脚本：`aginx-file read <path>`、`aginx-file ls <path>`、
+//!   `aginx-file write <path>`、`aginx-file convert <in> <fmt>`、
+//!   `aginx-file inspect <img>` — 路径按 CWD 解析。
+//! - 机读（runtime 桥用）：`aginx-file tool <name>`，stdin 收工具入参 JSON，
 //!   stdout 出 D1 信封（`{"ok":true,"data":"…"}` / `{"ok":false,"error":…}`）。
 //!
 //! 路径解析的分工：沙箱与用户数据目录路由留在 runtime 桥（单真源在
@@ -80,7 +81,7 @@ pub fn resolve_param(input: &Value, param: &str, raw: &str) -> CarrierResult<Pat
     Ok(PathBuf::from(raw))
 }
 
-/// 工具派发 — `agf tool <name>` 的库面。`None` = 不是本 CLI 的工具。
+/// 工具派发 — `aginx-file tool <name>` 的库面。`None` = 不是本 CLI 的工具。
 pub async fn execute_tool(name: &str, input: &Value) -> Option<CarrierResult<String>> {
     match name {
         "file_read" => Some(ops::file_read(input).await),
@@ -94,7 +95,7 @@ pub async fn execute_tool(name: &str, input: &Value) -> Option<CarrierResult<Str
 
 /// 人读/机读两脸共用的错误出口：Err → stderr 一行 + rc 1。
 pub fn bail_human(e: &CarrierError) -> ! {
-    eprintln!("agf: {e}");
+    eprintln!("aginx-file: {e}");
     std::process::exit(1);
 }
 

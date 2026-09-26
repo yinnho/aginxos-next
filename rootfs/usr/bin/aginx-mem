@@ -4,5 +4,7 @@
 # aginx:args=<subcommand> [args…]
 # aginx:examples=kv get demo
 # aginx:examples=tree ls /
-# N4 bridge shell to the agmem package (provision, /var/bin); see aginx-web.
-exec /var/bin/agmem "$@"
+# N4 bridge shell to the aginx-mem package (provision, /var/bin); see
+# aginx-file. D13 rename 2026-09-26: the package was re-cut from `agmem`.
+# No aginx:exec — the target only exists after the first provision sync.
+exec /var/bin/aginx-mem "$@"

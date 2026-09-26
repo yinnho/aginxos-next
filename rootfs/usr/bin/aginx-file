@@ -4,5 +4,9 @@
 # aginx:args=<subcommand> [args…]
 # aginx:examples=read /etc/hostname
 # aginx:examples=ls /home
-# N4 bridge shell to the agf package (provision, /var/bin); see aginx-web.
-exec /var/bin/agf "$@"
+# N4 bridge shell to the aginx-file package (provision, /var/bin); see
+# aginx-mem. D13 rename 2026-09-26: the package was re-cut from `agf`.
+# No aginx:exec — the target only exists after the first provision sync.
+# Post-provision this shim is shadowed by /var/bin/aginx-file + its
+# .aginxmd sidecar (same route `files`, same summary — keep in lockstep).
+exec /var/bin/aginx-file "$@"

@@ -1,10 +1,10 @@
-//! agmem — 记忆工具 CLI（M35）。
+//! aginx-mem — 记忆工具 CLI（M35；D13 改名 2026-09-26，原 agmem）。
 //!
 //! 两张脸：人面子命令（kv get/set/list/del、tree search/topic/source/
 //! global/drill/leaves、k 知识库面、flow 流程面、evaluate），机读面
-//! `agmem tool <name>`（stdin 收工具入参 JSON，stdout 出 D1 信封；runtime
-//! 的 agmem_bridge 消费）。身份三元组经 stdin JSON 保留键 `_ctx` 注入——
-//! 见 lib.rs 头注。knowledge/flow 面要 workspace：桥注入
+//! `aginx-mem tool <name>`（stdin 收工具入参 JSON，stdout 出 D1 信封；
+//! runtime 的 agmem_bridge 消费）。身份三元组经 stdin JSON 保留键 `_ctx`
+//! 注入——见 lib.rs 头注。knowledge/flow 面要 workspace：桥注入
 //! `_ctx.workspace_root`，人面给 --workspace。
 
 use clap::{Parser, Subcommand};
@@ -13,10 +13,10 @@ use std::path::PathBuf;
 
 #[derive(Parser)]
 #[command(
-    name = "agmem",
+    name = "aginx-mem",
     version,
     about = "记忆工具 CLI — kv 存取 + 记忆树检索 + 知识库/流程",
-    long_about = "agmem 是记忆面工具的 CLI 形态（M35 外置成包）。\nkv 按 (agent, owner, user) 三元组隔离；tree 是已摄取对话/邮件/文档的\n回溯索引；k 面管化身 workspace 的知识库；flow 面管流程（skills）。\n人面子命令直接给参数；机读面 `agmem tool <name>` 从 stdin 读 JSON，\nstdout 出 D1 信封（{\"ok\":true,\"data\":…}）。"
+    long_about = "aginx-mem 是记忆面工具的 CLI 形态（M35 外置成包；D13 改名，原 agmem）。\nkv 按 (agent, owner, user) 三元组隔离；tree 是已摄取对话/邮件/文档的\n回溯索引；k 面管化身 workspace 的知识库；flow 面管流程（skills）。\n人面子命令直接给参数；机读面 `aginx-mem tool <name>` 从 stdin 读 JSON，\nstdout 出 D1 信封（{\"ok\":true,\"data\":…}）。"
 )]
 struct Cli {
     /// substrate 库路径（缺省 $HOME/.aginx/carrier/data/carrier.db）
@@ -221,7 +221,7 @@ enum FlowCmd {
 fn main() -> anyhow::Result<()> {
     // CLI 人面常接 `| head`：Rust 默认忽略 SIGPIPE，写已关闭管道会以
     // "failed printing to stdout: Broken pipe" panic 收场。恢复默认处置
-    // = 安静地死于 SIGPIPE，与普通 CLI 一致（aginx-web/agf 同款，设备实测过）。
+    // = 安静地死于 SIGPIPE，与普通 CLI 一致（aginx-file 同款，设备实测过）。
     unsafe {
         libc::signal(libc::SIGPIPE, libc::SIG_DFL);
     }
@@ -232,8 +232,8 @@ fn main() -> anyhow::Result<()> {
     rt.block_on(run(cli))
 }
 
-fn fallback_of(cli: &Cli) -> agmem::AgmemCtx {
-    agmem::AgmemCtx {
+fn fallback_of(cli: &Cli) -> aginx_mem::AgmemCtx {
+    aginx_mem::AgmemCtx {
         agent_id: cli.agent.clone(),
         owner_id: Some(cli.owner.clone()),
         user_id: Some(cli.user.clone()),
@@ -253,7 +253,7 @@ async fn run(cli: Cli) -> anyhow::Result<()> {
             std::io::Read::read_to_string(&mut std::io::stdin(), &mut raw)?;
             let input: Value = serde_json::from_str(&raw)
                 .map_err(|e| anyhow::anyhow!("stdin 不是合法 JSON 入参: {e}"))?;
-            match agmem::execute_tool(name, &input, db_flag.as_ref(), ws_flag.as_ref(), fallback)
+            match aginx_mem::execute_tool(name, &input, db_flag.as_ref(), ws_flag.as_ref(), fallback)
                 .await
             {
                 None => {
@@ -276,12 +276,12 @@ async fn run(cli: Cli) -> anyhow::Result<()> {
             // 人面：参数拼回工具 JSON 入参，走同一条 execute_tool 单真源。
             let (name, input) = args_to_input(human)?;
             let input_val = Value::Object(input);
-            match agmem::execute_tool(name, &input_val, db_flag.as_ref(), ws_flag.as_ref(), fallback)
+            match aginx_mem::execute_tool(name, &input_val, db_flag.as_ref(), ws_flag.as_ref(), fallback)
                 .await
             {
                 None => anyhow::bail!("unknown tool: {name}"),
                 Some(Ok(data)) => println!("{data}"),
-                Some(Err(e)) => agmem::bail_human(&e),
+                Some(Err(e)) => aginx_mem::bail_human(&e),
             }
         }
     }
@@ -289,7 +289,7 @@ async fn run(cli: Cli) -> anyhow::Result<()> {
 }
 
 /// 人面子命令 → (工具名, 工具入参 JSON)。与工具 schema 同构，仅做参数搬运。
-/// set 的值缺省读 stdin（sh-first：`… | agmem set k` / `agmem set k < in`）；
+/// set 的值缺省读 stdin（sh-first：`… | aginx-mem set k` / `aginx-mem set k < in`）；
 /// 能解析成 JSON 就按 JSON 存（数字/对象原样），否则存裸字符串。
 fn args_to_input(cmd: &Command) -> anyhow::Result<(&'static str, serde_json::Map<String, Value>)> {
     use serde_json::json;
@@ -482,7 +482,7 @@ fn args_to_input(cmd: &Command) -> anyhow::Result<(&'static str, serde_json::Map
     }
 }
 
-/// 正文类参数统一从 stdin 读（sh-first：`… | agmem k add 标题`）。
+/// 正文类参数统一从 stdin 读（sh-first：`… | aginx-mem k add 标题`）。
 fn read_stdin() -> anyhow::Result<String> {
     let mut buf = String::new();
     std::io::Read::read_to_string(&mut std::io::stdin(), &mut buf)?;
@@ -491,5 +491,5 @@ fn read_stdin() -> anyhow::Result<String> {
 
 fn print_envelope_error(msg: &str) {
     println!("{}", serde_json::json!({"ok": false, "error": msg}));
-    eprintln!("agmem: {msg}");
+    eprintln!("aginx-mem: {msg}");
 }

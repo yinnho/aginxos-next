@@ -1,4 +1,4 @@
-//! agmem — 记忆工具 CLI 的库面（M35）。
+//! aginx-mem — 记忆工具 CLI 的库面（M35；D13 改名 2026-09-26，原 agmem）。
 //!
 //! kv_get / kv_set / kv_list / kv_delete / memory_tree 的语义从
 //! carrier-runtime 的 tools/kv.rs 与 tools/memory.rs 整体搬来，knowledge
@@ -6,16 +6,16 @@
 //! index、clone_evaluate、flow_create/update/load）从 tools/knowledge.rs
 //! 搬来（行为同构：同样的身份三元组隔离、同样的输出文案、同样的截断
 //! 边界处理、同样的凭证闸与 frontmatter 闸）。runtime 侧只留
-//! `agmem_bridge`：同名 ToolDefinition + spawn `agmem tool <name>`；
+//! `agmem_bridge`：同名 ToolDefinition + spawn `aginx-mem tool <name>`；
 //! apply_patch 与 session_summarize 留守 runtime（内核耦合面，不属记忆域）。
 //!
 //! 两张脸：
-//! - 人/流程脚本：`agmem kv get <key>`、`agmem kv set <k> <v>`、
-//!   `agmem tree search <q>`…（见 main.rs）
-//! - 机读（runtime 桥用）：`agmem tool <name>`，stdin 收工具入参 JSON，
+//! - 人/流程脚本：`aginx-mem kv get <key>`、`aginx-mem kv set <k> <v>`、
+//!   `aginx-mem tree search <q>`…（见 main.rs）
+//! - 机读（runtime 桥用）：`aginx-mem tool <name>`，stdin 收工具入参 JSON，
 //!   stdout 出 D1 信封（`{"ok":true,"data":"…"}` / `{"ok":false,"error":…}`）。
 //!
-//! 与 agf 的路径分工不同，本 CLI 直开 memory substrate（rusqlite WAL +
+//! 与 aginx-file 的路径分工不同，本 CLI 直开 memory substrate（rusqlite WAL +
 //! busy_timeout=5000，substrate.rs open 内建），默认
 //! `$HOME/.aginx/carrier/data/carrier.db` —— 与守护同一库、同一迁移链，
 //! 并发安全（M35a spike 2026-09-03）。knowledge/flows 面不吃库，吃
@@ -239,7 +239,7 @@ pub async fn execute_tool(
 
 /// 人面错误出口：agf 同款——非零退出 + stderr 一行。
 pub fn bail_human(e: &CarrierError) -> ! {
-    eprintln!("agmem: {e}");
+    eprintln!("aginx-mem: {e}");
     std::process::exit(1);
 }
 

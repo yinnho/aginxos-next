@@ -37,9 +37,8 @@ members = [
     "crates/kernel",
     "crates/ilink",
     "crates/webhook",
-    "crates/web",
-    "crates/agf",
-    "crates/agmem",
+    "crates/aginx-file",
+    "crates/aginx-mem",
 ]
 
 [workspace.package]
