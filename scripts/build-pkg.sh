@@ -8,6 +8,9 @@
 #   两树包  aginx aginx-term
 #                       — 母体三件（router/server/runtime，刀3 合一）+
 #                         终端面板（term+字体，刀4 出镜像）
+#   工具双包  aginx-file aginx-mem
+#                       — 母体桥 spawn 的工具面 CLI（D13 改姓自 agf/
+#                         agmem，2026-09-26；缺包=母体文件/记忆工具死）
 #   三树包  aginx-asr aginx-tts aginx-ocr
 #                       — .local/device/redfin 冻结 bionic 件 + 模型一树
 #                         （exec=bin/ag-*，模型与整机烤机逐字节同源：asr
@@ -149,6 +152,17 @@ case "${PKG}" in
     (cd "${ROOT}" && cargo zigbuild --release --target aarch64-unknown-linux-musl -p aginx-update)
     mkdir -p "${STAGE}/files/bin"
     install -m 755 "${TARGET_DIR}/aginx-update" "${STAGE}/files/bin/aginx-update"
+    MEMBERS="pkg.toml SKILL.md files"
+    ;;
+  aginx-file | aginx-mem)
+    # 工具面双包（D13 改姓 2026-09-26，原 agf/agmem）：母体桥 spawn
+    # `aginx-file|aginx-mem tool <name>`（stdin=JSON 含 _ctx，stdout=D1
+    # 信封）——缺包=母体文件/记忆工具整线死（09-26 晨报根因）。装包
+    # 自动生成 .aginxmd，/var/bin 真身遮住镜像 /usr/bin 桥壳。
+    echo "==> zigbuild ${PKG}（musl，缓存则秒过）"
+    (cd "${ROOT}" && cargo zigbuild --release --target aarch64-unknown-linux-musl -p "${PKG}")
+    mkdir -p "${STAGE}/files/bin"
+    install -m 755 "${TARGET_DIR}/${PKG}" "${STAGE}/files/bin/${PKG}"
     MEMBERS="pkg.toml SKILL.md files"
     ;;
   aginx-asr)

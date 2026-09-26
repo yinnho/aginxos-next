@@ -1,0 +1,11 @@
+# aginx-mem — 记忆面工具 CLI 的包形态（D13 改姓 2026-09-26，原 agmem v0.2.0）。
+# 母体 agmem_bridge spawn `aginx-mem tool <name>`（stdin=入参 JSON 含 _ctx
+# 三元组身份，stdout=D1 信封）；人面 = kv/tree/knowledge/flow 子命令。
+# 直开同一 sqlite（WAL 并发安全，M35a）。装包自动生成 .aginxmd sidecar。
+name = "aginx-mem"
+version = "0.1.0"
+summary = "记忆面工具：kv/tree/knowledge/flows（母体桥+人面 CLI，直开 substrate 库）"
+group = "mem"
+url = "https://pkgs.aginx.net/aginx-mem/v0.1.0/aginx-mem-v0.1.0-4pc.tar"
+
+exec = "bin/aginx-mem"

@@ -1,0 +1,11 @@
+# aginx-file — 文件面工具 CLI 的包形态（D13 改姓 2026-09-26，原 agf v0.2.0）。
+# 母体 agf_bridge spawn `aginx-file tool <name>`（stdin=入参 JSON 含 _ctx，
+# stdout=D1 信封）；人面 = read/write/ls/convert + image_analyze。
+# 装包自动生成 .aginxmd sidecar（/var/bin/aginx-file 遮住镜像桥壳）。
+name = "aginx-file"
+version = "0.1.0"
+summary = "文件面工具：read/write/ls/convert + image_analyze（母体桥+人面 CLI）"
+group = "files"
+url = "https://pkgs.aginx.net/aginx-file/v0.1.0/aginx-file-v0.1.0-4pc.tar"
+
+exec = "bin/aginx-file"
