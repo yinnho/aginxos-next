@@ -38,9 +38,11 @@
    13 件 docs(hardware) 收据按纪律永不上推，重排后**垫在本地 master 顶**。
    此后推送姿势固定：`git push origin <代码尖>:master`（代码尖=收据堆
    之下第一件；先推码、收据永远后落）。
-3. **一代仓工作树**：~~`tools/voice/ag-asr.c` zh 默认修~~（已搬本仓
-   落地=v0.1.1，#394）；204 件 `legacy/aginx-os/target/` 删除未提交；
-   untracked 散件（apk/dmg/ARCH.md/SCIS 设计稿）为他线工作件。
+3. **一代仓工作树——已清（09-26 晚）**：~~ag-asr.c zh 修~~（已搬本仓
+   v0.1.1）原件在一代仓封存落账（10c6aa9）；~~204 件 target/ 删除~~
+   已提交（2fc2cd3）。「封仓零提交」由用户 09-26 裁决破例收尾件——
+   **仍不推送**（local only）；21 件 untracked 散件（apk/dmg/ARCH.md/
+   SCIS 设计稿）为他线工作件，不碰。
 4. **运行面**：服务器腿（86quan）router 换装状态未知（晨报三杀两杀在
    服务器；Mac 本机腿已换，`~/.aginx/spool/me` 有落件）；明早 08:00 晨报
    复验；enchilada manifest 挂账同上。
