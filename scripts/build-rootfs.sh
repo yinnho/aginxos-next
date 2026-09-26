@@ -523,6 +523,13 @@ cp -R "${ROOT}/home/." "${TREE}/home/"
 # fail-fast，正脸拒绝）。
 mkdir -p "${TREE}/etc/aginx"
 install -m 644 "${DEVDIR}/device.toml" "${TREE}/etc/aginx/device.toml"
+# panel.on（D14：有屏机器的结果页上屏开关）：aginxbrowser 的面板线程
+# 只认 `--panel` 或这枚标记（main.rs 启动门），而全仓无人造它——L0 线
+# 「点卡黑屏」根因即此（09-26 晨报复验卡事故）。有 [panel] 段的机器
+# 落标记；无屏机器不落，引擎不起面板线程（省 DRM 轮询日志）。
+if grep -qE '^\[panel\]' "${DEVDIR}/device.toml"; then
+  : > "${TREE}/etc/aginx/panel.on"
+fi
 for b in "${DEVDIR}"/bringup/*; do
   test -f "${b}" || { echo "missing bringup scripts in ${DEVDIR}/bringup/" >&2; exit 1; }
   install -m 755 "${b}" "${TREE}/etc/init.d/$(basename "${b}")"
