@@ -1,5 +1,9 @@
 # aginx — 母体包（D11 母体=aginx）。刀2 起 server 进程内直调 kernel，
 # 不再 spawn aginx-runtime（该二进制已随结构刀①物理删除）。
+# v0.1.7（2026-09-26）：turn 固定延迟双刀修出包——turn 摘要 5s 硬预算
+# +短轮机械快路径（≤120 字零工具不过 LLM）；超阈会话压缩后台化（单飞
+# RAII+CAS 前缀护栏，不再门控回信）；server 挂 tracing_subscriber（设备
+# turn 日志从此可见）。收据 #395：设备稳态 49-65s→4-6s。
 # v0.1.6（2026-09-26）：装包后两修同出——通道层起不来不再殉母体（降级
 # 继续）、借道轮开轮清扫改按龄（并发轮的家不再被邻轮删根）。v0.1.5
 # （2026-09-26）：iLink 上机——server 装 weixin 通道层（扫码会话落地后
@@ -19,11 +23,11 @@
 # AGINX_BIN 指 /var/bin/aginx（face symlink）。刀F 起 depends 锚
 # aginx-update（装母体自动带自更新器；裸箱升级=重刷）。
 name = "aginx"
-version = "0.1.6"
+version = "0.1.7"
 summary = "母体：路由器 face /var/bin/aginx + 心脏 server（进程内直调 kernel）+ carrier CLI 面"
 group = "agent"
 depends = "aginx-update"
-url = "https://pkgs.aginx.net/aginx/v0.1.6/aginx-v0.1.6-4pc.tar"
+url = "https://pkgs.aginx.net/aginx/v0.1.7/aginx-v0.1.7-4pc.tar"
 exec = "bin/aginx"
 
 [service]
