@@ -8772,3 +8772,29 @@ server 不换：在跑的 #387 母体包 v0.1.2 系结构四刀后新车，源�
 **缺口（挂账）**：aginxbrowser 引擎 absent（`aginxbrowser` 单元在但 `/var/bin/aginxbrowser` 缺）——信封能上桌面，点开的 /open POST（127.0.0.1:8089）无人接；reply.html 模板同被 #388 清掉，Mac 无备份。两件归「引擎 opt-in + 模板生成 workflow 重跑」一揽子，未动。
 
 **设备终态**：aginx ready 450（未动）、aginx-voice ready 13983（dev-push）、term 14107 init respawn（dev-push）、carrier c9178cf9 CLI 件、晨报 job 在库待明晨 08:00、欢迎卡在桌面卡片带、vendor_boot 未动。
+
+## 2026-09-26 — #389 aginxbrowser v0.5.8 装回 + 远端通道修复（redfin/Pixel 5）
+
+**USB 与系统可分离死（新失败模式）**：会话起 Pixel 不枚举（Mac ioreg 无 0x18d1 Google 件，仅 CH340/DL-Dock/iPhone），但 wifi 活——ping 192.168.3.93 通、22 端口开 → 判定设备侧 adbd/USB gadget 单死、系统本身无恙（非变砖）。用户重启手机 → wifi ~65s 回、adb `aginxosredfin` 再 ~10s 后 up。判据入册：USB 消失先探 wifi+22，活则只需重启不必救砖。
+
+**v0.5.8 装机链（上一段两缺口中的引擎件收口）**：
+
+- manifest 合并纪律：设备 `/etc/agpkg.manifest` 比 repo（fa26fd3）多 11 条安装行（带 version+depends 列，bake/opt-in 追加）——**拉回合并、绝不盲覆**；host 重签（`.local/keys/aginx.key`）后 push manifest+.sig 双件。
+- `/usr/bin/aginx-pkg opt-in aginxbrowser`（pkg 面在 /usr/bin 不在 /var/bin；aginx-carrier 无 pkg 子命令）：镜像拉 82,650,144 B 精确、HTTP 200；缺席容忍单元 ≤32s 自拾取（pid 2162，免重启）。
+- `/health`：engine=diting version=0.5.8，capabilities.screenshot=true。
+- 模板三件（registry.json/reply.html/weather.html）push 到 `/var/lib/aginxbrowser/templates/`——adb push 目录会嵌套成子目录，须 `mv` 摊平（registry 期望平铺）。
+- 设备无 curl/wget → **adb forward tcp:18089→8089 让 Mac curl 当 HTTP 客户端**；POST /open `{"template":"reply","data":…}` → `{"ok":true,"template":"reply","bytes":4293}`，reply 页上手机屏。
+
+**ssh 公钥回灌**：Mac `id_ed25519.pub` 追加设备 `/root/.ssh/authorized_keys`（chmod 600），BatchMode 往返通——USB 无关的运维通道恢复。
+
+**晨报首触发（管道通、内容败）**：`20260926-000030512-晨报.json` 落 /home/cards——00:00:30 UTC=08:00:30 Asia/Shanghai **准点触发**，cron→卡片投递链全通；但内容是失败通知「Agent loop stuck: agent 连续 3 轮无进展，判定卡死，终止本轮」。活测 brain 当刻健康（`aginx agent send me` 真答）；`/home/sessions/main.jsonl` 09-25 有 turn1 auth error→turn2 成功的形状 → 偶发 brain auth 抖动嫌疑（env key 在、len 67），00:00 窗口无 transcript 痕迹（判死在内存完成）。挂账：观察次日 08:00 是否复现。
+
+**远端通道三缺口连修（#388 连坐债，一次清完）**：
+
+1. `AGINX_GATEWAY_ID=cf49973e` 旧值复发——#388 出厂树带的是 09-14 的 id，09-23 的 id=redfin 裁决被刷掉。sed 改 redfin（gateway.toml 刻意无 id，id 只住 env）。
+2. **aginx-gateway/secretd 根本未装**（svc list 无单元、/var/bin 无件、pkgfiles 无目录）——#388 裸刷后回装集漏了这对。`opt-in aginx-gateway` 依赖感知自动先装 `aginx-secretd`（刀1 首次实战收据：dep 先落 stamp 再装本体）；包内 [service] 单元装完即被 svcd 拉起（ready 2649/2644，免重启）。
+3. **secret 库被刷空**（/var/lib/aginx/secret/ = 09-25 08:06 空目录）→ 网关日志 `waiting for relay secret (env AGINX_RELAY_SECRET or sidecar relay.primary)`。修法：Mac `relay_secret`（~/.aginx/config.toml [relay]，register 令牌取 relay_secret 非 token）经 stdin 管道喂 `/usr/bin/aginx-secret set relay.primary`（零回显）；网关 5s 重解析循环免重启自动拾取 → `registered id=redfin url=agent://redfin.relay.aginx.net`。
+
+Mac 腿：agc 必须带 `AGC_RELAY_SECRET` env（09-12 四坑①复发，无之报 Invalid or missing relay token）→ `agc agent://redfin.relay.aginx.net/me` 真答 **ok**——Mac→relay:8443 TLS→网关→母体→brain 全链复活。
+
+**设备终态**：六单元 ready——aginx 421、aginx-gateway 2649、aginx-secretd 2644、aginx-voice 428、aginxbrowser 2162、net-watch 435；merged manifest 在役（83 行）；relay.primary 在库；vendor_boot 未动。
