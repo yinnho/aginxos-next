@@ -96,11 +96,14 @@ case "${PKG}" in
     # 母体树包（刀3 合一；结构刀① 起两件）：target 二进制名 aginx
     # （出自 aginx-router crate）+ aginx-server。exec=bin/aginx
     # → /var/bin/aginx symlink 面；[service] cmd 指 pkgfiles 真身。
-    echo "==> zigbuild 母体两件（musl，缓存则秒过）"
+    # v0.1.5 起第三件 aginx-carrier：一次性 CLI 面（qr-login/notify/
+    # ticket——server 直调形态不 spawn 它，但工具面在）。
+    echo "==> zigbuild 母体三件（musl，缓存则秒过）"
     (cd "${ROOT}" && cargo zigbuild --release --target aarch64-unknown-linux-musl \
-      -p aginx-router -p aginx-server)
+      -p aginx-router -p aginx-server -p carrier)
     mkdir -p "${STAGE}/files/bin"
     install -m 755 "${TARGET_DIR}/aginx" "${TARGET_DIR}/aginx-server" \
+      "${TARGET_DIR}/aginx-carrier" \
       "${STAGE}/files/bin/"
     MEMBERS="pkg.toml SKILL.md files"
     ;;
