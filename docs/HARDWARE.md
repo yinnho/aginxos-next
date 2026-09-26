@@ -8753,7 +8753,7 @@ CAPTURE 块直接 write_all 进已连接的 TCP 客户端；节拍律=M48（每 
 
 ## 2026-09-25 — 调好界面复活：#388 刷机后被清的显示线 UI 回灌（redfin/Pixel 5）
 
-#388 刷机装的是公共包（裸 L0 + 出厂树），显示线调好的 UI（信封卡片桌面）只存在于工作区 HEAD，镜像包不含——用户发现桌面信封没了。回灌方案：临时 worktree（`/tmp/aginxos-head-build`，HEAD=6bbbf19，避开他线脏件 voice/audio.rs、protocol.rs）cargo zigbuild musl 三件，全部三律换装：
+#388 刷机装的是公共包（裸 L0 + 出厂树），显示线调好的 UI（信封卡片桌面）只存在于工作区 HEAD，镜像包不含——用户发现桌面信封没了。回灌方案：临时 worktree（`/tmp/aginxos-head-build`，HEAD=39ce17f，避开他线脏件 voice/audio.rs、protocol.rs）cargo zigbuild musl 三件，全部三律换装：
 
 - `aginx-term` 1624008 B md5 03e351db → `/var/lib/aginx/pkgfiles/aginx-term/bin/aginx-term`；kill 后 init respawn 换血（pid 14107）。
 - `aginx-voice` 2417976 B md5 aef1799f → `/var/bin/aginx-voice`；`aginx-svc restart aginx-voice`（pid 12849→13983，ready）。
@@ -8779,7 +8779,7 @@ server 不换：在跑的 #387 母体包 v0.1.2 系结构四刀后新车，源�
 
 **v0.5.8 装机链（上一段两缺口中的引擎件收口）**：
 
-- manifest 合并纪律：设备 `/etc/agpkg.manifest` 比 repo（fa26fd3）多 11 条安装行（带 version+depends 列，bake/opt-in 追加）——**拉回合并、绝不盲覆**；host 重签（`.local/keys/aginx.key`）后 push manifest+.sig 双件。
+- manifest 合并纪律：设备 `/etc/agpkg.manifest` 比 repo（e7f9ed1）多 11 条安装行（带 version+depends 列，bake/opt-in 追加）——**拉回合并、绝不盲覆**；host 重签（`.local/keys/aginx.key`）后 push manifest+.sig 双件。
 - `/usr/bin/aginx-pkg opt-in aginxbrowser`（pkg 面在 /usr/bin 不在 /var/bin；aginx-carrier 无 pkg 子命令）：镜像拉 82,650,144 B 精确、HTTP 200；缺席容忍单元 ≤32s 自拾取（pid 2162，免重启）。
 - `/health`：engine=diting version=0.5.8，capabilities.screenshot=true。
 - 模板三件（registry.json/reply.html/weather.html）push 到 `/var/lib/aginxbrowser/templates/`——adb push 目录会嵌套成子目录，须 `mv` 摊平（registry 期望平铺）。
@@ -8869,7 +8869,7 @@ aginx-voice/aginxbrowser/net-watch）；stamps 全家含 aginx-file/aginx-mem；
 ### #390 补二：尾巴三件清零（同日续二）
 
 - **残留 grep 全文扫**：桥注释 6 处陈旧「web 桥/web-agf 同款」交叉引用
-  修齐（1e2e5c7）；pkg 测试件 agf 是任意名无碍、n4.sh 是退役存档不动。
+  修齐（2c697b1）；pkg 测试件 agf 是任意名无碍、n4.sh 是退役存档不动。
   `check.sh` 终态 rc=0。
 - **重启后远端通道复验**：六单元 ready（440–472 全 respawn）；Mac
   `agc agent://redfin.relay.aginx.net/me`（AGC_RELAY_SECRET 从
@@ -8886,7 +8886,7 @@ aginx-voice/aginxbrowser/net-watch）；stamps 全家含 aginx-file/aginx-mem；
 **根因一（数据键形）**：cron 写卡器 `write_home_card` 兜底把纯文本包成
 `{"text":...}`，而 `reply.html` 模板只吃 `question`+`body`（body×8/
 question×2，无 text）→ 渲染空页。修：daemon.rs 兜底改包
-`{question:"", body:<text>}`（be01375，测试断言同步）；在役两张卡
+`{question:"", body:<text>}`（c344ea8，测试断言同步）；在役两张卡
 （晨报/晨报复验）sed 原位抢救，验 `"body"` 在 `"text"` 清零。
 
 **根因二（上屏门，真正的主案）**：修复一后用户点卡**仍黑**——隧道 POST
@@ -8898,7 +8898,7 @@ question×2，无 text）→ 渲染空页。修：daemon.rs 兜底改包
 `/etc/aginx/panel.on` + `aginx-svc restart aginxbrowser` → 日志
 「panel: took the screen 1080x2340 / showing the page」；repo 侧
 build-rootfs.sh 对 device.toml 带 `[panel]` 段的机器（redfin/enchilada
-均带）烤镜像落标记（67934cb）。
+均带）烤镜像落标记（3d98834）。
 
 **母体 v0.1.4 上机（换装三律全过）**：镜像 `/aginx/v0.1.4/` tar+.sha256
 落位（sha256 `49241d2b`，服务器侧比对相符）；redfin manifest aginx 行
@@ -8945,7 +8945,7 @@ create_dir_all 回 ENOENT。测试侧两测试共用 /tmp/nonexistent-ws 同根
 （隔离债），生产侧即「微信入站轮+晨报 cron 轮并发」形状。修：按龄
 清扫（只动 mtime≥1h 条目，BORROW_SWEEP_MIN_AGE_SECS=3600），确定性
 回归测试 `borrowed_turn_sweep_spares_live_dirs` 钉死（f7981a0 系：
-f7a7925 kernel + 3749510 server）。
+3af519d kernel + 2142331 server）。
 
 **换装（v0.1.5→v0.1.6，三律全过）**：v0.1.5 tar 已上镜像后发现上述两修，
 同 URL 覆写坏 sha 不可变约定——升 v0.1.6 重打（sha `7eb97da1`，45.7MB
@@ -9063,7 +9063,7 @@ enchilada 上定的：`language` 默认 `"auto"` 把安静中文听成 Oh/The/I�
 **源搬迁（D14 净）**：`tools/voice/`（ag-asr.c 含修 + ag-tts.c +
 android-shims.c + build-aginx.sh + link-aginx.sh + README.md）、
 `scripts/build-voice.sh` + `fetch-voice-models.sh` 逐字自封仓工作树
-拷入（7355ec8）；全件零机器串。**重烤走 link-only**（C 源单改，
+拷入（d0fe1c8）；全件零机器串。**重烤走 link-only**（C 源单改，
 cmake install-aginx/lib 13 .a + ort 复用封仓拷，无需重建）：
 `bash tools/voice/link-aginx.sh` → ag-asr 25,985,792 B，sha
 `eebb6d46…`，strings 含 `AG_ASR_LANG`（在役旧件 13f03ff6… 无此符）。
@@ -9106,3 +9106,10 @@ build-rootfs.sh OPT_ADD 从 pkg.toml 生成）。
 线再生路径全部指本仓（assets.md 已改）。挂账：bake #27 未排——
 fresh flash 镜像 manifest 要带上 v0.1.1 钉，须重烤才有（OPT_ADD 现算
 现生成，下次 bake 自动带上，无需手改）。
+
+**补记（同晚）：GitHub 推送手术**——积压 35 件（13 收据+22 代码交错）
+历史重排：22 件代码重放贴远端（`f56cc16..d0fe1c8` 已推，含 fa26fd3
+欠账），13 件收据垫本地顶。验证：重排树与备份支逐字节同
+（`backup/master-prepush-0926` 留档）；此后推送姿势=
+`git push origin <代码尖>:master`，收据永远后落。收据内旧 sha 引用
+已改指新 sha（7 处）。
