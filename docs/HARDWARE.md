@@ -8918,3 +8918,68 @@ gone, releasing」——让/还屏回路健康。
 
 **挂账**：真人眼验（当场看屏点卡）待用户补记；enchilada manifest 升钉
 （离网，回网后照 #390 补配方）。
+
+## 2026-09-26 — #392 iLink（微信）上机全链：扫码上屏→消息直达 me→回信（redfin/Pixel 5）
+
+**目标**：手机屏幕出真二维码，微信扫码后，微信消息直达 me，回信回微信。
+「绑定即路由」——扫码落 `workflows/<bind_agent>/senders/<uid>/session.json`。
+
+**三件套（引擎件全在仓，接的是线）**：
+1. server 通道层 `crates/server/src/channels.rs`（wiring::boot_channels 的
+   iLink 子集移植：weixin watcher + 5 微信工具 + DB 持久化回调 + 出站
+   send 注入；webhook 不装）。host.rs 装配点两修其一一：**通道层起不来
+   降级不殉母体**（原 `?` 会把轮/定时/网关/ssh 一起带走——母体是脊柱、
+   iLink 是特性）。
+2. `aginx-carrier qr-login --screen`：qrcode crate 生成 SVG（EcLevel M、
+   4 模块静区、crispEdges）→ base64 过 escaped slot（base64 字母表无
+   HTML 可转义字符，无损）→ POST 本机 :8089/open（qr 模板）。闭环
+   单测：SVG→光栅→quircs 解码=原 URL。
+3. aginxbrowser `qr.html` 模板 + registry 注册（生态仓 a879a9c；白底
+   圆角码板承载黑码——黑底磷光页上扫不出反色码）。模板按需加载，scp
+   即生效免重启。
+
+**顺带修掉的真 bug（借道清扫删根）**：装包后 check.sh 又翻红，定谳非
+抖动——开轮清扫 `remove_dir_all(<ws>/borrow)` 删的是共享根，而
+`borrow/<uuid>/` 是同 workspace 并发轮各自的家；A 建根、B 删根、A 的
+create_dir_all 回 ENOENT。测试侧两测试共用 /tmp/nonexistent-ws 同根
+（隔离债），生产侧即「微信入站轮+晨报 cron 轮并发」形状。修：按龄
+清扫（只动 mtime≥1h 条目，BORROW_SWEEP_MIN_AGE_SECS=3600），确定性
+回归测试 `borrowed_turn_sweep_spares_live_dirs` 钉死（f7981a0 系：
+f7a7925 kernel + 3749510 server）。
+
+**换装（v0.1.5→v0.1.6，三律全过）**：v0.1.5 tar 已上镜像后发现上述两修，
+同 URL 覆写坏 sha 不可变约定——升 v0.1.6 重打（sha `7eb97da1`，45.7MB
+三件），镜像 `/aginx/v0.1.6/` 服务器侧 sha 比对相符、HTTP 200；v0.1.5/
+目录已从镜像撤下（防误钉），本地 tar 同删。manifest aginx 行升钉重签
+推送（stale grep 净）；opt-in 实拉 v0.1.6；真身三件 md5 host↔设备逐字节
+（aginx `592643fb` / server `582ca13b` / carrier `7c5db078`）+ -x；
+`aginx-reboot` 真重启 → 六单元 ready、pid 449 exe 无 `(deleted)`。
+`/var/bin/aginx-carrier` 旧 dev-push 件（09-25，24.6MB，无 --screen）
+挡 PATH：挪 `.aginx-carrier.devpush-bak`，面 symlink 指包内真身（包
+面只认 exec=bin/aginx，carrier 本无包面——place_symlink_face 单面律）。
+
+**扫码收据（机器+真人）**：
+- 首跑失败=重启后网络冷窗（get_bot_qrcode "error sending request"）：
+  分层探全通（DNS 四 A 记录；aginx-download 同 URL HTTP 200；Mac 同
+  栈一发过出码）→ 判瞬态，设备重跑即通。**教训：重启后第一条出站
+  HTTPS 可能吃冷窗，重试先于深查。**
+- 上屏：show.html 35301B（qr 模板填毕含 svg_b64）；机器收据闭环：
+  引擎 /screenshot（data URL）→ PNG 63719B → sips JPEG → aginx-qr
+  解码 = 登录进程所发 URL **逐字节一致**
+  （liteapp.weixin.qq.com/q/7GiQu1?qrcode=89554f…&bot_type=3）。
+- 扫码确认：`WeChat account linked: redfin (bot_id: ab24189169fb@im.bot)`；
+  session.json（0600，366B）落
+  `/home/workflows/me/senders/o9cq80yV026eCt5ekRuSdPiw2Ias@im.wechat/`；
+  母体日志 `mother: iLink channel online (weixin watcher + tools)`。
+- **微信往返**：用户微信发「你好」→ me 轮 → 回复「你好，主人 👋 我在。
+  有什么要记的、要办的、要派活的，直接说就行。」落
+  sessions/866e95eb….jsonl（user+assistant 两帧，conversation_count=1）。
+  回信到微信的**真人眼验待用户补记**。
+
+**主机插曲**：磁盘 100%（228G 满）→ 全工具瘫痪（Edit/Bash 全 ENOSPC，
+仅 Read/MCP 活），用户清 ~4G 恢复；期间借道 bug 诊断照走（Read 看码）。
+
+**挂账**：①qr.html 等模板不进任何包/镜像——fresh flash 即丢，scp 是
+唯一通道（bake 线债，与 reply/weather 同账）；②回信微信真人眼验；
+③enchilada manifest 升钉（离网）；④明晨 08:00 晨报自然 fire=晨报线
+终收据；⑤生态仓 a879a9c 推送裁决归账四摊。
