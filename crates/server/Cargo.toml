@@ -19,3 +19,8 @@ carrier-types = { path = "../types" }
 serde = { workspace = true }
 serde_json = { workspace = true }
 tokio = { workspace = true }
+carrier-runtime = { path = "../runtime" }
+carrier-ilink = { path = "../ilink" }
+carrier-memory = { path = "../memory" }
+anyhow = { workspace = true }
+tracing = { workspace = true }
