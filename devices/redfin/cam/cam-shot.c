@@ -2055,6 +2055,13 @@ static volatile sig_atomic_t g_stop;
 static uint32_t g_aspect_w, g_aspect_h;
 static uint32_t g_preview_w;
 static int g_vf_window = 8;
+/* M49a 刀C video-call feed: --yuv-out mirrors the published frame as raw
+ * yuv420p on stdout for the venc consumer (aginx-video stream-cam), one
+ * write() per frame — pipe backpressure is the pacing. fd 1 is dup'd to
+ * g_yuv_fd and re-pointed at stderr so every printf receipt in the tool
+ * lands off the pipe; the byte stream is AGYUV-header + frames only. */
+static int g_yuv_out;
+static int g_yuv_fd = -1;
 /* M47⑤c raw fast path: --raw-out publishes the display frame as raw RGB565
  * (12-byte header + pixels, atomic tmp+rename) EVERY frame, while
  * --jpeg-every-ms N demotes the JPEG to a throttled side product (QR decode
@@ -2912,6 +2919,69 @@ static void fold_rows(void *u, uint32_t a, uint32_t b)
     cp_fold_rows(&j->F, j->g, a, b, j->out, j->o565);
 }
 
+/* M49a 刀C: RGB24 -> yuv420p (BT.601 full-swing, integer >>8; chroma rides
+ * the plain 2x2 4-pixel mean) into a grow-only static, then ONE write() to
+ * the dup'd stdout pipe. First call emits the AGYUV geometry header the
+ * stream-cam consumer parses. Blocking write = backpressure to the sensor
+ * ring: the pipe is the clock. */
+static void yuv_out_frame(const uint8_t *rgb, uint32_t ow, uint32_t oh)
+{
+    static uint8_t *buf;
+    static size_t cap;
+    static int hdr;
+    size_t ysz = (size_t)ow * oh, csz = ysz / 4;
+    size_t need = ysz + 2 * csz;
+    if (need > cap) {
+        free(buf);
+        buf = malloc(need);
+        cap = buf ? need : 0;
+    }
+    if (!buf) {
+        fprintf(stderr, "yuv-out: no mem %zu B\n", need);
+        return;
+    }
+    if (!hdr) {
+        dprintf(g_yuv_fd, "AGYUV %u %u\n", ow, oh);
+        hdr = 1;
+    }
+    uint8_t *yp = buf, *up = buf + ysz, *vp = up + csz;
+    size_t stride = (size_t)ow * 3;
+    for (uint32_t j = 0; j < oh; j++) {
+        const uint8_t *r = rgb + (size_t)j * stride;
+        uint8_t *y = yp + (size_t)j * ow;
+        for (uint32_t i = 0; i < ow; i++) {
+            const uint8_t *p = r + (size_t)i * 3;
+            y[i] = (uint8_t)((77 * p[0] + 150 * p[1] + 29 * p[2]) >> 8);
+        }
+    }
+    for (uint32_t j = 0; j < oh / 2; j++) {
+        const uint8_t *r0 = rgb + (size_t)(2 * j) * stride;
+        const uint8_t *r1 = r0 + stride;
+        uint8_t *u = up + (size_t)j * (ow / 2);
+        uint8_t *v = vp + (size_t)j * (ow / 2);
+        for (uint32_t i = 0; i < ow / 2; i++) {
+            const uint8_t *p0 = r0 + (size_t)6 * i;
+            const uint8_t *p1 = p0 + 3, *p2 = r1 + (size_t)6 * i,
+                          *p3 = p2 + 3;
+            int R = p0[0] + p1[0] + p2[0] + p3[0];
+            int G = p0[1] + p1[1] + p2[1] + p3[1];
+            int B = p0[2] + p1[2] + p2[2] + p3[2];
+            /* sums are 4-pixel: coefficient 256 << 2 = >>10 */
+            u[i] = (uint8_t)(128 + ((-43 * R - 85 * G + 128 * B) >> 10));
+            v[i] = (uint8_t)(128 + ((128 * R - 107 * G - 21 * B) >> 10));
+        }
+    }
+    size_t off = 0;
+    while (off < need) {
+        ssize_t w = write(g_yuv_fd, buf + off, need - off);
+        if (w <= 0) {
+            fprintf(stderr, "yuv-out: write: %s\n", strerror(errno));
+            return;
+        }
+        off += (size_t)w;
+    }
+}
+
 static void dump_jpeg(const uint8_t *rdi, uint32_t w, uint32_t h,
                       uint32_t stride, const char *raw_path)
 {
@@ -3005,6 +3075,11 @@ static void dump_jpeg(const uint8_t *rdi, uint32_t w, uint32_t h,
         oh = (uint32_t)((double)oh * g_preview_w / ow + 0.5);
         ow = g_preview_w;
     }
+    if (g_yuv_out) {
+        /* H264 4:2:0 chroma needs even dims (yuv420p halves them) */
+        ow &= ~1u;
+        oh &= ~1u;
+    }
     /* M47⑤e: decide the JPEG throttle UP FRONT — a display-only frame then
      * needs neither the encode buffer nor the RGB888 plane (the debayer
      * pass emits 565 only), roughly halving its cost. First frame always
@@ -3088,19 +3163,22 @@ static void dump_jpeg(const uint8_t *rdi, uint32_t w, uint32_t h,
          * Sharpen is a stills-only pass (see the post block below), so it
          * only forces the post-pack path on the frames that run it. */
         int post565 = g_raw_out[0] && (g_nr_on || (g_sharp_s > 0.0 && want_jpeg));
-        if ((want_jpeg || post565) && need3 > plane_rgb_cap) {
+        /* g_yuv_out: the RGB888 plane every frame — the video feed ignores
+         * the JPEG throttle (want_jpeg) and reads the same `final` buffer */
+        int want_rgb = want_jpeg || post565 || g_yuv_out;
+        if (want_rgb && need3 > plane_rgb_cap) {
             free(plane_rgb);
             plane_rgb = malloc(need3);
             plane_rgb_cap = plane_rgb ? need3 : 0;
         }
-        uint8_t *rgb = (want_jpeg || post565) ? plane_rgb : NULL;
+        uint8_t *rgb = want_rgb ? plane_rgb : NULL;
         if (g_raw_out[0] && (size_t)ow * oh > plane5_cap) {
             free(plane5);
             plane5 = malloc((size_t)ow * oh * 2);
             plane5_cap = plane5 ? (size_t)ow * oh : 0;
         }
         uint16_t *px5 = g_raw_out[0] ? plane5 : NULL;
-        if (((want_jpeg || post565) && !rgb) || (g_raw_out[0] && !px5)) {
+        if ((want_rgb && !rgb) || (g_raw_out[0] && !px5)) {
             fprintf(stderr, "jpeg: no mem for rgb/565\n");
             free(g);
             return;
@@ -3272,6 +3350,10 @@ static void dump_jpeg(const uint8_t *rdi, uint32_t w, uint32_t h,
         chain_ms[2] += t3 - t2;
         chain_ms[3] += t4 - t3b;
         chain_n++;
+        /* M49a 刀C: feed the pipe BEFORE the JPEG-only early return — the
+         * video consumer gets every frame regardless of the JPEG throttle */
+        if (g_yuv_out && final)
+            yuv_out_frame(final, ow, oh);
         if (!want_jpeg) {
             printf("yavg: %.1f (linear, bl=%d gamma=%.2f rot=%d)\n",
                    yavg, g_bl, g_gamma, g_rot);
@@ -6231,6 +6313,20 @@ int main(int argc, char **argv)
              * the lifecycle (SIGTERM stops through the normal teardown) */
             g_forever = 1;
             stream = 1;
+        }
+        else if (strcmp(argv[i], "--yuv-out") == 0) {
+            /* M49a 刀C: resident viewfinder feeding the venc consumer.
+             * Implies --forever (one-shot bursts have no stream to feed).
+             * fd 1 becomes the yuv pipe's private write end (dup'd); every
+             * later printf lands on stderr via the re-pointed fd 1. */
+            g_yuv_out = 1;
+            g_forever = 1;
+            stream = 1;
+            if (!g_jpeg_q)
+                g_jpeg_q = 85;
+            fflush(stdout);
+            g_yuv_fd = dup(1);
+            dup2(2, 1);
         }
         else if (strcmp(argv[i], "--aspect") == 0 && i + 1 < argc) {
             if (sscanf(argv[++i], "%u:%u", &g_aspect_w, &g_aspect_h) != 2 ||
