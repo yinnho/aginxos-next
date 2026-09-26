@@ -537,6 +537,7 @@ async fn summarize_messages(
                 .to_string(),
         ),
         thinking: None,
+        reasoning_effort: Some("none".to_string()),
         extra: Default::default(),
     };
 
@@ -731,6 +732,7 @@ async fn summarize_in_chunks(
                 .to_string(),
         ),
         thinking: None,
+        reasoning_effort: Some("none".to_string()),
         extra: Default::default(),
     };
 

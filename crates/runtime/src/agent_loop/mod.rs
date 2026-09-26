@@ -713,6 +713,7 @@ async fn call_llm(ctx: &mut LoopContext<'_>, modality: &str) -> CarrierResult<Co
         temperature: ctx.manifest.model.temperature,
         system: Some(ctx.system_prompt.clone()),
         thinking: None,
+        reasoning_effort: None,
         extra: Default::default(),
     };
 

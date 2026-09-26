@@ -422,6 +422,7 @@ async fn tool_media_describe(
         temperature: 0.3,
         system: None,
         thinking: None,
+        reasoning_effort: None,
         extra: Default::default(),
     };
 
@@ -513,6 +514,7 @@ async fn tool_media_transcribe(
         temperature: 0.0,
         system: None,
         thinking: None,
+        reasoning_effort: None,
         extra: serde_json::Value::Object(serde_json::Map::new()),
     };
 
@@ -592,6 +594,7 @@ async fn tool_image_generate(
         temperature: 0.0,
         system: None,
         thinking: None,
+        reasoning_effort: None,
         extra: serde_json::Value::Object(extra),
     };
 
@@ -826,6 +829,7 @@ async fn tool_video_generate(
         temperature: 0.0,
         system: None,
         thinking: None,
+        reasoning_effort: None,
         extra: serde_json::Value::Object(extra),
     };
 
@@ -901,6 +905,7 @@ async fn tool_text_to_speech(
         temperature: 0.0,
         system: None,
         thinking: None,
+        reasoning_effort: None,
         extra: serde_json::Value::Object(extra),
     };
 
@@ -1026,6 +1031,7 @@ async fn tool_speech_to_text(
         temperature: 0.0,
         system: None,
         thinking: None,
+        reasoning_effort: None,
         extra: serde_json::Value::Object(extra),
     };
 

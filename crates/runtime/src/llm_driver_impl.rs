@@ -97,6 +97,10 @@ struct OaiRequest {
     stream: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     stream_options: Option<serde_json::Value>,
+    /// Explicit client intent for reasoning-style backends (brain v0.4.2
+    /// switch). Only emitted when the caller set it — aux calls "none".
+    #[serde(skip_serializing_if = "Option::is_none")]
+    reasoning_effort: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -476,6 +480,7 @@ impl UnifiedHttpDriver {
             tool_choice,
             stream: false,
             stream_options: None,
+            reasoning_effort: request.reasoning_effort.clone(),
         }
     }
 }
@@ -1587,6 +1592,7 @@ mod tests {
             temperature: 0.3,
             system: None,
             thinking: None,
+            reasoning_effort: None,
             extra: Default::default(),
         };
 

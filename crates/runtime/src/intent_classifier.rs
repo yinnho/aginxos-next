@@ -120,6 +120,7 @@ pub async fn classify_intent(
         temperature: 0.0,
         system: None,
         thinking: None,
+        reasoning_effort: Some("none".to_string()),
         extra: serde_json::Value::Null,
     };
 

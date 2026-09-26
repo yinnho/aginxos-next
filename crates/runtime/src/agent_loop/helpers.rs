@@ -668,6 +668,7 @@ pub(in crate::agent_loop) async fn generate_turn_summary(
         temperature: 0.3,
         system: Some("You are a conversation summarizer. Be concise and precise. Always follow the requested format.".to_string()),
         thinking: None,
+        reasoning_effort: Some("none".to_string()),
         extra: Default::default(),
     };
 

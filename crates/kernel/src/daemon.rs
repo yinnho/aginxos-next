@@ -1185,6 +1185,7 @@ impl CarrierKernel {
                         temperature: 0.3,
                         system: Some(sys.to_string()),
                         thinking: None,
+                        reasoning_effort: Some("none".to_string()),
                         extra: Default::default(),
                     };
                     // IMPORTANT: Do NOT use `rt_handle.block_on()` here.
