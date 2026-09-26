@@ -41,6 +41,14 @@ pub(in crate::agent_loop) const SUMMARY_MAX_TOKENS: u32 = 150;
 /// Summary modality (fast/cheap).
 pub(in crate::agent_loop) const SUMMARY_MODALITY: &str = "fast";
 
+/// Hard budget for the LLM turn-summary call (seconds). A summary is
+/// context-compaction sugar; the reply must never wait on it longer.
+pub(in crate::agent_loop) const SUMMARY_BUDGET_SECS: u64 = 5;
+
+/// Turns with both texts at or under this length (and no tool calls) get a
+/// mechanical summary — no LLM round trip.
+pub(in crate::agent_loop) const SUMMARY_FAST_PATH_MAX_CHARS: usize = 120;
+
 /// Reasoning modality — expensive model for planning and complex inference.
 pub(in crate::agent_loop) const REASONING_MODALITY: &str = "reasoning";
 
@@ -616,6 +624,26 @@ pub(in crate::agent_loop) async fn generate_turn_summary(
         }
     }
 
+    // Short-turn fast path: a short-in/short-out turn with no tool calls is
+    // the voice-dialogue product shape — paying a second reasoning-model
+    // round trip (observed 10s host / ~25s device) to summarize two short
+    // strings doubles every reply's latency for nothing. The raw texts ARE
+    // the summary at this length.
+    if mechanical_summary_eligible(&user_text, &assistant_text, &tools_used) {
+        debug!(
+            user_len = user_text.chars().count(),
+            "Short turn — mechanical summary, skipping LLM call"
+        );
+        return Some(TurnSummary {
+            turn_number: 0, // filled in by caller
+            timestamp: chrono::Utc::now().to_rfc3339(),
+            user_intent: user_text,
+            assistant_outcome: assistant_text,
+            tools_used,
+            key_facts: Vec::new(),
+        });
+    }
+
     let prompt = format!(
         "Summarize this conversation turn. Extract: user intent, outcome, and key facts.\n\n\
          User: {}\nAssistant: {}\n\n\
@@ -643,8 +671,17 @@ pub(in crate::agent_loop) async fn generate_turn_summary(
         extra: Default::default(),
     };
 
-    match brain.complete(SUMMARY_MODALITY, request).await {
-        Ok(response) => {
+    // The summary is context-compaction sugar, never the reply itself —
+    // time-box it so a slow reasoning backend can never gate the turn's
+    // return. On timeout the tree falls back to the raw user message (same
+    // as the brain-missing path), so nothing is lost.
+    match tokio::time::timeout(
+        std::time::Duration::from_secs(SUMMARY_BUDGET_SECS),
+        brain.complete(SUMMARY_MODALITY, request),
+    )
+    .await
+    {
+        Ok(Ok(response)) => {
             let text = response.text().trim().to_string();
             if text.is_empty() {
                 return None;
@@ -660,11 +697,30 @@ pub(in crate::agent_loop) async fn generate_turn_summary(
                 key_facts,
             })
         }
-        Err(e) => {
+        Ok(Err(e)) => {
             warn!("Turn summary generation failed: {}", e);
             None
         }
+        Err(_) => {
+            warn!(
+                budget_secs = SUMMARY_BUDGET_SECS,
+                "Turn summary timed out — skipping (reply is not gated on it)"
+            );
+            None
+        }
     }
+}
+
+/// Short-turn fast path predicate for [`generate_turn_summary`].
+fn mechanical_summary_eligible(
+    user_text: &str,
+    assistant_text: &str,
+    tools_used: &[String],
+) -> bool {
+    tools_used.is_empty()
+        && user_text.chars().count() <= SUMMARY_FAST_PATH_MAX_CHARS
+        && assistant_text.chars().count() <= SUMMARY_FAST_PATH_MAX_CHARS
+        && !(user_text.is_empty() && assistant_text.is_empty())
 }
 
 /// Parse the structured summary output from the LLM.
@@ -703,4 +759,36 @@ fn parse_summary_output(text: &str) -> (String, String, Vec<String>) {
     }
 
     (intent, outcome, facts)
+}
+
+#[cfg(test)]
+mod summary_tests {
+    use super::*;
+
+    #[test]
+    fn short_zh_turn_is_mechanical() {
+        assert!(mechanical_summary_eligible("现在几点了", "下午三点半", &[]));
+    }
+
+    #[test]
+    fn long_text_goes_to_llm() {
+        let long = "长".repeat(SUMMARY_FAST_PATH_MAX_CHARS + 1);
+        assert!(!mechanical_summary_eligible(&long, "收到", &[]));
+    }
+
+    #[test]
+    fn tools_used_goes_to_llm() {
+        assert!(!mechanical_summary_eligible("查天气", "晴", &["web_fetch".into()]));
+    }
+
+    #[test]
+    fn empty_turn_skipped() {
+        assert!(!mechanical_summary_eligible("", "", &[]));
+    }
+
+    #[test]
+    fn boundary_length_is_mechanical() {
+        let edge = "字".repeat(SUMMARY_FAST_PATH_MAX_CHARS);
+        assert!(mechanical_summary_eligible(&edge, &edge, &[]));
+    }
 }
