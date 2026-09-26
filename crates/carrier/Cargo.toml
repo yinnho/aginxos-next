@@ -43,3 +43,6 @@ carrier-webhook = { workspace = true }
 carrier-gateway = { workspace = true }
 uuid = { workspace = true }
 qrcode = "0.14"
+
+[dev-dependencies]
+aginx-qr = { path = "../qr", features = ["decode"] }

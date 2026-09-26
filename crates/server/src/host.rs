@@ -138,12 +138,15 @@ impl TurnObserver for LedgerObserver {
 }
 
 /// 母体宿主：kernel + 它的运行时 + 账本观察者的句柄（与 kernel 里
-/// 装的是同一份 Arc——run_turn 用它对准当前轮）。
+/// 装的是同一份 Arc——run_turn 用它对准当前轮）。channels = iLink 通道
+/// 管理器（必须随 Mother 活着——Drop 会拆通道线程）。
 pub struct Mother {
     pub kernel: Arc<CarrierKernel>,
     observer: Arc<LedgerObserver>,
     rt: tokio::runtime::Runtime,
     home: PathBuf,
+    #[allow(dead_code)] // 持有即在线：Drop 拆通道，字段不读
+    channels: Option<carrier_runtime::channel_manager::ChannelManager>,
 }
 
 impl Mother {
@@ -180,11 +183,12 @@ impl Mother {
             current: Mutex::new(None),
         });
         kernel.set_turn_observer(Arc::clone(&observer) as Arc<dyn TurnObserver>);
-        let mother = Mother {
+        let mut mother = Mother {
             kernel: Arc::clone(&kernel),
             observer,
             rt,
             home,
+            channels: None,
         };
         mother.reconcile()?;
         // 定时是母体职能（显示线刀A）：cron tick 循环随母体起。老路只有
@@ -197,6 +201,17 @@ impl Mother {
         {
             let _ctx = mother.rt.enter();
             mother.kernel.start_cron_loop();
+        }
+        // iLink（微信）入站通道：watcher + 微信工具 + 出站注入（2026-09-26
+        // 上机线）。start 在 RT 上下文里跑——bridge 与 poll 线程落在这台
+        // runtime 上；cm 换进 Mother 活到进程终（Drop 会拆通道）。
+        {
+            let mut cm = crate::channels::boot_ilink(&kernel)
+                .map_err(|e| format!("ilink channels boot failed: {e}"))?;
+            let _ctx = mother.rt.enter();
+            mother.rt.block_on(cm.start());
+            eprintln!("mother: iLink channel online (weixin watcher + tools)");
+            mother.channels.replace(cm);
         }
         Ok(mother)
     }
