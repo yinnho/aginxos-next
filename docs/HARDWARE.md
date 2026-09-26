@@ -9052,3 +9052,57 @@ aginx-secretd 451、aginx-voice 455、aginxbrowser 460、net-watch 468；
 
 **挂账更新**：#392 挂账①**清账**（模板进二进制，fresh flash 有全套）；
 生态仓 b706970 推送裁决归账四摊；v0.5.8 镜像目录留可回钉。
+
+## 2026-09-26 — #394 aginx-asr v0.1.1：中文默认修上机 + voice 源搬进本仓（redfin/Pixel 5）
+
+**清一代仓漏账**：`tools/voice/ag-asr.c` 的 zh 默认修（2026-09-18 在
+enchilada 上定的：`language` 默认 `"auto"` 把安静中文听成 Oh/The/I，
+产品是中文机）一直完整躺在一代仓工作树未提交——封仓后成悬账。裁决：
+源搬进本仓，修随迁落地，出包换钉。
+
+**源搬迁（D14 净）**：`tools/voice/`（ag-asr.c 含修 + ag-tts.c +
+android-shims.c + build-aginx.sh + link-aginx.sh + README.md）、
+`scripts/build-voice.sh` + `fetch-voice-models.sh` 逐字自封仓工作树
+拷入（7355ec8）；全件零机器串。**重烤走 link-only**（C 源单改，
+cmake install-aginx/lib 13 .a + ort 复用封仓拷，无需重建）：
+`bash tools/voice/link-aginx.sh` → ag-asr 25,985,792 B，sha
+`eebb6d46…`，strings 含 `AG_ASR_LANG`（在役旧件 13f03ff6… 无此符）。
+修本身：`config.model_config.sense_voice.language` 默认 `"zh"` +
+`AG_ASR_LANG` 覆盖（zh/en/ja/ko/yue/auto）。`.local/device/redfin/
+voice/bin/ag-asr` 同步换新（旧件留 `ag-asr.prefix-bak`；ag-tts 不动
+——它是 aginx-tts v0.1.0 的源，免 sha 漂移）。
+
+**出包+镜像**：aginx-asr v0.1.1 四件套 265,544,192 B（成员 pkg.toml/
+SKILL.md/files/bin/ag-asr/files/models/asr/{model.int8.onnx,tokens.txt}；
+成员内 ag-asr sha==eebb6d46 ✓），tar sha `641fbb44…` 上镜像
+（86quan `/data/pkgs.aginx.net/aginx-asr/v0.1.1/`，HTTPS 200 验）。
+manifest 合并律：拉设备件→只动 asr 行+注记（90 行）→host
+`aginx-sign sign` → 双件推；旧件设备侧留 `/tmp/agpkg.manifest.prev2`。
+
+**设备换装+验证（11:46）**：`aginx-pkg opt-in aginx-asr` 拉 265,544,192 B
+HTTP 200；真身 `/var/lib/aginx/pkgfiles/aginx-asr/bin/ag-asr` sha 三向
+相符（host=镜像=device）+ `test -x` + `/var/bin/aginx-asr` 符号链就位
+（CLI 面，pkg.toml exec 指 bin/ag-asr，与整机烤机同形）。
+
+**功能收据（tts→asr 真往返）**：
+- 中文合成：aginx-tts 出「今天天气很好，我们去公园散步吧。」→
+  /tmp/zh.wav（251,940 B，vits sid=8→0 老提醒，无害）。
+- **默认（zh）**：aginx-asr 回 **「今天天气很好，我们去公园散步吧。」**
+  ——逐字全对。
+- **AG_ASR_LANG=en**：同 wav 回「今天天气很，我去公园散步吧。」——
+  英文强制创码吃掉中文 token（好/们 丢字），**输出真变了**：env 覆盖
+  进了解码器（旧件不认此 env，en 会零效果——此对照即新码路活证，
+  无需推旧件上机 A/B）。
+- **AG_ASR_LANG=auto**：回全文，与默认一致（旧默认行为按需可回）。
+- 「安静中文被听成 Oh/The/I」原始症状属低增益现场（enchilada
+  09-18），净 wav 复现不了；收据以上述解码行为差+全对往返为准。
+
+**盘面**：本地 `out/pkgs/aginx-asr-v0.1.0-4pc.tar`（265MB）删——镜像
+v0.1.0 目录**留**（enchilada manifest 挂账回网重钉前免得无包可拉，
+86quan 有空间，不动）。repo 面无需改 manifest（aginx 家族行走
+build-rootfs.sh OPT_ADD 从 pkg.toml 生成）。
+
+**终态**：redfin 在役 aginx-asr v0.1.1（zh 默认 + env 覆盖）；voice
+线再生路径全部指本仓（assets.md 已改）。挂账：bake #27 未排——
+fresh flash 镜像 manifest 要带上 v0.1.1 钉，须重烤才有（OPT_ADD 现算
+现生成，下次 bake 自动带上，无需手改）。
