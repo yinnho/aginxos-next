@@ -4,7 +4,7 @@
 //! 实现自 runtime tools/scheduling.rs / agent_mgmt.rs / misc.rs 原样搬来。
 //! 输入 = stdin JSON（工具入参 + 保留键 `_ctx` 身份），输出 = stdout 一条
 //! D1 信封（{"ok":true,"data":…} / {"ok":false,"error":…}），rc 0/1。
-//! 与 aginx-web/agf 的 `tool` 面同构（M31/M32 先例）。
+//! 与 aginx-file/aginx-mem 的 `tool` 面同构（M31/M32 先例）。
 //!
 //! 并发模型与既有 CLI 面一致：一次性裸 kernel boot、不起后台循环
 //!（agent_cmd/cron_cmd 同款）。cron create 落 DB，常驻 daemon ≤15s

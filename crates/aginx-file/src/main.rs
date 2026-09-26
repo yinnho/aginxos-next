@@ -1,19 +1,19 @@
-//! agf — 文件工具 CLI（M32 D3 批2）。
+//! aginx-file — 文件工具 CLI（M32 D3 批2；D13 改名 2026-09-26，原 agf）。
 //!
-//! 两张脸���人/流程脚本面子命令（read/ls/write/convert/inspect），机读面
-//! `agf tool <name>`（stdin 收工具入参 JSON，stdout 出 D1 信封；runtime
-//! 的 agf_bridge 消费）。���份与预解析路径经 stdin JSON 保留键 `_ctx`
-//! 注入——见 lib.rs 头注。
+//! 两张脸：人/流程脚本面子命令（read/ls/write/convert/inspect），机读面
+//! `aginx-file tool <name>`（stdin 收工具入参 JSON，stdout 出 D1 信封；
+//! runtime 的 agf_bridge 消费）。身份与预解析路径经 stdin JSON 保留键
+//! `_ctx` 注入——见 lib.rs 头注。
 
 use clap::{Parser, Subcommand};
 use serde_json::Value;
 
 #[derive(Parser)]
 #[command(
-    name = "agf",
+    name = "aginx-file",
     version,
     about = "文件工具 CLI — 读写/列表/转换/图像信息",
-    long_about = "agf 是文件面工具的 CLI 形态（D3 批2 外置成包）。\n人面子命令直接给参数（路径按当前目录解析）；\n机读面 `agf tool <name>` 从 stdin 读 JSON，stdout 出 D1 信封\n（{\"ok\":true,\"data\":…}）。"
+    long_about = "aginx-file 是文件面工具的 CLI 形态（D3 批2 外置成包；D13 改名，原 agf）。\n人面子命令直接给参数（路径按当前目录解析）；\n机读面 `aginx-file tool <name>` 从 stdin 读 JSON，stdout 出 D1 信封\n（{\"ok\":true,\"data\":…}）。"
 )]
 struct Cli {
     #[command(subcommand)]
@@ -65,7 +65,7 @@ enum Command {
 fn main() -> anyhow::Result<()> {
     // CLI 人面常接 `| head`：Rust 默认忽略 SIGPIPE，写已关闭管道会以
     // "failed printing to stdout: Broken pipe" panic 收场。恢复默认处置
-    // = 安静地死于 SIGPIPE，与普通 CLI 一致（aginx-web 同款，设备实测过）。
+    // = 安静地死于 SIGPIPE，与普通 CLI 一致（设备实测过）。
     unsafe {
         libc::signal(libc::SIGPIPE, libc::SIG_DFL);
     }
@@ -83,7 +83,7 @@ async fn run(cli: Cli) -> anyhow::Result<()> {
             std::io::Read::read_to_string(&mut std::io::stdin(), &mut raw)?;
             let input: Value = serde_json::from_str(&raw)
                 .map_err(|e| anyhow::anyhow!("stdin 不是合法 JSON 入参: {e}"))?;
-            match agf::execute_tool(&name, &input).await {
+            match aginx_file::execute_tool(&name, &input).await {
                 None => {
                     print_envelope_error(&format!("unknown tool: {name}"));
                     std::process::exit(1);
@@ -104,10 +104,10 @@ async fn run(cli: Cli) -> anyhow::Result<()> {
             // 人面：参数拼回工具 JSON 入参，走同一条 execute_tool 单真源。
             let (name, input) = args_to_input(human)?;
             let input_val = serde_json::Value::Object(input);
-            match agf::execute_tool(name, &input_val).await {
+            match aginx_file::execute_tool(name, &input_val).await {
                 None => anyhow::bail!("unknown tool: {name}"),
                 Some(Ok(data)) => println!("{data}"),
-                Some(Err(e)) => agf::bail_human(&e),
+                Some(Err(e)) => aginx_file::bail_human(&e),
             }
         }
     }
@@ -115,7 +115,7 @@ async fn run(cli: Cli) -> anyhow::Result<()> {
 }
 
 /// 人面子命令 → (工具名, 工具入参 JSON)。与工具 schema 同构，仅做参数搬运。
-/// write 的内容缺省读 stdin（sh-first：`… | agf write f` / `agf write f < in`）。
+/// write 的内容缺省读 stdin（sh-first：`… | aginx-file write f` / `aginx-file write f < in`）。
 fn args_to_input(cmd: Command) -> anyhow::Result<(&'static str, serde_json::Map<String, Value>)> {
     use serde_json::json;
     let mut m = serde_json::Map::new();
@@ -160,5 +160,5 @@ fn args_to_input(cmd: Command) -> anyhow::Result<(&'static str, serde_json::Map<
 
 fn print_envelope_error(msg: &str) {
     println!("{}", serde_json::json!({"ok": false, "error": msg}));
-    eprintln!("agf: {msg}");
+    eprintln!("aginx-file: {msg}");
 }

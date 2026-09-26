@@ -1,9 +1,9 @@
 //! agmem 桥 — 记忆面工具的外置实现桥（M35c）。
 //!
-//! 实现已整体搬到 `agmem` CLI（crates/agmem，单真源）：kv_get / kv_set /
-//! kv_list 来自 tools/kv.rs，memory_tree 来自 tools/memory.rs，
-//! knowledge_* / clone_evaluate / flow_* 来自 tools/knowledge.rs。本模块
-//! 只留：
+//! 实现住在 `aginx-mem` CLI（crates/aginx-mem，单真源；原名 `agmem`，
+//! D13 改姓 2026-09-26）：kv_get / kv_set / kv_list 来自 tools/kv.rs，
+//! memory_tree 来自 tools/memory.rs，knowledge_* / clone_evaluate /
+//! flow_* 来自 tools/knowledge.rs。本模块只留：
 //! - definitions()：与被删模块**逐字节相同**的 ToolDefinition（名字/schema/
 //!   description 不动——flow `tools:` 加载期冻结、CORE_TOOL_NAMES、教学
 //!   文本全部依赖这批名字）。
@@ -13,15 +13,16 @@
 //!   同款先例）。身份经 stdin JSON 保留键 `_ctx` 注入；owner/user 的
 //!   None 以显式 null 传（CLI 侧还原成 Option，各面回落与上游逐字一致：
 //!   kv → ""，tree → "default"/不过滤）。
-//! - execute()：spawn `agmem tool <name>`，stdin 喂入参 JSON（含 `_ctx`），
-//!   stdout 收 D1 信封（{"ok":true,"data":…} / {"ok":false,"error":…}）。
+//! - execute()：spawn `aginx-mem tool <name>`，stdin 喂入参 JSON（含
+//!   `_ctx`），stdout 收 D1 信封（{"ok":true,"data":…} /
+//!   {"ok":false,"error":…}）。
 //!
 //! 留守 tools/knowledge.rs 的两个内核耦合面不经本桥：apply_patch（走
-//! crate::apply_patch + agf_bridge ��� sender 路径路由）、session_summarize
+//! crate::apply_patch + agf_bridge 的 sender 路径路由）、session_summarize
 //! （吃轮次身份与守护内记忆句柄）。
 //!
-//! 语义：定义恒广播；执行在 agmem 未安装时干净报错（包在场门执行，不门
-//! 广告——flow 冻结不因少包漂移；与 M31 web / M32 agf 桥同款）。
+//! 语义：定义恒广播；执行在 aginx-mem 未安装时干净报错（包在场门执行，
+//! 不门广告——flow 冻结不因少包漂移；与 web / agf 桥同款）。
 
 use super::ToolModule;
 use crate::tool_context::ToolContext;
@@ -396,7 +397,7 @@ fn build_payload(name: &str, input: &Value, ctx: &ToolContext<'_>) -> Value {
     payload
 }
 
-/// Spawn `agmem tool <name>`（stdin=入参 JSON 含 `_ctx`，stdout=D1 信封）。
+/// Spawn `aginx-mem tool <name>`（stdin=入参 JSON 含 `_ctx`，stdout=D1 信封）。
 ///
 /// sandbox 同 web/agf 桥：env_clear 后只回 PATH/HOME 等 SAFE_ENV_VARS。
 /// kill_on_drop：超时/取消不留孤儿。
@@ -406,7 +407,7 @@ async fn run_agmem_tool(name: &str, input: &Value, ctx: &ToolContext<'_>) -> Car
 
     let payload = build_payload(name, input, ctx);
 
-    let mut cmd = tokio::process::Command::new("agmem");
+    let mut cmd = tokio::process::Command::new("aginx-mem");
     cmd.arg("tool").arg(name);
     crate::subprocess_sandbox::sandbox_command(&mut cmd, &[]);
     cmd.stdin(Stdio::piped())
@@ -416,22 +417,21 @@ async fn run_agmem_tool(name: &str, input: &Value, ctx: &ToolContext<'_>) -> Car
 
     let mut child = cmd.spawn().map_err(|e| {
         CarrierError::Internal(format!(
-            "agmem CLI not available ({e}) — memory tools live in the `agmem` package. \
-             Install it (`ag pkg install agmem`) or check PATH."
+            "aginx-mem CLI not available ({e}) — memory tools live in the `aginx-mem` \
+             package. Install it (`aginx-pkg opt-in aginx-mem`) or check PATH."
         ))
     })?;
 
     if let Some(mut stdin) = child.stdin.take() {
-        // Best-effort write; agmem reads stdin to EOF before executing.
+        // Best-effort write; aginx-mem reads stdin to EOF before executing.
         let bytes = serde_json::to_vec(&payload).unwrap_or_default();
         let _ = stdin.write_all(&bytes).await;
         let _ = stdin.shutdown().await;
     }
 
-    let output = child
-        .wait_with_output()
-        .await
-        .map_err(|e| CarrierError::Internal(format!("agmem tool {name} subprocess failed: {e}")))?;
+    let output = child.wait_with_output().await.map_err(|e| {
+        CarrierError::Internal(format!("aginx-mem tool {name} subprocess failed: {e}"))
+    })?;
 
     let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
     let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
@@ -440,7 +440,7 @@ async fn run_agmem_tool(name: &str, input: &Value, ctx: &ToolContext<'_>) -> Car
         let tail = if stdout.is_empty() { stderr } else { stdout };
         let preview = crate::str_utils::safe_truncate_str(&tail, 300);
         CarrierError::Internal(format!(
-            "agmem tool {name} returned a non-JSON response (exit {:?}): {preview}",
+            "aginx-mem tool {name} returned a non-JSON response (exit {:?}): {preview}",
             output.status.code()
         ))
     })?;
@@ -450,10 +450,14 @@ async fn run_agmem_tool(name: &str, input: &Value, ctx: &ToolContext<'_>) -> Car
             .as_str()
             .map(|s| s.to_string())
             .ok_or_else(|| {
-                CarrierError::Serialization("agmem envelope missing string data field".to_string())
+                CarrierError::Serialization(
+                    "aginx-mem envelope missing string data field".to_string(),
+                )
             })
     } else {
-        let msg = envelope["error"].as_str().unwrap_or("unknown agmem error");
+        let msg = envelope["error"]
+            .as_str()
+            .unwrap_or("unknown aginx-mem error");
         Err(CarrierError::Internal(msg.to_string()))
     }
 }
@@ -581,7 +585,7 @@ mod tests {
 
     #[tokio::test]
     async fn spawn_without_agmem_reports_clean_error() {
-        // PATH 里没有 agmem（本测试进程）→ 干净的 Internal 报错带安装
+        // PATH 里没有 aginx-mem（本测试进程）→ 干净的 Internal 报错带安装
         // 提示，不是 panic。
         let bridge = AgmemBridge;
         let mut ctx = bare_ctx();
@@ -594,7 +598,7 @@ mod tests {
             Err(CarrierError::Internal(m)) => m,
             other => panic!("expected Internal error, got {other:?}"),
         };
-        assert!(msg.contains("agmem CLI not available"), "{msg}");
-        assert!(msg.contains("ag pkg install agmem"), "{msg}");
+        assert!(msg.contains("aginx-mem CLI not available"), "{msg}");
+        assert!(msg.contains("aginx-pkg opt-in aginx-mem"), "{msg}");
     }
 }

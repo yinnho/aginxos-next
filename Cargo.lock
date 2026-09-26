@@ -45,22 +45,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "agf"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "base64 0.22.1",
- "carrier-types",
- "clap",
- "libc",
- "serde",
- "serde_json",
- "tokio",
- "tracing",
- "urlencoding",
-]
-
-[[package]]
 name = "agi"
 version = "0.1.0"
 dependencies = [
@@ -85,6 +69,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "aginx-file"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "base64 0.22.1",
+ "carrier-types",
+ "clap",
+ "libc",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tracing",
+ "urlencoding",
+]
+
+[[package]]
 name = "aginx-gateway"
 version = "0.1.0"
 dependencies = [
@@ -105,6 +105,23 @@ version = "0.1.0"
 dependencies = [
  "cc",
  "png",
+]
+
+[[package]]
+name = "aginx-mem"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "carrier-lifecycle",
+ "carrier-memory",
+ "carrier-types",
+ "chrono",
+ "clap",
+ "libc",
+ "serde_json",
+ "tempfile",
+ "tokio",
+ "tracing",
 ]
 
 [[package]]
@@ -241,45 +258,10 @@ dependencies = [
 ]
 
 [[package]]
-name = "aginx-web"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "carrier-types",
- "clap",
- "dashmap",
- "hex",
- "libc",
- "reqwest",
- "serde",
- "serde_json",
- "sha2",
- "tokio",
- "tracing",
-]
-
-[[package]]
 name = "agio"
 version = "0.1.0"
 dependencies = [
  "serde_json",
-]
-
-[[package]]
-name = "agmem"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "carrier-lifecycle",
- "carrier-memory",
- "carrier-types",
- "chrono",
- "clap",
- "libc",
- "serde_json",
- "tempfile",
- "tokio",
- "tracing",
 ]
 
 [[package]]
