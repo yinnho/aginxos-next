@@ -8865,3 +8865,15 @@ aginx-voice/aginxbrowser/net-watch）；stamps 全家含 aginx-file/aginx-mem；
   inode 风险。
 - **enchilada**：离网（LAN 无 dropbear 候选），manifest 刷新继续挂账
   （回网后照本段配方做）。
+
+### #390 补二：尾巴三件清零（同日续二）
+
+- **残留 grep 全文扫**：桥注释 6 处陈旧「web 桥/web-agf 同款」交叉引用
+  修齐（1e2e5c7）；pkg 测试件 agf 是任意名无碍、n4.sh 是退役存档不动。
+  `check.sh` 终态 rc=0。
+- **重启后远端通道复验**：六单元 ready（440–472 全 respawn）；Mac
+  `agc agent://redfin.relay.aginx.net/me`（AGC_RELAY_SECRET 从
+  ~/.aginx/config.toml [relay].relay_secret 提取，不回显）真答 **pong**
+  ——远端回合走的就是 v0.1.3 母体，新母体远端面也过。
+- **SKILL 裸跑配方自验**：`aginx-mem --db /home/data/carrier.db set/get/
+  del` 三连与文档逐字吻合（测试键即测即清）。
