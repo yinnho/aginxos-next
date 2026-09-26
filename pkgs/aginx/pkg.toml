@@ -1,5 +1,8 @@
 # aginx — 母体包（D11 母体=aginx）。刀2 起 server 进程内直调 kernel，
 # 不再 spawn aginx-runtime（该二进制已随结构刀①物理删除）。
+# v0.1.5（2026-09-26）：iLink 上机——server 装 weixin 通道层（扫码会话
+# 落地后微信消息直达 me）+ 第三件 aginx-carrier（qr-login --screen 等
+# 一次性 CLI 面）。v0.1.4（2026-09-26）：写卡兜底对齐 reply 模板契约。
 # v0.1.2（2026-09-25）：母体刀5 裁剪车——wasmtime 裁到
 # cranelift+runtime+std（server musl 22.48M→19.65M，Cargo.lock -442 行）；
 # wat 只进 test 构建。v0.1.1（2026-09-24）：结构四刀后重出——workspace
@@ -14,11 +17,11 @@
 # AGINX_BIN 指 /var/bin/aginx（face symlink）。刀F 起 depends 锚
 # aginx-update（装母体自动带自更新器；裸箱升级=重刷）。
 name = "aginx"
-version = "0.1.4"
-summary = "母体：路由器 face /var/bin/aginx + 心脏 server（进程内直调 kernel）"
+version = "0.1.5"
+summary = "母体：路由器 face /var/bin/aginx + 心脏 server（进程内直调 kernel）+ carrier CLI 面"
 group = "agent"
 depends = "aginx-update"
-url = "https://pkgs.aginx.net/aginx/v0.1.4/aginx-v0.1.4-4pc.tar"
+url = "https://pkgs.aginx.net/aginx/v0.1.5/aginx-v0.1.5-4pc.tar"
 exec = "bin/aginx"
 
 [service]
