@@ -12,6 +12,23 @@ use tracing::{debug, info, warn};
 use crate::error::{KernelError, KernelResult};
 use crate::kernel::CarrierKernel;
 
+/// RAII in-flight marker for background compaction — Drop removes the
+/// session from the guard set even if the compaction future panics (a
+/// leaked entry would silently disable compaction for that session forever).
+struct CompactionInflight<'k> {
+    kernel: &'k CarrierKernel,
+    session_id: SessionId,
+}
+impl Drop for CompactionInflight<'_> {
+    fn drop(&mut self) {
+        self.kernel
+            .compaction_inflight
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .remove(&self.session_id);
+    }
+}
+
 impl CarrierKernel {
     /// Reset an agent's session — auto-saves a summary to memory, then clears messages
     /// and creates a fresh session ID.
@@ -471,7 +488,35 @@ impl CarrierKernel {
     ///
     /// Replaces the existing text-truncation compaction with an intelligent
     /// LLM-generated summary of older messages, keeping only recent messages.
+    ///
+    /// Single-flight per session: a turn-path caller spawns this in the
+    /// background, so back-to-back turns over the threshold could stack
+    /// duplicate LLM compactions — the guard makes the second a no-op.
     pub async fn compact_agent_session(
+        &self,
+        agent_id: AgentId,
+        session_id: carrier_types::agent::SessionId,
+        owner_id: Option<&str>,
+        user_id: Option<&str>,
+    ) -> KernelResult<String> {
+        {
+            let mut inflight = self
+                .compaction_inflight
+                .lock()
+                .unwrap_or_else(|e| e.into_inner());
+            if !inflight.insert(session_id) {
+                return Ok("compaction already in flight — skipped".to_string());
+            }
+        }
+        let _guard = CompactionInflight {
+            kernel: self,
+            session_id,
+        };
+        self.compact_agent_session_inner(agent_id, session_id, owner_id, user_id)
+            .await
+    }
+
+    async fn compact_agent_session_inner(
         &self,
         agent_id: AgentId,
         session_id: carrier_types::agent::SessionId,
@@ -524,6 +569,36 @@ impl CarrierKernel {
             .await
             .map_err(KernelError::Carrier)?;
 
+        // CAS guard: compaction can run in the background while new turns
+        // append to the same session, and save_session is a whole-row write —
+        // saving a stale snapshot would erase them. Reload and verify the
+        // compacted span is byte-identical; messages appended while the LLM
+        // summarized ride along in `tail`. Any other mutation (prune, a
+        // competing compaction) aborts — the next turn retries.
+        let snapshot_len = session.messages.len();
+        let reload = self
+            .memory
+            .get_session(session_id)
+            .map_err(KernelError::Carrier)?;
+        let Some(current) = reload else {
+            return Err(KernelError::Carrier(CarrierError::Internal(
+                "session vanished during compaction".to_string(),
+            )));
+        };
+        let prefix_intact = current.messages.len() >= snapshot_len
+            && (0..snapshot_len).all(|i| {
+                serde_json::to_string(&current.messages[i]).unwrap_or_default()
+                    == serde_json::to_string(&session.messages[i]).unwrap_or_default()
+            });
+        if !prefix_intact {
+            return Err(KernelError::Carrier(CarrierError::Internal(
+                "session mutated during background compaction — skipped, will retry next turn"
+                    .to_string(),
+            )));
+        }
+        let tail: Vec<carrier_types::message::Message> =
+            current.messages[snapshot_len..].to_vec();
+
         // Post-compaction audit: validate and repair the kept messages
         let (repaired_messages, repair_stats) =
             carrier_runtime::session_repair::validate_and_repair_with_stats(&result.kept_messages);
@@ -543,6 +618,9 @@ impl CarrierKernel {
             )));
         }
         final_messages.extend(repaired_messages);
+        // Messages appended by turns that completed while the LLM summarized
+        // (CAS guard above proved the prefix unchanged).
+        final_messages.extend(tail);
 
         // Also update the regular session with the repaired messages
         // P1-C: compaction becomes a replace event in the session event log

@@ -1610,29 +1610,35 @@ impl CarrierKernel {
                 crate::handle::make_memory_handle(Arc::clone(&kernel_clone.memory)),
             );
 
-            // Auto-compact if the session is large before running the loop
+            // Auto-compact if the session is large — OFF the turn path. The
+            // observed cost is a ~36s unbounded LLM call on the reasoning
+            // backend; running it inline gated every reply past a busy
+            // session. Fire-and-forget with the kernel's single-flight
+            // guard + CAS (sessions.rs): the turn below proceeds on the
+            // uncompacted session (threshold has margin; the rollover guard
+            // still bounds the extreme), the compacted view lands before
+            // the next turn that needs it.
             if needs_compact {
-                info!(agent_id = %agent_id, messages = session.messages.len(), "Auto-compacting session");
-                match kernel_clone
-                    .compact_agent_session(
-                        agent_id,
-                        session.id,
-                        owner_id.as_deref(),
-                        sender_id.as_deref(),
-                    )
-                    .await
-                {
-                    Ok(msg) => {
-                        info!(agent_id = %agent_id, "{msg}");
-                        // Reload the session after compaction
-                        if let Ok(Some(reloaded)) = memory.get_session_async(session.id).await {
-                            session = reloaded;
+                let bg_kernel = Arc::clone(&kernel_clone);
+                let bg_session = session.id;
+                let bg_owner = owner_id.clone();
+                let bg_sender = sender_id.clone();
+                tokio::spawn(async move {
+                    match bg_kernel
+                        .compact_agent_session(
+                            agent_id,
+                            bg_session,
+                            bg_owner.as_deref(),
+                            bg_sender.as_deref(),
+                        )
+                        .await
+                    {
+                        Ok(msg) => info!(agent_id = %agent_id, "{msg}"),
+                        Err(e) => {
+                            warn!(agent_id = %agent_id, "Background auto-compaction failed: {e}")
                         }
                     }
-                    Err(e) => {
-                        warn!(agent_id = %agent_id, "Auto-compaction failed: {e}");
-                    }
-                }
+                });
             }
 
             // Create a phase callback that emits PhaseChange events to WS/SSE clients
@@ -2430,25 +2436,39 @@ impl CarrierKernel {
             ..
         } = ctx;
 
-        // Execute compaction if needed
+        // Execute compaction if needed — OFF the turn path (a ~36s LLM call
+        // on the reasoning backend must not gate the reply). Fire-and-forget
+        // via the kernel's self_handle weak-Arc; single-flight + CAS live in
+        // compact_agent_session. This fn is the front-desk hot path
+        // (send_message_with_handle → execute_llm_agent).
         if needs_compact {
             match self
-                .compact_agent_session(
-                    agent_id,
-                    session.id,
-                    owner_id.as_deref(),
-                    sender_id.as_deref(),
-                )
-                .await
+                .coordination
+                .self_handle
+                .get()
+                .and_then(|w| w.upgrade())
             {
-                Ok(msg) => {
-                    info!(agent_id = %agent_id, "{msg}");
-                    if let Ok(Some(reloaded)) = self.memory.get_session_async(session.id).await {
-                        session = reloaded;
-                    }
+                Some(kc) => {
+                    let bg_session = session.id;
+                    let oid = owner_id.clone();
+                    let sid = sender_id.clone();
+                    tokio::spawn(async move {
+                        match kc
+                            .compact_agent_session(agent_id, bg_session, oid.as_deref(), sid.as_deref())
+                            .await
+                        {
+                            Ok(msg) => info!(agent_id = %agent_id, "{msg}"),
+                            Err(e) => {
+                                warn!(agent_id = %agent_id, "Background auto-compaction failed: {e}")
+                            }
+                        }
+                    });
                 }
-                Err(e) => {
-                    warn!(agent_id = %agent_id, "Pre-emptive compaction failed: {e}");
+                None => {
+                    warn!(
+                        agent_id = %agent_id,
+                        "self_handle not set — skipping background compaction this turn"
+                    );
                 }
             }
         }

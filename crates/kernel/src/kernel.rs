@@ -139,6 +139,12 @@ pub struct CarrierKernel {
     /// coalesce rapid-fire messages into one claim (dsh inbox+claim at turn
     /// granularity). See `sender_gate`.
     pub sender_gate: crate::sender_gate::SenderGate,
+    /// Sessions with a background compaction in flight. Compaction runs OFF
+    /// the turn path (36s LLM call observed gating replies on device); this
+    /// guard stops consecutive turns over the same threshold from stacking
+    /// duplicate compaction calls.
+    pub compaction_inflight:
+        std::sync::Mutex<std::collections::HashSet<carrier_types::agent::SessionId>>,
     /// Cost metering engine.
     pub metering: Arc<MeteringEngine>,
     /// Cron job scheduler.
@@ -582,6 +588,7 @@ impl CarrierKernel {
             memory: memory.clone(),
             audit_log: Arc::new(AuditLog::with_db(memory.usage_conn())),
             sender_gate: crate::sender_gate::SenderGate::default(),
+            compaction_inflight: std::sync::Mutex::new(std::collections::HashSet::new()),
             metering,
             cron_scheduler,
             channel_send_fn: std::sync::RwLock::new(None),
