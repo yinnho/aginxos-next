@@ -8849,3 +8849,19 @@ next_fire 2026-09-27T00:00Z 待明晨真收据。
 aginx-voice/aginxbrowser/net-watch）；stamps 全家含 aginx-file/aginx-mem；
 晨报原件在库 enabled（last_result 留旧错误作事故记录）；复验 one-shot
 已自动清理、复验卡留在 /home/cards；vendor_boot 未动。
+
+### #390 补：三 tar 上镜像 + redfin manifest 升钉（同日续）
+
+- **pkgs.aginx.net（86quan，手工 scp 线）**：`aginx-file/v0.1.0/`、
+  `aginx-mem/v0.1.0/`、`aginx/v0.1.3/` 三 tar+.sha256 落位，服务器侧
+  sha256 与 manifest 钉值逐一相符（f2318f15 / e58d5a43 / fbec577a）；
+  老 `agf/`、`agmem/`、`aginx-web/` 目录留作回滚重钉（v0.2.5 先例）。
+- **redfin manifest 合并纪律二连**：上一段只改了上半——合并件 61–63 行
+  还躺着旧时代的 `aginx-web`/`agf`/`agmem` 安装行（`available` 还在报
+  它们才暴露）。清行、aginx 行升钉 v0.1.3、补两工具包行、注释块同步
+  09-26 现实；host 重签推送双件。`available` 清干净（只剩真未装的
+  python3/codex/dup/grok/git），stamps 三连=钉值，设备实拉镜像 URL
+  HTTP 200 尺寸精确（1177088 B）。sync 全 opt 档 no-op，无重装换
+  inode 风险。
+- **enchilada**：离网（LAN 无 dropbear 候选），manifest 刷新继续挂账
+  （回网后照本段配方做）。
