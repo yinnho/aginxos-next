@@ -133,6 +133,21 @@ pub enum RunOutcome {
     Error(String),
 }
 
+/// Why the no-progress detector aborted the turn — drives the threshold and
+/// the user-facing message.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StuckKind {
+    /// No tool was attempted anywhere in the streak — the model spun without
+    /// calling anything. Trips at [`super::NO_PROGRESS_THRESHOLD`].
+    Idle,
+    /// At least one iteration in the streak dispatched tool calls but every
+    /// one failed — an environment problem (missing package, permission
+    /// wall, timeouts), not model laziness. Trips at the looser
+    /// [`super::ALL_TOOLS_FAILED_THRESHOLD`] to give the model room to
+    /// recover mid-streak.
+    AllToolsFailed,
+}
+
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct LastRunSummary {
     pub timestamp: String,
@@ -153,11 +168,22 @@ pub struct LoopState {
     /// answer, not actively generating via MaxTokens). Reaches
     /// [`super::NO_PROGRESS_THRESHOLD`] -> turn aborted as stuck.
     pub idle_streak: u32,
-    /// Tools executed in the CURRENT iteration. Reset at the top of each
-    /// `loop_iteration`; bumped per SUCCESSFUL tool call in `tool_use` (failed
-    /// calls don't count - an all-failed iteration is treated as no-progress).
-    /// Drives the no-progress detector.
+    /// Tools executed SUCCESSFULLY in the CURRENT iteration. Reset at the top
+    /// of each `loop_iteration`; bumped per successful tool call in
+    /// `tool_use` (failed calls don't count - an all-failed iteration is
+    /// treated as no-progress). Drives the no-progress detector.
     pub tools_this_iter: u32,
+    /// Tool calls ATTEMPTED (dispatched) in the CURRENT iteration — bumped
+    /// regardless of outcome (success, error, timeout). The detector uses it
+    /// to tell "model called nothing" (true idle) apart from "model called
+    /// tools but every one died" (environment: missing package, permission,
+    /// timeouts) — the two get different thresholds and messages.
+    pub tools_attempted_iter: u32,
+    /// Whether the current no-progress streak saw ANY tool attempt (in any of
+    /// its iterations). A streak with attempts only trips at the looser
+    /// [`super::ALL_TOOLS_FAILED_THRESHOLD`] and reports an all-failed
+    /// message; a pure-idle streak trips at [`super::NO_PROGRESS_THRESHOLD`].
+    pub streak_saw_tool_attempts: bool,
     pub context_tokens_used_estimate: usize,
     pub context_tokens_max: usize,
     pub context_pressure: ContextPressure,
@@ -201,6 +227,8 @@ impl LoopState {
             iteration: 0,
             idle_streak: 0,
             tools_this_iter: 0,
+            tools_attempted_iter: 0,
+            streak_saw_tool_attempts: false,
             context_tokens_used_estimate: 0,
             context_tokens_max: context_window_tokens,
             context_pressure: ContextPressure::Normal,
@@ -227,21 +255,46 @@ impl LoopState {
     }
 
     /// Record whether the just-completed iteration made progress, and return
-    /// `Some(idle_streak)` when the no-progress threshold is reached (caller
-    /// should abort the turn as stuck), else `None`.
+    /// `Some((idle_streak, StuckKind))` when the no-progress threshold is
+    /// reached (caller should abort the turn as stuck), else `None`.
     ///
     /// "Progress" = the iteration called at least one SUCCESSFUL tool, produced a
     /// final answer, or was actively generating (MaxTokens). A ToolUse iteration
     /// where every tool errored (or an EndTurn/StopSequence spin with no tools)
     /// counts as idle. Only consecutive idle turns trip the threshold.
-    pub fn record_iteration_progress(&mut self, made_progress: bool) -> Option<u32> {
+    ///
+    /// Two thresholds, keyed on whether the streak ever attempted a tool:
+    /// a pure-idle streak trips at [`super::NO_PROGRESS_THRESHOLD`] (the
+    /// model is spinning, calling nothing); a streak that attempted tools
+    /// trips only at [`super::ALL_TOOLS_FAILED_THRESHOLD`] (the model is
+    /// genuinely trying; every call dies in the environment — missing
+    /// package, permissions, timeouts). The returned kind drives the
+    /// user-facing message.
+    pub fn record_iteration_progress(
+        &mut self,
+        made_progress: bool,
+        attempted_tools: bool,
+    ) -> Option<(u32, StuckKind)> {
         if made_progress {
             self.idle_streak = 0;
+            self.streak_saw_tool_attempts = false;
             return None;
         }
+        if attempted_tools {
+            self.streak_saw_tool_attempts = true;
+        }
         self.idle_streak += 1;
-        if self.idle_streak >= super::NO_PROGRESS_THRESHOLD {
-            Some(self.idle_streak)
+        let kind = if self.streak_saw_tool_attempts {
+            StuckKind::AllToolsFailed
+        } else {
+            StuckKind::Idle
+        };
+        let threshold = match kind {
+            StuckKind::Idle => super::NO_PROGRESS_THRESHOLD,
+            StuckKind::AllToolsFailed => super::ALL_TOOLS_FAILED_THRESHOLD,
+        };
+        if self.idle_streak >= threshold {
+            Some((self.idle_streak, kind))
         } else {
             None
         }

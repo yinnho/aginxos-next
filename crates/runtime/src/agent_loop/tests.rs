@@ -1,5 +1,6 @@
 use super::state;
 use super::*;
+use super::state::StuckKind;
 use crate::llm_driver::{CompletionResponse, LlmError};
 use async_trait::async_trait;
 use carrier_types::tool::ToolCall;
@@ -111,44 +112,79 @@ fn test_last_run_stuck_prompt_strips_operator_advice() {
 
 #[test]
 fn test_record_progress_aborts_after_threshold_idle_iters() {
-    // No progress for 3 consecutive iterations -> Some(streak) on the 3rd.
+    // Pure idle (no tool attempts) for 3 consecutive iterations ->
+    // Some((3, Idle)) on the 3rd.
     let mut state = LoopState::new(128_000);
     assert_eq!(
-        state.record_iteration_progress(false),
+        state.record_iteration_progress(false, false),
         None,
         "1st idle: under threshold"
     );
     assert_eq!(
-        state.record_iteration_progress(false),
+        state.record_iteration_progress(false, false),
         None,
         "2nd idle: under threshold"
     );
-    let stuck = state.record_iteration_progress(false);
-    assert_eq!(stuck, Some(3), "3rd idle: threshold reached");
+    let stuck = state.record_iteration_progress(false, false);
+    assert_eq!(stuck, Some((3, StuckKind::Idle)), "3rd idle: threshold");
+}
+
+#[test]
+fn test_record_progress_all_failed_streak_trips_later_with_own_kind() {
+    // Tools attempted every iteration but all failed -> the looser
+    // ALL_TOOLS_FAILED_THRESHOLD (6) and the AllToolsFailed kind.
+    let mut state = LoopState::new(128_000);
+    for i in 1..6 {
+        assert_eq!(
+            state.record_iteration_progress(false, true),
+            None,
+            "all-failed iter {i}: under threshold"
+        );
+    }
+    let stuck = state.record_iteration_progress(false, true);
+    assert_eq!(stuck, Some((6, StuckKind::AllToolsFailed)));
+}
+
+#[test]
+fn test_record_progress_mixed_streak_kind_follows_attempts() {
+    // An idle iteration AFTER all-failed ones keeps the streak but the kind
+    // stays AllToolsFailed (the streak saw attempts) — no reset, no mislabel.
+    let mut state = LoopState::new(128_000);
+    for _ in 0..4 {
+        assert_eq!(state.record_iteration_progress(false, true), None);
+    }
+    // Model gives up on tools mid-streak and just spins: 2 more idle iters.
+    assert_eq!(state.record_iteration_progress(false, false), None);
+    let stuck = state.record_iteration_progress(false, false);
+    assert_eq!(stuck, Some((6, StuckKind::AllToolsFailed)));
 }
 
 #[test]
 fn test_record_progress_resets_on_tool_or_completion() {
     let mut state = LoopState::new(128_000);
-    // Two idle, then progress (tool call) resets the streak.
-    assert_eq!(state.record_iteration_progress(false), None);
-    assert_eq!(state.record_iteration_progress(false), None);
+    // Two idle, then progress (tool call) resets the streak AND the kind
+    // memory (a later all-failed streak must not inherit old attempts).
+    assert_eq!(state.record_iteration_progress(false, true), None);
+    assert_eq!(state.record_iteration_progress(false, false), None);
     assert_eq!(
-        state.record_iteration_progress(true),
+        state.record_iteration_progress(true, true),
         None,
         "progress resets streak"
     );
     // Streak restarted - needs 3 more idle to trip.
-    assert_eq!(state.record_iteration_progress(false), None);
-    assert_eq!(state.record_iteration_progress(false), None);
-    assert_eq!(state.record_iteration_progress(false), Some(3));
+    assert_eq!(state.record_iteration_progress(false, false), None);
+    assert_eq!(state.record_iteration_progress(false, false), None);
+    assert_eq!(
+        state.record_iteration_progress(false, false),
+        Some((3, StuckKind::Idle))
+    );
 }
 
 #[test]
 fn test_record_progress_progress_never_aborts() {
     let mut state = LoopState::new(128_000);
     for _ in 0..100 {
-        assert_eq!(state.record_iteration_progress(true), None);
+        assert_eq!(state.record_iteration_progress(true, true), None);
     }
 }
 
