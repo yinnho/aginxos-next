@@ -8798,3 +8798,54 @@ server 不换：在跑的 #387 母体包 v0.1.2 系结构四刀后新车，源�
 Mac 腿：agc 必须带 `AGC_RELAY_SECRET` env（09-12 四坑①复发，无之报 Invalid or missing relay token）→ `agc agent://redfin.relay.aginx.net/me` 真答 **ok**——Mac→relay:8443 TLS→网关→母体→brain 全链复活。
 
 **设备终态**：六单元 ready——aginx 421、aginx-gateway 2649、aginx-secretd 2644、aginx-voice 428、aginxbrowser 2162、net-watch 435；merged manifest 在役（83 行）；relay.primary 在库；vendor_boot 未动。
+
+## 2026-09-26 — #390 晨报卡死根因定谳 + 工具双包改姓重建 + stuck 断判二分（redfin/Pixel 5）
+
+**08:00 晨报卡死真因（#389 挂账的"brain auth 抖动嫌疑"出局）**：#388 裸刷后
+`agf`/`agmem`/`aginx-web` 三 CLI 全不在 `/var/bin`（manifest 有行、从未
+opt-in）。brain 连续 3 轮真调了 knowledge_list/kv_list/file_list/
+web_search——工具全 spawn 失败；旧 stuck 判定只数**成功**工具
+（tools_this_iter），全失败形状被记成「无工具调用」→ 3 轮撞线，错误文案
+与事实相反。真因是缺包 + 判定器瞎，不是 brain。
+
+**修链四件（本仓已提交）**：
+
+1. **D13 改姓建包**：agf→`aginx-file`、agmem→`aginx-mem` v0.1.0（四件套，
+   build-pkg.sh 新分支；桥 spawn 名同步改）。缺包报错文案自带装法
+   （`aginx-pkg opt-in aginx-file`）。
+2. **aginx-web 退役**：crates/web 整删；web 工具回迁母体进程内
+   （runtime `tools/web/`——aginxbrowser HTTP 客户端
+   http://127.0.0.1:8089 常开，GET 缓存 15min，风险站路由 aginxbrowser
+   无 fallback）。web 工具从此**零外部依赖**，brain 有网就能搜。
+3. **stuck 断判二分**：每轮 DISPATCH 记账（tools_attempted_iter——
+   成功/报错/超时都算）；`Idle`（3 轮无任何调用）与 `AllToolsFailed`
+   （6 轮调了但全败）分道，文案各自如实——下次卡死报告直接指向缺包/
+   权限/超时而非谎称没调工具。
+4. **母体 v0.1.3**（web 进程内 + 断判修 + 双桥改姓），manifest 重签。
+
+**上机（ssh 腿，USB 盲无关）**：三包 dev 免签通道装齐（md5 host↔设备对
+账）；镜像 `/usr/bin/aginx-mem|aginx-file` 老桥壳还在 exec 老名
+（agmem/agf）→ 设备侧 sed 改指 `/var/bin/aginx-mem|aginx-file`（repo 侧
+shims 已重写，下张镜像自新）；重启换血后 `aginx-server` 在跑件 md5
+`d165b06d` = v0.1.3 tar 成员逐字节。
+
+**E2E 三线全通**：`ag agent send me` 一次对话过 kv_set/kv_get（aginx-mem
+桥）、file_read（aginx-file 桥）、web_search（进程内→aginxbrowser 真结果）。
+
+**晨报复验（真 cron 管线）**：从 carrier.db WAL 挖出原件完整 action
+（`agent_turn "给我今天的晨报"` + card 投递），铸 one-shot `at` 复验件
+（74e88001，同 action 同 delivery）——08:08:43Z 触发、agent_turn 完成、
+`20260926-081106923-晨报复验.json` 全量真晨报落卡片带（中美元首会晤/
+亚运 98 金/甲骨文财报，全 web_search in-mother 真数据）。尾注顺带实证
+断判修：agent 试 file_convert 导 docx（设备缺 pandoc）失败但计为尝试，
+自己绕过交文字版并如实上报——**此形状在旧二进制下就是 3 轮卡死的死法**。
+
+**挂账**：① `file_convert` docx 面需 pandoc（设备未装，agent 可自愈绕过，
+非阻塞，pandoc 包线另排）；② 两工具包 v0.1.0 + 母体 v0.1.3 tar 未传
+pkgs.aginx.net（86quan）——manifest 钉的 URL 他机 opt-in 会 404，晨报原件
+next_fire 2026-09-27T00:00Z 待明晨真收据。
+
+**设备终态**：六单元 ready 不变（aginx/aginx-gateway/aginx-secretd/
+aginx-voice/aginxbrowser/net-watch）；stamps 全家含 aginx-file/aginx-mem；
+晨报原件在库 enabled（last_result 留旧错误作事故记录）；复验 one-shot
+已自动清理、复验卡留在 /home/cards；vendor_boot 未动。
