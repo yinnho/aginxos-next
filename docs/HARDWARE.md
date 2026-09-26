@@ -9265,3 +9265,29 @@ tier=browser 内容 1.0.41）全穿隧道 200；baidu search 直连 9 结果。
 aginxbrowser 带 AGINXBROWSER_PROXY。bake #27 起 aginx-proxy 经 OPT_ADD
 自动进镜像族。微信→iLink→me→spawn grok 的路由层是下一步（安全
 闸门：grok 是持壳 agent，须 --allow 限定后才放微信进）。
+
+## 2026-09-27 — #398 引擎辅助调用零思考：reasoning_effort=none 上码（host→包待出）
+
+**背景**：brain v0.4.2（brain.aginx.net 在役）chat face 支持
+reasoning_effort 参数——none/minimal → 关思考。母体此前辅助调用
+（turn 摘要/压缩合并/意图分类/flow 分类/演化知识提取/匿名化）不带
+该参数，router 端 reasoning-tag 默认给它们烧 20-36s 思考——纯浪费。
+
+**改动**（commit 4835f49，已推 origin/master）：
+- `CompletionRequest` 新字段 `reasoning_effort: Option<String>`，
+  `OaiRequest` 透传（skip_serializing_if）。
+- 辅助位带 `Some("none")`：helpers.rs turn 摘要、compactor.rs 摘要+
+  合并、intent_classifier.rs、kernel prompt_sources.rs flow 分类、
+  kernel.rs 演化提取+匿名化、daemon.rs clone watcher。
+- 实质生成保持 `None`：主回合（mod.rs）、vision describe
+  （handle.rs / media.rs 六处）、flow chat 步（steps.rs）。
+
+**brain v0.4.2 镜像**：双 arch 裸二进制已钉 pkgs.aginx.net/
+aginxbrain/v0.4.2/（aarch64 4fefd780… / x86_64 90bc28e4…，公共
+200/206 验过）。brain 侧已对齐下一版 per-key 默认思考档，优先序=
+请求参数 > per-key 默认 > 全局默认，不强压。
+
+**挂账**：母体包 v0.1.8 出包链（build-pkg → 镜像 → manifest 重钉 →
+opt-in → 重启 → 设备实测辅助调用零思考）待用户点头；设备现役仍
+v0.1.7。BRAIN-CODEX.md §四 五问应答已答（agent://redfin.relay.
+aginx.net/me）。
