@@ -1,0 +1,21 @@
+# aginx-proxy — 共享代理隧道守护（stunnel 客户端树包，2026-09-26）。
+# 本机 socks5 出口 127.0.0.1:8800（grok / aginxbrowser 共用基础设施，
+# D12 外部件一律走它出墙）。隧道远端 + PSK 凭据是设备侧配置，不进包
+# 不进库：conf 真源 /etc/stunnel/aginx-proxy.conf（含 foreground=yes，
+# simple 单元要前台），PSK 真源 /etc/stunnel/psk.txt（0600，永不回显）。
+# 缺 conf 启动即退（stunnel 无参找不到 conf 报错退出），svcd 断路器
+# 躺平是预期行为——先写 conf 再 opt-in 本包（运维序同 aginx-gateway
+# 教训必修④）。树包形态同 git 包：Alpine v3.22 apk 闭包（musl loader +
+# libssl3 + libcrypto3 + stunnel，sha256 逐件钉死 TOFU）+ wrapper 面
+# bin/aginx-proxy（首跑自链 /lib loader + LD_LIBRARY_PATH 指树内库）。
+name = "aginx-proxy"
+version = "0.1.0"
+summary = "共享代理隧道：stunnel 客户端守护，本机 127.0.0.1:8800 socks5（conf/PSK 在 /etc/stunnel/ 设备侧，先写后装）"
+group = "net"
+url = "https://pkgs.aginx.net/aginx-proxy/v0.1.0/aginx-proxy-v0.1.0-4pc.tar"
+exec = "bin/aginx-proxy"
+
+[service]
+cmd = "/var/bin/aginx-proxy"
+args = []
+type = "simple"

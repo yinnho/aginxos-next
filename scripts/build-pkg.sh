@@ -279,8 +279,59 @@ case "${PKG}" in
     done
     MEMBERS="pkg.toml SKILL.md files"
     ;;
+  aginx-proxy)
+    # 共享代理隧道树包（2026-09-26）：Alpine v3.22 community stunnel
+    # 闭包 4 apk（musl+libssl3+libcrypto3 与 git 包同钉同缓存），
+    # sha256 逐件钉死（TOFU 于下载日）。conf/PSK 不进包——设备侧
+    # /etc/stunnel/ 是真源（缺 conf 启动即退=预期，先写后装）。
+    APK_DIR="${ROOT}/out/apk-cache"
+    ALPINE_MAIN="https://dl-cdn.alpinelinux.org/alpine/v3.22/main/aarch64"
+    ALPINE_COMMUNITY="https://dl-cdn.alpinelinux.org/alpine/v3.22/community/aarch64"
+    PROXY_APKS="
+      musl-1.2.5-r12:ac281d1e7f9e9c447c51e309317b975f48be6edaf3ab91ae73b959cf86703782
+      libssl3-3.5.8-r0:2b175c982f9ff9a80fc88fa587f6db0ae1c58eef4b3f7fe69e8f066be9ff1090
+      libcrypto3-3.5.8-r0:094c5816644ade889f74387e8d91aad89dc9a05eda150494e3f91b80ffc15460
+      stunnel-5.75-r0:deae6ff3fe03e6a696bbefd9a7ba01062067625cc147c9fedb3f8354ab4c422e
+    "
+    mkdir -p "${APK_DIR}" "${STAGE}/files"
+    for pair in ${PROXY_APKS}; do
+      apk="${pair%%:*}"; want="${pair##*:}"
+      f="${APK_DIR}/${apk}.apk"
+      repo="main"; [ "${apk}" = "stunnel-5.75-r0" ] && repo="community"
+      base="${ALPINE_MAIN}"; [ "${repo}" = "community" ] && base="${ALPINE_COMMUNITY}"
+      if [ ! -s "${f}" ] || [ "$(shasum -a 256 "${f}" | cut -d' ' -f1)" != "${want}" ]; then
+        echo "  fetch ${apk}"
+        curl -fsSL -o "${f}" "${base}/${apk}.apk" \
+          || { echo "FATAL: fetch ${apk} 失败" >&2; exit 1; }
+      fi
+      got="$(shasum -a 256 "${f}" | cut -d' ' -f1)"
+      [ "${got}" = "${want}" ] \
+        || { echo "FATAL: ${apk} sha256 不符（钉 ${want} 得 ${got}）" >&2; exit 1; }
+      tar -xzf "${f}" -C "${STAGE}/files"
+    done
+    # apk 家务件 + 赘重裁掉（同 git 分支：TLS 默认 provider 内建于
+    # libcrypto，ossl-modules/engines 无人读；stunnel 自带的 etc/conf
+    # 样例删——真源在设备侧 /etc/stunnel/）。
+    rm -f "${STAGE}/files"/.PKGINFO "${STAGE}/files"/.SIGN.* \
+          "${STAGE}/files"/.pre-* "${STAGE}/files"/.post-* "${STAGE}/files"/.trigger*
+    rm -rf "${STAGE}/files"/usr/share/man "${STAGE}/files"/usr/share/doc \
+           "${STAGE}/files"/usr/share/locale "${STAGE}/files"/etc \
+           "${STAGE}/files"/usr/lib/engines-3 "${STAGE}/files"/usr/lib/ossl-modules
+    # wrapper 面（git 包同工艺：/lib loader 首跑自链 + LD_LIBRARY_PATH）。
+    mkdir -p "${STAGE}/files/bin"
+    install -m 755 "${RECIPE}/bin/aginx-proxy" "${STAGE}/files/bin/aginx-proxy"
+    find "${STAGE}/files" -type d -exec chmod 755 {} +
+    # 闭包钉死门：本体 + loader + 全部 DT_NEEDED soname
+    test -x "${STAGE}/files/usr/bin/stunnel" || { echo "FATAL: 树里无 usr/bin/stunnel" >&2; exit 1; }
+    test -f "${STAGE}/files/lib/ld-musl-aarch64.so.1" || { echo "FATAL: 树里无 musl loader" >&2; exit 1; }
+    for so in libc.musl-aarch64.so.1 libcrypto.so.3 libssl.so.3; do
+      find "${STAGE}/files/lib" "${STAGE}/files/usr/lib" -maxdepth 1 -name "${so}" | grep -q . \
+        || { echo "FATAL: 闭包缺 soname ${so}" >&2; exit 1; }
+    done
+    MEMBERS="pkg.toml SKILL.md files"
+    ;;
   *)
-    echo "FATAL: 未知包名 ${PKG}（四裸包/两树包/三树包/刀F三包 zigbuild / 上游树包 git）" >&2
+    echo "FATAL: 未知包名 ${PKG}（四裸包/两树包/三树包/刀F三包 zigbuild / 上游树包 git / aginx-proxy）" >&2
     exit 1
     ;;
 esac
