@@ -1,14 +1,14 @@
-//! aginx-web — AginxBrowser 客户端 CLI 的库面（原 agb，M31 D3 批1；D13 改姓 2026-09-09）。
+//! web 工具实现 — aginxbrowser 本地 HTTP API 客户端（M31 D3 批1 外置成
+//! aginx-web CLI；2026-09-26 CLI 退役，实现回迁母体进程内，行为同构）。
 //!
-//! browser_* / web_search / web_fetch 三组无状态 HTTP 工具的实现从
-//! carrier-runtime 整体搬来（行为逐字节同构：同样的 HTTP 体、同样的
-//! 输出格式、同样的安全管线 SSRF/taint/风控路由）。runtime 侧只留
-//! `web_bridge`：同名 ToolDefinition + spawn `aginx-web tool <name>`。
+//! browser_* / web_search / web_fetch 三组无状态 HTTP 工具直连
+//! aginxbrowser 的 HTTP API（默认 `http://127.0.0.1:8089` —— L0 镜像烤入
+//! 的两个 svc 单元之一，设备上恒在；`AGINXBROWSER_URL` 可覆盖，host 调试
+//! 指远端实例）。不再 spawn 外置 CLI：少包即工具全死的形态（09-26 晨报
+//! 卡死根因）随之消灭。web_bridge.rs 只留 definitions + 派发到这里。
 //!
-//! 两张脸：
-//! - 人/流程脚本：`aginx-web navigate <url>`、`aginx-web search <q>`、`aginx-web fetch <url>` …
-//! - 机读（runtime 桥用）：`aginx-web tool <name>`，stdin 收工具入参 JSON，
-//!   stdout 出 D1 信封（`{"ok":true,"data":"…"}` / `{"ok":false,"error":…}`）。
+//! 安全管线同旧：taint 闸（URL 带密钥即拦）、SSRF 逐跳校验、风控站
+//! （微信/知乎/JD/GitHub）不降级 reqwest。
 
 pub mod browser;
 pub mod fetch;
@@ -16,34 +16,27 @@ pub mod search;
 pub mod web_cache;
 pub mod web_content;
 
-use carrier_types::error::{CarrierError, CarrierResult};
+use carrier_types::error::CarrierResult;
 use serde_json::Value;
 
-pub const USER_AGENT: &str = concat!("aginx-web/", env!("CARGO_PKG_VERSION"));
+pub const USER_AGENT: &str = concat!("aginx/", env!("CARGO_PKG_VERSION"));
 
-/// Default AginBrowser endpoint. Override via `AGINXBROWSER_URL` env var.
+/// Default aginxbrowser endpoint (the baked L0 unit). Override via
+/// `AGINXBROWSER_URL` env var.
 pub const AGINXBROWSER_DEFAULT_URL: &str = "http://127.0.0.1:8089";
 
-/// Default timeout for AginBrowser HTTP requests (seconds).
+/// Default timeout for aginxbrowser HTTP requests (seconds).
 pub const AGINXBROWSER_TIMEOUT_SECS: u64 = 60;
 
-/// Read the AginBrowser URL from `AGINXBROWSER_URL` env var.
-/// Returns `None` if not set or empty (e.g. web_search disables itself).
-pub fn aginxbrowser_url_opt() -> Option<String> {
-    // carrier_types::env::get_env so ~/.aginx/carrier/.env values take effect
-    // (load_dotenv populates ENV_OVERRIDES, not std::env). Falls back to
-    // std::env::var for systemd Environment= configs. CLI main 启动时先
-    // load_dotenv()，桥接的子进程同样能读到。
-    carrier_types::env::get_env("AGINXBROWSER_URL").filter(|s| !s.is_empty())
-}
-
-/// Read the AginBrowser URL from `AGINXBROWSER_URL` env var.
-/// Returns the default URL if not set (e.g. browser_* tools are always enabled).
+/// Read the aginxbrowser URL from `AGINXBROWSER_URL` env var, falling back
+/// to the default (the baked unit on the device).
 pub fn aginxbrowser_url() -> String {
-    aginxbrowser_url_opt().unwrap_or_else(|| AGINXBROWSER_DEFAULT_URL.to_string())
+    carrier_types::env::get_env("AGINXBROWSER_URL")
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| AGINXBROWSER_DEFAULT_URL.to_string())
 }
 
-/// 本 CLI 承载的全部工具名（与 runtime 桥的 definitions 一一对应）。
+/// 本模块承载的全部工具名（与 web_bridge 的 definitions 一一对应）。
 pub const TOOL_NAMES: &[&str] = &[
     "browser_navigate",
     "browser_read_page",
@@ -59,7 +52,7 @@ pub const TOOL_NAMES: &[&str] = &[
     "web_fetch",
 ];
 
-/// 工具派发 — `aginx-web tool <name>` 的库面。`None` = 不是本 CLI 的工具。
+/// 工具派发 — web_bridge 的执行面。`None` = 不是本模块的工具。
 pub async fn execute_tool(name: &str, input: &Value) -> Option<CarrierResult<String>> {
     match name {
         "browser_navigate" | "browser_read_page" => Some(browser::navigate(input).await),
@@ -79,12 +72,10 @@ pub async fn execute_tool(name: &str, input: &Value) -> Option<CarrierResult<Str
     }
 }
 
-/// URL 里的疑似密钥（工具入参携带 secret）→ 明确报错。搬自 runtime
-/// tools/web_fetch.rs 的 check_taint_net_fetch（行为同构）。
+/// URL 里的疑似密钥（工具入参携带 secret）→ 明确报错。
 pub fn check_taint_net_fetch(url: &str) -> Option<String> {
     use carrier_types::taint::{TaintLabel, TaintSink, TaintedValue};
     use std::collections::HashSet;
-
     let exfil_patterns = [
         "api_key=",
         "apikey=",
@@ -110,12 +101,6 @@ pub fn check_taint_net_fetch(url: &str) -> Option<String> {
         }
     }
     None
-}
-
-/// 人读/机读两脸共用的错误出口：Err → stderr 一行 + rc 1。
-pub fn bail_human(e: &CarrierError) -> ! {
-    eprintln!("aginx-web: {e}");
-    std::process::exit(1);
 }
 
 #[cfg(test)]

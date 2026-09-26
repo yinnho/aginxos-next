@@ -646,9 +646,8 @@ fi
 # non-executable init script or shim is invisible at boot. Sidecars (.aginxmd)
 # stay 644 — they are data read next to the binary.
 chmod 755 "${TREE}"/etc/init.d/*
-chmod 755 "${TREE}"/usr/bin/aginx-web "${TREE}"/usr/bin/aginx-file \
-  "${TREE}"/usr/bin/aginx-mem "${TREE}"/usr/bin/aginx-sys-status \
-  "${TREE}"/usr/bin/aginx-backup
+chmod 755 "${TREE}"/usr/bin/aginx-file "${TREE}"/usr/bin/aginx-mem \
+  "${TREE}"/usr/bin/aginx-sys-status "${TREE}"/usr/bin/aginx-backup
 chmod 755 "${TREE}"/usr/libexec/aginx/net-watch "${TREE}"/usr/libexec/aginx/net-rejoin
 # NB: wifi.conf.example rides along in ${RECIPE}/etc — the real
 # /etc/wifi.conf (with the passphrase) rides the aginx-update state tar
@@ -687,7 +686,7 @@ ln -sf certs/ca-certificates.crt "${TREE}/etc/ssl/cert.pem"
 # Registry gate (N4): lint the assembled command set with a host-built
 # router before the image is packed. AGINX_CMD_PATH mirrors the device
 # (/var/bin first) plus /bin+/sbin so future aginx:exec targets into the
-# internals resolve. Bridge shims (aginx-web/file/mem) declare no
+# internals resolve. Bridge shims (aginx-file/mem) declare no
 # aginx:exec — their targets exist only after provision syncs the
 # packages (legal absence, warning-only). Fails the build on collisions,
 # missing summaries, bad metadata, or missing exec targets.
