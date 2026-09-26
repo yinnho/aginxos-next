@@ -49,6 +49,16 @@ impl ServerCfg {
 }
 
 fn main() {
+    // 引擎（kernel/runtime）全走 tracing——server 不挂 subscriber 的话
+    // LLM 重试/turn 事件全进黑洞（设备日志对 turn 静默的根因）。
+    // 与 carrier::start 同形：RUST_LOG 缺席时 info。
+    tracing_subscriber::fmt()
+        .with_env_filter(
+            tracing_subscriber::EnvFilter::try_from_default_env()
+                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info")),
+        )
+        .init();
+
     let cfg = Arc::new(ServerCfg::from_env());
     // kernel 内部多处读全局 home_dir()（AGINX_HOME env）——boot 前把
     // resolved home 写回 env，保证进程内全局一致（edition 2021 安全）。
