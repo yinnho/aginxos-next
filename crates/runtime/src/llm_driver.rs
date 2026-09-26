@@ -90,6 +90,12 @@ pub struct CompletionRequest {
     pub system: Option<String>,
     /// Extended thinking configuration (if supported by the model).
     pub thinking: Option<carrier_types::config::ThinkingConfig>,
+    /// Explicit reasoning-effort intent for the chat face. Auxiliary calls
+    /// (summary/compaction/classification) set `"none"` — brain.aginx.net
+    /// v0.4.2 honors it and skips thinking entirely; without it the router's
+    /// reasoning-tag default burns 20-36s on calls that need no thought.
+    /// Main turns leave `None` (thinking stays on for quality).
+    pub reasoning_effort: Option<String>,
     /// Modality-specific extra parameters (voice, size, resolution, etc.).
     /// Ignored by standard LLM drivers; used by media drivers.
     pub extra: serde_json::Value,
@@ -463,6 +469,7 @@ mod tests {
             temperature: 0.0,
             system: None,
             thinking: None,
+            reasoning_effort: None,
             extra: Default::default(),
         };
 

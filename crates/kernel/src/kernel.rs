@@ -300,6 +300,7 @@ impl CarrierKernel {
                 temperature: 0.3,
                 system: Some(prompt),
                 thinking: None,
+                reasoning_effort: Some("none".to_string()),
                 extra: Default::default(),
             };
 
@@ -345,6 +346,7 @@ impl CarrierKernel {
                                         temperature: 0.1,
                                         system: Some(sys),
                                         thinking: None,
+                                        reasoning_effort: Some("none".to_string()),
                                         extra: Default::default(),
                                     };
                                     match tokio::time::timeout(

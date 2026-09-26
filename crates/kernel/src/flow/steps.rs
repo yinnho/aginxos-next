@@ -125,6 +125,7 @@ impl CarrierKernel {
             temperature: 0.7,
             system: Some(system),
             thinking: None,
+            reasoning_effort: None,
             extra: Default::default(),
         };
         let resp = brain_ref

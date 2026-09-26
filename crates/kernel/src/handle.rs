@@ -148,6 +148,7 @@ impl KernelHandle for CarrierKernel {
             temperature: 0.3,
             system: None,
             thinking: None,
+            reasoning_effort: None,
             extra: Default::default(),
         };
 

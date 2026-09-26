@@ -741,6 +741,7 @@ pub async fn classify_flow_with_llm(
         temperature: 0.0,
         system: Some(system.to_string()),
         thinking: None,
+        reasoning_effort: Some("none".to_string()),
         extra: Default::default(),
     };
 
