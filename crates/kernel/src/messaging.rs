@@ -149,6 +149,11 @@ pub const BORROWED_MATERIAL_MAX_TOTAL: usize = 32 * 1024 * 1024;
 pub const BORROWED_OUTPUT_MAX_FILE: usize = 16 * 1024 * 1024;
 /// 单轮回传产物总量预算——超预算的文件跳过并计数。
 pub const BORROWED_OUTPUT_MAX_TOTAL: usize = 64 * 1024 * 1024;
+/// 借道目录的「死轮」判定龄：开轮清扫只动 mtime 早于此刻的条目。
+/// 清扫的初衷是补「进程中途死掉的轮」（轮末已自删，见 2287），而
+/// `borrow/<uuid>/` 是同 workspace 并发轮各自的家——无龄清扫会连根
+/// 删掉邻轮的活目录（A 建根、B 删根、A 的 create_dir_all 回 ENOENT）。
+pub const BORROW_SWEEP_MIN_AGE_SECS: u64 = 3600;
 
 impl CarrierKernel {
     /// Inject flow-declared tools into the turn's tool list.
@@ -2103,7 +2108,8 @@ impl CarrierKernel {
 
         // 3.2 素材内存级生命周期：借用者素材落 <ws>/borrow/<uuid>/materials/，
         // 仅本轮可读（走 agent 自己的 file 工具沙箱），轮末整目录销毁。
-        // 开轮先清扫残留——借道轮不跨进程存活，borrow/ 下的一切都是死轮遗留。
+        // 开轮按龄清扫残留——借道轮不跨进程存活，够老的条目必是死轮遗留；
+        // 同 workspace 的并发轮是活的（见清扫处注释）。
         // 3.3：同目录 output/ 是产物区，agent 写这里的文件轮末随响应回流。
         // 无素材轮也建目录（output/ 提示段始终注入，产物区恒可用）。
         #[allow(unused_assignments)]
@@ -2142,10 +2148,25 @@ impl CarrierKernel {
             }
 
             let borrow_root = ws.join("borrow");
-            if let Err(e) = std::fs::remove_dir_all(&borrow_root) {
-                // NotFound 是正常首态；其他错误不阻断（best-effort 清扫）。
-                if e.kind() != std::io::ErrorKind::NotFound {
-                    warn!(dir = %borrow_root.display(), error = %e, "borrow sweep failed");
+            // 只扫死轮：删 mtime 早于判定龄的**条目**，绝不动根、绝不动
+            // 邻轮的活目录——同 workspace 并发轮各住 borrow/<uuid>/，旧
+            // 的无龄 remove_dir_all(&borrow_root) 会把邻轮的活目录连根
+            // 删掉（A 建根、B 删根、A 的 create_dir_all 回 ENOENT）。
+            if let Ok(entries) = std::fs::read_dir(&borrow_root) {
+                let now = std::time::SystemTime::now();
+                for ent in entries.flatten() {
+                    let stale = ent
+                        .metadata()
+                        .and_then(|m| m.modified())
+                        .ok()
+                        .and_then(|t| now.duration_since(t).ok())
+                        .map(|age| age.as_secs() >= BORROW_SWEEP_MIN_AGE_SECS)
+                        .unwrap_or(false);
+                    if stale {
+                        if let Err(e) = std::fs::remove_dir_all(ent.path()) {
+                            warn!(dir = %ent.path().display(), error = %e, "borrow sweep failed");
+                        }
+                    }
                 }
             }
             let turn_root = borrow_root.join(uuid::Uuid::new_v4().simple().to_string());
@@ -4085,9 +4106,16 @@ mod tests {
             },
         );
 
-        // 植入上一个"死轮"残留——开轮清扫必须吃掉它。
-        std::fs::create_dir_all(ws.path().join("borrow/stale-turn/materials")).unwrap();
-        std::fs::write(ws.path().join("borrow/stale-turn/materials/junk"), b"junk").unwrap();
+        // 植入上一个"死轮"残留——开轮清扫按龄判定，够老的才吃掉（新鲜的
+        // 是同 workspace 活轮的家，见清扫处注释）。
+        let stale_turn = ws.path().join("borrow/stale-turn");
+        std::fs::create_dir_all(stale_turn.join("materials")).unwrap();
+        std::fs::write(stale_turn.join("materials/junk"), b"junk").unwrap();
+        // 目录 mtime 得在子项建完后回拨（建子项会刷新父目录 mtime）
+        std::fs::File::open(&stale_turn)
+            .expect("open stale turn dir")
+            .set_modified(std::time::SystemTime::now() - std::time::Duration::from_secs(7200))
+            .expect("backdate stale turn dir");
 
         let mut entry = entry_with_workspace(ws.path());
         entry.name = "materials-test-agent".to_string();
@@ -4473,6 +4501,110 @@ mod tests {
         let ledger = std::fs::read_to_string(tmp.path().join("data/borrow_usage.jsonl")).unwrap();
         assert!(ledger.contains("\"borrower\":\"friend-a\""));
         assert!(!ledger.contains("ALPHA") && !ledger.contains("生成报告"));
+    }
+
+    /// 借道清扫只动「死轮」：同 workspace 并发轮的家（新鲜 mtime）不被
+    /// 邻轮开轮清扫连根删掉；够老的条目仍被收走。
+    ///
+    /// 回归钉：旧的无龄 `remove_dir_all(<ws>/borrow)` 删的是共享根，邻轮
+    /// 活目录随之消失、邻轮 `create_dir_all` 回 ENOENT（清扫与开轮并发
+    /// 时的真实故障，`borrowed_turn_admission_and_rate_limit` 全跑翻转
+    /// 的根因）。按龄不变量是确定的，所以这条测试不赌并发复现。
+    #[tokio::test(flavor = "multi_thread")]
+    async fn borrowed_turn_sweep_spares_live_dirs() {
+        use crate::kernel::CarrierKernel;
+        use carrier_memory::session::SessionTicket;
+        use carrier_runtime::llm_driver::{
+            CompletionRequest, CompletionResponse, LlmDriver, LlmError,
+        };
+        use carrier_types::config::{BorrowPolicyConfig, KernelConfig};
+        use carrier_types::message::{ContentBlock, StopReason, TokenUsage};
+
+        struct Echo;
+        #[async_trait::async_trait]
+        impl LlmDriver for Echo {
+            async fn complete(
+                &self,
+                _request: CompletionRequest,
+            ) -> Result<CompletionResponse, LlmError> {
+                Ok(CompletionResponse {
+                    content: vec![ContentBlock::Text {
+                        text: "ok".to_string(),
+                        provider_metadata: None,
+                    }],
+                    stop_reason: StopReason::EndTurn,
+                    tool_calls: vec![],
+                    usage: TokenUsage {
+                        input_tokens: 1,
+                        output_tokens: 1,
+                    },
+                    media: None,
+                })
+            }
+        }
+
+        let tmp = tempfile::tempdir().unwrap();
+        let brain = serde_json::json!({
+            "base_url": "http://127.0.0.1:1/v1/chat/completions",
+            "api_key_env": "",
+            "default_modality": "chat",
+            "modalities": { "chat": { "description": "test" } }
+        });
+        std::fs::write(tmp.path().join("brain.json"), brain.to_string()).unwrap();
+        let config = KernelConfig {
+            home_dir: tmp.path().to_path_buf(),
+            data_dir: tmp.path().join("data"),
+            borrow: BorrowPolicyConfig {
+                enabled: true,
+                allow_borrowers: vec![],
+                max_turns_per_hour: 10,
+            },
+            ..KernelConfig::default()
+        };
+        let kernel = CarrierKernel::boot_with_config(config).expect("kernel boot");
+        install_test_driver(&kernel, Echo);
+
+        // 真 workspace——借道目录就住它下面
+        let ws = tmp.path().join("ws");
+        std::fs::create_dir_all(&ws).unwrap();
+        let entry = entry_with_workspace(&ws);
+        let agent_id = entry.id;
+        kernel.registry.register(entry).expect("register");
+
+        // 邻轮活目录（新鲜 mtime）+ 死轮遗留（2 小时前）
+        let live_turn = ws.join("borrow/live-turn");
+        std::fs::create_dir_all(live_turn.join("materials")).unwrap();
+        let stale_turn = ws.join("borrow/stale-turn");
+        std::fs::create_dir_all(stale_turn.join("materials")).unwrap();
+        let two_hours_ago = std::time::SystemTime::now() - std::time::Duration::from_secs(7200);
+        // 目录 mtime 得在子项建完后回拨（建子项会刷新父目录 mtime）
+        std::fs::File::open(&stale_turn)
+            .expect("open stale turn dir")
+            .set_modified(two_hours_ago)
+            .expect("backdate stale turn dir");
+
+        kernel
+            .run_borrowed_turn(
+                agent_id,
+                SessionTicket::empty(None),
+                "hi",
+                None,
+                None,
+                &[],
+                None,
+                None,
+            )
+            .await
+            .expect("borrowed turn");
+
+        assert!(
+            live_turn.join("materials").exists(),
+            "邻轮活目录被开轮清扫连根删了"
+        );
+        assert!(
+            !stale_turn.exists(),
+            "够老的死轮遗留没被清扫收走"
+        );
     }
 
     /// enabled=false 总开关：一切借用轮直接拒绝。
