@@ -44,8 +44,16 @@
 # segfaults on device (their CI zig was broken at tag time; fixed in
 # b0315d7 after the tag) — same mirror treatment, device-verified rebuild
 # (M10, /health + /fetch ok). All sha256 match the on-device installs.
+#
+# 2026-09-26: aginxbrowser moved to its own repo (yinnho/aginxbrowser,
+# bare v-tags) and its official musl assets are device-usable since
+# v0.2.11 (V8-snapshot fix). Pinned v0.5.8 screenshot variant — device
+# runs the full engine (#250 viewport + P0 receipts need screenshot);
+# /open route verified in-tree (src/main.rs route table). Screenshot
+# asset filename has NO v-prefix (upstream release quirk). v0.2.5 mirror
+# dir retained on pkgs.aginx.net for rollback re-pin.
 
-aginxbrowser   https://pkgs.aginx.net/aginxbrowser/v0.2.5/aginxbrowser-v0.2.5-aarch64-unknown-linux-musl 5561e6287d6b146a94170bb71fc2c5b0ff0e9e6cfd0aa0a8ea84a21d630a99e6 opt
+aginxbrowser   https://pkgs.aginx.net/aginxbrowser/v0.5.8/aginxbrowser-0.5.8-aarch64-unknown-linux-musl-screenshot 39304c3679af397447d580e354211bdbba497b271358c0921d8db109ebc12178 opt
 # python3 (M28) — first TREE bundle: musl CPython 3.12.14 (python-build-
 # standalone 20260901 install_only_stripped) + Alpine musl 1.2.5 ld.so;
 # pkg.toml exec faces /var/bin/python3 as a symlink into
