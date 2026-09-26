@@ -206,12 +206,17 @@ impl Mother {
         // 上机线）。start 在 RT 上下文里跑——bridge 与 poll 线程落在这台
         // runtime 上；cm 换进 Mother 活到进程终（Drop 会拆通道）。
         {
-            let mut cm = crate::channels::boot_ilink(&kernel)
-                .map_err(|e| format!("ilink channels boot failed: {e}"))?;
-            let _ctx = mother.rt.enter();
-            mother.rt.block_on(cm.start());
-            eprintln!("mother: iLink channel online (weixin watcher + tools)");
-            mother.channels.replace(cm);
+            match crate::channels::boot_ilink(&kernel) {
+                Ok(mut cm) => {
+                    let _ctx = mother.rt.enter();
+                    mother.rt.block_on(cm.start());
+                    eprintln!("mother: iLink channel online (weixin watcher + tools)");
+                    mother.channels.replace(cm);
+                }
+                // 通道层是特性不是脊柱：起不来就少个微信面，母体（轮、
+                // 定时、网关、ssh）照活——同一进程里 `?` 会连晨报一起殉。
+                Err(e) => eprintln!("mother: iLink channel OFF ({e}) — mother continues"),
+            }
         }
         Ok(mother)
     }
