@@ -14,11 +14,11 @@
 # AGINX_BIN 指 /var/bin/aginx（face symlink）。刀F 起 depends 锚
 # aginx-update（装母体自动带自更新器；裸箱升级=重刷）。
 name = "aginx"
-version = "0.1.3"
+version = "0.1.4"
 summary = "母体：路由器 face /var/bin/aginx + 心脏 server（进程内直调 kernel）"
 group = "agent"
 depends = "aginx-update"
-url = "https://pkgs.aginx.net/aginx/v0.1.3/aginx-v0.1.3-4pc.tar"
+url = "https://pkgs.aginx.net/aginx/v0.1.4/aginx-v0.1.4-4pc.tar"
 exec = "bin/aginx"
 
 [service]
