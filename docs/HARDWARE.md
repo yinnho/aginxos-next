@@ -8974,12 +8974,13 @@ f7a7925 kernel + 3749510 server）。
 - **微信往返**：用户微信发「你好」→ me 轮 → 回复「你好，主人 👋 我在。
   有什么要记的、要办的、要派活的，直接说就行。」落
   sessions/866e95eb….jsonl（user+assistant 两帧，conversation_count=1）。
-  回信到微信的**真人眼验待用户补记**。
+  回信到微信的**真人眼验已收**（2026-09-26 用户确认微信里收到回复——
+  往返双 leg 皆真人见证，本线整线关账）。
 
 **主机插曲**：磁盘 100%（228G 满）→ 全工具瘫痪（Edit/Bash 全 ENOSPC，
 仅 Read/MCP 活），用户清 ~4G 恢复；期间借道 bug 诊断照走（Read 看码）。
 
 **挂账**：①qr.html 等模板不进任何包/镜像——fresh flash 即丢，scp 是
-唯一通道（bake 线债，与 reply/weather 同账）；②回信微信真人眼验；
-③enchilada manifest 升钉（离网）；④明晨 08:00 晨报自然 fire=晨报线
-终收据；⑤生态仓 a879a9c 推送裁决归账四摊。
+唯一通道（bake 线债，与 reply/weather 同账）；②enchilada manifest
+升钉（离网）；③明晨 08:00 晨报自然 fire=晨报线终收据；④生态仓
+a879a9c 推送裁决归账四摊。
