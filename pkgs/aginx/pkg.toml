@@ -1,5 +1,9 @@
 # aginx — 母体包（D11 母体=aginx）。刀2 起 server 进程内直调 kernel，
 # 不再 spawn aginx-runtime（该二进制已随结构刀①物理删除）。
+# v0.1.8（2026-09-27）：辅助 LLM 调用零思考——turn 摘要/压缩合并/意图
+# 分类/flow 分类/演化提取/匿名化显式带 reasoning_effort=none（brain
+# v0.4.2 起认领），免 router 端 reasoning-tag 默认烧掉的 20-36s；主回合
+# 与 vision/flow-step 实质生成不动。收据 #398。
 # v0.1.7（2026-09-26）：turn 固定延迟双刀修出包——turn 摘要 5s 硬预算
 # +短轮机械快路径（≤120 字零工具不过 LLM）；超阈会话压缩后台化（单飞
 # RAII+CAS 前缀护栏，不再门控回信）；server 挂 tracing_subscriber（设备
@@ -23,11 +27,11 @@
 # AGINX_BIN 指 /var/bin/aginx（face symlink）。刀F 起 depends 锚
 # aginx-update（装母体自动带自更新器；裸箱升级=重刷）。
 name = "aginx"
-version = "0.1.7"
+version = "0.1.8"
 summary = "母体：路由器 face /var/bin/aginx + 心脏 server（进程内直调 kernel）+ carrier CLI 面"
 group = "agent"
 depends = "aginx-update"
-url = "https://pkgs.aginx.net/aginx/v0.1.7/aginx-v0.1.7-4pc.tar"
+url = "https://pkgs.aginx.net/aginx/v0.1.8/aginx-v0.1.8-4pc.tar"
 exec = "bin/aginx"
 
 [service]
