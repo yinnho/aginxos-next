@@ -91,6 +91,7 @@ pub(in crate::agent_loop) async fn handle_tool_use(
     consecutive_max_tokens: &mut u32,
     any_tools_executed: &mut bool,
     tools_this_iter: &mut u32,
+    tools_attempted_iter: &mut u32,
     recent_tool_calls: &mut Vec<(String, u64)>,
     loaded_flows: &mut std::collections::HashSet<String>,
     loaded_flow_shell_allow: &mut Vec<String>,
@@ -111,6 +112,9 @@ pub(in crate::agent_loop) async fn handle_tool_use(
     // Note: tools_this_iter is bumped per SUCCESSFUL tool execution below (after
     // the execute_tool call), not here on entry. A ToolUse iteration where every
     // tool call errored counts as no-progress for the idle detector (Problem 3).
+    // tools_attempted_iter, in contrast, bumps per DISPATCH (success, error or
+    // timeout alike) — the detector uses it to tell "called nothing" apart
+    // from "called, all died" (they get different thresholds/messages).
 
     let assistant_blocks = response.content.clone();
 
@@ -475,6 +479,11 @@ pub(in crate::agent_loop) async fn handle_tool_use(
         if let Some(obs) = kernel.and_then(|k| k.turn_observer()) {
             obs.on_tool_result(&manifest.name, &tool_call.id, !result.is_error, &result.content);
         }
+
+        // Count every DISPATCH (success, error, or timeout) as an attempt for
+        // the no-progress detector's kind discrimination: the model DID call
+        // tools this iteration, whatever the environment did to them.
+        *tools_attempted_iter = tools_attempted_iter.saturating_add(1);
 
         // Count only SUCCESSFUL tool executions as progress for the no-progress
         // detector (Problem 3): an iteration where every tool call errored

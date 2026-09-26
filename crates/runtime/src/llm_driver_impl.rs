@@ -1537,6 +1537,74 @@ impl LlmDriver for UnifiedHttpDriver {
 mod tests {
     use super::*;
 
+    /// Regression: the 09-26 morning-report turn died as "loop stuck" because
+    /// the streamed response carried reasoning + tool_calls but nothing else.
+    /// Feed the real brain's exact SSE frames (captured from the device's own
+    /// request) through the driver and assert the tool calls survive assembly.
+    /// If this passes, the driver is not the drop point and the bug is upstream
+    /// of it (or in the caller).
+    #[tokio::test]
+    async fn test_stream_keeps_tool_calls_when_content_is_absent() {
+        use crate::llm_driver::{LlmDriver, CompletionRequest};
+        use carrier_types::message::StopReason;
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        use tokio::net::TcpListener;
+
+        let body = concat!(
+            "data: {\"choices\":[{\"delta\":{\"reasoning_content\":\"The\",\"role\":\"assistant\"},\"finish_reason\":null,\"index\":0}],\"id\":\"x\",\"model\":\"chat\",\"object\":\"chat.completion.chunk\"}\n\n",
+            "data: {\"choices\":[{\"delta\":{\"role\":\"assistant\",\"tool_calls\":[{\"function\":{\"arguments\":\"\",\"name\":\"cron_list\"},\"id\":\"call_1\",\"index\":0,\"type\":\"function\"}]},\"finish_reason\":null,\"index\":0}],\"id\":\"x\",\"model\":\"chat\",\"object\":\"chat.completion.chunk\"}\n\n",
+            "data: {\"choices\":[{\"delta\":{\"role\":\"assistant\",\"tool_calls\":[{\"function\":{\"arguments\":\"{}\",\"index\":0}]},\"finish_reason\":null,\"index\":0}],\"id\":\"x\"}\n\n",
+            "data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"tool_calls\",\"index\":0}],\"id\":\"x\",\"usage\":{\"completion_tokens\":5,\"prompt_tokens\":0,\"total_tokens\":5}}\n\n",
+            "data: [DONE]\n\n",
+        );
+
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            let (mut sock, _) = listener.accept().await.unwrap();
+            let mut buf = vec![0u8; 8192];
+            let _ = sock.read(&mut buf).await;
+            let resp = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                body.len(),
+                body
+            );
+            let _ = sock.write_all(resp.as_bytes()).await;
+            let _ = sock.flush().await;
+            tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+        });
+
+        let driver =
+            UnifiedHttpDriver::new("test-key".to_string(), format!("http://{addr}/v1/chat/completions"));
+        let (tx, mut rx) = tokio::sync::mpsc::channel(64);
+        tokio::spawn(async move { while rx.recv().await.is_some() {} });
+
+        let request = CompletionRequest {
+            model: "chat".to_string(),
+            messages: vec![],
+            tools: vec![],
+            max_tokens: 100,
+            temperature: 0.3,
+            system: None,
+            thinking: None,
+            extra: Default::default(),
+        };
+
+        let response = driver.stream(request, tx).await.expect("stream failed");
+        assert_eq!(
+            response.tool_calls.len(),
+            1,
+            "tool_calls were dropped during stream assembly: {:?}",
+            response.tool_calls
+        );
+        assert_eq!(response.tool_calls[0].name, "cron_list");
+        assert!(
+            matches!(response.stop_reason, StopReason::ToolUse),
+            "stop_reason should be ToolUse, got {:?}",
+            response.stop_reason
+        );
+    }
+
     #[test]
     fn test_extract_think_tags() {
         let (cleaned, thinking) = extract_think_tags("hello world");

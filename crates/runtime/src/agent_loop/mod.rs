@@ -70,6 +70,12 @@ pub use knowledge::merge_key_facts;
 /// Aligns with `CUMULATIVE_REMIND_AT` - 3 idle turns is clearly spinning.
 const NO_PROGRESS_THRESHOLD: u32 = 3;
 
+/// Looser threshold for streaks where the model DID dispatch tool calls but
+/// every one failed (missing package, permission wall, timeouts) — the model
+/// is trying, so it gets twice the runway before the turn is aborted. See
+/// `state::StuckKind::AllToolsFailed`.
+const ALL_TOOLS_FAILED_THRESHOLD: u32 = 6;
+
 const MAX_TEXT_RECOVERY_RETRIES: u32 = 2;
 
 /// Agent lifecycle phase within the execution loop.
@@ -494,8 +500,9 @@ async fn loop_iteration(ctx: &mut LoopContext<'_>) -> CarrierResult<LoopAction> 
     let iteration = ctx.state.iteration;
     debug!(iteration, "Streaming agent loop iteration");
 
-    // Reset per-iteration tool counter for the no-progress detector.
+    // Reset per-iteration tool counters for the no-progress detector.
     ctx.state.tools_this_iter = 0;
+    ctx.state.tools_attempted_iter = 0;
 
     // ---- PREPARE_TURN ----
     prepare_turn(ctx);
@@ -536,19 +543,36 @@ async fn loop_iteration(ctx: &mut LoopContext<'_>) -> CarrierResult<LoopAction> 
     // without converging -> abort as stuck. A successful tool call, completion,
     // or active generation (MaxTokens) resets the streak. Note: a ToolUse
     // iteration where every tool errored is idle (tools_this_iter stays 0) -
-    // stop_reason==ToolUse alone no longer counts as progress.
+    // stop_reason==ToolUse alone no longer counts as progress. But the streak
+    // remembers whether tools were ATTEMPTED (tools_attempted_iter): an
+    // all-failed streak trips at ALL_TOOLS_FAILED_THRESHOLD with an honest
+    // "tools were called but all failed" message, a pure-idle streak trips at
+    // NO_PROGRESS_THRESHOLD (09-26 晨报 incident: 3 all-failed iterations were
+    // reported as "无工具调用" — factually wrong, the model was calling tools).
     let made_progress = !matches!(action, LoopAction::Continue)
         || ctx.state.tools_this_iter > 0
         || matches!(stop_reason, StopReason::MaxTokens);
-    if let Some(streak) = ctx.state.record_iteration_progress(made_progress) {
+    let attempted_tools = ctx.state.tools_attempted_iter > 0;
+    if let Some((streak, kind)) = ctx
+        .state
+        .record_iteration_progress(made_progress, attempted_tools)
+    {
+        let msg = match kind {
+            state::StuckKind::Idle => format!(
+                "agent 连续 {streak} 轮无进展（未调用任何工具、无最终答案），判定卡死，终止本轮"
+            ),
+            state::StuckKind::AllToolsFailed => format!(
+                "agent 连续 {streak} 轮无进展：每轮都调用了工具但全部执行失败\
+                 （缺包/权限/超时？查 error_tracker 与工具报错），判定卡死，终止本轮"
+            ),
+        };
         warn!(
             iteration = ctx.state.iteration,
             idle_streak = streak,
+            kind = ?kind,
             "No progress for {streak} consecutive iterations - aborting turn as stuck"
         );
-        return Err(CarrierError::LoopStuck(format!(
-            "agent 连续 {streak} 轮无进展（无工具调用、无最终答案），判定卡死，终止本轮"
-        )));
+        return Err(CarrierError::LoopStuck(msg));
     }
 
     if ctx.state.declared_max_exceeded() {
@@ -943,6 +967,7 @@ async fn dispatch(
                 &mut ctx.state.consecutive_max_tokens,
                 &mut ctx.state.any_tools_executed,
                 &mut ctx.state.tools_this_iter,
+                &mut ctx.state.tools_attempted_iter,
                 &mut ctx.state.recent_tool_calls,
                 &mut ctx.loaded_flows,
                 &mut ctx.loaded_flow_shell_allow,
