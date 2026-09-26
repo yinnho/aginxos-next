@@ -33,10 +33,12 @@
 # N4 切净 (2026-09-05): the first-gen `aginx` (relay/gateway daemon) and
 # `aginx-carrier` entries are DELETED — the N4 image carries no carrier
 # daemon and no relay; the remote channel rebuilds as aginx-gateway in N5.
-# The web tool package is re-cut as aginx-web (D13 rename 2026-09-09,
-# was first-gen `agb`); the brain still reaches agf/agmem through their
-# /usr/bin bridge shells (aginx-file -> agf, aginx-mem -> agmem) —
-# re-cutting those two under aginx- names is future packaging work.
+#
+# 2026-09-26: web tools moved INTO the mother (runtime tools/web/, in-process
+# aginxbrowser client) — the aginx-web CLI package is retired, its line
+# deleted. agf/agmem re-cut under their D13 names as aginx-file/aginx-mem
+# (the mother's bridges spawn `aginx-file|aginx-mem tool <name>`; a device
+# without them loses every file/memory tool — 09-26 晨报 stuck root cause).
 #
 # codex/grok have no usable upstream raw-musl asset (codex ships a tarball,
 # grok has no musl release at all) — mirrored as raw binaries under
@@ -61,13 +63,13 @@ aginxbrowser   https://pkgs.aginx.net/aginxbrowser/v0.5.8/aginxbrowser-0.5.8-aar
 # to /lib/ld-musl-aarch64.so.1 (kernel interp path) and marks it done.
 python3        https://pkgs.aginx.net/python3/v3.12.14/python3-v3.12.14-4pc.tar 23923ffe46c3562d3801b742fea02ccc7f0aaddd91d7a40a66e4a6ee7a6beb73 opt
 codex          https://pkgs.aginx.net/codex/v0.151.0/codex-v0.151.0-aarch64-unknown-linux-musl 56f026015ccc3ebc12895282200d89c216892bf6fa15fa7f228e6e0c6ad6ce76 opt
-# M30–M35 tool packages (2026-09-03 推送): the runtime's browser/web,
-# filesystem, memory and clone bridges spawn these CLIs — core tier, a
-# rootfs without them has an agent that cannot browse/read/remember.
+# M30–M35 tool packages (2026-09-03 推送): the runtime's filesystem and
+# memory bridges spawn these CLIs — core tier, a rootfs without them has
+# an agent that cannot read/remember. (2026-09-26: web line retired —
+# browser/search/fetch now run in-mother; names D13-re-cut below.)
 dup            https://pkgs.aginx.net/dup/v0.2.0/dup-v0.2.0-4pc.tar 652f9d583611826cdb3c5c02ee62a07b3e710df786c914f3a0e2629173c32a82 opt
-aginx-web      https://pkgs.aginx.net/aginx-web/v0.3.0/aginx-web-v0.3.0-4pc.tar dd5f5e0857aea31cd78212e4596bdb59235a9a779757fe0bf9cd342bd31c36a3 opt
-agf            https://pkgs.aginx.net/agf/v0.2.0/agf-v0.2.0-4pc.tar eed372acd77037b1755ad3ad0053c949e86fc7f0bb4be57b06314e604b4862a9 opt
-agmem          https://pkgs.aginx.net/agmem/v0.2.0/agmem-v0.2.0-4pc.tar 4b9c469038cbf4e97e913d10fa55b1fe67e14c2220a2f4134d522aeec0bf5357 opt
+aginx-file     https://pkgs.aginx.net/aginx-file/v0.1.0/aginx-file-v0.1.0-4pc.tar f2318f15e2887fb463bc09a7231284583f106b732e7ecc2ca3333bd18099de2c opt
+aginx-mem      https://pkgs.aginx.net/aginx-mem/v0.1.0/aginx-mem-v0.1.0-4pc.tar e58d5a437999c0aeb674ff129f002cfb2bb4ea9909bcb05c90c39fd5ed134d5f opt
 # grok is optional since M23 (选装 tier): an agent CLI like codex, but
 # self-built and not needed for the phone's own loop — pick it via "+".
 grok           https://pkgs.aginx.net/grok/v1.0.12/grok-v1.0.12-aarch64-unknown-linux-musl dac1ccb2084ee8ccbfd3e9656210e5dfb689c080b05d0fc1c5349c010fd6796d opt
