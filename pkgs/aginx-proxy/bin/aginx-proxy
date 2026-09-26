@@ -1,0 +1,13 @@
+#!/bin/sh
+# aginx-proxy face — stunnel 树包 wrapper（共享代理隧道，grok/aginxbrowser
+# 走本机 127.0.0.1:8800）。无参=默认 conf /etc/stunnel/aginx-proxy.conf
+# （simple 单元的调用形状）；带参原样透传（手工指定 conf / stunnel 旗标）。
+# 首跑自链 /lib loader：git 包同工艺（同 musl 1.2.5，先到先得互不抢）。
+# musl ld.so 无 --library-path 旗标——库解析只走 env，LD_LIBRARY_PATH
+# 随 env 继承（stunnel 不 exec 子进程，env 只为它自身生效也够）。
+P=/var/lib/aginx/pkgfiles/aginx-proxy
+L=/lib/ld-musl-aarch64.so.1
+[ -e "$L" ] || ln -sf "$P/lib/ld-musl-aarch64.so.1" "$L" 2>/dev/null
+export LD_LIBRARY_PATH="$P/usr/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+[ $# -eq 0 ] && set -- /etc/stunnel/aginx-proxy.conf
+exec "$P/lib/ld-musl-aarch64.so.1" "$P/usr/bin/stunnel" "$@"
