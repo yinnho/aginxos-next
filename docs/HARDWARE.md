@@ -9113,3 +9113,61 @@ fresh flash 镜像 manifest 要带上 v0.1.1 钉，须重烤才有（OPT_ADD 现
 （`backup/master-prepush-0926` 留档）；此后推送姿势=
 `git push origin <代码尖>:master`，收据永远后落。收据内旧 sha 引用
 已改指新 sha（7 处）。
+
+## 2026-09-26 — #395 母体 turn 固定延迟解剖+双刀修：49-65s → 4-6s（redfin/Pixel 5）
+
+**起点**：测 Mac↔手机对话（relay/agc 通道），稳态每轮 49-65s 固定
+延迟。排除法：relay 无罪（直连同慢）、DNS/v6 无罪、环境无罪（净链
+复测 65.5s）。用户令「aginx 这条线发现问题你就要修——核心功能」。
+
+**解剖（主机复现 14.2s + 设备日志时间线）**——每轮 turn 实为三段串行：
+1. **会话压缩段**（设备 ~30-36s）：会话超阈值（~40 消息）→ 轮前同步
+   await `compact_agent_session` 的 LLM 摘要调用，推理型 brain 无预算。
+   主机复现漏了这段（净会话不超阈）——设备日志才现形：
+   `13:21:26.25 Compacting → 13:22:02.26 complete` = 36.0s。
+2. **主答调用**（~4s）：与主机同速，本来就是健康的。
+3. **turn 摘要调用**（设备 ~20-30s）：EndTurn 前同步再打一次完整 LLM
+   给两字回信写摘要，brain 先烧 637 字 reasoning（主机 10s、设备翻倍）。
+   `Captured reasoning_content len=637` 钉死。
+
+**刀1（0948972 已推）——摘要不再门回复**：
+- 短进短出零工具轮（语音对话产品形状，≤120 字）直接用原文当摘要，
+  零 LLM 调用（`mechanical_summary_eligible`，5 单测）；
+- 仍有 LLM 摘要的轮 5s 硬预算，超时即弃（树记忆回退原文，同 brain
+  缺席路径）。主机 14.2s→5.9s，POST 2→1。
+- 附：aginx-server 挂 tracing_subscriber——引擎 debug/warn 全进黑洞
+  是设备日志对 turn 静默的根因（RUST_LOG 滤名=crate 名
+  carrier_runtime/carrier_kernel）。
+
+**刀2（e76a27d 已推）——压缩移出轮上路径**：
+- 前台热路径（`send_message_with_handle→execute_llm_agent`，2442 处）
+  改 fire-and-forget：`self_handle` weak-Arc 取自身 spawn，零签名涟漪；
+  流式路径（1614 处）同修。教训：**生产热路径是非流式腿**——先改了
+  流式腿上机无效（52s），设备日志才暴露真路径；
+- 单飞护栏 `compaction_inflight: Mutex<HashSet<SessionId>>`：连轮不重
+  复烧同一会话；RAII Drop 封 panic 泄洞（泄漏=该会话永久禁压缩）；
+- **CAS 护栏**：压缩 LLM 返回后重载会话，前缀逐条序列化比对——
+  append 尾保留（后台压缩期间落成的新轮不丢）、他因变更（轮内 trim/
+  竞争压缩）即弃下轮重试。`save_session` 是整行覆盖，裸后台化会吃掉
+  并发轮消息，此栏是后台化的安全前提。
+
+**设备收据（换装三律，真重启×3，md5 三对三）**：
+- 刀1 件：45.2s（压缩仍门回复——热路径判错，见上）；日志证摘要
+  5s 预算起效（`Turn summary timed out — skipping`）。
+- 刀2 件：**4.07s**；第二轮 4.19s、第三轮 4.10s 三连真答；护栏实战
+  命中（`compaction already in flight — skipped`），压缩行与 loop 启动
+  并行交错（`12.213 Starting agent loop` 紧跟 `12.214 Compacting`，
+  无门控）。终版（RAII）件冷启 15.4s（重启后无热连接）、稳态 5.7-6.0s。
+- check.sh 三过全绿；carrier-kernel 174 单测绿（wasm 集成 6 败为预存
+  他线——刀5 wasmtime 裁剪残留，stash 验证与本刀无关）。
+
+**预存挂账（本刀只记不修）**：会话切片边界漂移——turn 摘要偶取到前
+轮文本（主机 turn4 摘要串台 turn3；设备 `intent=记住暗号：红灯笼`），
+且观测到一轮消息数瞬态膨胀（43→73，下轮回落）；疑
+`session_base_len` 捕获与 sync 时点错位，喂着压缩循环，另案查。
+
+**盘面**：设备在役=dev-push 二进制（真身
+`/var/lib/aginx/pkgfiles/aginx/bin/aginx-server`，md5
+`6de130a6…`），领先在役包 v0.1.6。母体包 v0.1.7 出包+镜像上架待排
+（公共包线动作）；bake #27 重烤自动带上。主机台面已清（测试 sock/
+env 文件含 key 已删）。
