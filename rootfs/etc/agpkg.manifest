@@ -54,8 +54,15 @@
 # /open route verified in-tree (src/main.rs route table). Screenshot
 # asset filename has NO v-prefix (upstream release quirk). v0.2.5 mirror
 # dir retained on pkgs.aginx.net for rollback re-pin.
+#
+# v0.5.9 (2026-09-26): 模板内置地板——qr/reply/weather 三页 include_str!
+# 编进二进制（src/tmpl.rs BUILTIN），fresh flash 后 /open 全套可用：此前
+# 模板只在设备 scp + 生态仓，刷机即丢。/var/lib/aginxbrowser/templates
+# 仍是热修覆盖层（盘上同名赢内置，scp 秒生效）。本地 arm64 zigbuild
+# 出件（宿主/目标 V8 档分取，gh-proxy 过墙），rust-objcopy --strip-all，
+# sha 即本行；v0.5.8 镜像目录保留可回钉。
 
-aginxbrowser   https://pkgs.aginx.net/aginxbrowser/v0.5.8/aginxbrowser-0.5.8-aarch64-unknown-linux-musl-screenshot 39304c3679af397447d580e354211bdbba497b271358c0921d8db109ebc12178 opt
+aginxbrowser   https://pkgs.aginx.net/aginxbrowser/v0.5.9/aginxbrowser-0.5.9-aarch64-unknown-linux-musl-screenshot 85954d3ce41d0d7d6cc86de627237bc985fc74178a2f35ec66629eef4fac0c72 opt
 # python3 (M28) — first TREE bundle: musl CPython 3.12.14 (python-build-
 # standalone 20260901 install_only_stripped) + Alpine musl 1.2.5 ld.so;
 # pkg.toml exec faces /var/bin/python3 as a symlink into
