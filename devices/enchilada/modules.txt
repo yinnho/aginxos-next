@@ -27,6 +27,9 @@ qcom_q6v5_pas
 qcom_q6v5_mss
 # IPA（modem-up online 前置——不载 = ipa_dl_opt_lte.c:432 fatal，M44 债）：
 ipa
+# 电量计（2026-09-18）：DT i2c-10@55 ti,bq27411 → /sys/class/power_supply/bq27411-0
+bq27xxx_battery
+bq27xxx_battery_i2c
 # 触摸（人用轨 2026-09-16）：DT i2c-12@20 syna,rmi4-i2c → Synaptics S3706B
 rmi_core
 rmi_i2c
@@ -48,3 +51,34 @@ imx376
 imx371
 lc898217xc
 qcom-camss
+# 音频（人用轨 2026-09-18）：sdm845 sndcard + WCD934x SLIM + MAX98927
+# insmod 序在 audio-bringup，不是本文件顺序。
+slim-qcom-ngd-ctrl
+regmap-slimbus
+snd-soc-wcd-classh
+snd-soc-wcd-mbhc
+wcd934x
+gpio-wcd934x
+snd-soc-wcd934x
+snd-soc-max98927
+snd-q6dsp-common
+q6core
+q6afe
+q6afe-dai
+q6afe-clocks
+q6adm
+q6routing
+q6asm
+q6asm-dai
+q6voice-common
+q6mvm
+q6cvp
+q6cvs
+q6voice
+q6voice-dai
+snd-soc-qcom-common
+soundwire-bus
+snd-soc-qcom-sdw
+snd-soc-rl6231
+snd-soc-rt5663
+snd-soc-sdm845

@@ -1,0 +1,89 @@
+#!/bin/sh
+# enchilada audio — sdm845 sndcard + WCD934x SLIM + MAX98927 speaker.
+# 2026-09-18 live: card "OnePlus 6" /dev/snd/pcmC0D0{p,c} after this
+# chain; playback PREPARE ok via QUAT_MI2S_RX; capture PREPARE ok but
+# AFE SLIMBUS_0_TX DSP error 9 (wav silence). rcS already [ -x ] this.
+export PATH=/sbin:/bin:/usr/sbin:/usr/bin
+LOG=/var/audio.log
+exec >>"$LOG" 2>&1
+echo "=== audio bring-up $(date) ==="
+M=/lib/modules
+already() {
+  mod=$(echo "$1" | tr '-' '_')
+  grep -q "^${mod} " /proc/modules
+}
+for m in \
+  slim-qcom-ngd-ctrl \
+  regmap-slimbus \
+  snd-soc-wcd-classh snd-soc-wcd-mbhc \
+  wcd934x gpio-wcd934x \
+  snd-soc-wcd934x snd-soc-max98927 \
+  snd-q6dsp-common q6core q6afe q6afe-dai q6afe-clocks \
+  q6adm q6routing q6asm q6asm-dai \
+  q6voice-common q6mvm q6cvp q6cvs q6voice q6voice-dai \
+  snd-soc-qcom-common soundwire-bus snd-soc-qcom-sdw \
+  snd-soc-rl6231 snd-soc-rt5663 \
+  snd-soc-sdm845
+do
+  already "$m" && echo "$m already" && continue
+  if [ -f "$M/$m.ko" ]; then
+    insmod "$M/$m.ko" 2>/dev/null && echo "insmod $m ok" || echo "insmod $m fail"
+  else
+    echo "missing $m.ko"
+  fi
+done
+n=0
+while [ $n -lt 20 ]; do
+  if [ -e /dev/snd/pcmC0D0p ] && [ -e /dev/snd/pcmC0D0c ]; then
+    echo "pcm up"
+    break
+  fi
+  sleep 1
+  n=$((n + 1))
+done
+if [ ! -e /dev/snd/pcmC0D0p ]; then
+  echo "audio fail no pcm"
+  echo "audio fail no pcm" >>/run/boot.state
+  ls -l /dev/snd
+  exit 1
+fi
+# FE→BE: speaker on QUAT_MI2S (MAX98927) via MultiMedia1 (ear-confirmed
+# 2026-09-18). 2026-09-22 capture is Lineage handset-mic amic4:
+# MultiMedia2 ← SLIMBUS_0_TX ← AIF1 TX0 ← DEC0 ← ADC4, one channel.
+# Do not also enable TX7: an empty AIF1 list steals TX7, and a TX7
+# entry makes sdm845 force channel 135. Dummy capture stays off.
+if [ -w /sys/devices/platform/soc@0/171c0000.slim-ngd/qcom,slim-ngd.1/power/control ]; then
+  echo on > /sys/devices/platform/soc@0/171c0000.slim-ngd/qcom,slim-ngd.1/power/control || true
+fi
+# Mixer bits drop after some DAPM cycles — set them every bring-up.
+if [ -x /bin/snd-mixer ]; then
+  snd-mixer "QUAT_MI2S_RX Audio Mixer MultiMedia1" 1 || true
+  snd-mixer "Speaker Volume" 6 || true
+  snd-mixer "Digital Volume" 100 || true
+  snd-mixer "DAI Sel Mux" 2 || true
+  snd-mixer "MultiMedia1 Mixer SLIMBUS_0_TX" 0 || true
+  snd-mixer "MultiMedia2 Mixer SLIMBUS_0_TX" 1 || true
+  snd-mixer "AIF1_CAP Mixer SLIM TX0" 1 || true
+  snd-mixer "AIF1_CAP Mixer SLIM TX7" 0 || true
+  snd-mixer "AIF2_CAP Mixer SLIM TX7" 0 || true
+  snd-mixer "AIF3_CAP Mixer SLIM TX7" 0 || true
+  snd-mixer "CDC_IF TX0 MUX" 2 || true
+  snd-mixer "ADC MUX0" 1 || true
+  snd-mixer "AMIC MUX0" 4 || true
+  snd-mixer "AMIC4_5 SEL" 0 || true
+  snd-mixer "CDC_IF TX7 MUX" 0 || true
+  snd-mixer "IIR0 INP0 MUX" 1 || true
+  snd-mixer "ADC4 Volume" 20 || true
+  snd-mixer "DEC0 Volume" 84 || true
+fi
+# Pixel 5 lesson (redfin audio-bringup): first TX session after mixer
+# writes is quiet; burn a dummy capture so the first PTT is hot.
+if [ -x /bin/snd-cap ] && [ -e /dev/snd/pcmC0D1c ]; then
+  # First TX after mixer writes is the energy window (2026-09-18).
+  # Dummy to /dev/null eats that clip; leave it off until capture has rms.
+  # /bin/snd-cap /dev/snd/pcmC0D1c 1 /dev/null 48000 1 >/dev/null 2>&1 || true
+  true
+fi
+echo "audio ok pcm=pcmC0D0p,pcmC0D1c card=OnePlus 6"
+echo "audio ok" >>/run/boot.state
+exit 0

@@ -1,0 +1,36 @@
+#!/bin/sh
+# enchilada battery — TI bq27411 on i2c-10@55 (DT bq27441-battery@55).
+# 2026-09-18 live: psy bq27411-0 capacity 97 voltage_now 4317000.
+export PATH=/sbin:/bin:/usr/sbin:/usr/bin
+LOG=/var/battery.log
+exec >>"$LOG" 2>&1
+echo "=== battery bring-up $(date) ==="
+M=/lib/modules
+already() {
+  mod=$(echo "$1" | tr '-' '_')
+  grep -q "^${mod} " /proc/modules
+}
+for m in bq27xxx_battery bq27xxx_battery_i2c; do
+  already "$m" && echo "$m already" && continue
+  if [ -f "$M/$m.ko" ]; then
+    insmod "$M/$m.ko" 2>/dev/null && echo "insmod $m ok" || echo "insmod $m fail"
+  else
+    echo "missing $m.ko"
+  fi
+done
+PSY=/sys/class/power_supply/bq27411-0
+n=0
+while [ $n -lt 20 ]; do
+  if [ -r "$PSY/capacity" ]; then
+    CAP=$(cat "$PSY/capacity" 2>/dev/null)
+    echo "battery ok ${CAP}% psy=bq27411-0"
+    echo "battery ok ${CAP}%" >>/run/boot.state
+    exit 0
+  fi
+  sleep 1
+  n=$((n + 1))
+done
+echo "battery fail no psy"
+echo "battery fail" >>/run/boot.state
+ls /sys/class/power_supply
+exit 1
