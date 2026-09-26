@@ -8984,3 +8984,71 @@ f7a7925 kernel + 3749510 server）。
 唯一通道（bake 线债，与 reply/weather 同账）；②enchilada manifest
 升钉（离网）；③明晨 08:00 晨报自然 fire=晨报线终收据；④生态仓
 a879a9c 推送裁决归账四摊。
+
+## 2026-09-26 — #393 模板内置地板：qr/reply/weather 编进 aginxbrowser v0.5.9（redfin/Pixel 5）
+
+**清 #392 挂账①**：模板此前只活在设备 scp + 生态仓，fresh flash 即丢
+（表现层归 aginxbrowser 的边界债）。取修法 A——引擎内置：出厂三页
+`include_str!` 进二进制作地板，`/var/lib/aginxbrowser/templates` 保留
+为 scp 秒生效的**热修覆盖层**（盘上同名赢内置）。
+
+**引擎改（生态仓 b706970，只带 tmpl.rs+Cargo.toml+lock，diting 线
+未提交件不碰）**：`src/tmpl.rs` 加 `BUILTIN` 常量 + 合并查名
+（盘上条目按名赢；`NoRegistry`=裸装形状落地板；`BadRegistry`/在册
+文件缺失仍响亮报错；known 清单盘先内置后去重）。单测 6/6：新增
+`builtin_floor_serves_without_disk_templates`、`disk_entry_overrides_builtin`，
+改写 `registry_and_file_failures_map_to_their_codes`（空目录从
+NoRegistry 改为地板接住）、`unknown_template_carries_known_list`。
+版本 0.5.8→0.5.9（`/health` 的 version 串取 aginxbrowser 自身
+`CARGO_PKG_VERSION`，认件无碍）。
+
+**出件链（首次本机 macOS arm64 出 musl 件，两败一成）**：
+- 首败=rust_v8 预编译档下载（GitHub 本网段 stall——manifest 注释里
+  的老毛病）。
+- 二败（有信息的败）：强塞 `RUSTY_V8_ARCHIVE=<musl 档>` 全局生效→
+  宿主 build.rs 链接吃 `binding.o` 非 mach-o。**机制定谳**：diting
+  build.rs 要在**宿主**上编译一个跑 V8 的快照生成器（v0.2.10
+  "x86_64 快照烤进 aarch64 件"事故同源）；宿主档与目标档必须分取。
+- 成：`RUSTY_V8_MIRROR=https://gh-proxy.com/https://github.com/denoland/rusty_v8/releases/download`
+  → 宿主取 `aarch64-apple-darwin` 档、目标取 `aarch64-unknown-linux-musl`
+  档，`cargo zigbuild --release --target aarch64-unknown-linux-musl
+  --features screenshot` 3m36s 成。
+- strip：`zig objcopy` 是桩（`error: unimplemented`）→ 用 rustup
+  llvm-tools 的 `rust-objcopy --strip-all` → **83,567,472 B**。
+- sha `85954d3ce41d0d7d6cc86de627237bc985fc74178a2f35ec66629eef4fac0c72`；
+  上镜像 `/aginxbrowser/v0.5.9/`，公网 HTTPS 200 + sha 相符。**此为
+  本地件（非上游 CI 原生 arm64 runner 产物），设备烟测过闸为准**；
+  上游 tag 出官方件仍归生态仓流程。
+
+**manifest 合并纪律**：设备 `wc -l` 83（超集，13 条 aginx 系安装行）
+拉回，只换 aginxbrowser 行 + 加 v0.5.9 注释块 → 89 行；host 重签
+（`.local/keys/aginx.key`）→ 推 manifest+.sig 双件（落 /tmp 再 mv，
+免半读）；repo `rootfs/etc/agpkg.manifest` 同步换钉重签（88 行）。
+
+**换装三律全过**：`aginx-pkg opt-in aginxbrowser` 拉 83,567,472 B
+HTTP 200；`/var/bin/aginxbrowser` 真身 sha 三向相符（host=镜像=device）
++ `test -x` + stamp 更新；`aginx-svc restart` → pid 4507、
+`/proc/4507/exe` 无 `(deleted)`；**真重启**（`aginx-reboot reboot`）→
+冷启 pid 460 sha 同、`/health` 冷读 `ok 0.5.9
+{"screenshot":true,...}`。**mac 产物在设备上活着，V8 快照未爆**。
+
+**模板地板收据（配对双向 + 负控）**：
+- 盘上层基线：`/open reply` → 4163B。
+- `mv templates .templates-floor-test` → 内置接住：reply **4163B**
+  （与盘上逐字节同）、weather 3856B。
+- 负控：`/open 晨报` → `{"ok":false,"error":"unknown_template",
+  "known":["weather","reply","qr"]}`——地板是真注册表，不是瞎成功。
+- 热修层仍赢：植入 `MARKER-HOTFIX` weather.html → 20B；还原 → 3856B。
+- **金收据（地板态全链）**：内置 qr 模板 + 真 svg_b64（#392 那份）→
+  `/open` show.html 35243B → `/screenshot` 1080×2620 → PNG → sips
+  JPEG → `aginx-qr` 解码 = `liteapp.weixin.qq.com/q/7GiQu1?qrcode=
+  89554f…&bot_type=3` **逐字节相符**——同时证 V8/渲染栈在新件上活
+  （非仅启动），且内置码板白底可扫。
+
+**设备终态**：六单元冷启全 ready——aginx 442、aginx-gateway 447、
+aginx-secretd 451、aginx-voice 455、aginxbrowser 460、net-watch 468；
+`/var/lib/aginxbrowser/templates/` 恢复 4 件正身（嵌套残留
+`aginxbrowser-tpl-0.5.8` 挪 `.tpl-nested-remnant-0958`，未删）。
+
+**挂账更新**：#392 挂账①**清账**（模板进二进制，fresh flash 有全套）；
+生态仓 b706970 推送裁决归账四摊；v0.5.8 镜像目录留可回钉。
