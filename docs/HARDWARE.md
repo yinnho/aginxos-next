@@ -9291,3 +9291,34 @@ aginxbrain/v0.4.2/（aarch64 4fefd780… / x86_64 90bc28e4…，公共
 opt-in → 重启 → 设备实测辅助调用零思考）待用户点头；设备现役仍
 v0.1.7。BRAIN-CODEX.md §四 五问应答已答（agent://redfin.relay.
 aginx.net/me）。
+
+## 2026-09-27 — #399 母体包 v0.1.8 出包上架+设备换装：辅助调用零思考落地（redfin/Pixel 5）
+
+**#398 的 reasoning_effort=none 从代码转正为公共包**。pkg.toml
+0.1.7→0.1.8（头注版本史补 v0.1.8 条）。
+
+**包与镜像**：tar `aginx-v0.1.8-4pc.tar` 47,264,768 B，sha256
+`9cb4de261fc34eec7829101405190540b831dac9c5d8cf1f19995c397e18748a`；
+86quan 预建 v0.1.8 目录上架，本地/服务器 sha 一致，公网 200
+content-length 精确。zigbuild 缓存暖（仅 runtime+kernel 重编）5m16s。
+
+**scp 覆写暗坑（新）**：sftp 模式 scp 推 /etc/agpkg.manifest（已存在
+文件）零报错但不落盘——时间戳纹丝不动、md5 不动；同命令推**新文件名**
+正常落。修法=推 `*.new` 再 on-device `mv` 就位。排障序：先比 md5 再
+信 scp 退出码。
+
+**设备换装**：manifest 拉回→改 aginx 行 v0.1.8+新 sha→aginx-sign
+重签→new+mv 推回→md5 双件对上→`opt-in aginx`（47264768 bytes 精确、
+stamp 0.1.8）→真重启（/usr/bin/aginx-reboot reboot）。四对四 md5：
+tar 成员 aginx-server=`cc9698d9…`=重启后 /proc/442/exe（无旧 inode）。
+七单元全 ready（aginx/gateway/proxy/secretd/voice/aginxbrowser/
+net-watch）。
+
+**零思考活体证据（aginx.log）**：
+- 压缩单趟 32 消息→4092 字符 **3.0s**（思考开启档为 20-36s+）；
+- turn 摘要 ~4s 内完（不再顶 5s 预算帽）；
+- turn 计时：冷启 5.01s、暖 6.25s/7.73s（relay 往返含内，与 #396
+  的 4-6s 档一致，高出部分为 relay 抖动）。
+
+**盘面**：设备在役=包 v0.1.8（=git 尖 4835f49 同源）；08:00 晨报前
+6.5h 完成换装，账四摊④ 自然火不受扰。enchilada manifest 挂账继续。
