@@ -5,7 +5,7 @@
 #   panel  = /sys/class/drm/card0-DSI-1 modes 首行 1080x2280
 #   input  = /proc/bus/input/devices: event0=pm8941_pwrkey event1=Alert slider
 #            event2=Hall event3=Volume keys（无触摸器件——mainline 未绑定）
-#   无     = /sys/class/power_supply 空（电池 psy 未上）、/dev/snd 仅 timer
+#   无     = /dev/snd 仅 timer（声卡后装）；电池 2026-09-18 起 bq27411-0
 #            （声卡未起）、/dev/block/by-name 不存在
 # 标「未探针」的键是 schema 必填占位——hwd deny_unknown_fields 要全键；
 # 其消费者（voice/term/qr）在本机不装不跑，读到即哑。
@@ -36,9 +36,9 @@ key_power = 116          # registered, unused；电源键在 event0 (probed)
 touch_device = "/dev/input/event4"  # Synaptics S3706B (probed 2026-09-16)
 power_device = "/dev/input/event0"  # pm8941_pwrkey (probed)
 
-[audio]                  # voice/audio.rs —— 声卡未起（/dev/snd 仅 timer, probed）
-capture_pcm = ""         # 未探针：mainline 音频链是 E5+ 的事
-playback_pcm = ""
+[audio]                  # voice/audio.rs —— 2026-09-18 card "OnePlus 6" probed
+capture_pcm = "/dev/snd/pcmC0D1c"   # MultiMedia2: UCM bottom mic ADC4/TX7
+playback_pcm = "/dev/snd/pcmC0D0p"  # MultiMedia1 playback via QUAT_MI2S/MAX98927
 rate = 48000
 channels = 1
 playback_channels = 2
@@ -60,7 +60,7 @@ dark_gain = 16
 dark_dgain = 2
 
 [paths]
-power_supply = ""            # 未探针：/sys/class/power_supply 为空 (probed 2026-09-13)
+power_supply = "/sys/class/power_supply/bq27411-0"  # i2c-10@55, probed 2026-09-18 capacity=97
 wlan = "wlan0"               # [v1] registered（ath10k WCN3990 是 E5 的事）
 drm_card = "/dev/dri/card0"  # [v1] registered (probed: card0 + renderD128)
 
