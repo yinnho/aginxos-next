@@ -11,15 +11,21 @@
 //!      花名册发现面，刀5）。
 //! 卸载对称两删；重装=upsert 覆盖（clone_install_files 重跑即刷新）。
 //!
-//! 路径规则与生态仓 data_dir() 同律：`AGINX_DATA_DIR` 优先，否则 ~/.aginx
+//! 路径规则与生态仓 data_dir() 同律，外加收敛指针：`AGINX_DATA_DIR`
+//! 优先，否则跟随 `<home>/gateway-data` 指针（symlink），否则 ~/.aginx
 //! ——设备上母体单元带 AGINX_DATA_DIR=/var/lib/aginx/gateway 与网关守护
-//! 同世界（pkgs/aginx [service] envs）；host 裸跑落 ~/.aginx（Mac 同款）。
+//! 同世界（pkgs/aginx [service] envs）；首次带 env 写入时在 home 根落
+//! 指针自愈（装机收据 #411：装带 env、卸裸跑曾劈叉成两个世界）。
+//! host 裸跑无 env 无指针落 ~/.aginx（Mac 同款）。
 //! 真身守护不感知本模块存在——它只认目录里的 toml，安装链是唯一写手。
 
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 
 use carrier_types::config::KernelConfig;
+
+/// home 根的收敛指针名（symlink → 数据根）。
+const HOME_POINTER: &str = "gateway-data";
 
 /// workflows.md 固定头（创建时写；后续 upsert 保留原文件只动条目行）。
 const ROSTER_HEADER: &str = "# workflows 助理能力注册表\n\
@@ -37,14 +43,56 @@ fn roster_key(name: &str) -> String {
     format!("- `{}`:", name)
 }
 
-/// 真 aginx 数据根（生态 data_dir 同律）。
-pub fn agents_root() -> PathBuf {
-    if let Ok(d) = std::env::var("AGINX_DATA_DIR") {
-        return PathBuf::from(d);
+/// 真 aginx 数据根：env 优先 → home 指针跟随 → ~/.aginx 兜底（生态
+/// data_dir 同律 + 收敛指针）。
+fn env_data_root() -> Option<PathBuf> {
+    std::env::var_os("AGINX_DATA_DIR")
+        .filter(|v| !v.is_empty())
+        .map(PathBuf::from)
+}
+
+/// 跟随 `<home>/gateway-data` 指针（目标须是现存目录；悬空=没指）。
+fn follow_home_pointer(home: &Path) -> Option<PathBuf> {
+    let target = std::fs::read_link(home.join(HOME_POINTER)).ok()?;
+    let t = PathBuf::from(target);
+    if t.is_dir() {
+        Some(t)
+    } else {
+        None
+    }
+}
+
+fn resolve_data_root(home: &Path) -> PathBuf {
+    data_root_order(env_data_root().as_deref(), home)
+}
+
+/// 解析序（纯函数腿，测试用）：env → home 指针 → ~/.aginx。
+fn data_root_order(env: Option<&Path>, home: &Path) -> PathBuf {
+    if let Some(r) = env {
+        return r.to_path_buf();
+    }
+    if let Some(r) = follow_home_pointer(home) {
+        return r;
     }
     dirs::home_dir()
         .map(|h| h.join(".aginx"))
         .unwrap_or_else(|| PathBuf::from(".aginx"))
+}
+
+/// 带 env 写入时落/刷 home 指针（幂等；指错目标则换指）——让后续无 env
+/// 的 CLI 面收敛到同一数据世界。
+fn ensure_home_pointer(home: &Path, data_root: &Path) {
+    let link = home.join(HOME_POINTER);
+    match std::fs::read_link(&link) {
+        Ok(t) if PathBuf::from(t.clone()) == data_root => return,
+        Ok(_) => {
+            let _ = std::fs::remove_file(&link);
+        }
+        Err(_) => {}
+    }
+    if let Err(e) = std::os::unix::fs::symlink(data_root, &link) {
+        tracing::debug!(error = %e, "home 指针落盘失败（无 env 的后续调用仍走 ~/.aginx）");
+    }
 }
 
 /// toml 字符串字面量（转义反斜杠/引号，压掉换行——描述单行纪律）。
@@ -165,13 +213,17 @@ pub fn roster_remove(home_root: &Path, name: &str) -> std::io::Result<()> {
 /// 安装链入口：①+② 一并写。失败不回滚安装（对外注册表是外围面，
 /// 调用方 warn 降级）。
 pub fn register(config: &KernelConfig, name: &str, display: &str, desc: &str) -> std::io::Result<()> {
-    write_entry(&agents_root(), name, display, desc)?;
+    let root = resolve_data_root(&config.home_dir);
+    if let Some(env_root) = env_data_root() {
+        ensure_home_pointer(&config.home_dir, &env_root);
+    }
+    write_entry(&root, name, display, desc)?;
     roster_upsert(&config.home_dir, name, display, desc)
 }
 
 /// 卸载链入口：①+② 一并摘。
 pub fn unregister(config: &KernelConfig, name: &str) -> std::io::Result<()> {
-    remove_entry(&agents_root(), name)?;
+    remove_entry(&resolve_data_root(&config.home_dir), name)?;
     roster_remove(&config.home_dir, name)
 }
 
@@ -184,6 +236,39 @@ mod tests {
         let _ = std::fs::remove_dir_all(&d);
         std::fs::create_dir_all(&d).unwrap();
         d
+    }
+
+    #[test]
+    fn pointer_convergence_env_wins_then_home_pointer() {
+        let home = tmp("ptr-home");
+        let data = tmp("ptr-data");
+        std::fs::create_dir_all(data.join("agents")).unwrap();
+        // 无 env 无指针 → ~/.aginx 兜底（与生态 data_dir 同律）
+        assert_eq!(
+            data_root_order(None, &home),
+            dirs::home_dir().unwrap().join(".aginx")
+        );
+        // 落指针后无 env 也收敛到数据根
+        ensure_home_pointer(&home, &data);
+        assert_eq!(data_root_order(None, &home), data);
+        // env 永远优先（指针不劫持显式 env）
+        let env_root = tmp("ptr-env");
+        std::fs::create_dir_all(&env_root).unwrap();
+        assert_eq!(data_root_order(Some(&env_root), &home), env_root);
+        // 换指（指针目标变更=重指）
+        let data2 = tmp("ptr-data2");
+        std::fs::create_dir_all(data2.join("agents")).unwrap();
+        ensure_home_pointer(&home, &data2);
+        assert_eq!(data_root_order(None, &home), data2);
+        // 悬空指针=没指（目标目录消失）
+        let _ = std::fs::remove_dir_all(&data2);
+        assert_eq!(
+            data_root_order(None, &home),
+            dirs::home_dir().unwrap().join(".aginx")
+        );
+        for d in [home, data, env_root] {
+            let _ = std::fs::remove_dir_all(d);
+        }
     }
 
     #[test]
