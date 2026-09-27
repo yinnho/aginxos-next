@@ -9814,3 +9814,12 @@ AGINX_DATA_DIR=/var/lib/aginx/gateway 与网关守护同世界）。
 **挂账**：①镜面 manifest 上架 v0.1.10（v0.1.9 不外发）；②刀4 旧线
 退役（crates/gateway 删+镜像收尾+enchilada 同配方）；③刀5 no-me 线
 （roster 读腿=workflows.md 唯一真源）。
+
+## #412 刀4 仿制品退役收据（2026-09-27）
+
+`crates/gateway`（仿制 aginx-gateway，src/bin/tests 整树 9 文件）
+`git rm`；workspace 席位摘除；仓内 grep 无引用（build-pkg.sh 仅存
+历史注释）。check.sh 全绿。设备侧：单元同名换装在役（cmd 指
+pkgfiles/aginx-gateway 真身，envs 带 AGINX_DATA_DIR），无旧单元残留。
+镜面上架（aginx-gateway v0.2.0 + aginx v0.1.10 + manifest 换钉）随
+推送窗口挂账；enchilada 回网后同配方挂账。
