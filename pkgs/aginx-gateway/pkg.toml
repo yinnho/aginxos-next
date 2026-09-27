@@ -1,20 +1,33 @@
-# aginx-gateway — 远端通道守护的包形态（C8 蛋案 → L0 刀3：单元入包）。
-# id/secret 走 env_file（/etc/aginx/env，刷机日灌注），不进包不进库。
-# 运维序铁律（必修④）：先写 env（AGINX_GATEWAY_ID 等）再 opt-in 本包——
-# 裸 exit(1) 于缺 ID 会 5 连崩进断路器停摆，provision revive 只救 sync
-# 装的；停摆=显式 `aginx-svc start aginx-gateway` 才醒。
+# aginx-gateway — 对外面守护的包形态（v0.2.0 换真身，2026-09-27 刀1）。
+# 裁决：aginx/agc/aginxbrowser/aginxbrain 四项目独立专人开发，本仓只
+# 装配不仿制——v0.1.x 的 crates/gateway 仿制品退役（刀4 删源）。真身=
+# 生态仓 ~/Documents/aginx/aginx（HEAD 5658af7）cargo zigbuild 的
+# aarch64-musl 静态，bin 改名落 pkgfiles：单元直指真身 spawn；exec 面
+# /var/bin/aginx-gateway symlink（安装器自动生成 .aginxmd）。
+# 权限模型（v0.1.x 全缺，真品自带）：access=private 默认不对外；主人=
+# pair 出码 → agc --bind 入钥匙串；第三方=auth 发 scoped token
+# （allowed_agents 点名）。裸根结构性不可 prompt（agent 参数必填）。
+# 运维序铁律（沿 v0.1.x 必修④）：先写 /etc/aginx/gateway.toml（[relay]
+# id/relay_secret、[server] access、[auth] jwt_secret；0600）再 opt-in
+# 本包——缺 id 裸 exit(1) 会 5 连崩进断路器停摆；停摆=显式
+# `aginx-svc start aginx-gateway` 才醒。
+# 状态归 N5 世界：AGINX_DATA_DIR=/var/lib/aginx/gateway（绑定台账、
+# 丢件柜台、agents 注册表）。切流纪律：relay id 唯一注册方——先停旧
+# 网关再起本包（docs/PLAN-真aginx入机.md 刀2）。
 # depends=aginx-secretd 只保安装序；启动序由 requires_weak 延到 secretd
 # ready（弱依赖，secretd 后死不拖累）。
 name = "aginx-gateway"
-version = "0.1.1"
-summary = "远端通道守护：8443 长连、agc 往返（凭据走 env 不进包）"
+version = "0.2.0"
+summary = "对外面守护（真 aginx）：8443 relay 长连、private 默认不对外、pair/auth 凭据面"
 group = "net"
 depends = "aginx-secretd"
-url = "https://pkgs.aginx.net/aginx-gateway/v0.1.1/aginx-gateway-v0.1.1-4pc.tar"
+url = "https://pkgs.aginx.net/aginx-gateway/v0.2.0/aginx-gateway-v0.2.0-4pc.tar"
+exec = "bin/aginx-gateway"
 
 [service]
-cmd = "/var/bin/aginx-gateway"
-args = []
+cmd = "/var/lib/aginx/pkgfiles/aginx-gateway/bin/aginx-gateway"
+args = ["-c", "/etc/aginx/gateway.toml"]
 type = "simple"
+envs = ["AGINX_DATA_DIR=/var/lib/aginx/gateway"]
 env_file = "/etc/aginx/env"
 requires_weak = ["aginx-secretd"]
