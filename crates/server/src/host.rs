@@ -232,14 +232,19 @@ impl Mother {
         Ok(())
     }
 
-    /// workflows/ 下的目录名（跳过文件与隐藏目录），me 不在其中。
+    /// workflows/ 下的目录名（跳过文件与隐藏目录），system 与老名 me 不在
+    /// 其中（me 残目录由 boot 迁移器清走，这里再拦一道防复活）。
     fn workflow_names(&self) -> Vec<String> {
         let root = self.home.join("workflows");
         let mut out = Vec::new();
         if let Ok(rd) = std::fs::read_dir(&root) {
             for e in rd.flatten() {
                 let name = e.file_name().to_string_lossy().to_string();
-                if name.starts_with('.') || name == SYSTEM_AGENT || !e.path().is_dir() {
+                if name.starts_with('.')
+                    || name == SYSTEM_AGENT
+                    || name == carrier_types::config::LEGACY_SYSTEM_AGENT_ME
+                    || !e.path().is_dir()
+                {
                     continue;
                 }
                 out.push(name);
