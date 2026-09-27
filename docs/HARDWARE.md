@@ -9546,3 +9546,36 @@ storage.md`（账户 storage 落账不回放=重启掉登录态，证据链四�
 morning 模板+晨报 flow）；term 404 真人收据（提醒·明早喝水卡待点）；
 session slice/brain 思考档=生态线；微信→iLink→spawn 链设计。
 
+## 2026-09-27 — #406 codex 安家裁决（Mac 方式）+ 注册表双案侦破 14/14 全绿
+
+**裁决（用户拍板「按照Mac方式」）**：provider 真身与壳层分离——
+**真身走 pkg 进 /var/bin**（与 Mac 同构：npm 装 binary 在 PATH；
+233MB 大件不进 /home，backup/state tar 不背，同「模型不进 tar」纪律）；
+**`providers/<名>/<名>` 是人格壳层**（几行 shim+inline 卡，exec 真身，
+router tier-1 裸名路由由此生效；没按名 spawn 需求前可不建壳）；
+状态家 `/home/.codex`。FS.md providers 节改写（17b6e70）。
+
+**注册表勘误三课**（勘 `aginx commands --check` 两存量错）：
+1. **router PATH 层只扫 `aginx-*`**——codex/grok 不进 router 清单
+   （裸名 provider 走 tier-1 家目录）；`/var/bin/*.aginxmd` 对非
+   aginx 名=纯文档卡（grok 先例），合法但无人读。
+2. **D13：shebang 脚本只认自身 inline 头，sidecar 对脚本无效**
+   （meta.rs is_script 分支）。aginx-proxy 报缺 summary 真因 =
+   pkgfiles wrapper 是 sh 脚本没写 inline 头，旁边 sidecar 白搭。
+   修：wrapper 补 inline 头出包 v0.1.1（sha 7437dfce），scp 显式
+   路径安装（adb 腿死，dev 免签通道三参式 install <name> <src> <sha>）。
+3. **aginx:kind= 不是 router 键**（parse_pairs unknown-key 分支）——
+   我造的 kind=provider 语义不存在，tier 本身就是语义。已从设备
+   文档卡撤掉；FS.md 相关表述改正。
+
+**aginx-carrier 存量错**：ELF symlink 缺 sidecar——设备补 hidden 卡
+（母体引擎旧独立腿，设备不役；服务器腿仍用）。groups.desc 补
+carrier/ui 两行。**终态：`aginx commands --check` 14/14 零错零警**。
+
+**不动**：stunnel PID 449 在跑（pkg 树同 sha 零行为变，不折腾重启）；
+`aginx-proxy --version` 会透传给 stunnel 当 conf 解析（wrapper 是
+透传脸，无 --version）。
+
+**挂账**：公共镜像还是 v0.1.0（本次走 dev 通道；enchilada 回网取
+更新前须把 v0.1.1 上镜）；adb 腿死待物理重启手机。
+
