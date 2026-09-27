@@ -9,7 +9,7 @@
 #                       — 生态仓真 aginx（~/Documents/aginx/aginx，独立
 #                         项目专人开发，本仓只装配不仿制）原样 zigbuild
 #                         musl 静态，bin 改名落树（2026-09-27 刀1；v0.1.x
-#                         仿制品 crates/gateway 退役——刀4 删源）
+#                         仿制品 crates/gateway 已于刀4 删源，收据 #412）
 #   两树包  aginx aginx-term
 #                       — 母体三件（router/server/runtime，刀3 合一）+
 #                         终端面板（term+字体，刀4 出镜像）
