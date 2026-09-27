@@ -9615,3 +9615,53 @@ DiscussingFilm Star Wars E10 导演帖 4.6万赞/666万浏览）。
 ALL_PROXY=… NO_PROXY=127.0.0.1,localhost /var/bin/grok -p "…" 
 --always-approve`（单轮 headless；工具批走 always-approve）。
 
+
+## 2026-09-27 — #408 派活正典化：flows 退场·助理直寻址·斥候线全通
+
+**用户两连纠**：①「你是你写命令啊，应该是你用 agc 给手机，手机出
+这样的结果」——ssh 进手机自己跑 grok 违宪（系统即智能体：活该母体
+体系干）；②「有 workflows 怎么又建了一个 flows」「flows 下的两个也
+需要放在 workflows 里」——**顶层 `/home/flows/` 整个退场**，能力=
+助理，一律住 `workflows/<名>/flows/`（FS.md 正典树本无顶层 flows，
+#403 的 /home/flows 是画外发明，本轮纠正）。
+
+**新架构事实（全部活体验证）**：
+- **助理可直寻址**：`agc agent://redfin.relay.aginx.net/<名>` 一发
+  即中（引擎按名拉起，FS.md「第二张脸」实证）。scout/template-gen/
+  morning-report 三助理直聊全部自报成功。
+- **斥候线全通**（本行正路）：Mac agc → relay → 手机斥候 → 其
+  grok-web flow → grok（隧道+browser MCP+原生 X）→ 结果落
+  `output/<ts>.md` → 再问取果 → 原文回传。数据与晨间 #407 双源
+  核对一致（elonmusk 241.6M/109.1K/Terafab.AI；xai→SpaceXAI 改名
+  2M/393/x.ai）。
+- **晨报迁晨报官**：morning-report 助理 + cron job 重建到它名下
+  （`0f39b295` 母体名下已删；新 job `496d3fac`，0 8 * * *
+  Asia/Shanghai，message 同文，delivery=morning 卡，还把
+  active_flow 钉死+300s 超时）。真火一发：回复即成品（中秋/亚运/
+  A股 全真材），morning 模板在 overlay 登记表确认在位。明早 08:00
+  三联首跑（cron+模板+成稿）待验。
+- **模板匠迁 template-gen 助理**：flow+scripts 原样搬家，调用路径
+  改 `/home/workflows/template-gen/flows/template-gen/scripts/gen.sh`，
+  shell_allow 通配 `*flows/template-gen/scripts/*` 不变仍匹配。
+
+**关键配方/坑（本轮新增）**：
+- **grok 状态家搬家**：母体进程 `HOME=/home`，手动配的
+  `/root/.grok` 母体看不见（grok 报 Not signed in）。正解=状态真源
+  `/home/.grok`（auth.json 0600+config.toml 带 browser MCP），
+  `/root/.grok` 改符号链接同源——母体腿/手动腿一份数据。
+- **provider 壳层**：`home/providers/grok/grok` shim（隧道
+  env+inline 卡 exec /var/bin 真身）——母体裸名 spawn grok 时 env
+  由壳层保证（#406 Mac 方式的实装首例）。
+- **relay turn gate 110s**：同步等 grok/全份晨报必被掐；异步形状=
+  派工秒回+后台腿（setsid）+回头取果（设备侧 turn 不受 agc 视图
+  死亡影响，继续跑完）。
+- **file_write 相对路径被发送者域收编**：`output/…` 落
+  `senders/<sender>/output/…`；要确定性归档必须绝对路径（flow 已
+  措辞钉死）。
+- **工具面三层**：核心面（金样本钉死，无 agent_*）∪ flow 声明注入
+  − deny；scout flow 踩过的坑=file_list 缺声明+相对路径取果（v2
+  已修：+file_list、max_iterations 6、绝对路径）。
+
+**挂账**：①母体核心工具面无 agent_send/spawn/list——「母体派活」
+  的宪法承诺需引擎改动（CORE_TOOL_NAMES+金样本有意更新），下一引擎
+  commit 做；②adb 腿仍死（待手机重启）；③公共镜像 v0.1.1 挂账同前。
