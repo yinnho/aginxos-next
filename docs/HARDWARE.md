@@ -9441,3 +9441,52 @@ bytes:6425}`，show.html 落盘；panel 05:17:36 接屏 1080x2340、缓存
 （本次即误诊「delivery 落 reply」，实为 WAL 未并）。zsh 侧 remote
 通配路径要整条引号，否则本地 glob 无匹配硬报错。
 
+## 2026-09-27 — #403 模板派工流：404 上报母体→codex 异步生成→出卡回话（redfin/Pixel 5）
+
+**案由**：#402 定的架构收口——模板制作不归会话代理手写，用户要新模板
+或卡片 404 unknown_template 时由母体派 codex 生成。grok 弃用（水平
+不够），codex v0.151.0 上岗。
+
+**速度修**：codex→brain 默认思考档首役 ~25 分钟（16.1k tokens，本地
+写盘秒级、墙钟全在 brain 推理往返——note.html 05:41→registry 05:50
+九分钟=单个 turn）。`/home/.codex/config.toml` 加
+`model_reasoning_effort = "low"`，复测同量级任务（todo 模板）
+**4 分 52 秒**、9.2k tokens，纪律全收（磷光变量/2620px 底/离线/
+模板内 JS markdown/tmp+mv+cmp 原子）。5 倍提速。
+
+**架构发现（me 的工作区根）**：`me` 的 workspace_root 是 `/home`
+本身（AGINX_HOME），母体自有 flow 住 **`/home/flows/`**——不是
+`workflows/me/flows/`（首测 flow_load 报 not found 才暴露；母体回信
+自证「流程本就注入在上下文里」=分类器按消息文本自动命中 template-gen，
+flow_load 只是备份腿）。出厂树真源随仓 `home/flows/`。
+
+**派工流三件**（`home/flows/template-gen/`，设备同步落位）：
+- `flow.md`：shell_allow `sh *flows/template-gen/scripts/*`，声明
+  shell_exec/file_read（flow 载入即注入工具面——母体默认无 shell）；
+- `scripts/gen.sh`：入口（id 校验小写英文+codex 在位检查+mkdir 原子
+  防重入锁）→ setsid 甩后台腿立即返回；
+- `scripts/run.sh`：锁→codex（金样本 reply/note/todo 喂进 prompt）→
+  验工件（页+registry grep）→ busybox nc 烟测上屏（stdin 保持铁律）→
+  **出卡即回话**：成功卡用新模板、失败卡走 reply 兜底，原子落
+  /home/cards/。
+
+**异步是铁的**：工具层 shell_exec 硬顶 TOOL_TIMEOUT_LONG_SECS=300s，
+codex low 档 4:52 贴边必炸——派工必须 fire-and-forget，完成通知走
+现成卡片通道（卡片=通知+预览+复验三合一），零轮询零撑turn。
+
+**term 404 腿**：cards.rs post_open Err 含 404+unknown_template →
+sh -c 后台甩 `/var/bin/aginx agent send me <报文>`（sh 内 `&` 双 fork
+免僵尸，文本走 env 免引号转义），面上给「模板 X 缺失，已派工生成」。
+ssh 直跑 `aginx` 会 PATH not found——必须绝对路径（term 腿已是）。
+
+**活体（全环路 poem 首飞）**：模拟 term 报文（模板 poem 不存在）→
+分类器命中→母体**自己补了风格描述**（诗意信纸：衬线/留白/居中诗句）
+→gen.sh 06:17:50 落锁开跑→codex 4.7 分钟出件（poem.html 4332B+
+registry 第 7 条，matches 诗/诗歌/诗词/诗句/短诗/poem）→烟测 200
+上屏→06:22:37 出卡「新模板 poem 就绪」→「全部完成」。上报到出卡
+~6 分钟。term musl 换装（md5 6688cd9c…，svcd 重生 pid 15805）。
+
+**挂账**：term 点卡 404 腿真人收据（drop 一张 template:zzz 卡点一下）；
+模型选择（哪类活给 codex 哪类给母体自己干）未立法； morgen 08:00
+晨报=新模板+新 prompt 双首火复验点。
+
