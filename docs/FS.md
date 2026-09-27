@@ -109,6 +109,16 @@ git、aginxbrowser 客户端、扫码装的小命令。二进制 + sidecar，不
 
 母体说「用 Codex 改这个」→ spawn `/home/providers/codex`。
 
+**模型分工**（2026-09-27 立法，#403 实践定型）：
+
+- **产出是对话的，母体自己答**：回答、摘要、检索取材、markdown 成稿——
+  brain 直答，会话内收口。
+- **产出是工件的，派 provider**：HTML 模板、代码生成这类文件工件长活
+  （预计超 4 分钟）——派 codex（grok 不接工件活：模板质量不过关，#402）。
+- **派工必须异步**：flow 只跑派工脚本立即返回，后台腿干活，完成以卡片
+  回话。工具层 shell 300s 硬顶撑不下长活；轮询等待、母体手写工件
+  （替 provider 代笔 HTML）都违宪。
+
 ### workflows — 助理（分身翻本）
 
 一个人很多助理。目录形态与 carrier `CLONE-FORMAT.md` 同一套，只是所有权在母体：
