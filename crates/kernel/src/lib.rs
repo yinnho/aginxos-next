@@ -16,6 +16,7 @@ pub mod error;
 pub mod event_bus;
 pub mod flow;
 pub mod flow_runner;
+pub mod gateway_registry;
 pub mod handle;
 pub mod heartbeat;
 pub mod kernel;

@@ -125,6 +125,7 @@ async fn install(
         println!("已安装：{display_name}（{agent_name}，id={id}）");
     }
     daemon_restart_hint();
+    println!("提示：对外直通面已入册；`aginx-svc restart aginx-gateway` 后 agent://…/{name} 可寻址。");
     Ok(())
 }
 
@@ -222,8 +223,14 @@ fn remove(kernel: &CarrierKernel, name: &str) -> anyhow::Result<()> {
     if ws.exists() {
         std::fs::remove_dir_all(&ws)?;
     }
+    // 刀3：卸载同步摘对外注册表（真 aginx agents 条目 + workflows.md 行）。
+    // 外围面失败不挡卸载主体——warn 降级。
+    if let Err(e) = carrier_kernel::gateway_registry::unregister(&kernel.config, name) {
+        eprintln!("WARN: 对外注册表摘除失败（agents toml / workflows.md）：{e}");
+    }
     println!("已卸载 {name}（workspace 已删除）");
     daemon_restart_hint();
+    println!("提示：对外直通面同步摘除；`aginx-svc restart aginx-gateway` 后网关名册生效。");
     Ok(())
 }
 
