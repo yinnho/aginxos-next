@@ -9,7 +9,7 @@
 | **母体** | `/home` 根上的 SOUL / MEMORY / 对人会话。总管 + 门面 | 助理之一、再套一层 mother 目录 |
 | **助理** | `/home/workflows/<名>/`。分身格式的翻本：性格、干什么、自己的 flows | 用户直接切过去聊天的「第二张脸」；不是 skill 包 |
 | **tools** | 普通 CLI | 助理、provider |
-| **providers** | Codex / Claude / Grok 这类 agent CLI | 助理、对话对象 |
+| **providers** | Codex / Claude / Grok 这类 agent CLI 的人格壳层：`providers/<名>/<名>`（几行 shim + inline 卡） | 助理、对话对象 |
 | **peers** | 别人的 `agent://` | 自己家里的助理 |
 
 母体**设置**每个助理：干什么（profile / default_flow）、性格（SOUL / system_prompt）。派活是母体的事。用户不对助理点名当操作系统，也不对 Codex 说话。
@@ -30,7 +30,7 @@ workspace 仍是执行工位（`run/`），用户脸上没有。
 /usr/bin            出厂 tool（aginx、aginx-term…）+ .aginxmd
 /usr/libexec/aginx  守护（server / runtime / gateway / secretd）
 /var                机器账：日志、模型、热换 bin
-/home               母体的家：总管人设 + 助理编制 + tools / providers / peers
+/home               母体的家：总管人设 + 助理编制 + peers（provider 真身在 /var/bin）
 ```
 
 OTA 不覆盖 `/home`。
@@ -56,10 +56,9 @@ OTA 不覆盖 `/home`。
 │       ├── <name>
 │       └── <name>.aginxmd
 │
-├── providers/              # Codex / Claude / Grok …
+├── providers/              # agent CLI 的人格壳层（轻 shim 指到 /var/bin 真身）
 │   └── <name>/
-│       ├── <name>
-│       └── <name>.aginxmd
+│       └── <name>          # 几行脚本 + inline 卡，不放大件
 │
 ├── workflows/              # 助理编制。一个目录 = 一个助理（分身翻本）
 │   └── <name>/
@@ -87,7 +86,7 @@ OTA 不覆盖 `/home`。
 └── secret/
 ```
 
-出厂 CLI 已经在 `/usr/bin`（同样 `.aginxmd`）。母体找命令：**先 `providers/`，再 `tools/`，再 PATH**。不必把 `aginx-qr` 再复制一份进 `/home`。
+出厂 CLI 已经在 `/usr/bin`（同样 `.aginxmd`）。母体找命令走 router 三层路由（resolve.rs 实装）：**先 `<home>/providers/<名>/`，再 `<home>/tools/<名>/`，再 PATH 的 `aginx-*`**——provider 走裸名路由（`codex` 就是 `codex`），aginx 宇宙带姓。不必把 `aginx-qr` 再复制一份进 `/home`。
 
 ### cards — 首页卡片 + 结果信封
 
@@ -95,19 +94,26 @@ OTA 不覆盖 `/home`。
 
 ### tools — 普通 CLI
 
-git、aginxbrowser 客户端、扫码装的小命令。二进制 + sidecar，不是人格。用户不对它说话。
+git、aginxbrowser 客户端这类。**首选走 pkg 进 `/var/bin`**（与 provider
+同路，只是 sidecar 无 kind 标记）；`/home/tools/` 仅作扫码装小命令的
+选装位。二进制 + sidecar，不是人格。用户不对它说话。
 
 ### providers — agent CLI
 
-从 Omarchy 拿来的分层：Codex / Claude / Grok 是 **provider**，不是分身。各有自己的二进制；session/用量留在该目录下或 `/home/run/`，不写进 `SOUL.md`。
+从 Omarchy 拿来的分层：Codex / Claude / Grok 是 **provider**，不是分身。
+2026-09-27 裁决（**Mac 方式**）——真身与壳层分离：
 
-```
-/home/providers/codex/
-  codex
-  codex.aginxmd
-```
+- **真身走 pkg 进 `/var/bin`**（`aginx-pkg opt-in codex`），与 Mac 同构
+  （npm 装、binary 在 PATH）；pkg 线自带签名/版本/更新/镜像。
+  233MB 大件不进 /home——backup/state tar 不背，与「模型不进 tar」
+  同纪律。
+- **`providers/<名>/<名>` 是人格壳**：几行 shim + inline `# aginx:` 卡，
+  exec 到 /var/bin 真身；router tier-1 裸名路由由此生效（母体按名
+  spawn）。没人在意按名 spawn 前可以不建壳。
+- **状态家在 `/home/.<名>`**（如 `/home/.codex`）；session/用量留在
+  状态家或 `/home/run/`，不写进 `SOUL.md`。
 
-母体说「用 Codex 改这个」→ spawn `/home/providers/codex`。
+母体说「用 Codex 改这个」→ 按名 spawn（tier-1 壳层解析到真身）。
 
 **模型分工**（2026-09-27 立法，#403 实践定型）：
 
@@ -197,7 +203,8 @@ aginxos-next/
 └── docs/FS.md
 ```
 
-用户后来装的 Codex 不进 git，进机上 `/home/providers/`。普通 CLI 进 `/home/tools/`。
+用户后来装的 Codex 不进 git，走 pkg 进机上 `/var/bin`（状态家
+`/home/.codex`；要按名 spawn 时补 `providers/codex/` 壳）。普通 CLI 同路。
 
 ---
 

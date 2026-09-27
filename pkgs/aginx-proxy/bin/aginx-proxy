@@ -1,4 +1,7 @@
 #!/bin/sh
+# aginx:summary=共享代理隧道：stunnel 客户端守护，本机 127.0.0.1:8800 socks5（conf/PSK 在 /etc/stunnel/ 设备侧，先写后装）
+# aginx:args=[conf路径/stunnel旗标…]
+# aginx:group=net
 # aginx-proxy face — stunnel 树包 wrapper（共享代理隧道，grok/aginxbrowser
 # 走本机 127.0.0.1:8800）。无参=默认 conf /etc/stunnel/aginx-proxy.conf
 # （simple 单元的调用形状）；带参原样透传（手工指定 conf / stunnel 旗标）。

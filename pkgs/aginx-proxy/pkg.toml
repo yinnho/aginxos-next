@@ -9,10 +9,10 @@
 # libssl3 + libcrypto3 + stunnel，sha256 逐件钉死 TOFU）+ wrapper 面
 # bin/aginx-proxy（首跑自链 /lib loader + LD_LIBRARY_PATH 指树内库）。
 name = "aginx-proxy"
-version = "0.1.0"
+version = "0.1.1"
 summary = "共享代理隧道：stunnel 客户端守护，本机 127.0.0.1:8800 socks5（conf/PSK 在 /etc/stunnel/ 设备侧，先写后装）"
 group = "net"
-url = "https://pkgs.aginx.net/aginx-proxy/v0.1.0/aginx-proxy-v0.1.0-4pc.tar"
+url = "https://pkgs.aginx.net/aginx-proxy/v0.1.1/aginx-proxy-v0.1.1-4pc.tar"
 exec = "bin/aginx-proxy"
 
 [service]
