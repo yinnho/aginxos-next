@@ -1,0 +1,13 @@
+{
+  "version": "2",
+  "name": "morning-report",
+  "description": "晨报 — 每日新闻官：定时任务（08:00）或用户要晨报时取材成稿，回复即成品，归档 markdown",
+  "author": "aginx",
+  "display_name": "晨报",
+  "tags": ["news", "daily", "report"],
+  "category": "官方",
+  "knowledge_version": 1,
+  "plugins": [],
+  "mcp_servers": [],
+  "default_flow": "morning-report"
+}

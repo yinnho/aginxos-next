@@ -31,7 +31,9 @@ web_search 今日新闻（`fetch_top` 拿正文一步搜读），按需分域补
 
 ## 归档（到此为止）
 
-全文存 `output/晨报-YYYY年M月D日.src.md`。
+全文存 `/home/workflows/morning-report/output/晨报-YYYY年M月D日.src.md`
+（file_write 的 path 一字不差用这个绝对路径——写相对 `output/` 会被
+发送者域收编到别处）。
 **归档=markdown 落盘即完成。禁止导 docx/pptx/pdf——设备没有
 pandoc，document_generate 在设备上不可用，试了必失败还污染回复。**
 

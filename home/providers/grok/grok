@@ -1,0 +1,12 @@
+#!/bin/sh
+# grok — provider 人格壳层：带上共享代理隧道 env 后 exec /var/bin/grok 真身。
+# 母体按裸名 spawn grok 时走这里（router tier-1 providers/ 路由），env 由
+# 壳层保证，调用方不用知道隧道配方。状态家 /home/.grok（auth+browser MCP）。
+# aginx:summary=grok CLI 壳层——隧道 env+状态家 /home/.grok，真身 /var/bin/grok（pkg 装）
+# aginx:args=[grok 原样旗标…]
+# aginx:group=providers
+export HTTPS_PROXY=socks5h://127.0.0.1:8800
+export ALL_PROXY=socks5h://127.0.0.1:8800
+export NO_PROXY=127.0.0.1,localhost
+export no_proxy=127.0.0.1,localhost
+exec /var/bin/grok "$@"
