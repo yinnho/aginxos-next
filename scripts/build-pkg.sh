@@ -3,8 +3,13 @@
 #
 # usage: scripts/build-pkg.sh <name> [--push <serial>]
 #
-#   四裸包  aginx-gateway aginx-secretd aginx-voice
+#   两裸包  aginx-secretd aginx-voice
 #                       — zigbuild musl 件 + pkgs/<name>/ 配方
+#   换芯树包  aginx-gateway
+#                       — 生态仓真 aginx（~/Documents/aginx/aginx，独立
+#                         项目专人开发，本仓只装配不仿制）原样 zigbuild
+#                         musl 静态，bin 改名落树（2026-09-27 刀1；v0.1.x
+#                         仿制品 crates/gateway 退役——刀4 删源）
 #   两树包  aginx aginx-term
 #                       — 母体三件（router/server/runtime，刀3 合一）+
 #                         终端面板（term+字体，刀4 出镜像）
@@ -82,7 +87,7 @@ mkdir -p "${OUT}"
 TARNAME="${PKG}-v${VER}-4pc.tar"
 
 case "${PKG}" in
-  aginx-gateway | aginx-secretd | aginx-voice)
+  aginx-secretd | aginx-voice)
     # crate 名≠包名的唯一例外：secretd 二进制住在 aginx-secret crate（双 bin）
     CRATE="${PKG}"
     [ "${PKG}" = "aginx-secretd" ] && CRATE="aginx-secret"
@@ -91,6 +96,28 @@ case "${PKG}" in
     mkdir -p "${STAGE}/bin"
     install -m 755 "${TARGET_DIR}/${PKG}" "${STAGE}/bin/${PKG}"
     MEMBERS="bin pkg.toml SKILL.md"
+    ;;
+  aginx-gateway)
+    # 换芯树包（刀1，2026-09-27）：真身=生态仓 aginx——四独立项目之一，
+    # 只构建不改码。out-of-tree CARGO_TARGET_DIR 保证生态仓工作树零
+    # 改动，--locked 钉死依赖闭包。生态 bin 名 aginx，落包改名
+    # aginx-gateway：真身居 pkgfiles，面 /var/bin symlink + .aginxmd
+    # （安装器自动生成），[service] cmd 直指真身。遇编译问题写需求
+    # 文档（docs/REQ-*.md）给专人，不在生态仓动手。
+    ECO="${AGINX_ECO:-$HOME/Documents/aginx/aginx}"
+    ECO_BUILD="${ROOT}/out/eco-aginx-build"
+    [ -f "${ECO}/Cargo.toml" ] || { echo "FATAL: 生态仓不在 ${ECO}（AGINX_ECO 可改指）" >&2; exit 1; }
+    echo "==> zigbuild 生态 aginx（${ECO}，musl，缓存则秒过）"
+    (cd "${ECO}" && CARGO_TARGET_DIR="${ECO_BUILD}" \
+      cargo zigbuild --release --locked --target aarch64-unknown-linux-musl)
+    ECO_BIN="${ECO_BUILD}/aarch64-unknown-linux-musl/release/aginx"
+    [ -x "${ECO_BIN}" ] || { echo "FATAL: ${ECO_BIN} 未产出" >&2; exit 1; }
+    # musl 静态自证（刀1 验收门）：非静态=zigbuild 链了 glibc，上机必炸
+    file "${ECO_BIN}" | grep -q "statically linked" \
+      || { echo "FATAL: 生态 aginx 非 musl 静态（$(file "${ECO_BIN}")）" >&2; exit 1; }
+    mkdir -p "${STAGE}/files/bin"
+    install -m 755 "${ECO_BIN}" "${STAGE}/files/bin/aginx-gateway"
+    MEMBERS="pkg.toml SKILL.md files"
     ;;
   aginx)
     # 母体树包（刀3 合一；结构刀① 起两件）：target 二进制名 aginx
@@ -331,7 +358,7 @@ case "${PKG}" in
     MEMBERS="pkg.toml SKILL.md files"
     ;;
   *)
-    echo "FATAL: 未知包名 ${PKG}（四裸包/两树包/三树包/刀F三包 zigbuild / 上游树包 git / aginx-proxy）" >&2
+    echo "FATAL: 未知包名 ${PKG}（两裸包/换芯树包/两树包/工具双包/三树包/刀F三包 zigbuild / 上游树包 git / aginx-proxy）" >&2
     exit 1
     ;;
 esac
