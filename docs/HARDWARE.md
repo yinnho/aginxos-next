@@ -9373,3 +9373,38 @@ v0.5.14+新 sha→aginx-sign 重签→（踩多文件坑后）mv 就位→
 
 **盘面**：redfin aginxbrowser 在役=公共包 v0.5.14；v0.5.9 镜像件
 保留。enchilada manifest（aginxbrowser 线）挂账继续。
+
+## 2026-09-27 — #401 cron 自我认知注入：任务 ID 段改定时任务触发段（redfin/Pixel 5）
+
+**案由**：晨报 08:01 自然火烧过（00:00–00:02:51 UTC，5 轮 5199
+tokens 落卡），但母体跑在已存在的晨报 cron 里，卡片却反问用户
+「**要不要把晨报设成每天早 8 点定时任务？你点头我就配上**」——
+cron 触发的 turn 没有自我认知，agent 把它当用户口头请求。
+
+**根因定位**：`Some(task_id)` 全仓唯一注入点＝daemon.rs:180 的
+cron AgentTurn 分支——任务 ID 段就是 cron 专属提示位，但旧文案
+（prompt_builder.rs `build_task_id_section`）只讲文件输出路径，
+只字不提「你是被定时任务唤醒的」。agent 有 `cron_list` 工具却
+不知道该用。
+
+**修**（19a74d5，零签名涟漪）：段名「任务 ID」→「定时任务触发」；
+段首加「本 turn 由定时任务自动触发，不是用户发来的消息」；规则
+加「触发你的定时任务已经存在——先 cron_list 查现状，不要反问
+用户要不要建、不要重复创建」。原有 output/ 路径规则与链式流水线
+区分（08-19 坑4）原样保留，chain-aware 测试扩活体断言。
+
+**换装**：zigbuild aginx-server musl（21.4M，sha256
+`400bfd18…`）→ /var/lib/aginx 同 fs staging → md5 双端等
+（d61c14cf…）→ mv 落位 chmod 755 → aginx-svc restart，pid
+442→18258，/proc/exe 解析真身无误。
+
+**活体验证**：设备建 one-shot 探针 cron「cron认知探针」
+（job_id bad37faf），05:07:05 触发，1 轮 165 tokens。turn 摘要
+原话：「说明**本轮由定时任务“cron认知探针”（job_id bad37faf）
+触发，而非用户直接发消息**，判断依据是**系统注入的定时触发
+上下文**（任务ID「cron认知探针-20260927」和输出目录）」——
+认知、归因、出处三样全对。
+
+**挂账不动的**：①晨报 flow classifier no match（裸 turn 跑），
+flow 钉法另案；②pandoc 缺件（晨报 docx 归档失败），包装配另案。
+
