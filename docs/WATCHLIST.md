@@ -194,6 +194,37 @@ lightpanda（浏览器）/moondream（视觉）之后再证「为 agent 不为�
 立身之本），定位=同赛道工具箱非竞品；隐身军备（TLS 伪装/Camoufox）
 不进——对抗性泥潭，轻量伪装够用。
 
+## Paperclip——Agent 组织架构控制面（管理产品 vs OS 的正面撞款）
+
+[paperclipai/paperclip](https://github.com/paperclipai/paperclip)（87.7k★/15.5k
+fork，2026-03 出生七个月冲顶，日历版 v2026.916.x 日更，TypeScript
+Node+React，MIT core + EE 开核——零运行时交集，偷机制不偷代码）：
+「自主 AI 公司的控制面」——Company 一阶对象（目标+全 agent 员工+
+组织树+预算），四种 adapter 雇佣异构运行时（本地 CLI 会话启停
+Claude Code/Codex/Cursor、跑命令、HTTP webhook 唤醒、插件），Slack
+19 文件当人类通道。README 定位句「OpenClaw 是员工，Paperclip 是
+公司」。
+
+**记它**：①**雇佣契约同型判断**——「if it can receive a heartbeat,
+it's hired」≡ D12 外部件一律 CLI；但方向相反：它控制面**叠在别人
+运行时上**（Claude Code 当执行面），我们引擎内置盒内零 hop——管理
+产品 vs OS 的正面撞款，赛道验证（30 贡献者 87.7k★=「agent 管理层」
+营销爆发，DupHub/派活台站位旁证）。②**任务 because 链**——每任务
+上溯「为什么」直到公司目标，对齐机制=这条链，比裸优先级队列强，
+D16 派活台可用。③**evidence-classifier + 完成契约/续跑契约**——
+native-runtime 132 文件专做「agent 说做完了→验收证据分级」，我们
+「confirm on device 未眼验不算数」纪律的机器化形态。④**预算硬停**
+（月额度烧完即停）——母体派活给 grok/brain 的同款护栏。⑤skills
+治理「权限是 opt-in 限制不是 opt-in 能力」+安全不变量焊死 core——
+与 FS.md clone 格式拒绝 `skills/` 的显式分歧点，留观谁对。⑥组织
+树把 agent 当雇员管（角色/汇报线/预算）——「agents 不是 users」
+第四家（Violoop 双芯片、TabTin 治理、Cloudflare 能力引入制之后）。
+
+**再评估触发**：D16 派活台迭代（because 链+预算硬停抄机制时）；
+验收证据分级立项（evidence-classifier 参照时）。届时注意：它的
+真相层是任务+评论（Jira for agents），我们会话日志真源——偷目标
+追溯不偷任务模型；Node 重栈不进卡。
+
 ## 附：已完成研究（不在 watchlist，已转行动）
 
 - Termux → [TERMUX-STUDY.md](TERMUX-STUDY.md)（recipes 仓/fallback
