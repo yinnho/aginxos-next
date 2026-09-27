@@ -9490,3 +9490,34 @@ registry 第 7 条，matches 诗/诗歌/诗词/诗句/短诗/poem）→烟测 20
 模型选择（哪类活给 codex 哪类给母体自己干）未立法； morgen 08:00
 晨报=新模板+新 prompt 双首火复验点。
 
+## 2026-09-27 — #404 清账：晨报 flow 上机+pandoc 定谳+远端通道回环复验（redfin/Pixel 5）
+
+**pandoc 挂账定谳**：今晨 00:02Z 晨报卡自带败报「文件归档没成——缺
+pandoc」。追根：job 消息只有「给我今天的晨报」（DB 三件套直读），
+**docx 归档是模型自由发挥**；`document_generate` 工具本身=甩 pandoc
+（document.rs:101），设备 L0 无 pandoc 天然瘸。裁决：晨报产品=卡片
++src.md，docx 不上进设备（Haskell 大件不值）；教训进 flow 条文。
+
+**晨报卡难看真因**：卡片 data.body=模型**回复原文**——模型把全文
+存了 src.md、回复只给了道歉+反问，卡上自然只剩过程话。立规「回复
+即成品」。
+
+**晨报 flow 上机**（`home/flows/morning-report/flow.md`，9574341）：
+取材（web_search+fetch_top）→ 成稿格式（# 晨报·日期 首行、分栏、
+12~25 条）→ 归档止于 md+**禁 docx/pptx/pdf**（设备无 pandoc）→
+交付=回复正文即全文、禁包裹语/道歉语/任务 ID、禁反问定时任务。
+明早 08:00 = 新 prompt（#401）+ morning 模板（#402）+ 本 flow
+三件首火复验点。
+
+**远端通道回环复验（HANDOFF 运行面清账）**：Mac
+`agc agent://redfin.relay.aginx.net/me '通道复验：回一个字 活'`
+→ 真答「活」。Mac 腿+relay.aginx.net+redfin 网关+母体全链在役
+（agc 6eef4d3 配置腿 ~/.aginx/config.toml 裸跑）。
+
+**term 404 真人收据布卡**：/home/cards/20260927-064000-reminder.json
+（template=reminder 不存在，title 提醒·明早喝水）——点开应触发：
+term 报母体→派 codex 生成 reminder 模板→出新卡。**待真人点**。
+
+**仍在账**：enchilada 离线（ping 不通，manifest 重钉挂账继续）；
+session slice 边界漂移、brain per-key 思考档=生态线账。
+
