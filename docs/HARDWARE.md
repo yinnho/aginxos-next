@@ -9521,3 +9521,28 @@ term 报母体→派 codex 生成 reminder 模板→出新卡。**待真人点**
 **仍在账**：enchilada 离线（ping 不通，manifest 重钉挂账继续）；
 session slice 边界漂移、brain per-key 思考档=生态线账。
 
+## 2026-09-27 — #405 清账续：服务器腿换装定谳+REQ 两件落仓+模型分工立法
+
+**服务器腿（86quan）router 换装定谳（HANDOFF#4 清）**：repo 在
+5658af7（spool 丢件柜台件），binary 09-26 11:11 构建、11:12 起跑至今
+无重启；`~/.aginx/spool/` 柜台活且空=无积压丢件。三腿（Mac/relay/
+redfin）+服务器腿全数在役。服务器 brain 今日 00:06 重建在跑
+（ef0c48e）；per-key 思考档仍是生态线自己的账。
+
+**REQ 两件落仓**（6a334e9，本仓 docs/）：`REQ-aginxbrowser-account-
+storage.md`（账户 storage 落账不回放=重启掉登录态，证据链四入口+
+单点接线建议）+ `REQ-aginx-hub-asset-kind.md`（DupHub kind 字段
+三味协议 clone/agx-flow/agx-template，缺省 clone 全向后兼容）。
+均「待裁决」——给生态线，不是补丁（禁改仓纪律）。
+
+**模型分工立法（挂账清）**：FS.md providers 节立三条文——产出是
+对话的母体自己答（brain 直答会话内收口）；产出是工件的派 provider
+（codex；grok 不接工件活 #402）；派工必须异步（flow 只跑派工脚本
+立即返回+后台腿+卡片回话，轮询/母体代笔 HTML 违宪）。SOUL.md 铁律
+加第四条同义条文，scp 上机（md5 三点一致）**活体复验：母体逐字
+背出第四条**——SOUL 现行会话直接生效（db71114）。
+
+**仍挂**：enchilada 离线；明早 08:00 三件首火（cron 新 prompt+
+morning 模板+晨报 flow）；term 404 真人收据（提醒·明早喝水卡待点）；
+session slice/brain 思考档=生态线；微信→iLink→spawn 链设计。
+
