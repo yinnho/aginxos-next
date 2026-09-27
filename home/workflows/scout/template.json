@@ -1,0 +1,13 @@
+{
+  "version": "2",
+  "name": "scout",
+  "description": "斥候 — 墙外取材助理：派 grok 走共享代理隧道（带浏览器 MCP 和原生 X 检索）去看母体直连到不了的网页数据，只取材不成稿，原文交回母体组织作答",
+  "author": "aginx",
+  "display_name": "斥候",
+  "tags": ["web", "retrieval", "grok"],
+  "category": "官方",
+  "knowledge_version": 1,
+  "plugins": [],
+  "mcp_servers": [],
+  "default_flow": "grok-web"
+}

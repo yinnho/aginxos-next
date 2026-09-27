@@ -23,7 +23,7 @@ max_iterations: 6
 ## 派工（唯一动作）
 
 ```
-sh /home/flows/template-gen/scripts/gen.sh <模板id> <一句话风格/用途描述>
+sh /home/workflows/template-gen/flows/template-gen/scripts/gen.sh <模板id> <一句话风格/用途描述>
 ```
 
 - 模板 id：小写英文（如 note / todo / poem），不是中文

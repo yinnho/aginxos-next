@@ -1,0 +1,13 @@
+{
+  "version": "2",
+  "name": "template-gen",
+  "description": "模板匠 — aginxbrowser 显示模板的生成官：接单即派 codex 异步生成，验工件+烟测+出卡，完成后卡片即预览",
+  "author": "aginx",
+  "display_name": "模板匠",
+  "tags": ["template", "codex", "aginxbrowser"],
+  "category": "官方",
+  "knowledge_version": 1,
+  "plugins": [],
+  "mcp_servers": [],
+  "default_flow": "template-gen"
+}
