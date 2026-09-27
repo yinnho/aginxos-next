@@ -9408,3 +9408,36 @@ cron AgentTurn 分支——任务 ID 段就是 cron 专属提示位，但旧文�
 **挂账不动的**：①晨报 flow classifier no match（裸 turn 跑），
 flow 钉法另案；②pandoc 缺件（晨报 docx 归档失败），包装配另案。
 
+
+## 2026-09-27 — #402 晨报专属模板 morning 上机：盘上层加名+job 换装（redfin/Pixel 5）
+
+**架构定谳**：aginxbrowser 模板两层——二进制内置=裸装地板（weather/
+reply/qr），盘上 `/var/lib/aginxbrowser/templates/registry.json`=真源
+且**可加新名**（tmpl.rs `load_at` 盘上注册表优先、任意 id；测试
+`unknown_template_carries_known_list` 的 listen 即证）。加模板=纯盘上
+数据操作，零重编零重启（registry 每次 render 现读）。
+
+**出件**：morning.html（磷光终端 v1：报头「晨报」大字+AGINX MORNING
++日期眉双规线+markdown 正文+报尾；数据形状同 reply {question,body}，
+母体零改动；日期=点开时刻设备钟——隔日翻旧卡日期跟点开走，已记）。
+源件 `.local/aginxbrowser-templates/`（部署真源；上仓归 aginxbrowser
+线，同 account-storage 需求单路数）。
+
+**部署**：morning.html+registry.json（加 morning 条目，matches
+晨报/早报/morning）双件 *.new+mv 落位，md5 双端等（6739fe08…/
+6643fe49…）。
+
+**活体**：POST /open{template:morning, 今晨真卡 data}→`{ok:true,
+bytes:6425}`，show.html 落盘；panel 05:17:36 接屏 1080x2340、缓存
+1080x2620 66ms、showing the page——**屏幕在演，真人眼验待用户**。
+
+**job 换装**：旧 job 7a28b62f（09-25 建，template reply）remove；
+新 job 0f39b295 同排期同消息，delivery `card{晨报, morning}`，DB
+复核落值正确，next_fire 2026-09-28T00:00Z（明早 08:00）。明日晨报
+卡即带 morning，term 点卡走新模板。
+
+**新坑（WAL 快照）**：设备 SQLite 拉库校验必须连 `carrier.db-wal`
+（4.1MB 未 checkpoint）+`-shm` 三件套一起 scp——只拉主库读到旧世代
+（本次即误诊「delivery 落 reply」，实为 WAL 未并）。zsh 侧 remote
+通配路径要整条引号，否则本地 glob 无匹配硬报错。
+
