@@ -9781,3 +9781,36 @@ relay.primary 保留=旧网关回滚即用）。**不回滚的理由**：仿制�
 transcript 已露面一次——轮换待用户裁，轮换=Mac agc 配置+两机 secretd 同步换）；
 ②刀3 install 三写（装 workflows 助理时同步写 agents toml）；③刀4 删
 crates/gateway 源+镜像 manifest 收尾；④enchilada 同配方换装（回网后）。
+
+## #411 刀3 安装链三写收据（redfin，2026-09-27）
+
+**引擎**：`crates/kernel/src/gateway_registry.rs`（新模块）——装
+workflows/<名> 助理时三写：①kernel DB（spawn_agent 既有）②真 aginx
+agents 条目 `$AGINX_DATA_DIR/agents/<名>/aginx.toml`（raw 方言
+`args=["acp","--clone",名]`，PATH 步进解析 carrier 真身）③
+`/home/workflows.md` 能力注册表行（排序 upsert）。卸载对称两摘；外围
+失败 warn 降级不回滚。`agent install/remove` CLI 提示补网关重启句（册
+是启动期建的不热扫）。母体包 v0.1.9→v0.1.10（单元 envs 加
+AGINX_DATA_DIR=/var/lib/aginx/gateway 与网关守护同世界）。
+
+**验收**（host 裸测 + redfin 双跑）：
+- host：/tmp 裸环境 install test-clone → 三写全落；remove → ①目录空
+  ②注册表行没（头保留）。
+- 设备：install 带 env → 三写落 `/var/lib/aginx/gateway/agents/` +
+  `/home/workflows.md`，carrier 真身解析 /var/bin/aginx-carrier ✓；
+  `agc agent://redfin.relay.aginx.net/test-clone` 真答 7.8s（raw 流式
+  增量+result，sessionId 续接票）✓；remove → ①②对称消失 ✓。
+
+**补刀（装机验收抓的劈叉，v0.1.10）**：装带 AGINX_DATA_DIR、卸裸跑时
+`~/.aginx` 兜底落进无人世界（设备无该目录、无人写它）→ ①条目卸不掉。
+修：解析序 env → `<home>/gateway-data` 收敛指针（symlink，悬空=没指）
+→ ~/.aginx 兜底；首次带 env 写入自愈落指。复验：装带 env 落指针
+`/home/gateway-data -> /var/lib/aginx/gateway`，**裸跑**卸载①②全对称
+摘除 ✓。单测 3/3（指针收敛/env 优先/换指/悬空）。
+
+**收尾烟测**：母体 v0.1.10 在役 ready；网关册回 codex 单条；
+`agc agent://…/codex` 真答正常（sessionId 01a0e39a…）。
+
+**挂账**：①镜面 manifest 上架 v0.1.10（v0.1.9 不外发）；②刀4 旧线
+退役（crates/gateway 删+镜像收尾+enchilada 同配方）；③刀5 no-me 线
+（roster 读腿=workflows.md 唯一真源）。
