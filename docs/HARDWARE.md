@@ -9721,3 +9721,63 @@ WAL 三件套拉齐再看**（呼应 [[device-sqlite-wal-pull]]，只拉主库=�
 **挂账**：①母体核心面无 agent_*（#408，下一引擎 commit）；②adb 腿死（待手机
   重启）；③公共镜像 v0.1.1。**新登记**：生态挂账「手机微信控 grok 路由层
   （#397）」地基即此——微信→绑定的助理→其 flow（斥候/模板匠/晨报官皆可直接对外）。
+
+## 2026-09-27 — #410 刀2 redfin 切流：真 aginx v0.2.0 换装+配对+三负例（redfin/Pixel 5）
+
+**背景**：五刀章程（docs/PLAN-真aginx入机.md）刀1 出包已落（9db6a16+cb815e4：
+生态仓 HEAD 5658af7 原样 zigbuild musl 静态 4882360B，同包换芯 v0.2.0 树包）。
+本收据=刀2：停旧仿制品、真身换装、配对、正负例验收。
+
+**时间线（relay 侧 journalctl 权威）**：15:26:27 旧 aginx-gateway（仿制品）
+断开；15:28:07 `Aginx [redfin] registered from 127.0.0.1:54900`——真 aginx
+上线。装后 stopped=受控起（安装器不自动起，断路器零触发）。
+
+**换装序实测**（SKILL.md 已固化）：停旧 → scp .new+mv → `aginx-pkg install`
+（dev 显式路径免签）→ 验面 `/var/bin/aginx-gateway` → symlink 指
+pkgfiles 真身（旧 flat 件消失）→ `aginx-svc start`。
+
+**四个坑（全进 SKILL.md/pkg.toml 档案）**：
+1. **CLI 子命令不认 -c**：pair/auth 走 `find_default_config` 四级候选
+   （./aginx.toml → ./.aginx → ~/.aginx → **/etc/aginx/config.toml**）——
+   配置必须落 /etc/aginx/config.toml 守护与 CLI 才同源（首版 pkg.toml 写
+   gateway.toml，cb815e4 已改）。
+2. **relay secret 真源=secretd store** 非 env：旧网关 env/gateway.toml 皆无
+   secret，`relay.primary`（64 hex）住 /var/lib/aginx/secret/store（明文
+   JSON 0600）。搬迁=store 直读 sed 抽值进 config.toml（busybox nc 无 -U，
+   sidecar 套接字设备侧无腿）。**relay 侧是单把全局 `--secret`**（86quan
+   进程参数），哈希两侧比对一致才注册成功。
+3. **jwt_secret 生成坑**：busybox 无 basenc，`cmd1|head` 管道退出码取 head
+   成功假象 → `||` 永不触发 → 空串。正解 `od -An -tx1`（64 hex）。
+4. **无 agent 拒启**：agents 目录空 → 交互式 setup（svcd 下 stdin EOF→跳过）
+   → exit(1) → 断路器。先铺 codex 条目再首启。
+
+**codex 条目**（/var/lib/aginx/gateway/agents/codex/aginx.toml）：
+`output="codex-exec-json"`、path=/var/bin/codex、
+`args=["exec","--json","--skip-git-repo-check"]`（folder=/root 非信任目录，
+首帧被 codex 拒——加旗标即过）、`resume_args=["resume","${SESSION_ID}"]`、
+timeout=300（缺省 120 贴 brain 轮时延）。agent_type/folder 必填项实测：
+AgentConfig 无 working_dir 字段，cwd=folder。
+
+**验收数据**：
+- 正例①：`agc agent://redfin.relay.aginx.net/codex` 真答 16.8s（brain 轮）；
+  sessionId `01a0e37d…`（thread.started 收割 ✓）。
+- 正例②：`-s <sessionId>` 续话原样复述上轮问题 ✓（同 thread，16.8s）。
+- 负例 A（无凭据，假 HOME 空钥匙串）：「该网关是私有的」拒 ✓。
+- 负例 B（主人钥匙串打裸根）：-32602 missing field `agent` ✓——裸根结构性
+  不可打，正等刀5 系统条目补执行脸。
+- 负例 C（scoped token `-a scout` 打 codex）：拒 ✓（codex ∉ 白名单）。
+- 绑定台账：device-abd098cb "sophiehe-mac" 15:30；auth.json 客户端 in place；
+  sessions.json+spool（丢件柜台）状态世界齐。
+
+**agc 侧**：`--bind kC99fc --device-name sophiehe-mac` 一发入
+~/.aginx/agc/tokens.json，bind 回执自带名册（「可用分身: codex」）。
+
+**回滚**：`aginx-pkg rollback aginx-gateway` + 重起单元（旧 config
+/etc/aginx/gateway.toml 与 AGINX_GATEWAY_ID env 原样未动，secretd store
+relay.primary 保留=旧网关回滚即用）。**不回滚的理由**：仿制品无权限模型、
+裸根直达母体光标——已被三负例证明是真品结构性堵掉的。
+
+**挂账**：①relay 全局 secret 在 86quan 进程参数（journalctl/pgrep 可见，
+transcript 已露面一次——轮换待用户裁，轮换=Mac agc 配置+两机 secretd 同步换）；
+②刀3 install 三写（装 workflows 助理时同步写 agents toml）；③刀4 删
+crates/gateway 源+镜像 manifest 收尾；④enchilada 同配方换装（回网后）。
