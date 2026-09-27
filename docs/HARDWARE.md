@@ -9823,3 +9823,52 @@ AGINX_DATA_DIR=/var/lib/aginx/gateway 与网关守护同世界）。
 pkgfiles/aginx-gateway 真身，envs 带 AGINX_DATA_DIR），无旧单元残留。
 镜面上架（aginx-gateway v0.2.0 + aginx v0.1.10 + manifest 换钉）随
 推送窗口挂账；enchilada 回网后同配方挂账。
+
+## #413 刀5 no-me 收据：me 退场，system 即系统本人（2026-09-28）
+
+五刀收官（docs/PLAN-真aginx入机.md）。裁决：系统即智能体、不应有
+me——系统本人改名 `system`（家根身份不变，uuid 保持 ⇒ cron/会话账/
+flow_runs/事件账零重映射）。代码 15c10eb + 0ff7597（v0.1.11）+
+4d53cc9（补刀）+ c402a19（v0.1.12）；check.sh 全绿（kernel 迁移器
+5/5 单测，含复活体重启持久性）。
+
+**v0.1.11 上机（第一拍）**：装机重启，boot 迁移器落账——me（uuid
+986f8deb…）原地改名 system（display 系统）、weixin 绑定行 UPDATE
+me→system（1 行，SenderRouter boot 播种即改路）。`/home/workflows/me`
+残目录当时未动。
+
+**复活体（装机收据现场抓的劈叉）**：boot 迁移器改完名后 host
+reconcile 扫 workflows/ 目录——旧世界 `<workflows>/me/` 残目录还在，
+又 spawn 出一只**新 uuid 的 me**（7e80045f…）：册上 system 与 me 并存
+的分裂脑。v0.1.11 收回不外发（仅本机装机一件；复活体即它装的）。
+
+**v0.1.12 补刀（在役，sha 36ff773f…）**：
+- 迁移器加复活体摘除（system 在册而 me 又在册 → registry+DB 摘除；
+  零历史幽灵，uuid 键控状态无一件是它的）。
+- 目录世界：`workflows/me/senders/`（微信来信人会话史+晨报产物）并入
+  家根 `/home/senders/`（文件级 union，家根已有的赢），残树整棵清走
+  ——必须删：目录在 me 就每次 boot 复活（违「只搬不删」N5 纪律，但
+  残目录本身就是 bug 的根）。并入失败不清树（下次 boot 重试）。
+- host reconcile 再拦一道 LEGACY 名双保险。
+- 出厂 `home/workflows.md` 编制名册进厂树；设备册回填（包装不碰
+  /home，包只管码）。
+
+**验收（全部设备实测）**：
+- `workflows/` = clone-creator / morning-report / scout / template-gen
+  四助理，无 me；agent list 干净，迁移日志三腿全落（摘除复活体 /
+  senders 并家根 / 残树清走）。
+- `agc agent://redfin.relay.aginx.net/system` 往返真答 15.8s，答文点
+  名编制四助理——名册注入系统提示活着。
+- 本机 `aginx agent send system` 直答正常。
+- cron `每日晨报` 活在 morning-report 名下（0 8 * * * Asia/Shanghai，
+  agent_turn「给我今天的晨报」，uuid 键控免搬的直接验证）；owner 侧
+  cron_list 自报下次运行 09-28 08:00。
+- codex 不受伤（agc codex pong）。
+
+**两笔备注**：①system 自称母体「我」——SOUL.md 出厂树人格措辞是
+工厂树内容后续调，非代码缺陷；②weixin 行被 v0.1.11 内存态回写 'me'
+后 v0.1.12 再改名一次——一次性回声，现自洽。
+
+**挂账**：镜面上架 aginx v0.1.12 + aginx-gateway v0.2.0 + manifest
+换钉（推送窗口）；enchilada 回网后同配方；term 404→模板匠转派；
+B 路裸根默认条目作上游特性请求（docs/REQ → aginx 项目）。
