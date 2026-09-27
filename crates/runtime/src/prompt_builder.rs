@@ -102,6 +102,9 @@ pub struct PromptContext {
     pub knowledge_content: Option<String>,
     /// Clone's sub-agents — workspace/agents/*.md parsed at prompt build time.
     pub clone_agents_md: Option<String>,
+    /// 系统本人的编制名册 — home/workflows.md 全文（刀5 唯一真源：装/卸
+    /// 链同步写，系统据此派活）。仅系统身份填充；助理为 None。
+    pub system_roster_md: Option<String>,
     /// EVOLUTION.md body text (rules only, frontmatter stripped).
     pub evolution_rules_md: Option<String>,
     // --- V3 identity layer (名人分身专属) ---
@@ -252,6 +255,16 @@ pub fn build_system_prompt(ctx: &PromptContext) -> String {
                 sections.push(format!(
                     "## 子代理\n你可以将任务委派给以下子代理。每个子代理有独立的指令和工具。\n\n{}",
                     cap_str(agents, 2000)
+                ));
+            }
+        }
+
+        // 系统本人 → workflows 助理编制（home/workflows.md 唯一真源，刀5）
+        if let Some(ref roster) = ctx.system_roster_md {
+            if !roster.trim().is_empty() {
+                sections.push(format!(
+                    "## 编制（workflows 助理）\n你是系统本人；以下是本机在册的 workflows 助理（home/workflows.md，安装链自动维护）。需要专业能力时把任务派给对应助理（agent://<本机>/<名> 或 send 到助理名）；册上没有的就自己干——你是全能本体，无 workflows 也是智能体。\n\n{}",
+                    cap_str(roster, 2000)
                 ));
             }
         }

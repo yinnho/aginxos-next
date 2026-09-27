@@ -190,20 +190,21 @@ pub fn seed_brain_skeleton_if_missing() {
     }
 }
 
-/// 系统身份种子：母体（"me"）住在家根——她的人格就是家目录本身
-/// （SOUL.md / MEMORY.md 在 {AGINX_HOME} 根上，docs/FS.md）。不走 clone
-/// 安装管线：那会清空重装目录，家根绝不能进。
+/// 系统身份种子：系统本人（"system"）住在家根——系统即智能体（09-27
+/// 裁决），人格就是家目录本身（SOUL.md / MEMORY.md 在 {AGINX_HOME} 根上，
+/// docs/FS.md）。不走 clone 安装管线：那会清空重装目录，家根绝不能进。
 ///
 /// 未注册时：建家目录 + sessions/，再以 workspace=家根 spawn。家根人格
 /// 文件不在这里种——出厂树随镜像烤进 /home（结构刀②③④，真源=仓里
 /// `home/` 整树），这里只管注册。已注册即跳过；失败只告警不挡启动，
-/// 重启重试。
-pub async fn seed_system_me(kernel: &Arc<CarrierKernel>) {
+/// 重启重试。刀5 no-me：老 seed_system_me（"me"）退场，boot 迁移器
+/// （kernel::migrations）负责把旧 me 世界搬过来。
+pub async fn seed_system_agent(kernel: &Arc<CarrierKernel>) {
     use carrier_types::agent::AgentManifest;
 
     if kernel
         .registry
-        .find_by_name(carrier_types::config::SYSTEM_AGENT_ME)
+        .find_by_name(carrier_types::config::SYSTEM_AGENT)
         .is_some()
     {
         return;
@@ -211,25 +212,30 @@ pub async fn seed_system_me(kernel: &Arc<CarrierKernel>) {
 
     let home = kernel.config.home_dir.clone();
     if let Err(e) = std::fs::create_dir_all(&home) {
-        tracing::warn!(error = %e, "me 种子失败：家目录不可建（不影响启动，重启重试）");
+        tracing::warn!(error = %e, "system 种子失败：家目录不可建（不影响启动，重启重试）");
         return;
     }
 
     if let Err(e) = std::fs::create_dir_all(home.join("sessions")) {
-        tracing::warn!(error = %e, "me sessions 目录创建失败");
+        tracing::warn!(error = %e, "system sessions 目录创建失败");
     }
 
     let manifest = AgentManifest {
-        name: carrier_types::config::SYSTEM_AGENT_ME.to_string(),
-        display_name: "我".to_string(),
-        description: "母体 — 对主人是总管，对外是门面（家根身份）".to_string(),
+        name: carrier_types::config::SYSTEM_AGENT.to_string(),
+        display_name: "系统".to_string(),
+        description: "系统本体 — OS 进程即智能体；对主人是总管，对外是门面（家根身份，无 workflows 也是智能体）".to_string(),
         workspace: Some(home),
         generate_identity_files: false,
         ..Default::default()
     };
     match kernel.spawn_agent(manifest) {
-        Ok(id) => tracing::info!(id = %id, "母体已种子：me（workspace=家根）"),
-        Err(e) => tracing::warn!(error = ?e, "me 种子失败（不影响启动，重启重试）"),
+        Ok(id) => {
+            tracing::info!(id = %id, "系统本人已种子：system（workspace=家根）");
+            // 刀5 A 路：系统直通条目随种子落（boot 闸只认在册，新世界第一
+            // 拍在这里补）
+            carrier_kernel::gateway_registry::ensure_system_entry(&kernel.config);
+        }
+        Err(e) => tracing::warn!(error = ?e, "system 种子失败（不影响启动，重启重试）"),
     }
 }
 

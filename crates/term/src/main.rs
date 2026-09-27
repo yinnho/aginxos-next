@@ -2446,7 +2446,7 @@ fn host_ppm(out: &str) {
                 title: "天气 · 南京".into(),
                 template: "weather".into(),
                 source: "cron".into(),
-                session: "me".into(),
+                session: "system".into(),
             },
             cards::Card {
                 path: "/home/cards/2026-09-23-trip.json".into(),
@@ -3415,7 +3415,7 @@ fn main() {
                                                     let _ = std::process::Command::new("sh")
                                                         .arg("-c")
                                                         .arg(
-                                                            "/var/bin/aginx agent send me \
+                                                            "/var/bin/aginx agent send system \
                                                              \"$AGINX_TG_TEXT\" >/dev/null 2>&1 &",
                                                         )
                                                         .env("AGINX_TG_TEXT", text)

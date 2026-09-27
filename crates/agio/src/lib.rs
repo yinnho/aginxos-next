@@ -124,11 +124,11 @@ mod tests {
 
     #[test]
     fn fail_shape_and_codes() {
-        let v = fail_hint(ErrorType::Usage, "missing_arg", "need <name>", "try: aginx agent send me 你好");
+        let v = fail_hint(ErrorType::Usage, "missing_arg", "need <name>", "try: aginx agent send system 你好");
         assert_eq!(v["ok"], json!(false));
         assert_eq!(v["error"]["type"], json!("usage"));
         assert_eq!(v["error"]["code"], json!("missing_arg"));
-        assert_eq!(v["error"]["hint"], json!("try: aginx agent send me 你好"));
+        assert_eq!(v["error"]["hint"], json!("try: aginx agent send system 你好"));
         assert_eq!(ErrorType::Usage.exit_code(), 2);
         assert_eq!(ErrorType::NotFound.exit_code(), 1);
         assert_eq!(ErrorType::Internal.exit_code(), 1);

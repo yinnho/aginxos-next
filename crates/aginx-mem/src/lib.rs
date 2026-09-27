@@ -91,12 +91,12 @@ pub struct AgmemCtx {
     pub workspace_root: Option<PathBuf>,
 }
 
-/// 人面默认身份。owner="default"/user="local" 是人面自己的域；agent="me"
-/// 对齐手机注册的主化身；user="local" 标记"这是本机人手，不是任何渠道
-/// 来信"。
+/// 人面默认身份。owner="default"/user="local" 是人面自己的域；agent=
+/// "system" 对齐系统本人（刀5 no-me：原 "me" 退场）；user="local" 标记
+/// "这是本机人手，不是任何渠道来信"。
 pub fn default_identity() -> AgmemCtx {
     AgmemCtx {
-        agent_id: "me".to_string(),
+        agent_id: "system".to_string(),
         owner_id: Some("default".to_string()),
         user_id: Some("local".to_string()),
         home_dir: None,
@@ -318,7 +318,7 @@ mod tests {
     #[test]
     fn ctx_of_falls_back_to_default_identity() {
         let c = ctx_of(&json!({"key": "k"}), default_identity());
-        assert_eq!(c.agent_id, "me");
+        assert_eq!(c.agent_id, "system");
         assert_eq!(c.owner_id, Some("default".to_string()));
         assert_eq!(c.user_id, Some("local".to_string()));
     }

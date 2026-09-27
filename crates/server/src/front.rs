@@ -21,8 +21,9 @@ use std::sync::{Mutex, MutexGuard};
 /// v0 每化身一个常驻会话；多会话（D10 切会话）后续按 sessions/ 清单加。
 pub const SESSION_MAIN: &str = "main";
 
-/// 母体的名字。既是光标的默认值，也是 `aginx agent send me …` 的目标。
-pub const MOTHER: &str = "me";
+/// 系统本人的名字（刀5 no-me：原 "me" 退场）。既是光标的默认值，也是
+/// `aginx agent send system …` 的目标。
+pub const MOTHER: &str = "system";
 
 /// 退房词（D10 退）：整段完全匹配才算——正文里顺带提到不退房。
 /// 与 M42a 语音封闭词表同源，host v0 收敛到这一小撮。
@@ -82,7 +83,7 @@ impl FrontDesk {
         }
     }
 
-    /// 当前住台的化身（"me" = 母体）。
+    /// 当前住台的化身（"system" = 系统本人）。
     pub fn cursor(&self) -> String {
         self.cursor.lock().unwrap_or_else(|p| p.into_inner()).clone()
     }
@@ -287,8 +288,8 @@ mod tests {
         assert_eq!(d.cursor(), MOTHER);
         // 再不点名：再派（派活是常态，不是一次性行为）
         assert!(matches!(d.resolve_send(None, "帮我查点东西"), Ok(SendTarget::Avatar(n)) if n == "小喜"));
-        // 显式 me 仍母体直答（点名优先于派活）
-        assert!(matches!(d.resolve_send(Some("me"), "你是谁"), Ok(SendTarget::Mother)));
+        // 显式 system 仍系统直答（点名优先于派活）
+        assert!(matches!(d.resolve_send(Some("system"), "你是谁"), Ok(SendTarget::Mother)));
     }
 
     #[test]
@@ -301,8 +302,8 @@ mod tests {
         assert_eq!(d.cursor(), "小满");
         // 住：不点名给当前光标
         assert!(matches!(d.resolve_send(None, "继续"), Ok(SendTarget::Avatar(n)) if n == "小满"));
-        // 点名 me：显式回母体
-        assert!(matches!(d.resolve_send(Some("me"), "hi"), Ok(SendTarget::Mother)));
+        // 点名 system：显式回系统本人
+        assert!(matches!(d.resolve_send(Some("system"), "hi"), Ok(SendTarget::Mother)));
         assert_eq!(d.cursor(), MOTHER);
     }
 
@@ -327,7 +328,7 @@ mod tests {
     fn create_validates_names() {
         let (d, _dir) = desk("create");
         assert!(d.create_avatar("", None).is_err());
-        assert!(d.create_avatar("me", None).is_err());
+        assert!(d.create_avatar("system", None).is_err());
         assert!(d.create_avatar("../escape", None).is_err());
         assert!(d.create_avatar(".hidden", None).is_err());
         let ws = d.create_avatar("小满", Some("  你是小满。  ")).unwrap();

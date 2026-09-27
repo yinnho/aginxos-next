@@ -227,6 +227,20 @@ pub fn unregister(config: &KernelConfig, name: &str) -> std::io::Result<()> {
     roster_remove(&config.home_dir, name)
 }
 
+/// 刀5：系统本人的直通条目（A 路：`agent://<机>.relay.aginx.net/system`
+/// 即刻可用）。只写 agents toml（①）不写注册表行（②）——workflows.md 是
+/// 助理名册，系统不是助理。幂等 upsert，kernel boot 期调用。
+pub fn ensure_system_entry(config: &KernelConfig) {
+    let root = resolve_data_root(&config.home_dir);
+    if let Some(env_root) = env_data_root() {
+        ensure_home_pointer(&config.home_dir, &env_root);
+    }
+    let desc = "系统本体 — OS 进程即智能体（无 workflows 也是智能体）";
+    if let Err(e) = write_entry(&root, carrier_types::config::SYSTEM_AGENT, "系统", desc) {
+        tracing::debug!(error = %e, "系统直通条目写入失败（agc 对外 system 面暂缺）");
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

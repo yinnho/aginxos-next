@@ -25,6 +25,7 @@ pub mod mcp_conn;
 pub mod mcp_docker;
 pub mod mcp_registry;
 pub mod messaging;
+pub mod migrations;
 pub mod metering;
 pub mod plugins;
 pub mod prompt_sources;

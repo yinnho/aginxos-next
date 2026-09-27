@@ -999,12 +999,12 @@ impl CarrierKernel {
             )));
         }
 
-        // 母体不是助理：她住在家根（agent_workspace_dir 特判），绝不能走
-        // clone 管线——install 的 reinstall-clear 分支会把家根清空。她由
-        // wiring::seed_system_me 用独立种子路径落位。
-        if name == carrier_types::config::SYSTEM_AGENT_ME {
+        // 系统本人不是助理：system 住在家根（agent_workspace_dir 特判），
+        // 绝不能走 clone 管线——install 的 reinstall-clear 分支会把家根清空。
+        // 由 wiring::seed_system_agent 用独立种子路径落位。
+        if name == carrier_types::config::SYSTEM_AGENT {
             return Err(CarrierError::Internal(
-                "'me' 是母体（家根身份），不能作为 clone 安装".into(),
+                "system 是系统本人（家根身份），不能作为 clone 安装".into(),
             ));
         }
 

@@ -168,7 +168,7 @@ mod tests {
         .unwrap();
         std::fs::write(
             dir.join("2026-09-23-morning.json"),
-            r#"{"title":"今天的晨报","template":"morning","data":{},"source":"cron","session":"me"}"#,
+            r#"{"title":"今天的晨报","template":"morning","data":{},"source":"cron","session":"system"}"#,
         )
         .unwrap();
         std::fs::write(dir.join("2026-09-23-broken.json"), "{ not json").unwrap();
@@ -180,7 +180,7 @@ mod tests {
         assert_eq!(cards[0].template, "morning");
         assert_eq!(cards[0].source, "cron");
         // 刀4：session 读出；老卡（昨天的晨报）没有该字段=空
-        assert_eq!(cards[0].session, "me");
+        assert_eq!(cards[0].session, "system");
         assert_eq!(cards[1].session, "");
         assert!(scan(Path::new("/nonexistent-aginx-cards")).is_empty());
     }

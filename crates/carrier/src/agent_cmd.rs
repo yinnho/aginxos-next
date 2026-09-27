@@ -209,8 +209,8 @@ fn list(kernel: &CarrierKernel, json: bool) {
 }
 
 fn remove(kernel: &CarrierKernel, name: &str) -> anyhow::Result<()> {
-    if name == carrier_types::config::SYSTEM_AGENT_ME {
-        anyhow::bail!("me 是母体（家根身份），不可卸载");
+    if name == carrier_types::config::SYSTEM_AGENT {
+        anyhow::bail!("system 是系统本人（家根身份），不可卸载");
     }
     let entry = kernel
         .registry

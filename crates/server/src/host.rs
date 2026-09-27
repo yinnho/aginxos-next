@@ -20,7 +20,7 @@ use crate::front::{FrontDesk, SteerOutcome, MOTHER};
 use agi::{Done, Frame};
 use carrier_kernel::kernel::CarrierKernel;
 use carrier_types::agent::AgentManifest;
-use carrier_types::config::{KernelConfig, SYSTEM_AGENT_ME};
+use carrier_types::config::{KernelConfig, SYSTEM_AGENT};
 use carrier_types::observer::TurnObserver;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
@@ -239,7 +239,7 @@ impl Mother {
         if let Ok(rd) = std::fs::read_dir(&root) {
             for e in rd.flatten() {
                 let name = e.file_name().to_string_lossy().to_string();
-                if name.starts_with('.') || name == SYSTEM_AGENT_ME || !e.path().is_dir() {
+                if name.starts_with('.') || name == SYSTEM_AGENT || !e.path().is_dir() {
                     continue;
                 }
                 out.push(name);
@@ -264,15 +264,24 @@ impl Mother {
         // 不落树——FS.md 的家根与助理形状都不认。母体的 SOUL/MEMORY 随
         // 镜像出厂树来（烤线整树拷），助理的性格由 create 面（soul 参数）写。
         manifest.generate_identity_files = false;
-        if name == SYSTEM_AGENT_ME {
-            // 母体 manifest 对齐 wiring::seed_system_me 的语义（那边是老
-            // carrier 入口的种子；server 直调路径自己种，不背 carrier crate）
-            manifest.display_name = "我".to_string();
-            manifest.description = "母体 — 对主人是总管，对外是门面（家根身份）".to_string();
+        if name == SYSTEM_AGENT {
+            // 系统本人 manifest 对齐 wiring::seed_system_agent 的语义（那边
+            // 是老 carrier 入口的种子；server 直调路径自己种，不背 carrier crate）
+            manifest.display_name = "系统".to_string();
+            manifest.description =
+                "系统本体 — OS 进程即智能体；对主人是总管，对外是门面（家根身份，无 workflows 也是智能体）"
+                    .to_string();
         }
-        self.kernel
+        let id = self
+            .kernel
             .spawn_agent_with_parent(manifest, None, None)
-            .map_err(|e| format!("spawn agent '{name}': {e}"))
+            .map_err(|e| format!("spawn agent '{name}': {e}"))?;
+        // 刀5 A 路：系统直通条目随种子落（boot 闸只认在册，新世界第一拍
+        // 在这里补）
+        if name == SYSTEM_AGENT {
+            carrier_kernel::gateway_registry::ensure_system_entry(&self.kernel.config);
+        }
+        Ok(id)
     }
 
     /// create 面用：新助理进 kernel 在册（幂等）。前台文件夹由
@@ -423,7 +432,7 @@ mod tests {
         let me_log = agent_log(&dir, MOTHER);
         let frames = read_frames(&me_log);
         assert_eq!(frames.len(), 2);
-        assert!(matches!(&frames[0], Frame::Request(r) if r.text == "你是谁" && r.turn == 1 && r.avatar == "me"));
+        assert!(matches!(&frames[0], Frame::Request(r) if r.text == "你是谁" && r.turn == 1 && r.avatar == "system"));
         assert!(matches!(&frames[1], Frame::Done(x) if x.ok && x.turn == Some(1)));
 
         // 助理轮：工具帧经观察者落账
@@ -438,8 +447,8 @@ mod tests {
         assert!(matches!(&frames[2], Frame::ToolResult(r) if r.id == "c1" && !r.ok && !r.err.is_empty()));
         assert!(matches!(&frames[3], Frame::Done(x) if x.ok && x.turn == Some(1)));
 
-        // kernel 侧真在册：me 与 小满 都有 agent
-        assert!(mother.kernel.registry.find_by_name("me").is_some());
+        // kernel 侧真在册：system 与 小满 都有 agent
+        assert!(mother.kernel.registry.find_by_name("system").is_some());
         assert!(mother.kernel.registry.find_by_name("小满").is_some());
     }
 
@@ -536,11 +545,11 @@ mod tests {
         assert!(!dir.join("brain.json").exists());
     }
 
-    /// 账本路径律：me=home/sessions，助理=home/workflows/<名>/sessions。
+    /// 账本路径律：system=home/sessions，助理=home/workflows/<名>/sessions。
     #[test]
     fn agent_log_layout() {
         let home = std::path::Path::new("/home");
-        assert_eq!(agent_log(home, "me"), PathBuf::from("/home/sessions/main.jsonl"));
+        assert_eq!(agent_log(home, "system"), PathBuf::from("/home/sessions/main.jsonl"));
         assert_eq!(
             agent_log(home, "小满"),
             PathBuf::from("/home/workflows/小满/sessions/main.jsonl")
