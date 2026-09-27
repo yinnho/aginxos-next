@@ -9322,3 +9322,54 @@ net-watch）。
 
 **盘面**：设备在役=包 v0.1.8（=git 尖 4835f49 同源）；08:00 晨报前
 6.5h 完成换装，账四摊④ 自然火不受扰。enchilada manifest 挂账继续。
+
+## 2026-09-27 — #400 aginxbrowser v0.5.9→v0.5.14 升级：镜像换钉+四路 md5+V8 活体烟测（redfin/Pixel 5）
+
+**对账**：生态仓 HEAD 从开工时 v0.5.13@283cd01 一路走到
+**v0.5.14@8e0dac8**（外来会话同窗落 release 提交，含 CSS Transforms
+L2/ch-ex 单位两 feat+竞争清扫三修+BUILTIN_FLOWS 样本内置）。首烘件
+版本号与 commit 戳错位（0.5.14 版号配 f9f042b 戳），全缓存重烘 1m38s
+拿干净件：**v0.5.14@8e0dac8**，sha256
+`fd55c976cd34bf7cf269085adc3f8d6db135371792e40fc363bf2f4d15ae80dc`，
+md5 `f30538d1300bf9c6a9dc28ae588e285e`，80M。
+
+**v8 musl 资产坑（新）**：`~/.cargo/.rusty_v8/` 只有宿主档
+（aarch64-apple-darwin）键，musl 目标键缺失→build script 裸连
+github 卡死 21min 0% CPU（无报错）。昨日 v0.5.9 能出件疑走
+RUSTY_V8_ARCHIVE 本地路径（/tmp 已清）。修法=gh-proxy.com 镜像
+单流整拉 37.6MB `simdutf_release_aarch64-unknown-linux-musl.a.gz`
+（`gh api` 腿与 86quan 直连均 ~50KB/s 爬行；镜像单流实际 >1MB/s，
+小文件探测会失真）；官方 digest `sha256:54db6a6a…` 全等核验后落
+缓存键（URL→下划线变形名），**不用 RUSTY_V8_ARCHIVE**（宿主/目标
+连坐=宿主链 mach-o 炸）。重烘即过。
+
+**多文件 scp 造目录坑（新）**：`scp a b host:/etc/agpkg.manifest.new`
+——目标不存在+多源=scp 自动建**目录**把件装进去，不是覆写。修法=
+件落目录内再逐个 mv 就位+rmdir。单文件推新名才安全（#399 律）。
+
+**包链**：镜像 `pkgs.aginx.net/aginxbrowser/v0.5.14/
+aginxbrowser-0.5.14-aarch64-unknown-linux-musl-screenshot`（沿 v0.5.9
+裸二进制形状，install_file 走 place_binary v0 路径）；本地/镜像 sha
+全等，公网 200 content-length 精确。manifest aginxbrowser 行换钉
+v0.5.14+新 sha→aginx-sign 重签→（踩多文件坑后）mv 就位→
+`opt-in aginxbrowser`（83829792 bytes 精确）→`aginx-svc restart`。
+
+**四路 md5 全等**：本地烘件=`/var/bin/aginxbrowser`=
+`/proc/7292/exe`=镜像拉件源。stamp=`fd55c976…`（sha256 钉）。
+
+**活体验证**：
+- `/health`：`version 0.5.14, commit 8e0dac8`，engine diting、
+  screenshot:true；
+- 代理腿完好：pid 7292 环境 AGINXBROWSER_PROXY=socks5h://127.0.0.1:8800；
+- **V8 活体烟测**：data:text/html 经 /fetch 强制 browser tier，页内
+  JS `document.getElementById("x").textContent=…` 真执行——正文
+  回「V8 执行过」而非静态文本「V8 静态」，标题对，tier:"browser"；
+- 模板覆盖层与 HEAD 四件（qr/registry/reply/weather）md5 全同，无
+  旧热修压新地板。
+
+**晨报彩蛋**：换装前旧件日志 00:01 UTC（=08:01 CST）一串
+「9月27日新闻早报」搜索——**账四摊④ 晨报已自然火烧过**（走 v0.1.8
+零思考栈），报文投递待晨验。
+
+**盘面**：redfin aginxbrowser 在役=公共包 v0.5.14；v0.5.9 镜像件
+保留。enchilada manifest（aginxbrowser 线）挂账继续。
