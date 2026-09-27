@@ -1129,6 +1129,7 @@ impl CarrierKernel {
 
         let agent_name = manifest.name.clone();
         let display_name = manifest.display_name.clone();
+        let description = manifest.description.clone();
         let id = self
             .spawn_agent(manifest)
             .map_err(|e| CarrierError::Internal(format!("Spawn failed: {e}")))?;
@@ -1143,6 +1144,22 @@ impl CarrierKernel {
 
         if !plugins.is_empty() {
             self.resolve_plugin_dependencies(&plugins).await;
+        }
+
+        // 刀3 三写的对外两笔（DB=spawn_agent 已写①）：真 aginx agents 条目
+        // + workflows.md 注册表行。外围面失败不回滚安装——warn 降级。
+        let display = if display_name.is_empty() {
+            clone_name.clone()
+        } else {
+            display_name.clone()
+        };
+        if let Err(e) = crate::gateway_registry::register(
+            &self.config,
+            &clone_name,
+            &display,
+            &description,
+        ) {
+            tracing::warn!(name = %clone_name, error = %e, "对外注册表写入失败（agents toml / workflows.md）");
         }
 
         tracing::info!(
