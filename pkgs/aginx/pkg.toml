@@ -1,5 +1,10 @@
 # aginx — 母体包（D11 母体=aginx）。刀2 起 server 进程内直调 kernel，
 # 不再 spawn aginx-runtime（该二进制已随结构刀①物理删除）。
+# v0.1.11（2026-09-28）：刀5 no-me——me 退场，system=系统本人（家根身份）。
+# boot 迁移器把旧 me 原地改名 system（uuid 保持，cron/会话账零重映射；
+# weixin bind_agent 行 UPDATE）；agents/system/aginx.toml 直通条目随种子落
+# （agent://<机>.relay.aginx.net/system 即刻可对话）；system 轮读
+# /home/workflows.md 编制名册进系统提示（据此派活、册上没有自己干）。
 # v0.1.10（2026-09-27）：刀3 补刀——agents 根解析加收敛指针
 # `<home>/gateway-data`（env 优先→指针→~/.aginx；首次带 env 写入自愈
 # 落指），修装机收据 #411 抓到的装/卸劈叉（装带 env、卸裸跑落
@@ -35,11 +40,11 @@
 # AGINX_BIN 指 /var/bin/aginx（face symlink）。刀F 起 depends 锚
 # aginx-update（装母体自动带自更新器；裸箱升级=重刷）。
 name = "aginx"
-version = "0.1.10"
+version = "0.1.11"
 summary = "母体：路由器 face /var/bin/aginx + 心脏 server（进程内直调 kernel）+ carrier CLI 面"
 group = "agent"
 depends = "aginx-update"
-url = "https://pkgs.aginx.net/aginx/v0.1.10/aginx-v0.1.10-4pc.tar"
+url = "https://pkgs.aginx.net/aginx/v0.1.11/aginx-v0.1.11-4pc.tar"
 exec = "bin/aginx"
 
 [service]
