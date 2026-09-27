@@ -7,10 +7,16 @@
 # 权限模型（v0.1.x 全缺，真品自带）：access=private 默认不对外；主人=
 # pair 出码 → agc --bind 入钥匙串；第三方=auth 发 scoped token
 # （allowed_agents 点名）。裸根结构性不可 prompt（agent 参数必填）。
-# 运维序铁律（沿 v0.1.x 必修④）：先写 /etc/aginx/gateway.toml（[relay]
-# id/relay_secret、[server] access、[auth] jwt_secret；0600）再 opt-in
-# 本包——缺 id 裸 exit(1) 会 5 连崩进断路器停摆；停摆=显式
-# `aginx-svc start aginx-gateway` 才醒。
+# 配置落位两坑（生态源码定案）：
+#   ① 必须是 /etc/aginx/config.toml——CLI 子命令（pair/auth）不认 -c，
+#     走 find_default_config 四级候选（./aginx.toml → ./.aginx/config.toml
+#     → ~/.aginx/config.toml → /etc/aginx/config.toml），守护与 CLI 要
+#     同一份文件；运维面调用须带 AGINX_DATA_DIR=/var/lib/aginx/gateway。
+#   ② 无 agent 拒启：has_agents() 空则交互式 setup（stdin EOF→跳过）→
+#     exit(1)→5 连崩断路器。首启前必须先铺 ≥1 个
+#     $AGINX_DATA_DIR/agents/<名>/aginx.toml（刀3 codex 条目先行）。
+# relay 注册握手 = {id, token: relay_secret}——relay_secret 从旧 env 的
+# AGINX_RELAY_SECRET 搬入，先写配置再装本包（缺 id 裸 exit(1) 同断路器）。
 # 状态归 N5 世界：AGINX_DATA_DIR=/var/lib/aginx/gateway（绑定台账、
 # 丢件柜台、agents 注册表）。切流纪律：relay id 唯一注册方——先停旧
 # 网关再起本包（docs/PLAN-真aginx入机.md 刀2）。
@@ -26,7 +32,7 @@ exec = "bin/aginx-gateway"
 
 [service]
 cmd = "/var/lib/aginx/pkgfiles/aginx-gateway/bin/aginx-gateway"
-args = ["-c", "/etc/aginx/gateway.toml"]
+args = ["-c", "/etc/aginx/config.toml"]
 type = "simple"
 envs = ["AGINX_DATA_DIR=/var/lib/aginx/gateway"]
 env_file = "/etc/aginx/env"
