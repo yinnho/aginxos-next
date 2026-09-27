@@ -323,8 +323,8 @@ pub trait KernelHandle: Send + Sync {
         None
     }
 
-    /// Unbound-inbound fallback target (system identity「me」). None/empty =
-    /// keep the bind-only routing law (drop unbound messages).
+    /// Unbound-inbound fallback target (system identity「system」, 刀5 no-me).
+    /// None/empty = keep the bind-only routing law (drop unbound messages).
     fn inbound_fallback_agent(&self) -> Option<String> {
         None
     }

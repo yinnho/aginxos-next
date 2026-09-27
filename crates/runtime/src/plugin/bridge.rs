@@ -530,9 +530,9 @@ impl PluginBridgeManager {
         String::new()
     }
 
-    /// Fallback identity for unbound inbound messages (default「me」).
-    /// Returns None when the feature is off or the fallback identity is not
-    /// registered — the caller then keeps the drop behavior.
+    /// Fallback identity for unbound inbound messages (default「system」,
+    /// 刀5 no-me). Returns None when the feature is off or the fallback
+    /// identity is not registered — the caller then keeps the drop behavior.
     fn resolve_fallback(&self) -> Option<String> {
         resolve_fallback_agent(
             self.kernel.inbound_fallback_agent().as_deref(),
@@ -896,28 +896,28 @@ mod inbound_fallback_tests {
     }
 
     #[test]
-    fn unbound_routes_to_me_when_registered() {
-        let agents = vec![agent("uuid-tiny", "tiny-pilot"), agent("uuid-me", "me")];
+    fn unbound_routes_to_system_when_registered() {
+        let agents = vec![agent("uuid-tiny", "tiny-pilot"), agent("uuid-sys", "system")];
         assert_eq!(
-            resolve_fallback_agent(Some("me"), &agents),
-            Some("uuid-me".to_string())
+            resolve_fallback_agent(Some("system"), &agents),
+            Some("uuid-sys".to_string())
         );
     }
 
     #[test]
     fn disabled_switch_keeps_drop() {
-        let agents = vec![agent("uuid-me", "me")];
+        let agents = vec![agent("uuid-sys", "system")];
         // Config off (None) and explicit empty string both disable the feature.
         assert_eq!(resolve_fallback_agent(None, &agents), None);
         assert_eq!(resolve_fallback_agent(Some(""), &agents), None);
     }
 
     #[test]
-    fn me_not_installed_keeps_drop() {
+    fn system_not_installed_keeps_drop() {
         let agents = vec![agent("uuid-tiny", "tiny-pilot")];
-        assert_eq!(resolve_fallback_agent(Some("me"), &agents), None);
+        assert_eq!(resolve_fallback_agent(Some("system"), &agents), None);
         // Empty registry too.
-        assert_eq!(resolve_fallback_agent(Some("me"), &[]), None);
+        assert_eq!(resolve_fallback_agent(Some("system"), &[]), None);
     }
 }
 

@@ -765,7 +765,7 @@ fn run_outs(
                     let sess = hit.clone().or_else(|| {
                         page.as_deref()
                             .and_then(screen::card_session)
-                            .or_else(|| Some("me".to_string()))
+                            .or_else(|| Some("system".to_string()))
                     });
                     if let Some(s) = &sess {
                         eprintln!("aginx-voice: session {s}");
@@ -796,7 +796,7 @@ fn run_outs(
                     // 追问原地重写同卡；前台没答上（地板话）不落卡。
                     if front_ok {
                         if let Some(sh) = shown {
-                            let s = sess.unwrap_or_else(|| "me".into());
+                            let s = sess.unwrap_or_else(|| "system".into());
                             if let Some(p) = screen::save_card(
                                 &screen::cards_dir(),
                                 page.as_deref(),
@@ -956,7 +956,7 @@ fn report_missing_template(tpl: &str, known: &[String]) {
         known.join("、")
     );
     eprintln!("aginx-voice: report missing template {tpl}");
-    if let Err(e) = chat_front(&msg, Some("me")) {
+    if let Err(e) = chat_front(&msg, Some("system")) {
         eprintln!("aginx-voice: report: {e}");
     }
 }

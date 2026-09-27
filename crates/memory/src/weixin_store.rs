@@ -107,4 +107,21 @@ impl WeixinSessionStore {
         .map_err(|e| CarrierError::Memory(e.to_string()))?;
         Ok(())
     }
+
+    /// 刀5 no-me 迁移：绑定行的 agent 名搬家（me → system）。返回受影响
+    /// 行数；幂等（无旧行=0）。
+    pub fn rename_bind_agent(&self, from: &str, to: &str) -> CarrierResult<usize> {
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| CarrierError::Internal(e.to_string()))?;
+        let n = conn
+            .execute(
+                "UPDATE weixin_sessions SET bind_agent = ?1, updated_at = datetime('now') \
+                 WHERE bind_agent = ?2",
+                rusqlite::params![to, from],
+            )
+            .map_err(|e| CarrierError::Memory(e.to_string()))?;
+        Ok(n)
+    }
 }

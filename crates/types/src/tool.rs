@@ -101,7 +101,7 @@ impl PermissionLevel {
             // contact_prompt — send a message to a local clone or remote agent://
             // contact (spend gated by the owner's consent flow on the far side);
             // contacts_list — read-only listing. Both are the system identity
-            // 「me」's hub tools, injected via its flow's tools: declaration.
+            // 「system」's hub tools, injected via its flow's tools: declaration.
             | "contact_prompt" | "contacts_list" => Self::Write,
 
             // Execute — cross-boundary writes

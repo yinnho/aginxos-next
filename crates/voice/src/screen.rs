@@ -316,7 +316,7 @@ mod tests {
     fn save_card_new_then_update_in_place() {
         let dir = tmpdir("save");
         let data = serde_json::json!({"city": "南京"});
-        let p1 = save_card(&dir, None, "帮我看下南京的天气", "weather", &data, "me")
+        let p1 = save_card(&dir, None, "帮我看下南京的天气", "weather", &data, "system")
             .expect("new card saved");
         assert!(p1.starts_with(&dir), "card lives in the cards dir");
         let raw = std::fs::read_to_string(&p1).unwrap();
@@ -325,11 +325,11 @@ mod tests {
         assert_eq!(doc["template"], "weather");
         assert_eq!(doc["data"]["city"], "南京");
         assert_eq!(doc["source"], "chat");
-        assert_eq!(doc["session"], "me");
+        assert_eq!(doc["session"], "system");
 
         // 追问：同卡重写，内容换新
         let data2 = serde_json::json!({"city": "北京"});
-        let p2 = save_card(&dir, Some(&p1), "改成北京", "weather", &data2, "me")
+        let p2 = save_card(&dir, Some(&p1), "改成北京", "weather", &data2, "system")
             .expect("update saved");
         assert_eq!(p2, p1, "follow-up rewrites the same card");
         let doc: serde_json::Value =
@@ -340,11 +340,11 @@ mod tests {
 
         // 超长问句截 16 字；空问句给占位（title 空的卡 term 扫不出来）
         let long = "今".repeat(40);
-        let p3 = save_card(&dir, None, &long, "reply", &data, "me").unwrap();
+        let p3 = save_card(&dir, None, &long, "reply", &data, "system").unwrap();
         let doc: serde_json::Value =
             serde_json::from_str(&std::fs::read_to_string(&p3).unwrap()).unwrap();
         assert_eq!(doc["title"].as_str().unwrap().chars().count(), 16);
-        let p4 = save_card(&dir, None, "  ", "reply", &data, "me").unwrap();
+        let p4 = save_card(&dir, None, "  ", "reply", &data, "system").unwrap();
         let doc: serde_json::Value =
             serde_json::from_str(&std::fs::read_to_string(&p4).unwrap()).unwrap();
         assert_eq!(doc["title"], "对话");

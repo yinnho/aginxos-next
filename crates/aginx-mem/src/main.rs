@@ -25,8 +25,8 @@ struct Cli {
     /// knowledge/flow 面的 workspace 根（机读面经 _ctx.workspace_root 注入）
     #[arg(long, global = true)]
     workspace: Option<String>,
-    /// 身份三元组：agent（默认 me）
-    #[arg(long, global = true, default_value = "me")]
+    /// 身份三元组：agent（默认 system，刀5 no-me）
+    #[arg(long, global = true, default_value = "system")]
     agent: String,
     /// 身份三元组：owner（默认 default）
     #[arg(long, global = true, default_value = "default")]

@@ -690,7 +690,8 @@ pub struct KernelConfig {
     /// webhook HTTP 入站通道（机器→agent 事件触达）。
     #[serde(default)]
     pub webhook: WebhookConfig,
-    /// 未绑定入站消息的兜底落点（系统身份「我」）。None/空 = 维持
+    /// 未绑定入站消息的兜底落点（系统本人——刀5 no-me 后由 boot 迁移器
+    /// 保证 system 在册）。None/空 = 维持
     /// 第十二刀立法（无路由即丢弃）。兜底不写回 SenderRouter——扫码
     /// 绑定才固化路由，这里只是"别让陌生人石沉大海"。
     #[serde(default = "default_inbound_fallback_agent")]
@@ -698,7 +699,7 @@ pub struct KernelConfig {
 }
 
 fn default_inbound_fallback_agent() -> Option<String> {
-    Some("me".to_string())
+    Some(SYSTEM_AGENT.to_string())
 }
 
 /// webhook HTTP 入站通道（config.toml `[webhook]` 段）——分身被外部事件
@@ -1046,12 +1047,12 @@ impl KernelConfig {
             .unwrap_or_else(|| self.home_dir.join("workflows"))
     }
 
-    /// Workspace directory for one agent by name. The mother ("me") lives at
-    /// the home root itself — her persona IS the home tree, not an assistant
-    /// folder (docs/FS.md: 不要再做 workflows/me). Every other agent is a
-    /// directory under the workflows root.
+    /// Workspace directory for one agent by name. The system itself
+    /// ("system") lives at the home root — its persona IS the home tree, not
+    /// an assistant folder (docs/FS.md: 不要再做 workflows/me；刀5 no-me，
+    /// 收据 #413). Every other agent is a directory under the workflows root.
     pub fn agent_workspace_dir(&self, name: &str) -> PathBuf {
-        if name == SYSTEM_AGENT_ME {
+        if name == SYSTEM_AGENT {
             self.home_dir.clone()
         } else {
             self.effective_workflows_dir().join(name)
@@ -1059,9 +1060,15 @@ impl KernelConfig {
     }
 }
 
-/// System identity agent name — the mother. Kept here (not in carrier-clone)
-/// so KernelConfig can special-case her workspace without a reverse dep.
-pub const SYSTEM_AGENT_ME: &str = "me";
+/// System identity agent name — the OS itself is the agent（系统即智能体，
+/// 09-27 裁决：无 workflows 也是智能体、workflows 只是专业化；"me" 退场，
+/// 刀5）。Kept here (not in carrier-clone) so KernelConfig can special-case
+/// its workspace without a reverse dep.
+pub const SYSTEM_AGENT: &str = "system";
+
+/// 刀5 迁移期兼容：旧库/旧路由里的母体名。只读不写——boot 迁移器把
+/// 它搬去 SYSTEM_AGENT 后即不再出现。
+pub const LEGACY_SYSTEM_AGENT_ME: &str = "me";
 
 /// SECURITY: Custom Debug impl redacts sensitive fields (api_key).
 impl std::fmt::Debug for KernelConfig {

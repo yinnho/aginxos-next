@@ -549,7 +549,7 @@ mod tests {
                 title: "出行".into(),
                 template: "trip".into(),
                 source: "cron".into(),
-                session: "me".into(),
+                session: "system".into(),
             },
         ];
         paint_cards(&mut pix, w, w, h, &font, &cards, 0, None);

@@ -742,6 +742,16 @@ impl CarrierKernel {
             }
         }
 
+        // 刀5 no-me 世界搬家（幂等：me → system，uuid 保持）
+        crate::migrations::migrate_legacy_me(&kernel);
+
+        // 刀5 A 路：系统本人直通条目（agents/system/aginx.toml，幂等 upsert；
+        // agent://<机>.relay.aginx.net/system 即刻可对话）。只在 system 真在
+        // 册时写——宿主裸测试世界不往 ~/.aginx 落条目。
+        if kernel.registry.find_by_name(carrier_types::config::SYSTEM_AGENT).is_some() {
+            crate::gateway_registry::ensure_system_entry(&kernel.config);
+        }
+
         // Boot validation complete
 
         info!("Carrier kernel booted successfully");
@@ -807,8 +817,9 @@ impl CarrierKernel {
             .clone()
             .unwrap_or_else(|| self.config.agent_workspace_dir(&name));
         if workspace_dir == self.config.home_dir {
-            // 母体（"me"）：家目录即工作区。只补会话账目录——助理脚手架
-            // （knowledge/logs/history/AGENT.json）不落在家根上（docs/FS.md）。
+            // 系统本人（"system"）：家目录即工作区。只补会话账目录——助理
+            // 脚手架（knowledge/logs/history/AGENT.json）不落在家根上
+            // （docs/FS.md）。
             std::fs::create_dir_all(workspace_dir.join("sessions")).map_err(|e| {
                 KernelError::Carrier(carrier_types::error::CarrierError::Internal(format!(
                     "Failed to create mother sessions dir: {e}"
@@ -1389,6 +1400,13 @@ impl CarrierKernel {
                 .workspace
                 .as_ref()
                 .and_then(|w| crate::prompt_sources::read_agents_directory(w)),
+            // 刀5：系统本人的编制名册（home/workflows.md 唯一真源）——
+            // 系统据此派活；无 workflows 也是智能体（册空=全自己干）。
+            system_roster_md: if manifest.name == carrier_types::config::SYSTEM_AGENT {
+                std::fs::read_to_string(self.config.home_dir.join("workflows.md")).ok()
+            } else {
+                None
+            },
             evolution_rules_md: manifest
                 .workspace
                 .as_ref()

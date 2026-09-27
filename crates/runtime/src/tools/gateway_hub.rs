@@ -1,6 +1,6 @@
 //! Gateway hub tools: contacts_list, contact_prompt.
 //!
-//! The system agent「me」uses these to see and reach EVERY contact — local
+//! The system agent「system」uses these to see and reach EVERY contact — local
 //! clones (via kernel) and remote agent:// contacts on other people's gateways
 //! (via carrier-gateway's ACP client). This is the agent-side twin of what the
 //! webui does over HTTP: same endpoints, same credentials (the webui ledger's
@@ -22,7 +22,7 @@ use serde_json::Value;
 use std::sync::Arc;
 
 /// kv key prefix for per-contact sessionId bookkeeping (auto-resume).
-/// Keyed under the calling agent + owner so each owner's "me" keeps its own
+/// Keyed under the calling agent + owner so each owner's system identity keeps
 /// continuation map; user_id is left empty (contact continuity is per-owner,
 /// not per-chat-user — remote sessions belong to the owner identity).
 const SESSION_KEY_PREFIX: &str = "gw_session:";
@@ -260,7 +260,7 @@ async fn prompt_remote(
     Ok(out.to_string())
 }
 
-/// Hub tools for the system agent「me」— see module docs.
+/// Hub tools for the system agent「system」— see module docs.
 pub struct GatewayHubTools;
 
 #[async_trait]

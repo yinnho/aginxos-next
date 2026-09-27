@@ -149,8 +149,8 @@ fn print_human(resp: &Value, verb: &str) {
         "status" => {
             let cursor = d["cursor"].as_str().unwrap_or("?");
             let n = d["avatars"].as_array().map(Vec::len).unwrap_or(0);
-            if cursor == "me" {
-                println!("前台：母体（me）");
+            if cursor == "system" {
+                println!("前台：系统（system）");
             } else {
                 println!("前台：化身 {cursor}");
             }
