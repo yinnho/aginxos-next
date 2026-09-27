@@ -9579,3 +9579,39 @@ carrier/ui 两行。**终态：`aginx commands --check` 14/14 零错零警**。
 **挂账**：公共镜像还是 v0.1.0（本次走 dev 通道；enchilada 回网取
 更新前须把 v0.1.1 上镜）；adb 腿死待物理重启手机。
 
+## 2026-09-27 — #407 grok×aginxbrowser 看 x.com——MCP 接线三坑+双源核对闭环
+
+**接线**：grok mcp add browser -t http `http://127.0.0.1:8089/mcp`
+（常驻引擎的 streamable HTTP MCP 面，user scope）。Mac 侧也能直连
+此面驱动设备引擎——**/mcp 有 loopback Host 门**（Host≠127.0.0.1 →
+403），伪造 Host 头即过。工具 39 个进 grok 会话带 `browser__` 前缀。
+
+**三坑定谳**：
+1. **grok 登录态过期自动清证件**：auth.json 被 refresh failed 后
+   purged（log 实锤）。重登配方=设备侧 `nohup grok login
+   --device-code`（进程必须活着轮询），码给用户浏览器批，证件 0600
+   落回 /root/.grok/auth.json。设备无 XAI_API_KEY（env 只有 brain）。
+2. **ALL_PROXY=socks5h://…:8800 吃回环**：MCP 握手 127.0.0.1:8089
+   被塞进隧道从远端出口回打=死。**跑 grok 必带
+   NO_PROXY=127.0.0.1,localhost**（shell 环境逗号没事；unit envs
+   数组逗号坑另案）。症候：session.mcp_init 4ms、tool_count 27=
+   昨日无 MCP 基线。修复后 browser__* 全进。
+3. **x.com 匿名面**：explore=登录墙（重定向 onboarding/login 空页）；
+   profile 页可看；页面中文本地化=隧道出口 IP 地域信号。设备引擎
+   账号库空。
+
+**验收（grok 会话内真调 browser__fetch + 自带 X 检索双源核对）**：
+- x.com/xai **已重定向到 @SpaceXAI**（显示名 SpaceXAI，简介 x.ai）：
+  粉丝 206.8万=2,068,332，浏览器页与 grok 原生检索**逐位一致**；
+- elonmusk：页 2.4亿 vs 原生 241,695,809（同数取整）、简介同链，
+  一致；帖子数检索接口不返（两边同缺）。
+
+**数据本体**（grok 原生 X 检索，08:00–09:10 UTC）：全球榜前 10
+（Oregon/#AEWAllOut/Tati/Demond/Barcelos/Gophers…，snaplytics 与
+trends24 两套不一致；日语榜另一套）+ 10 帖全指标（最高
+DiscussingFilm Star Wars E10 导演帖 4.6万赞/666万浏览）。
+
+**配方（跑 grok 的完整 env）**：`HTTPS_PROXY=socks5h://127.0.0.1:8800
+ALL_PROXY=… NO_PROXY=127.0.0.1,localhost /var/bin/grok -p "…" 
+--always-approve`（单轮 headless；工具批走 always-approve）。
+
