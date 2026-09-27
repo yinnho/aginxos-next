@@ -23,7 +23,6 @@ members = [
     "crates/testkit",
     "crates/done",
     "crates/secret",
-    "crates/gateway",
     "crates/pair",
     "crates/hwd",
     # ── 母体引擎面（carrier-*，自 mother/ 并入）──
