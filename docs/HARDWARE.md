@@ -9665,3 +9665,59 @@ ALL_PROXY=… NO_PROXY=127.0.0.1,localhost /var/bin/grok -p "…"
 **挂账**：①母体核心工具面无 agent_send/spawn/list——「母体派活」
   的宪法承诺需引擎改动（CORE_TOOL_NAMES+金样本有意更新），下一引擎
   commit 做；②adb 腿仍死（待手机重启）；③公共镜像 v0.1.1 挂账同前。
+
+
+## 2026-09-27 — #409 iLink 源码通读：一台手机=任意助理的对外服务宿主（redfin/Pixel 5）
+
+**触发**：用户「你看一下 ilink 是怎么工作的」→ 全链源码研究（零改动）；
+用户裁定 framing「其实就是一个手机，可以把任何助理对外服务」。
+
+**源码通读（crates/ilink 全 8 件 + runtime bridge/router/channel_manager +
+server channels.rs 接线）**：
+- **协议**（api.rs）：`ilinkai.weixin.qq.com` 四端点——get_bot_qrcode（免鉴权
+  出码）/ get_qrcode_status（35s 长轮询状态机 wait→scaned→confirmed/expired/
+  scaned_but_redirect 换 baseurl）/ getupdates（游标长轮询，Bearer bot_token）/
+  sendmessage（文本/图/视频）。头 AuthorizationType=ilink_bot_token +
+  iLink-App-Id=bot + iLink-App-ClientVersion + 随机 X-WECHAT-UIN。**client 特设
+  no_proxy+http1_only——iLink 不过墙**（与 grok 隧道正好相反）。
+- **会话**（auth.rs+token.rs）：扫码 confirmed → register_from_qr(bind_agent)
+  → `WEIXIN_STATE.bots[key=user_id]`；DB(weixin_sessions) 优先 / JSON 兜底
+  `workflows/<助理>/senders/<uid>/session.json`(0600)；**目录即绑定真源**（文件
+  字段只作校验）；重绑=搬家（清旧分身同名会话）；**续命**=每次成功 getupdates
+  内存续 24h + persist_if_due 30min 落盘（修「闲置号重启判过期」老 bug）。
+- **入站**（channel.rs）：SessionWatcher 每号一线程长轮询 + 5s respawn watcher
+  拾取新扫码（免重启领养）；item_list[0]→Text/Image(CDN 下载+AES 解密)/Voice
+  (优先转写)/File/Video；**去重闸在进 bridge 之前**（mid:/seq:/fp: 三键、120s
+  TTL、10k 上限——挡微信重投双答）→ PluginMessage → mpsc(256)。
+- **路由**（channel_manager+router+bridge）：route_key（weixin=sender_id）串行锁
+  → cron 记「最后通道」+drain 积压通知 → SenderRouter.resolve（未绑→兜底 me，
+  仍无→丢弃告警）→ 首 sender 自动 admin / 关键词闸(零 LLM) → `kernel.send_to_agent`
+  → 助理完整 turn → 回复 send_response。**路由表纯内存无磁盘真源**，绑定即路由
+  （加载/扫码都调 seeder）。
+- **出站**（token.rs 注释，2026-08-19 生产验证）：账号对账号，context_token 可省；
+  **送达是关系账本不是回执**——陌生目标 HTTP 也回 message_id 但上游静默丢，成功
+  永远 best-effort。get_session_for_send 三路（直接自聊 / 关系扫 / legacy bot_id）。
+  `send_*_auto`=带缓存 token 试→失败裸发重试一次。
+- **server 接线**（channels.rs boot_ilink）：手机版=weixin watcher + 5 微信工具 +
+  DB 回调 + 出站注入，**webhook 不装**（daemon 专属）；DB 回调必须在 `start()`
+  之前（晚装=永读 JSON 旁路，opencarrier 踩过）；零功耗：无扫码会话时只留一个 5s
+  目录扫描线程。
+
+**设备核实现状（ssh 192.168.3.93 + DB，本日 21:40，Pixel 5）**：唯一 weixin 会话
+`workflows/me/senders/o9cq80yV026eCt5ekRuSdPiw2Ias@im.wechat/`（bind_agent=**me**，
+bot_id=redfin）；其余助理只有 `senders/front`。**DB 真源** `weixin_sessions` 行
+expires_at=**2026-09-28 21:30 CST（活、持续续命）**，context_token 在。
+**两处诱饵（本轮踩到）**：①设备 `session.json`（09-26 一次性 qr-login 快照，
+expires_at 已过期 2.8h）——DB 回调在位后续命只写 DB 不写 JSON，JSON 是死的；
+②carrier.db 主库 mtime=09:34 也是诱饵（WAL 模式，新写在 -wal 里）——**必须
+WAL 三件套拉齐再看**（呼应 [[device-sqlite-wal-pull]]，只拉主库=旧世代）。
+
+**framing（用户裁定）**：iLink 的价值不在「接了个微信通道」，在**同一台手机的
+同一个对外面服务任意助理**——bind_agent 指哪个 `workflows/<名>`，微信消息就交给
+哪个助理跑一轮。换面=重扫码（谁扫绑谁，工具内 bind=context.agent_id）。内部面
+（`agent://` 直寻址）与之并行 = 一个助理两张脸。记忆：新建
+[[assistant-external-face]]（本裁定+全链机制），[[ilink-bringup-state]] 加链接。
+
+**挂账**：①母体核心面无 agent_*（#408，下一引擎 commit）；②adb 腿死（待手机
+  重启）；③公共镜像 v0.1.1。**新登记**：生态挂账「手机微信控 grok 路由层
+  （#397）」地基即此——微信→绑定的助理→其 flow（斥候/模板匠/晨报官皆可直接对外）。
