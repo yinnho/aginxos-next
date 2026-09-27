@@ -491,13 +491,14 @@ fn build_task_id_section(task_id: &str, chain_id: Option<&str>) -> String {
         ),
     };
     format!(
-        "## 任务 ID\n\
-         {id_header}\n\
+        "## 定时任务触发\n\
+         本 turn 由定时任务自动触发，不是用户发来的消息。{id_header}\n\
          文件输出目录: output/{output_id}/\n\
          规则：\n\
          {rule1}\n\
-         2. 不要把任务 ID 或流水线 ID 写入文章内容或文件开头--文章标题是文章的主题，不是任务 ID\n\
-         3. Markdown 文件第一行必须是文章的 # 标题（如 # 阿里 banning Claude 分析）"
+         2. 触发你的定时任务已经存在——要查看或调整定时任务先 cron_list 查现状，不要反问用户「要不要设定时任务」、不要重复创建\n\
+         3. 不要把任务 ID 或流水线 ID 写入文章内容或文件开头--文章标题是文章的主题，不是任务 ID\n\
+         4. Markdown 文件第一行必须是文章的 # 标题（如 # 阿里 banning Claude 分析）"
     )
 }
 
@@ -1044,6 +1045,7 @@ mod tests {
             !prompt.contains("output/article-writer-pipeline-x-20260819/"),
             "chained prompt must not point output paths at the task_id"
         );
+        assert!(prompt.contains("由定时任务自动触发"));
 
         // Non-chained: task_id remains the output dir (unchanged behaviour).
         let mut plain = basic_ctx();
@@ -1051,6 +1053,12 @@ mod tests {
         let prompt = build_system_prompt(&plain);
         assert!(prompt.contains("output/daily-brief-20260820/"));
         assert!(!prompt.contains("流水线 ID: "));
+        // Cron self-awareness: the section must tell the agent this turn was
+        // cron-fired and steer it to cron_list instead of offering to create
+        // the very job that triggered it (09-27 晨报事故).
+        assert!(prompt.contains("由定时任务自动触发，不是用户发来的消息"));
+        assert!(prompt.contains("cron_list"));
+        assert!(prompt.contains("不要反问用户"));
     }
 
     #[test]
