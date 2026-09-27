@@ -3401,7 +3401,35 @@ fn main() {
                                                 );
                                             }
                                             Err(e) => {
-                                                cards_err = Some(e);
+                                                // 404 unknown_template = 模板缺失：
+                                                // 报母体派 codex 生成（agent send 后台
+                                                // 甩——sh 内 '&' 双 fork 免僵尸，文本走
+                                                // env 免引号转义）。
+                                                if e.contains("404")
+                                                    && e.contains("unknown_template")
+                                                {
+                                                    let text = format!(
+                                                        "卡片模板 {} 不存在（404 unknown_template），卡片「{}」打不开。请用 flow_load 调起 template-gen 流程，派 codex 生成并登记模板 {}，完成出新卡。",
+                                                        card.template, card.title, card.template
+                                                    );
+                                                    let _ = std::process::Command::new("sh")
+                                                        .arg("-c")
+                                                        .arg(
+                                                            "/var/bin/aginx agent send me \
+                                                             \"$AGINX_TG_TEXT\" >/dev/null 2>&1 &",
+                                                        )
+                                                        .env("AGINX_TG_TEXT", text)
+                                                        .stdin(std::process::Stdio::null())
+                                                        .stdout(std::process::Stdio::null())
+                                                        .stderr(std::process::Stdio::null())
+                                                        .spawn();
+                                                    cards_err = Some(format!(
+                                                        "模板 {} 缺失，已派工生成",
+                                                        card.template
+                                                    ));
+                                                } else {
+                                                    cards_err = Some(e);
+                                                }
                                                 cards_err_at = Instant::now();
                                             }
                                         }
