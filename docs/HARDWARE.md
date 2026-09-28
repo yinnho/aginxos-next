@@ -10058,6 +10058,38 @@ commit **2257857**（check.sh 全绿，aginx-pair 9/9 含新档建档/段合并�
 enchilada 同配方、B 路裸根泛解析（上游）、金样本伪元素（REQ 归口）。
 
 
+## #417 镜面上架+manifest 换钉+设备 pair 升 v0.1.1（redfin，2026-09-28）
+
+清账第③项收官（#416 挂账的镜像债全清）：
+
+- **上架三件**（86quan `/data/pkgs.aginx.net/`，v 前缀目录铁律，sha
+  两侧核对一致 + 公网 HTTPS 200 全过）：
+  - `aginx/v0.1.13/`（a9867ab8…）——母体晨报三堵口版；
+  - `aginx-gateway/v0.2.0/`（cb62d06b…）——换芯真 aginx 首 上架
+    （镜像此前只到仿制品 v0.1.1）；
+  - `aginx-pair/v0.1.1/`（f6143a30…）——随 2257857 出包（pkg.toml
+    bump+重出，commit 313675a；旧 v0.1.0 的 apply 写 env 死信腿）。
+  - 中间版 v0.1.9–v0.1.12 不补传：manifest 只钉当前尖，历史件无
+    消费者。
+- **manifest 换钉**（设备腿）：redfin /etc/agpkg.manifest 三行换钉
+  （aginx v0.1.8→v0.1.13、gateway v0.1.1→v0.2.0、pair v0.1.0→v0.1.1，
+  依赖列 aginx-update/aginx-secretd 原样）；host
+  `aginx-sign sign`（.local/keys/aginx.key）重签+verify 过；scp
+  .new 再 mv 落位。设备 `aginx-pkg sync` rc=0——**新签名单在设备
+  签名链验过**（全 opt 早退但链照验）。stamps 对账：aginx=0.1.13
+  ✓、gateway=0.2.0 ✓（此前 dev 推装已到位）、pair=0.1.0→升。
+- **设备 pair 升级**：`install` 收本地路径不收 URL（sync 才拉网）；
+  scp tar → `/usr/bin/aginx-pkg install aginx-pair /tmp/… f6143a30…`
+  → stamp=0.1.1、face symlink→pkgfiles 真身 ✓。旧 0.1.0 的
+  env 死信腿从此不再可能被配对触发写回。
+- **通道旁证**：本收据全程 ssh root@192.168.3.93（adb USB 盲再现，
+  已知案——wifi/ssh 活即非砖，不处置）；首探验 uname 4.19
+  ab10812814=redfin（多设备铁律）。
+
+**挂账**：enchilada 回网探查+同配方换装（#416 遗留，见 #418 或
+后续收据）；B 路裸根泛解析（上游）；金样本伪元素 REQ 待裁。
+
+
 **挂账**：① 屏上真眼验（卡已落，未见屏）。② `▸`(U+25B8) 在 macOS
 宿主字体栈**缺字形**（真元素占位不落墨）——Android Noto/Droid Mono
 有该字形，设备应正常，但需真眼确认。③ **族群级遗留**：
