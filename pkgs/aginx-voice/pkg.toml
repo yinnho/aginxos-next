@@ -4,12 +4,15 @@
 # 同列（出镜像走包——扫码/配网 spawn /var/bin/aginx-{qr,pair}）。
 # VOICED_FRONT 指 /var/bin/aginx（母体包 face）：L0 镜像不烤路由器，
 # 自由文本走包面。env_file 与 server 同读（brain key）。
+# 刀5b（v0.2.2）：语音直拨「找X语音/打给X/呼叫X」——aginx-call 刻意
+# 不进 depends（19M 大件，通话是可选能力）：缺包=地板话「呼叫失败」，
+# 名录 /etc/aginx/call.conf 刷后灌注（D14，不烤镜像）。
 name = "aginx-voice"
-version = "0.2.1"
-summary = "语音对话守护：PTT 嘴耳 + 眼取景，脸写 /run/aginx-voice/face"
+version = "0.2.2"
+summary = "语音对话守护：PTT 嘴耳 + 眼取景 + 语音直拨（刀5b），脸写 /run/aginx-voice/face"
 group = "snd"
 depends = "aginx-asr,aginx-tts,aginx-ocr,aginx-qr,aginx-pair"
-url = "https://pkgs.aginx.net/aginx-voice/v0.2.1/aginx-voice-v0.2.1-4pc.tar"
+url = "https://pkgs.aginx.net/aginx-voice/v0.2.2/aginx-voice-v0.2.2-4pc.tar"
 
 [service]
 cmd = "/var/bin/aginx-voice"
