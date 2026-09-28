@@ -4,9 +4,11 @@
 //! `WIFI:…` 连网码）：argv 恒两词，/proc/*/cmdline 永不出现 psk/三键——
 //! argv 泄密是硬红线。五步照搬 voice 的 pair_apply（M42c 一眼自举）：
 //! ①join（spawn aginx-net-join，90s 预算 + 10×500ms IP 轮询，成功才落
-//! /etc/wifi.conf 0600 tmp+rename）②env 三键合并（保旧行）③快速校时
-//! ④internet 探测 + 母体两单元 restart-ready ⑤一行汇总。`WIFI:` 码只走
-//! ①+④探测——没有身份可灌。
+//! /etc/wifi.conf 0600 tmp+rename）②brain 键并入 env + 网关身份两键落
+//! /etc/aginx/config.toml（真 aginx 的配置真源——09-27 换芯后 id/secret
+//! 不再走 env；仿制品的 AGINX_GATEWAY_ID/AGINX_RELAY_SECRET env 腿退役）
+//! ③快速校时④internet 探测 + 母体两单元 restart-ready ⑤一行汇总。
+//! `WIFI:` 码只走①+④探测——没有身份可灌。
 //!
 //! 秘密卫生：stdout 只出一行汇总（无任何字段值）；stderr 记步骤名，ssid
 //! 可记、psk/三键永不。退出码 0 成功 / 1 步骤失败 / 2 坏 payload。
@@ -16,8 +18,9 @@
 //! 行、清单面的自动 sync 门、n6 断言都读它。幂等：重跑同值。
 //!
 //! 外部触点全部 env 可覆写（AGINX_PAIR_NET_JOIN/SVC/HTTPGET/NTPD/IP/
-//! WIFI_CONF/ENV/STATE/IFACE——pkg crate 的 envp 律）：设备上没人设它们，
-//! host 测试直接构造 PairPaths 指向一树 stub，不碰进程 env。
+//! WIFI_CONF/ENV/GATEWAY_CONFIG/STATE/IFACE——pkg crate 的 envp 律）：
+//! 设备上没人设它们，host 测试直接构造 PairPaths 指向一树 stub，不碰
+//! 进程 env。
 
 use std::io::Write;
 use std::path::PathBuf;
@@ -41,6 +44,7 @@ pub struct PairPaths {
     pub ip: PathBuf,
     pub wifi_conf: PathBuf,
     pub env_file: PathBuf,
+    pub gateway_config: PathBuf,
     pub state: PathBuf,
     pub iface: String,
 }
@@ -60,6 +64,7 @@ impl PairPaths {
             ip: envp("AGINX_PAIR_IP", "ip"),
             wifi_conf: envp("AGINX_PAIR_WIFI_CONF", "/etc/wifi.conf"),
             env_file: envp("AGINX_PAIR_ENV", "/etc/aginx/env"),
+            gateway_config: envp("AGINX_PAIR_GATEWAY_CONFIG", "/etc/aginx/config.toml"),
             state: envp("AGINX_PAIR_STATE", "/run/boot.state"),
             iface: std::env::var("AGINX_PAIR_IFACE").unwrap_or_else(|_| "wlan0".into()),
         }
@@ -108,21 +113,16 @@ pub fn run_with(p: &PairPaths, line: &str) -> Result<String, ApplyErr> {
     }
 }
 
-/// 全身份码：join → env 三键 → 校时 → internet 探测 → 母体两单元。
+/// 全身份码：join → brain 键入 env + 网关身份入 config.toml → 校时 →
+/// internet 探测 → 母体两单元。
 fn apply_pair(p: &PairPaths, b: &PairBundle) -> Result<String, ApplyErr> {
     let step = |m: String| ApplyErr::Step(m);
     let ip = join_wifi(p, &b.ssid, &b.psk).map_err(step)?;
     eprintln!("aginx-pair: joined ssid={} ip={ip}", b.ssid);
-    write_env_keys(
-        p,
-        &[
-            ("AGINXBRAIN_API_KEY", &b.brain_key),
-            ("AGINX_GATEWAY_ID", &b.gateway_id),
-            ("AGINX_RELAY_SECRET", &b.relay_secret),
-        ],
-    )
-    .map_err(step)?;
-    eprintln!("aginx-pair: env keys merged (3)");
+    write_env_keys(p, &[("AGINXBRAIN_API_KEY", &b.brain_key)]).map_err(step)?;
+    eprintln!("aginx-pair: env keys merged (1)");
+    write_gateway_config(p, &b.gateway_id, &b.relay_secret).map_err(step)?;
+    eprintln!("aginx-pair: gateway config merged");
     let clock_ok = quick_clock(p);
     let net_ok = internet_probe(p);
     let up = svc_ready_after_restart(p, "aginx-gateway") && svc_ready_after_restart(p, "aginx-server");
@@ -259,6 +259,98 @@ fn write_env_keys(p: &PairPaths, kvs: &[(&str, &str)]) -> Result<(), String> {
         .and_then(|mut f| f.write_all(out.as_bytes()))
         .map_err(|e| format!("env write: {e}"))?;
     std::fs::rename(&tmp, &p.env_file).map_err(|e| format!("env rename: {e}"))
+}
+
+/// 网关身份两键并入真 aginx 配置 /etc/aginx/config.toml 的 [relay] 段
+/// （id/relay_secret——真源在此，env 腿已随仿制品退役）。段内原地替换、
+/// 缺键段尾补；无段则尾补整段；[server]/[auth] 等其余行一字不动（jwt_secret
+/// 等刷机日灌注的值不能被配对冲掉）。0600 tmp+rename。
+fn write_gateway_config(p: &PairPaths, id: &str, secret: &str) -> Result<(), String> {
+    use std::os::unix::fs::OpenOptionsExt;
+    let existing = std::fs::read_to_string(&p.gateway_config).unwrap_or_default();
+    let lines: Vec<&str> = existing.lines().collect();
+    let is_header = |l: &str| l.trim().starts_with('[');
+    let key_of = |l: &str| l.split_once('=').map(|(k, _)| k.trim().to_string());
+    let mut out = String::new();
+    let mut wrote_id = false;
+    let mut wrote_secret = false;
+    let mut in_relay = false;
+    // 先定位 [relay] 段界，好把缺键插在段尾（而非文件尾）
+    let mut relay_end = lines.len();
+    if let Some(start) = lines.iter().position(|l| l.trim() == "[relay]") {
+        relay_end = lines[start..]
+            .iter()
+            .skip(1)
+            .position(|l| is_header(l))
+            .map(|i| start + 1 + i)
+            .unwrap_or(lines.len());
+    }
+    for (i, line) in lines.iter().enumerate() {
+        if i == relay_end {
+            if in_relay {
+                if !wrote_id {
+                    out.push_str(&format!("id = \"{id}\"\n"));
+                }
+                if !wrote_secret {
+                    out.push_str(&format!("relay_secret = \"{secret}\"\n"));
+                }
+            }
+        }
+        if line.trim() == "[relay]" {
+            in_relay = true;
+            out.push_str(line);
+            out.push('\n');
+            continue;
+        }
+        if in_relay && !is_header(line) {
+            match key_of(line).as_deref() {
+                Some("id") => {
+                    out.push_str(&format!("id = \"{id}\"\n"));
+                    wrote_id = true;
+                    continue;
+                }
+                Some("relay_secret") => {
+                    out.push_str(&format!("relay_secret = \"{secret}\"\n"));
+                    wrote_secret = true;
+                    continue;
+                }
+                _ => {}
+            }
+        }
+        if is_header(line) {
+            in_relay = false;
+        }
+        out.push_str(line);
+        out.push('\n');
+    }
+    if !out.is_empty() && !out.ends_with('\n') {
+        out.push('\n');
+    }
+    if relay_end == lines.len() && in_relay {
+        if !wrote_id {
+            out.push_str(&format!("id = \"{id}\"\n"));
+        }
+        if !wrote_secret {
+            out.push_str(&format!("relay_secret = \"{secret}\"\n"));
+        }
+    } else if !lines.iter().any(|l| l.trim() == "[relay]") {
+        if !out.is_empty() {
+            out.push('\n');
+        }
+        out.push_str("[relay]\n");
+        out.push_str(&format!("id = \"{id}\"\n"));
+        out.push_str(&format!("relay_secret = \"{secret}\"\n"));
+    }
+    let tmp = p.gateway_config.with_extension("toml.tmp");
+    std::fs::OpenOptions::new()
+        .write(true)
+        .create(true)
+        .truncate(true)
+        .mode(0o600)
+        .open(&tmp)
+        .and_then(|mut f| f.write_all(out.as_bytes()))
+        .map_err(|e| format!("gateway config write: {e}"))?;
+    std::fs::rename(&tmp, &p.gateway_config).map_err(|e| format!("gateway config rename: {e}"))
 }
 
 /// 快速校时（voice quick_clock 同款）：双 NTP ×10s 交替，`date +%Y≥2026`
@@ -421,6 +513,7 @@ mod tests {
             ip: bin.join("ip"),
             wifi_conf: root.join("wifi.conf"),
             env_file: root.join("env"),
+            gateway_config: root.join("config.toml"),
             state: root.join("boot.state"),
             iface: "wlan0".into(),
         }
@@ -433,6 +526,11 @@ mod tests {
         let root = tmp("aginx-pair-apply-full");
         let p = paths(&root);
         fs::write(&p.env_file, "# identity\nHOME=/home/aginx\nOLDKEY=x\n").unwrap();
+        fs::write(
+            &p.gateway_config,
+            "[server]\naccess = \"private\"\n\n[relay]\nid = \"oldid\"\n\n[auth]\njwt_secret = \"keepme\"\n",
+        )
+        .unwrap();
         fs::write(&p.state, "touch ok\ntime run\nwifi fail no /etc/wifi.conf\ndhcp fail\ninternet fail\n").unwrap();
 
         let msg = run_with(&p, PAYLOAD).unwrap();
@@ -448,15 +546,27 @@ mod tests {
         let mode = fs::metadata(&p.wifi_conf).unwrap().permissions().mode();
         assert_eq!(mode & 0o777, 0o600);
 
-        // env: comment + HOME preserved, three keys merged, 0600
+        // env: comment + HOME preserved, brain key merged, 0600 — 网关身份
+        // 两键不再走 env（真 aginx 读 config.toml，仿制品 env 腿退役）
         let env = fs::read_to_string(&p.env_file).unwrap();
         assert!(env.contains("# identity\n"));
         assert!(env.contains("HOME=/home/aginx\n"));
         assert!(env.contains("AGINXBRAIN_API_KEY=sk-1234567890abcdef1234567890abcdef\n"));
-        assert!(env.contains("AGINX_GATEWAY_ID=cf49973e\n"));
-        assert!(env.contains("AGINX_RELAY_SECRET=relay-secret-9f8e7d6c\n"));
+        assert!(!env.contains("AGINX_GATEWAY_ID"));
+        assert!(!env.contains("AGINX_RELAY_SECRET"));
         let emode = fs::metadata(&p.env_file).unwrap().permissions().mode();
         assert_eq!(emode & 0o777, 0o600);
+
+        // config.toml: [relay] id 原地换新、secret 段尾补；他段一字不动
+        let cfg = fs::read_to_string(&p.gateway_config).unwrap();
+        assert!(cfg.contains("[server]\naccess = \"private\""), "{cfg}");
+        assert!(cfg.contains("[auth]\njwt_secret = \"keepme\""), "{cfg}");
+        assert!(cfg.contains("id = \"cf49973e\"\n"), "{cfg}");
+        assert!(!cfg.contains("oldid"), "{cfg}");
+        assert!(cfg.contains("relay_secret = \"relay-secret-9f8e7d6c\"\n"), "{cfg}");
+        assert!(cfg.find("[relay]").unwrap() < cfg.find("[auth]").unwrap(), "{cfg}");
+        let cmode = fs::metadata(&p.gateway_config).unwrap().permissions().mode();
+        assert_eq!(cmode & 0o777, 0o600);
 
         // boot.state: other lines kept, net verdicts rewritten/appended
         let state = fs::read_to_string(&p.state).unwrap();
@@ -482,6 +592,7 @@ mod tests {
         assert_eq!(msg, "网已连 home");
         assert!(p.wifi_conf.exists());
         assert!(!p.env_file.exists()); // no identity to merge
+        assert!(!p.gateway_config.exists());
         let state = fs::read_to_string(&p.state).unwrap();
         assert!(state.contains("wifi ok home\n"));
         assert!(state.contains("dhcp ok 192.168.1.42\n"));
@@ -501,7 +612,25 @@ mod tests {
         assert!(matches!(err, ApplyErr::Step(_)));
         assert!(!p.wifi_conf.exists());
         assert!(!p.env_file.exists());
+        assert!(!p.gateway_config.exists());
         assert_eq!(fs::read_to_string(&p.state).unwrap(), "wifi fail no /etc/wifi.conf\n");
+    }
+
+    #[test]
+    fn gateway_config_created_when_absent() {
+        // fresh flash：opt-in 网关前配对——config.toml 不存在，须建档成
+        // 合法 TOML（真 aginx 首启读它）
+        let root = tmp("aginx-pair-apply-cfgnew");
+        let p = paths(&root);
+        run_with(&p, PAYLOAD).unwrap();
+        let cfg = fs::read_to_string(&p.gateway_config).unwrap();
+        assert_eq!(
+            cfg,
+            "[relay]\nid = \"cf49973e\"\nrelay_secret = \"relay-secret-9f8e7d6c\"\n"
+        );
+        use std::os::unix::fs::PermissionsExt;
+        let mode = fs::metadata(&p.gateway_config).unwrap().permissions().mode();
+        assert_eq!(mode & 0o777, 0o600);
     }
 
     #[test]
