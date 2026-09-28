@@ -31,7 +31,7 @@ EOF
   say "出卡：$CARDS/${CS}-template-$ID.json"
 }
 
-PROMPT="任务：给 aginxbrowser 生成新模板 $ID。目录 $TDIR。先读 reply.html、note.html、todo.html 学纪律：磷光终端配色变量（--bg #060a07 --accent #3dfd8f 一族）、等宽字体栈、body min-height 2620px、离线无外部资源、markdown 正文用模板内 JS 渲染。槽位 {{title}} {{body}}。风格要求：$DESC。registry.json 用同目录临时副本逐字节校验后 mv 原子更新，加入 $ID 条目（matches 放中文同义词和 $ID）。完成后报告两个文件的路径和字节数。"
+PROMPT="任务：给 aginxbrowser 生成新模板 $ID。目录 $TDIR。先读 reply.html、note.html、todo.html 学纪律：磷光终端配色变量（--bg #060a07 --accent #3dfd8f 一族）、等宽字体栈、body min-height 2620px、离线无外部资源、markdown 正文用模板内 JS 渲染。槽位 {{title}} {{body}}。风格要求：$DESC。registry.json 用同目录临时副本逐字节校验后 mv 原子更新，加入 $ID 条目（matches 放中文同义词和 $ID）。完成后报告两个文件的路径和字节数。硬约束一：**装饰一律用真元素**（<span> 等），禁止用 ::before/::after 的 content 做任何可见装饰（眉标、标题前缀、列表项目符皆然）——本机渲染引擎不渲染伪元素 content，实测零像素，写了等于没写；三份参照里的 ::before 装饰因此同样是死的，别照抄。硬约束二：body::before 那层扫描线/辉光覆盖同样不落墨，可保留但不得依赖它表达信息。"
 
 say "codex 开跑：$ID —— $DESC"
 cd /tmp || exit 1
@@ -66,6 +66,18 @@ if grep -q 'unknown_template' /tmp/tg-smoke.resp 2>/dev/null; then
   exit 1
 fi
 grep -q '"ok":true' /tmp/tg-smoke.resp 2>/dev/null && say "烟测 200，已上屏" || say "烟测响应异常（文件已验，放行）"
+
+# 伪元素自检（2026-09-28 设备实测：引擎不画 ::before/::after 的 content——
+# 判别页伪元素行 accent 0px vs 真元素行 1481px）。带文本的伪元素 content
+# 必然是失踪的装饰：出件照落盘，但不报「就绪」，让水线自己说出缺陷。
+PB=$(tr '\n' ' ' < "$TDIR/$ID.html" | tr '}' '\n' | grep -E '::(before|after)' \
+     | grep -E 'content:[[:space:]]*"[^"]' | head -3 | tr -d '"' | tr -s ' ' | cut -c1-160)
+if [ -n "$PB" ]; then
+  say "自检不过：伪元素不落墨 —— $PB"
+  card "模板 $ID 装饰失效" reply "装饰不落墨" "## 伪元素 content 引擎不渲染\\n\\n装饰必须用真元素 span。命中：$PB\\n\\n页与登记已落盘，但装饰在屏上不可见，需重派。"
+  exit 1
+fi
+say "自检过：无伪元素文本装饰"
 
 card "新模板「$ID」就绪" "$ID" "模板 $ID" "## codex 已生成\\n\\n- 点开即预览\\n- registry 已登记\\n- 风格：$DESC"
 say "全部完成"

@@ -37,6 +37,17 @@ sh /home/workflows/template-gen/flows/template-gen/scripts/gen.sh <模板id> <�
 - 不要轮询文件、不要反复 shell——完成后卡片自己出现
 - 不要 file_write 模板 HTML 或 registry.json（原子性归脚本管）
 
+## 造型纪律（2026-09-28 加，设备实测）
+
+**装饰一律真元素，禁用伪元素 content。** aginxbrowser 渲染引擎不画
+`::before`/`::after` 的 `content`——设备 `POST /screenshot` 判别页实测：
+伪元素行强调色 **0 像素**，真元素同色行 **1481 像素**。眉标括号、
+标题前缀、列表项目符全都要用真 `<span>` 写。
+
+这条是**补牙**：三份参照（reply/note/todo）各带伪元素装饰规则，全是
+死的，照抄即传病；run.sh 的 PROMPT 已加硬约束且出件后**自检**——
+带文本的伪元素 `content` 会判「装饰失效」出失败卡（页照落盘，不报就绪）。
+
 ## 失败处理
 
 - gen.sh 说 codex 未装 → 回复用户 `aginx-pkg opt-in codex`
