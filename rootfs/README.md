@@ -13,8 +13,9 @@
   （D14 机型是数据；E4b 起 net-bringup 同律：并网流程是机型数据）、
   aginx/svc.d 两单元（net-watch + aginxbrowser——L0 刀4 起
   server/secretd/gateway/voice 单元随包走）、
-  aginx/（env 明文环境、gateway.toml 形状参数、groups.desc 命令分组、
-  secret.policy sidecar 放行表）、
+  aginx/（env 明文环境、groups.desc 命令分组、
+  secret.policy sidecar 放行表；gateway.toml 已随仿制品退役删除——
+  真网关配置=/etc/aginx/config.toml，刷机日灌注不进配方）、
   crontabs（N5④：备份 now 定时行）、agpkg.manifest
   （N4 切净：8 条，删 aginx/aginx-carrier 两行，sig 由烤机脚本重签）。
 - `libexec/aginx/` — 守护的家（D13：libexec 不进路由器命令扫描）。net-watch/

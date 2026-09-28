@@ -123,8 +123,8 @@ phase_usbconf() {
     adbx shell "mkdir -p /etc/aginx && chmod 700 /etc/aginx"
     adbx push "${N7_ENV}" /etc/aginx/env >/dev/null
     adbx shell "chmod 600 /etc/aginx/env"
-    drv "grep -q '^AGINXBRAIN_API_KEY=' /etc/aginx/env && grep -q '^AGINX_GATEWAY_ID=' /etc/aginx/env"
-    expect_rc  "env 已灌注（brain/gateway 键名在，值零回显）"
+    drv "grep -q '^AGINXBRAIN_API_KEY=' /etc/aginx/env"
+    expect_rc  "env 已灌注（brain 键名在，值零回显）"
   else
     echo "warn - N7_ENV 未给（${N7_ENV} 缺）——裸 bar 不需要；留给将来 gateway 装机日再灌" >&2
   fi

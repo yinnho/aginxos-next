@@ -58,7 +58,9 @@ local-only) and the public `docs/ARCHITECTURE.md` were retired
   the sixth unit `aginx-gateway` — persistent register to
   relay.aginx.net, external JSON-RPC collapsed onto the server's UDS
   front (ACP.md wire authority = ecosystem repo). Acceptance gate:
-  `scripts/accept/n5.sh`.
+  `scripts/accept/n5.sh`. (The gateway itself was re-cored 2026-09-27:
+  the crate below was the replica and is gone; the package name now
+  carries the real ecosystem `aginx` — see the layout table.)
 - **L0 无头底座 (2026-09-12, 刀1–刀6 翻档)**: the image is the base and
   nothing else — kernel + init + supervisor + network + ssh (dropbear,
   password AND pubkey channels) + pkg + the bootcard lamp; image svc.d
@@ -166,7 +168,7 @@ dropbear sftp subsystem is a Go static (`tools/sftp-server` +
 | `crates/download`, `crates/update` | `aginx-download`/`aginx-update` — HTTPS fetch + signed A/B rootfs updater |
 | `crates/done` | `aginx-done` — provision done-marker discipline |
 | `crates/secret` | `aginx-secretd`/`aginx-secret` — the secret sidecar + its admin face |
-| `crates/gateway` | `aginx-gateway` — remote channel daemon: registers to relay.aginx.net, collapses external JSON-RPC onto the server's UDS front (ACP.md wire authority = ecosystem repo) |
+| `pkgs/aginx-gateway` | the outward-facing daemon package (v0.2.0 re-cored 2026-09-27): carries the real ecosystem `aginx` (~/Documents/aginx, independent project — this repo only builds/packages/configures it). The old replica `crates/gateway` is deleted (#412); package name kept for opt-in continuity |
 | `crates/{carrier,types,memory,clone,dup,carrier-gateway,lifecycle,kernel,ilink,webhook,web,agf,agmem}` | the mother engine (ex-`aginx-carrier`, merged 2026-09-24): kernel spawns/turns/sessions, runtime = agent loop + tools, clone = assistant format + install chain + dup VCS, memory/agmem = the memory tree, ilink/webhook = inbound channels, `carrier-gateway` = agent:// client + contacts ledger (NOT the remote-channel daemon above) |
 | `crates/testkit` | test helpers |
 | `rootfs/` | the image recipe — see `rootfs/README.md` (placement matrix, asset split) |

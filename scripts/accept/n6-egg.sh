@@ -22,9 +22,10 @@
 #           回脸 + 等价复验。与蛋时代的 missing—downloading×8 是两条路。
 #
 # 前置（刀6 镜像先行闸）：pkgs.aginx.net 已上 11 包新车（刀F +qr/pair/
-# update）——opt-in 404 = 镜像源没上，不是套件的失败。env 灌注（brain 键 +
-# AGINX_GATEWAY_ID）
-# 是运维腿：gateway 缺 id 会裸 exit(1) 进断路器（刀3 必修④），send 缺
+# update）——opt-in 404 = 镜像源没上，不是套件的失败。env 灌注（brain 键）
+# 与 /etc/aginx/config.toml 灌注（[relay] id/relay_secret——真 aginx 配置
+# 真源，09-27 换芯后 id 不再走 env）
+# 是运维腿：网关缺 id 会裸 exit(1) 进断路器（刀3 必修④），send 缺
 # brain 键 401 空答。
 #
 # 已知缺口（R13 残余，接受）：L0 首启无语音问候（voice 是包，装上时
@@ -154,8 +155,8 @@ phase_paired() {
   expect_rc  "boot.state internet ok"
   drv "grep -q '^AGINXBRAIN_API_KEY=' /etc/aginx/env"
   expect_rc  "env brain 键名在（值零回显——send 真答的前置）"
-  drv "grep -q '^AGINX_GATEWAY_ID=' /etc/aginx/env"
-  expect_rc  "env gateway id 键名在（gateway 缺 id 会裸 exit 断路器）"
+  drv "grep -q '^\[relay\]' /etc/aginx/config.toml && grep -q '^id = ' /etc/aginx/config.toml"
+  expect_rc  "config.toml relay id 在（真网关缺 id 会裸 exit 断路器；env 腿已随仿制品退役）"
   drv "[ \$(date +%Y) -ge 2026 ]"
   expect_rc  "钟到 2026（TLS 前置）"
 
