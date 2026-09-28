@@ -15,6 +15,7 @@ members = [
     "crates/runtime",
     "crates/server",
     "crates/voice",
+    "crates/call",
     "crates/wizard",
     "crates/svc",
     "crates/img",
