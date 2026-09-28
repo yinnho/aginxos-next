@@ -27,25 +27,29 @@
 - **生态仓** `~/Documents/aginx/`：aginx（5658af7 spool 丢件柜台）、
   agc（6eef4d3 配置腿）、aginx-relay（ff1a949）、aginx-carrier。
 
-## 账四摊（2026-09-26 清点）
+## 账四摊（2026-09-28 追记）
 
 1. **GitHub 未推——已清（09-26 晚）**：aginx-carrier `b3a42c7`/`8c958fd`/
    `97b855e` 上 GitHub（d64f2fb..97b855e）+ 86quan deploy 腿同步
    （9e8ddd2..97b855e 快进 33 件）；aginx-relay GitHub 仓**新建私仓**
    `yinnho/aginx-relay` 并推 `ff1a949`（deploy 腿本已在 ff1a949）。
-2. **本仓未推——已清（09-26 晚）**：历史积压的 22 件代码（含
-   `fa26fd3`→重排后 `e7f9ed1`）经历史重排整批上推（`f56cc16..d0fe1c8`）；
-   13 件 docs(hardware) 收据按纪律永不上推，重排后**垫在本地 master 顶**。
-   此后推送姿势固定：`git push origin <代码尖>:master`（代码尖=收据堆
-   之下第一件；先推码、收据永远后落）。
+2. **本仓未推——已清（09-28 二批）**：09-26 后新积的 24 件代码+文档
+   （v0.1.8 后至 aginx-pair v0.1.1，收据 #397–#418 期间的码）经第二次
+   历史重排整批上推（`398efc5..7dc055f`）；24 件 docs(hardware) 收据
+   （#397–#418）按纪律永不上推，重排后**垫在本地 master 顶**（本地
+   ahead 24=纯收据堆）。推送姿势不变：
+   `git push origin <代码尖>:master`。**教训：重排后落收据须等价垫顶
+   ——09-26 后新工作直接在 master 交错落码与收据，推送窗又被顶回
+   重排；此后收据仍按「先码后收据」顺序落**。
 3. **一代仓工作树——已清（09-26 晚）**：~~ag-asr.c zh 修~~（已搬本仓
    v0.1.1）原件在一代仓封存落账（10c6aa9）；~~204 件 target/ 删除~~
    已提交（2fc2cd3）。「封仓零提交」由用户 09-26 裁决破例收尾件——
    **仍不推送**（local only）；21 件 untracked 散件（apk/dmg/ARCH.md/
    SCIS 设计稿）为他线工作件，不碰。
-4. **运行面**：服务器腿（86quan）router 换装状态未知（晨报三杀两杀在
-   服务器；Mac 本机腿已换，`~/.aginx/spool/me` 有落件）；明早 08:00 晨报
-   复验；enchilada manifest 挂账同上。
+4. **运行面（09-28 现况）**：镜像三件上架（aginx v0.1.13/gateway
+   v0.2.0/pair v0.1.1）+redfin manifest 换钉+pair 升 v0.1.1（收据
+   #417）；enchilada 不在线（relay 5 天零注册，收据 #418）回网再
+   换装；明晨 08:00 晨报=降级卡真考（#414 三堵口后首验）。
 
 ## 指针
 
