@@ -9872,3 +9872,39 @@ reconcile 扫 workflows/ 目录——旧世界 `<workflows>/me/` 残目录还在
 **挂账**：镜面上架 aginx v0.1.12 + aginx-gateway v0.2.0 + manifest
 换钉（推送窗口）；enchilada 回网后同配方；term 404→模板匠转派；
 B 路裸根默认条目作上游特性请求（docs/REQ → aginx 项目）。
+
+## #414 晨报 09-28 08:00 点火失败收据+三堵口（2026-09-28）
+
+**事故**：刀5 后首次无人值守晨报点火整轮失败且全静默。时间线
+（母体/aginxbrowser 双日志）：
+- 00:00:00 UTC cron 准点（每日晨报-20260928）——morning-report uuid
+  免搬、cron 活性本身 ✓。
+- 00:00–00:04 web_search 单调用 2m08s–2m18s：aginxbrowser 每查询打
+  4–6 引擎，墙内直连腿等满超时（huggingface/duckduckgo timed out）、
+  bing 直连被 geo-substitute 判废，全部转代理重试。
+- 00:04:43 **aginxbrowser 进程死亡**、svc respawn（第 19 次）——正在跑
+  的 web_search 当场 connection refused。死因三无：dmesg 无 OOM/segfault、
+  单元日志无 panic（stderr 本进日志=无输出死亡，SIGSEGV/SIGKILL 级）、
+  svcd respawn 零记录。
+- 00:05:00 cron 300s 超时杀轮；超时通知因 job 无 owner_id 报错丢弃
+  （"LastChannel delivery requires owner_id"）——失败对主人全静默。
+
+**三堵口**（30bd9da + 994fa22 + 115f05e，check.sh 全绿）：
+1. kernel：cron LastChannel 无 owner_id 交付（超时/失败通知）不再报错
+   丢弃，降级落 system 家根卡片（reply 模板，deliver_ownerless_home_card；
+   回归测试 ownerless_last_channel_falls_back_to_system_home_card）。
+   v0.1.13 装机在役（stamps=a9867ab8…，pid 3958）。
+2. svc：respawn 前必 kmsg exit 码（负数=信号）——普通失败原先零日志
+   （只有 breaker 全开才 kmsg）。镜像件，**挂账镜像线**不热修。
+3. REQ-aginxbrowser-search-latency-panic.md → 生态仓：直连超时瘦身/
+   引擎并行（目标单搜 ≤30s，现 120s+）+ panic 落盘。待裁决。
+
+**设备侧**：晨报 job 经 morning-report 活进程重建（cron_cancel+create），
+DB 实锤 timeout_secs=900（用户裁决 600s+）、delivery=last_channel、
+active_flow=morning-report、下次 09-29 08:00 Asia/Shanghai。一次性
+「超时测试」job（timeout 10s）真触发真超时 ✓（delivery=none 静默正确）；
+「超时测试2」LLM 两次把 cron_create 写成文本没建成——无主 last_channel
+活体降级卡留明早晨报真考（真 job 即无主 last_channel；单测已锁行为）。
+
+**遗留**：搜索慢的根治在生态仓（REQ）；aginxbrowser 死因等 svcd 留痕
+上线（镜像线）+ aginxbrowser panic 落盘（REQ）。
