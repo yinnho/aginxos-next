@@ -327,9 +327,18 @@ impl Svc {
             ));
             r.set_st(St::Failed);
         } else if restartable {
+            // 普通失败也留痕：exit 码（负数=信号）是无输出死亡的唯一线索
+            // （09-28 aginxbrowser 死因三无——stderr 本进单元日志但无输出）
+            kmsg(&format!(
+                "aginx-svcd: {display} failed ({why}) — respawn in {}ms\n",
+                r.backoff_ms
+            ));
             r.backoff_until = Some(now + Duration::from_millis(r.backoff_ms));
             r.set_st(St::Backoff);
         } else {
+            kmsg(&format!(
+                "aginx-svcd: {display} failed ({why}) — not restartable, parked\n"
+            ));
             r.set_st(St::Failed);
         }
     }
