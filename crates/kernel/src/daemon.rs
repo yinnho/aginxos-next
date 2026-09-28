@@ -509,14 +509,19 @@ pub(super) async fn cron_deliver_response(
 
     match delivery {
         CronDelivery::None => Ok(()),
-        CronDelivery::LastChannel => {
-            let sender_id = owner_id.ok_or_else(|| {
-                CarrierError::Config(
-                    "LastChannel delivery requires owner_id on the cron job".to_string(),
-                )
-            })?;
-            deliver_via_last_channel(kernel, agent_id, sender_id, response).await
-        }
+        CronDelivery::LastChannel => match owner_id {
+            Some(sender_id) => deliver_via_last_channel(kernel, agent_id, sender_id, response).await,
+            // 无主 job（agent 自建、无 owner）：超时/失败通知不得静默——降级
+            // 落 system 家根卡片（reply 模板渲染纯文本 body）。09-28 晨报
+            // 超时事故：LastChannel 无 owner 直接报错丢弃，失败对主人全静默。
+            None => {
+                tracing::warn!(
+                    agent = %agent_id,
+                    "Cron LastChannel delivery has no owner_id — falling back to system home card"
+                );
+                deliver_ownerless_home_card(&kernel.config.home_dir, response)
+            }
+        },
         CronDelivery::Admins => {
             // Fan the cron result out to every admin in the agent's workspace
             // (admins.json) via the same privileged path the automation webhook
@@ -572,6 +577,17 @@ pub(super) async fn cron_deliver_response(
 /// fire 白跑。tmp+rename 原子写（tmp 名带前导点，term 扫目录跳过点文件
 /// 就不会读到半截）。文件名 `{本地时间戳}-{slugify(title)}.json`，同
 /// 一毫秒同标题的极端碰撞=后写覆盖（同一张卡，��接受）。
+/// 无主 cron 交付的兜底：落 system 家根卡片（09-28 晨报超时静默事故）。
+fn deliver_ownerless_home_card(home: &std::path::Path, response: &str) -> CarrierResult<()> {
+    write_home_card(
+        home,
+        carrier_types::config::SYSTEM_AGENT,
+        "任务通知",
+        "reply",
+        response,
+    )
+}
+
 fn write_home_card(
     home: &std::path::Path,
     agent_name: &str,
@@ -1670,8 +1686,8 @@ impl CarrierKernel {
 #[cfg(test)]
 mod tests {
     use super::{
-        build_resume_job, cron_turn_degenerate, is_stranded, slugify, write_home_card,
-        MAX_AUTO_RESUMES,
+        build_resume_job, cron_turn_degenerate, deliver_ownerless_home_card, is_stranded,
+        slugify, write_home_card, MAX_AUTO_RESUMES,
     };
     use crate::registry::AgentRegistry;
     use chrono::Utc;
@@ -1989,6 +2005,35 @@ mod tests {
         assert!(
             files.iter().all(|f| !f.starts_with('.')),
             "no tmp residue: {files:?}"
+        );
+        let _ = std::fs::remove_dir_all(&home);
+    }
+
+    /// 无主 LastChannel 交付兜底（09-28 晨报超时静默事故）：不报错丢弃，
+    /// 落 system 家根卡片——source=system、reply 模板、纯文本包 body。
+    #[test]
+    fn ownerless_last_channel_falls_back_to_system_home_card() {
+        let home = std::env::temp_dir().join(format!("carrier-kernel-ownerless-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&home);
+
+        deliver_ownerless_home_card(&home, "⚠️ 定时任务「每日晨报」执行超时（300秒未完成）")
+            .expect("ownerless delivery must not error");
+
+        let files: Vec<String> = std::fs::read_dir(home.join("cards"))
+            .unwrap()
+            .flatten()
+            .map(|e| e.file_name().to_string_lossy().to_string())
+            .collect();
+        assert_eq!(files.len(), 1, "one fallback card: {files:?}");
+        let doc: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(home.join("cards").join(&files[0])).unwrap())
+                .unwrap();
+        assert_eq!(doc["source"], "system");
+        assert_eq!(doc["template"], "reply");
+        assert_eq!(doc["title"], "任务通知");
+        assert!(
+            doc["data"]["body"].as_str().unwrap().contains("执行超时"),
+            "notice text preserved: {doc}"
         );
         let _ = std::fs::remove_dir_all(&home);
     }
