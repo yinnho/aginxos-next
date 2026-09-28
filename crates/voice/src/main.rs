@@ -1133,7 +1133,9 @@ fn net_check() -> NetState {
     }
 }
 
-/// wlan0 的 IPv4（回环除外）。None = 没网。
+/// wlan0 的 IPv4（回环除外）。None = 没网。剥 CIDR 后缀（设备 ip 输出
+/// `inet 192.168.3.93/24`——带着 /24 会让 AGINX_CALL_BIND 的 IpAddr
+/// 解析炸，刀5c 预检收据）。
 fn wlan0_ip() -> Option<String> {
     let out = Command::new("ip")
         .args(["-4", "addr", "show", "wlan0"])
@@ -1142,6 +1144,7 @@ fn wlan0_ip() -> Option<String> {
     for line in String::from_utf8_lossy(&out.stdout).lines() {
         if let Some(rest) = line.trim().strip_prefix("inet ") {
             if let Some(ip) = rest.split_whitespace().next() {
+                let ip = ip.split('/').next().unwrap_or(ip);
                 if ip != "127.0.0.1" {
                     return Some(ip.to_string());
                 }
