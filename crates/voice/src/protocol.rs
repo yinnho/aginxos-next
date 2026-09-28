@@ -57,6 +57,22 @@ pub enum Ev {
     QrDone(Result<Vec<String>, String>),
     /// Act::Ocr 完成：Ok(每行一条文本) / Err(拍照/识别失败原因)
     OcrDone(Result<Vec<String>, String>),
+    /// Act::Call 终局（刀5b：daemon 查名录/观测子进程后回喂）
+    CallDone(CallEnd),
+}
+
+/// 通话终局（刀5b，M48 刀5）。话术是地板话——原因细节只进 daemon 日志。
+#[derive(Debug, Clone, PartialEq)]
+pub enum CallEnd {
+    /// call.conf 查无此名（名随事件走——协议无驻留态，话术要用）
+    NoNumber { name: String },
+    /// 接通后正常挂断（本端音量键 SIGINT / 对端 BYE 同一形态）
+    Done,
+    /// 没接通（15s 拨号窗尽/对端不可达——窗内建在 aginx-call 的
+    /// call_and_wait，daemon 只按「从未接通」归类）
+    NoAnswer,
+    /// 起不来/接通后桥断（spawn 失败、mic 打不开等）
+    Failed,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -84,6 +100,9 @@ pub enum Act {
     /// 自由文本喂母体/新前台（N2②：aginx agent send）。封闭词表全部
     /// miss 时走这里；前台不可达由 daemon 落回离线地板话。
     Chat(String),
+    /// 语音直拨（刀5b，M48 刀5 零脑直拨）：确定性机器动作，同 WiFi join
+    /// 先例——daemon 查 call.conf 名录后 spawn aginx-call，不过 brain。
+    Call { target: String },
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -371,6 +390,16 @@ impl Vm {
                     }
                 }
             }
+            Ev::CallDone(end) => match end {
+                // 终局全 Speak（刀5b）：通话是耳朵的事，人挂完电话不一定
+                // 看屏——地板话要听得见。
+                CallEnd::NoNumber { name } => {
+                    self.say_loud(&mut outs, &format!("没找到{name}的号码。"))
+                }
+                CallEnd::Done => self.say_loud(&mut outs, "通话结束。"),
+                CallEnd::NoAnswer => self.say_loud(&mut outs, "没拨通，再说一次重拨。"),
+                CallEnd::Failed => self.say_loud(&mut outs, "呼叫失败，再说一次重试。"),
+            },
         }
         outs
     }
@@ -447,6 +476,11 @@ impl Vm {
                 outs,
                 "我能连网、扫码、念字、关机、重启。回应都在屏幕上，要听我说，说你说给我听。",
             );
+        } else if let Some(target) = call_target(text) {
+            // 刀5b 语音直拨：出声确认（对讲动作看不见脸，必须有可听反馈），
+            // 查名录/spawn 由 daemon 落地，终局回喂 CallDone。
+            self.say_loud(outs, &format!("正在呼叫{target}。"));
+            outs.push(Out::Act(Act::Call { target }));
         } else {
             if self.front {
                 // N2②：封闭词表 miss = 自由文本 → 母体（新前台）。封闭
@@ -626,6 +660,28 @@ fn is_shutdown(t: &str) -> bool {
 /// 单列）。
 fn is_reboot(t: &str) -> bool {
     contains_any(t, &["重启", "重新启动", "重启手机"])
+}
+
+/// 通话意图点名（刀5b）：三形——「找X语音」「打给X」「呼叫X」。
+/// 返回中段名（查名录在 daemon，大小写不敏感在那侧比）。找形取 找↔语音
+/// 之间的段（尾随「通话」等字自然截掉）；打给/呼收取后缀。
+fn call_target(t: &str) -> Option<String> {
+    if let (Some(i), Some(j)) = (t.find('找'), t.find("语音")) {
+        // 语音必须在找之后且中段非空（「语音找一下」不是点名）
+        let start = i + '找'.len_utf8();
+        if j > start {
+            return Some(t[start..j].to_string());
+        }
+    }
+    for p in ["打给", "呼叫"] {
+        if let Some(i) = t.find(p) {
+            let rest = &t[i + p.len()..];
+            if !rest.is_empty() {
+                return Some(rest.to_string());
+            }
+        }
+    }
+    None
 }
 
 /// 行尾终止符：句/问/叹/分/省略——段落自然边界，保留原文不加工。
@@ -1255,5 +1311,96 @@ mod tests {
         let o = heard(&mut vm, "关机");
         assert_eq!(speaks(&o), vec!["请说口令。"]);
         assert!(o.iter().all(|x| !matches!(x, Out::Act(Act::Chat(_)))));
+    }
+
+    // ---------------- 刀5b：语音直拨（2026-09-28） ----------------
+
+    #[test]
+    fn call_words_fire_act_with_target() {
+        // 三形点名：找X语音 / 打给X / 呼叫X
+        for (w, target) in [
+            ("找mac语音", "mac"),
+            ("找Mac语音通话", "Mac"), // 尾随字被找形自然截掉
+            ("打给mac", "mac"),
+            ("呼叫Mac", "Mac"),
+        ] {
+            let mut vm = Vm::new();
+            let o = heard(&mut vm, w);
+            assert_eq!(
+                acts(&o),
+                vec![Act::Call {
+                    target: target.into()
+                }],
+                "「{w}」"
+            );
+            // 出声确认（对讲动作看不见脸）
+            assert_eq!(speaks(&o), vec![format!("正在呼叫{target}。")], "「{w}」");
+        }
+    }
+
+    #[test]
+    fn call_intent_edge_shapes() {
+        // 裸「找语音」（无中段）/裸「打给」不触发——落 Chat/地板
+        for w in ["找语音", "打给", "呼叫"] {
+            let mut vm = Vm::new();
+            let o = heard(&mut vm, w);
+            assert!(o.iter().all(|x| !matches!(x, Out::Act(Act::Call { .. }))), "「{w}」");
+        }
+        // 语音在找之前：找形不成立（不是点名）
+        let mut vm = Vm::new();
+        let o = heard(&mut vm, "语音找一下");
+        assert!(o.iter().all(|x| !matches!(x, Out::Act(Act::Call { .. }))));
+    }
+
+    #[test]
+    fn call_done_three_terminal_states() {
+        // 查无此人
+        let mut vm = Vm::new();
+        let o = vm.step(Ev::CallDone(CallEnd::NoNumber { name: "mac".into() }));
+        assert_eq!(speaks(&o), vec!["没找到mac的号码。"]);
+        // 接通后挂断
+        let mut vm = Vm::new();
+        let o = vm.step(Ev::CallDone(CallEnd::Done));
+        assert_eq!(speaks(&o), vec!["通话结束。"]);
+        // 没接通（15s 窗尽）
+        let mut vm = Vm::new();
+        let o = vm.step(Ev::CallDone(CallEnd::NoAnswer));
+        assert_eq!(speaks(&o), vec!["没拨通，再说一次重拨。"]);
+        // 起不来/桥断
+        let mut vm = Vm::new();
+        let o = vm.step(Ev::CallDone(CallEnd::Failed));
+        assert_eq!(speaks(&o), vec!["呼叫失败，再说一次重试。"]);
+        // 终局回 idle：没有驻留态
+        assert_eq!(vm.state_name(), "idle");
+    }
+
+    #[test]
+    fn call_words_are_closed_vocab_not_chat() {
+        // 零脑直拨：开前台时通话词仍本地，不进 brain 往返
+        let mut vm = Vm::with_front();
+        let o = heard(&mut vm, "找mac语音");
+        assert_eq!(
+            acts(&o),
+            vec![Act::Call {
+                target: "mac".into()
+            }]
+        );
+        assert!(o.iter().all(|x| !matches!(x, Out::Act(Act::Chat(_)))));
+    }
+
+    #[test]
+    fn call_words_zero_perturbation_on_old_intents() {
+        // 新词不偷旧意图：连网/扫码/念读/关机原样
+        let mut vm = Vm::new();
+        let o = heard(&mut vm, "连接无线网络");
+        assert!(acts(&o).contains(&Act::NetConnect));
+        assert!(o.iter().all(|x| !matches!(x, Out::Act(Act::Call { .. }))));
+        let o = heard(&mut vm, "扫码");
+        assert!(acts(&o).contains(&Act::QrScan));
+        let o = heard(&mut vm, "念一下");
+        assert!(acts(&o).contains(&Act::Ocr));
+        let mut vm = Vm::new().with_power_key(Some("口令".into()));
+        let o = heard(&mut vm, "关机");
+        assert_eq!(speaks(&o), vec!["请说口令。"]);
     }
 }

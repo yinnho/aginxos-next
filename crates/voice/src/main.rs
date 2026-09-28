@@ -34,7 +34,8 @@ mod protocol;
 mod ptt;
 mod screen;
 
-use protocol::{Act, Ev, NetState, Out, PowerAction, Vm};
+use protocol::{Act, CallEnd, Ev, NetState, Out, PowerAction, Vm};
+use std::io::Read as _;
 use std::path::PathBuf;
 use std::process::Command;
 use std::time::{Duration, Instant};
@@ -61,6 +62,95 @@ const EYE_STUCK_SECS: u64 = 5;
 /// QR 重一个量级——3s 一拍把大核均摊压住，对准节奏也够快。窗口同
 /// EYE_VIEW_SECS。
 const OCR_EYE_SPACING_SECS: u64 = 3;
+
+/// 刀5b（M48 刀5）：语音直拨。CLI 真身在 aginx-call 包（opt-in，缺包=
+/// 干净的 CallEnd::Failed 地板话，同 agf 桥先例）；名录 /etc/aginx/call.conf。
+const CALL_BIN: &str = "/var/bin/aginx-call";
+const CALL_CONF: &str = "/etc/aginx/call.conf";
+const CALL_LOG: &str = "/run/aginx-voice/call.log";
+
+/// 通话子进程（刀5b）：spawn 后由主循环 try_wait 轮询，退出即按
+/// stdout 标记分类终局回喂。stdout 管着（talk 模式全程只打几行短话，
+/// 管道缓冲装得下，退出后读到 EOF 分类）；tracing 落 call.log（刀5c
+/// 收据真源）。挂断=SIGINT（子进程 tokio ctrl_c 臂=优雅 BYE）。
+struct CallView {
+    child: std::process::Child,
+    target: String,
+    since: Instant,
+}
+
+/// 名录查找（刀5b）：`name = sip:uri` 一行一目，# 注释；查名大小写
+/// 不敏感（ASR 不保大小写还原）。None = 查无此人。
+fn call_lookup(name: &str) -> Option<String> {
+    let txt = std::fs::read_to_string(CALL_CONF).ok()?;
+    let want = name.to_lowercase();
+    txt.lines().find_map(|l| {
+        let l = l.trim();
+        if l.is_empty() || l.starts_with('#') {
+            return None;
+        }
+        let (k, v) = l.split_once('=')?;
+        (k.trim().to_lowercase() == want)
+            .then(|| v.trim().to_string())
+            .filter(|v| !v.is_empty())
+    })
+}
+
+/// spawn 拨出腿（刀5b章程：`aginx-call talk <uri>`）。AGINX_CALL_BIND
+/// 钉本机 wlan0 IP——Config::local 把 127.0.0.1 烧进 local_ip/bind_addr/
+/// local_uri，回环套接字连 LAN 对端都发不出去（刀3 收据）。
+fn call_spawn(uri: &str) -> Result<std::process::Child, String> {
+    let bind = wlan0_ip().ok_or("wlan0 没地址")?;
+    let log = std::fs::File::create(CALL_LOG).ok();
+    Command::new(CALL_BIN)
+        .args(["talk", uri])
+        .env("AGINX_CALL_BIND", &bind)
+        .stdout(std::process::Stdio::piped())
+        .stderr(log.as_ref().and_then(|f| f.try_clone().ok()).map_or_else(
+            std::process::Stdio::null,
+            std::process::Stdio::from,
+        ))
+        .spawn()
+        .map_err(|e| format!("aginx-call spawn: {e}"))
+}
+
+/// 通话中音量键（上/下皆可，章程裁决）= 挂断：SIGINT → 子进程优雅 BYE。
+/// 不 take——终局仍由主循环看到退出后统一分类回喂（Ctrl+C 路径 exit 0
+/// + stdout 带 call up 标记 = Done）。
+fn call_hangup(call: &mut Option<CallView>) {
+    if let Some(cv) = call.as_mut() {
+        eprintln!(
+            "aginx-voice: call hangup (volume key), {} elapsed {:.0}s",
+            cv.target,
+            cv.since.elapsed().as_secs_f32()
+        );
+        unsafe { libc::kill(cv.child.id() as i32, libc::SIGINT) };
+    }
+}
+
+/// 子进程退出后的终局分类（刀5b 三态）：stdout 带 `[aginx-call] call up`
+/// = 接通过——exit 0 = 优雅结束（Done），非 0 = 桥断（Failed）；从未
+/// 接通 = 15s 拨号窗尽/不可达（NoAnswer，窗内建在 call_and_wait）。
+fn call_classify(cv: &mut CallView) -> CallEnd {
+    let mut buf = String::new();
+    if let Some(mut r) = cv.child.stdout.take() {
+        let _ = r.read_to_string(&mut buf);
+    }
+    let ok = cv.child.wait().map(|s| s.success()).unwrap_or(false);
+    let up = buf.contains("[aginx-call] call up");
+    eprintln!(
+        "aginx-voice: call {} exited rc={} up={} {:.0}s",
+        cv.target,
+        if ok { 0 } else { 1 },
+        up,
+        cv.since.elapsed().as_secs_f32()
+    );
+    match (up, ok) {
+        (true, true) => CallEnd::Done,
+        (true, false) => CallEnd::Failed,
+        _ => CallEnd::NoAnswer,
+    }
+}
 
 /// M47⑤ 眼取景常驻：一个 --forever cam-shot 子进程 + mtime 轮询。子进程
 /// 自己原子发布 eye.jpg（tmp+rename），voice 不再逐帧起停相机——双会话
@@ -134,7 +224,7 @@ fn main() {
             face::set_line(Some(&text));
             face::write(false);
             let outs = vm.step(Ev::Heard(text));
-            run_outs(&mut vm, outs, None, &mut None);
+            run_outs(&mut vm, outs, None, &mut None, &mut None);
         }
         Some("--script") => {
             // 收据阶梯：stdin 每行一条 Heard，同一个 Vm 跨步保持（--inject
@@ -158,7 +248,7 @@ fn main() {
                         step += 1;
                         eprintln!("aginx-voice: script step {step}");
                         let outs = vm.step(Ev::Heard(t.to_string()));
-                        run_outs(&mut vm, outs, brain.as_ref(), &mut None);
+                        run_outs(&mut vm, outs, brain.as_ref(), &mut None, &mut None);
                     }
                 }
             }
@@ -331,6 +421,9 @@ fn daemon() {
     // ——命中 WIFI: 码直接连（扫码即指令，拉式——机器开着取景等的就是
     // 这个格式）。
     let mut eye: Option<EyeView> = None;
+    // 通话子进程（刀5b）：Some = 通话中。期间音量键=挂断（mic 归
+    // aginx-call 独占，PTT/屏上按住都不采集——撞上必抢 PCM）。
+    let mut call: Option<CallView> = None;
 
     // 面法B：口令等待的心跳基准（真实流逝喂进状态机，超时由协议判）
     let mut last_tick = Instant::now();
@@ -346,6 +439,13 @@ fn daemon() {
                         let had_eye = eye.is_some();
                         eye_shut(&mut vm, &mut eye);
                         if had_eye {
+                            face::write(false);
+                            continue;
+                        }
+                        // 通话中音量下 = 挂断（刀5b：章程裁决上/下皆可；
+                        // mic 归 aginx-call，PTT 不采集——同吞周期法）
+                        if call.is_some() {
+                            call_hangup(&mut call);
                             face::write(false);
                             continue;
                         }
@@ -398,7 +498,7 @@ fn daemon() {
                                         face::set_line(Some(&text));
                                         face::write(false);
                                         let outs = vm.step(Ev::Heard(text));
-                                        run_outs(&mut vm, outs, brain.as_ref(), &mut eye);
+                                        run_outs(&mut vm, outs, brain.as_ref(), &mut eye, &mut call);
                                     }
                                     Err(e) => {
                                         eprintln!("aginx-voice: asr {e}");
@@ -419,6 +519,12 @@ fn daemon() {
                         // M42g：音量+ = 眼开关（音量+10 的老义退役；一屏一键
                         // 一义，加音量走语音）。协议的 Act::Eye/EyeClose 走
                         // 同两个助手——键是手动挡，机器会自己睁眼/闭眼。
+                        // 刀5b：通话中音量+ = 挂断（与音量下同一闸）。
+                        if call.is_some() {
+                            call_hangup(&mut call);
+                            face::write(false);
+                            continue;
+                        }
                         if eye.is_some() {
                             eye_shut(&mut vm, &mut eye);
                         } else {
@@ -445,7 +551,9 @@ fn daemon() {
                     .filter(|s| !s.is_empty())
                     .map(PathBuf::from);
                 *CHAT_PAGE.lock().unwrap() = target;
-                if capturing.is_none() {
+                // 通话中不采集（刀5b：mic 归 aginx-call；松手 take 空
+                // 自然空走）。
+                if capturing.is_none() && call.is_none() {
                     match audio::capture_start() {
                         Ok(c) => {
                             capturing = Some(c);
@@ -470,7 +578,7 @@ fn daemon() {
                                 face::set_line(Some(&text));
                                 face::write(false);
                                 let outs = vm.step(Ev::Heard(text));
-                                run_outs(&mut vm, outs, brain.as_ref(), &mut eye);
+                                run_outs(&mut vm, outs, brain.as_ref(), &mut eye, &mut call);
                             }
                             Err(e) => {
                                 eprintln!("aginx-voice: asr {e}");
@@ -577,16 +685,28 @@ fn daemon() {
                     // 命中即自动走：配对码（超集，PairApply）/ WIFI: 码直连 /
                     // 文本码念前 40 字——拉式，码到手就用
                     let outs = vm.step(Ev::QrDone(Ok(payloads)));
-                    run_outs(&mut vm, outs, brain.as_ref(), &mut eye);
+                    run_outs(&mut vm, outs, brain.as_ref(), &mut eye, &mut call);
                 }
                 EyeExit::OcrHit(lines) => {
                     // 文字到手取景的活就干完了（#246 同律）：闭眼、上屏、念。
                     let outs = vm.step(Ev::OcrDone(Ok(lines)));
-                    run_outs(&mut vm, outs, brain.as_ref(), &mut eye);
+                    run_outs(&mut vm, outs, brain.as_ref(), &mut eye, &mut call);
                 }
                 EyeExit::GiveUp(msg) => {
                     let _ = vm.inject_say(msg);
                 }
+            }
+        }
+
+        // ---- 通话子进程（刀5b）：退出即分类终局回喂 ----
+        if call.is_some() {
+            let exited = call.as_mut().and_then(|cv| cv.child.try_wait().ok()).flatten().is_some();
+            if exited {
+                let mut cv = call.take().expect("call");
+                let end = call_classify(&mut cv);
+                face::write(false);
+                let outs = vm.step(Ev::CallDone(end));
+                run_outs(&mut vm, outs, brain.as_ref(), &mut eye, &mut call);
             }
         }
 
@@ -602,7 +722,7 @@ fn daemon() {
         ));
         last_tick = now;
         if !outs.is_empty() {
-            run_outs(&mut vm, outs, brain.as_ref(), &mut eye);
+            run_outs(&mut vm, outs, brain.as_ref(), &mut eye, &mut call);
         }
     }
 }
@@ -646,12 +766,15 @@ fn hear(wav: &[u8], brain: Option<&audio::Brain>) -> Result<String, String> {
 /// 落地状态机输出。拉式语音：Say 只上脸（行已在 vm.lines 里，末尾统一
 /// face::write），Speak 才走 TTS；Act → 执行并把结果喂回状态机。eye：
 /// 眼取景所有权借用——Act::Eye/EyeClose 由协议出生（缺网自动睁眼、取消
-/// 自动闭眼），VolUp/音量下走同两个助手。
+/// 自动闭眼），VolUp/音量下走同两个助手。call：通话子进程所有权借用
+/// （刀5b）——Act::Call spawn 后由主循环轮询。
+#[allow(clippy::too_many_arguments)]
 fn run_outs(
     vm: &mut Vm,
     outs: Vec<Out>,
     brain: Option<&audio::Brain>,
     eye: &mut Option<EyeView>,
+    call: &mut Option<CallView>,
 ) {
     let mut followups: Vec<Ev> = Vec::new();
     for o in outs {
@@ -686,7 +809,7 @@ fn run_outs(
                         // PairDone 就地喂（收尾句照常出声，Say 落 face）。
                         eye_shut(vm, eye);
                         let outs = vm.step(Ev::PairDone(r));
-                        run_outs(vm, outs, brain, eye);
+                        run_outs(vm, outs, brain, eye, call);
                     } else {
                         followups.push(Ev::PairDone(r));
                     }
@@ -751,6 +874,35 @@ fn run_outs(
                     };
                     eprintln!("aginx-voice: power exec {arg}");
                     let _ = Command::new("/usr/bin/aginx-reboot").arg(arg).spawn();
+                }
+                Act::Call { target } => {
+                    // 刀5b 零脑直拨：查名录 → spawn 拨出腿。通话中的
+                    // 结构性防御（PTT/屏上按住在通话中都进不来，这里
+                    // 是万一）：报忙不开第二路。
+                    face::write(eye.is_some());
+                    if call.is_some() {
+                        let _ = vm.inject_say("正在通话中。");
+                        continue;
+                    }
+                    match call_lookup(&target) {
+                        None => {
+                            followups.push(Ev::CallDone(CallEnd::NoNumber { name: target }));
+                        }
+                        Some(uri) => match call_spawn(&uri) {
+                            Ok(child) => {
+                                eprintln!("aginx-voice: call {target} -> {uri}");
+                                *call = Some(CallView {
+                                    child,
+                                    target,
+                                    since: Instant::now(),
+                                });
+                            }
+                            Err(e) => {
+                                eprintln!("aginx-voice: call {e}");
+                                followups.push(Ev::CallDone(CallEnd::Failed));
+                            }
+                        },
+                    }
                 }
                 Act::Chat(text) => {
                     face::write(eye.is_some());
@@ -827,7 +979,7 @@ fn run_outs(
     }
     for ev in followups {
         let outs = vm.step(ev);
-        run_outs(vm, outs, brain, eye);
+        run_outs(vm, outs, brain, eye, call);
     }
     // v4⑥ 翻旗点（全程序唯一）：本回合若有 Chat 暂存了收尾，这里统一
     // 翻 result:true——在出口 face::write 清旗之后、followups 跑完之后。
