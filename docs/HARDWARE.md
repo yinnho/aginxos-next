@@ -9990,7 +9990,9 @@ color:accent}` 行 **accent=0 / fg=1875**，真元素 accent 行
 在**传病**；生产在役 note/todo/poem 卡片的 ">"/"▸" 装饰今天同样不可见。
 **待修（系统侧，仓内 `home/workflows/template-gen/`）**：① run.sh
 PROMPT 加硬约束「装饰禁用 `::before/::after` 的 content，一律真元素」；
-② 金样本换正确写法（note/reply/todo 属他线工件，需裁决）。**未动，等裁决。**
+② 金样本换正确写法（note/reply/todo 属他线工件，需裁决）。
+→ ①已于 143b018 修（硬约束一/二 + 出件后伪元素自检门 + flow.md 造型
+纪律），②仍挂（金样本属生态仓线，写需求文档归口）。
 
 **新发现②：relay 名册与本地名册劈叉**
 `agc agent://redfin.relay.aginx.net/template-gen` 回
@@ -9999,6 +10001,26 @@ PROMPT 加硬约束「装饰禁用 `::before/::after` 的 content，一律真元
 `workflows/` + `workflows.md`。→「一台手机 = 任意助理对外服务宿主」
 **目前只对在 relay 名册里的助理成立**（模板匠/斥候/晨报官/分身生成器
 皆不可 relay 寻址）。**未动，等裁决。**
+（同日修正：经查 #410–#413 收据与 docs/PLAN-真aginx入机.md——
+relay 面=真 aginx 注册表，入册机制已存在=#411 安装链三写（install
+时写 DB+agents toml+workflows.md，册不热扫）；template-gen 不在册
+是 #408 手迁绕过安装链所致。**补册正路=走 agent install 重装**，
+非缺设计。另：设备上「aginx-gateway」进程即真 aginx v0.2.0 同包换芯
+（包名壳），/etc/aginx/gateway.toml+env AGINX_GATEWAY_ID 为仿制品
+回滚备件遗迹，#412 已裁不回滚。）
+
+## #415 补章：流水线修后重跑验证（同日 09:58）
+
+修后的 run.sh（143b018，PROMPT 硬约束+自检门）同步设备后重派
+（首派被模板匠按会话上下文拒重单——「这单已派出去了」；喂修正态
+「旧单作废+用新脚本」后接单）。codex v0.151.0 09:49 开跑 → 09:58
+退 0（14974 tokens）。出件：`reminder.html` 4989B / `registry.json`
+2550B——**REMINDER 眉标、`!` 标题前缀、列表项目符全部真元素**
+（`body::before` 按硬约束二保留但只作不承载信息的背景层）。烟测
+200 已上屏 → **自检门通过**（无伪元素文本装饰）→ 就绪卡
+`20260928-095820-template-reminder.json` 落 `/home/cards/`。死装饰件
+park 于 `.tpl-park-20260928/reminder.html.codex-deaddeco` 备查。
+**用户点名的「! 前缀」这回真的在屏上。**
 
 
 **挂账**：① 屏上真眼验（卡已落，未见屏）。② `▸`(U+25B8) 在 macOS
