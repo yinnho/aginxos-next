@@ -4,9 +4,9 @@
 # --no-default-features，<2MB 绊网在 build-pkg.sh）。voice/term 的
 # depends 自动带装。
 name = "aginx-pair"
-version = "0.1.0"
+version = "0.1.1"
 summary = "配网 apply：join+IP+env 三键+校时+internet+单元 restart-ready（face /var/bin/aginx-pair）"
 group = "net"
-url = "https://pkgs.aginx.net/aginx-pair/v0.1.0/aginx-pair-v0.1.0-4pc.tar"
+url = "https://pkgs.aginx.net/aginx-pair/v0.1.1/aginx-pair-v0.1.1-4pc.tar"
 
 exec = "bin/aginx-pair"
