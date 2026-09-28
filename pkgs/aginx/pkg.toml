@@ -1,5 +1,8 @@
 # aginx — 母体包（D11 母体=aginx）。刀2 起 server 进程内直调 kernel，
 # 不再 spawn aginx-runtime（该二进制已随结构刀①物理删除）。
+# v0.1.13（2026-09-28）：晨报超时静默堵口——cron LastChannel 无 owner_id
+# 的交付（超时/失败通知）不再报错丢弃，降级落 system 家根卡片（reply
+# 模板）。收据 #414：09-28 08:00 晨报超时被杀、失败对主人全静默。
 # v0.1.12（2026-09-28）：刀5 补刀——堵残目录复活 me（boot 迁移器加
 # 复活体摘除+workflows/me senders 并家根+残树清走；host 再拦 LEGACY 名）。
 # v0.1.11 收回不外发（仅本机装机一件；复活体即它装的）。
@@ -43,11 +46,11 @@
 # AGINX_BIN 指 /var/bin/aginx（face symlink）。刀F 起 depends 锚
 # aginx-update（装母体自动带自更新器；裸箱升级=重刷）。
 name = "aginx"
-version = "0.1.12"
+version = "0.1.13"
 summary = "母体：路由器 face /var/bin/aginx + 心脏 server（进程内直调 kernel）+ carrier CLI 面"
 group = "agent"
 depends = "aginx-update"
-url = "https://pkgs.aginx.net/aginx/v0.1.12/aginx-v0.1.12-4pc.tar"
+url = "https://pkgs.aginx.net/aginx/v0.1.13/aginx-v0.1.13-4pc.tar"
 exec = "bin/aginx"
 
 [service]
