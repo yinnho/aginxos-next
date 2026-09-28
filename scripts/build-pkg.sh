@@ -97,6 +97,20 @@ case "${PKG}" in
     install -m 755 "${TARGET_DIR}/${PKG}" "${STAGE}/bin/${PKG}"
     MEMBERS="bin pkg.toml SKILL.md"
     ;;
+  aginx-call)
+    # M48 刀5a（2026-09-28）：opus-media 折 audiopus_sys——CMake 4 拒
+    # audiopus_sys-0.2.2 的 cmake_minimum_required<3.5，须 env 钉政策
+    # 版本（刀2 收据配方）。产物 30M 级静态，strip 控包体。
+    CRATE="aginx-call"
+    echo "==> zigbuild ${PKG}（musl+opus-media，CMake 政策钉 3.5）"
+    (cd "${ROOT}" && CMAKE_POLICY_VERSION_MINIMUM=3.5 \
+      cargo zigbuild --release --target aarch64-unknown-linux-musl \
+      -p "${CRATE}" --features opus-media)
+    mkdir -p "${STAGE}/bin"
+    install -m 755 "${TARGET_DIR}/${PKG}" "${STAGE}/bin/${PKG}"
+    strip "${STAGE}/bin/${PKG}" 2>/dev/null || true
+    MEMBERS="bin pkg.toml SKILL.md"
+    ;;
   aginx-gateway)
     # 换芯树包（刀1，2026-09-27）：真身=生态仓 aginx——四独立项目之一，
     # 只构建不改码。out-of-tree CARGO_TARGET_DIR 保证生态仓工作树零
