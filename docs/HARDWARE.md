@@ -10022,6 +10022,41 @@ relay 面=真 aginx 注册表，入册机制已存在=#411 安装链三写（ins
 park 于 `.tpl-park-20260928/reminder.html.codex-deaddeco` 备查。
 **用户点名的「! 前缀」这回真的在屏上。**
 
+## #416 旧线残件清理：仿制品形状全线退场（redfin，2026-09-28）
+
+**裁决**（用户：「还是先清理代码，先走上正确的架构，然后再来清账」）——
+真 aginx 换芯（#410–#413）后仍按仿制品形状活的代码与文件全清，
+commit **2257857**（check.sh 全绿，aginx-pair 9/9 含新档建档/段合并例）：
+
+- **rootfs**：`etc/aginx/gateway.toml` 死配置出配方（fresh flash 不再烤
+  host/port/heartbeat 形状参数——那是已删 crates/gateway 的 Config）；
+  出厂 env 本就干净（只 HOME，brain 键走 state tar）。
+- **pair 链**：`apply_pair` 身份写位改 **/etc/aginx/config.toml [relay]**
+  （`write_gateway_config` 段感知合并：段内 id 原地换、relay_secret 缺则
+  段尾补、无段则尾建档；**[server]/[auth] 一字不动**——jwt_secret 等
+  刷机日灌注值不被配对冲掉；0600 tmp+rename）。env 只留 brain 键——
+  **AGINX_GATEWAY_ID/AGINX_RELAY_SECRET env 腿退役**（真 aginx 从不读
+  它们，纯写不读的死信）。触点 env 新增 `AGINX_PAIR_GATEWAY_CONFIG`。
+- **验收**：n6-egg 配对相位身份断言改查 config.toml `[relay] id`（裸
+  grep env 腿退役注记）；n7-l0 usbconf 断言 env 只查 brain 键。
+- **AGENTS.md**：布局表 `crates/gateway` 行删除（#412 已整删的源），
+  换 `pkgs/aginx-gateway` 行注明 v0.2.0 换芯真身；N5 里程碑文字补注。
+- **crates/update 的 STATE_TAR_EXCLUDES 含 gateway.toml**：保留不动——
+  升级路径防旧机残件经 state tar 复活，是防御不是残件。
+- **enchilada 未动**：其 SKILL.md 与在役包仍旧线，回网换装（挂账）时
+  同配方清理。
+
+**设备侧（redfin，运维腿）**：`rm /etc/aginx/gateway.toml` + env 删
+`AGINX_GATEWAY_ID` 行（sed）；config.toml [relay]/brain 键原样。
+`aginx-svc restart aginx-gateway` → ready（pid 24068，cmd 仍真身
+`-c /etc/aginx/config.toml`）。**终极判据**：Mac
+`agc agent://redfin.relay.aginx.net/system '回一个字：通'` → 真答
+「通」5.9s，sessionId 续接票正常。日志尾 ERROR 行为 09-27 切流前旧账
+（secret 迁移完成前），非现况。
+
+**挂账不变**：镜面上架（aginx v0.1.12+v0.2.0 包+manifest 换钉）、
+enchilada 同配方、B 路裸根泛解析（上游）、金样本伪元素（REQ 归口）。
+
 
 **挂账**：① 屏上真眼验（卡已落，未见屏）。② `▸`(U+25B8) 在 macOS
 宿主字体栈**缺字形**（真元素占位不落墨）——Android Noto/Droid Mono
