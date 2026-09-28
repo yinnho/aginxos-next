@@ -10092,6 +10092,7 @@ enchilada 同配方、B 路裸根泛解析（上游）、金样本伪元素（RE
 
 ## #418 enchilada 探查：不在线，换装留挂（2026-09-28）
 
+
 #416/#417 遗留的「回网则同配方换装」探查腿：
 
 - **relay 侧**：`journalctl -u aginx-relay | grep enchilada` 历史注册
@@ -10104,6 +10105,31 @@ enchilada 同配方、B 路裸根泛解析（上游）、金样本伪元素（RE
   旧线残件清理，参照 #410–#413+#416；其 manifest 换钉同 #417 待其
   回网后单独跑）。
 
+
+## #419 降级卡活体烟测：明早日考前置收据（redfin，2026-09-28）
+
+#414 留的 08:00 真考盲区（LastChannel 无 owner → system 家根卡是否
+真活）今晚提前走通：
+
+- **复刻故障形状**：一次性 cron job（`aginx-carrier cron create
+  --agent morning-report`，JSON 走文件 stdin 避复合命令坑）——
+  schedule at 12:22:30Z、action agent_turn 短问、delivery
+  `{"kind":"last_channel"}`、**无 owner**——与晨报 job 同助理同
+  delivery，正是明早的触发形状。
+- **结果**：准点触发（reconcile ≤15s 采进），brain 真答「通」，
+  **降级卡落地** `/home/cards/20260928-122252963-任务通知.json`
+  （source=system、template=reply、body=通）——v0.1.13 降级路径
+  活体实证；one_shot job 触发后自清（cron list 回 1 条）。
+- **顺带核验**：晨报 job 三件全对（timeout_secs=900 ✓、
+  next_run=09-29T00:00Z=北京 08:00 ✓、consecutive_errors=0 ✓）；
+  镜像全量 20 条 manifest 钉 URL 逐条 HEAD **全 200**（含
+  browser v0.5.14/grok v1.0.41/codex/python3/dup/git——#417 只验
+  过自家三件，本补全）。
+- **明早只剩的真未知**：晨报全文生成面（天气/搜索——搜索延迟是
+  REQ-aginxbrowser-search-latency-panic 归口生态线的病，非本仓
+  可修）与 900s 窗在真实流量下的表现。
+- 配方：carrier.db 拉库核 job 用 WAL 三件套（#402 铁律）；测试卡
+  留在 cards/ 目录（明早与晨报卡同屏可见）。
 
 
 **挂账**：① 屏上真眼验（卡已落，未见屏）。② `▸`(U+25B8) 在 macOS
