@@ -69,12 +69,16 @@ const CALL_BIN: &str = "/var/bin/aginx-call";
 const CALL_CONF: &str = "/etc/aginx/call.conf";
 const CALL_LOG: &str = "/run/aginx-voice/call.log";
 
-/// 通话子进程（刀5b）：spawn 后由主循环 try_wait 轮询，退出即按
-/// stdout 标记分类终局回喂。stdout 管着（talk 模式全程只打几行短话，
-/// 管道缓冲装得下，退出后读到 EOF 分类）；tracing 落 call.log（刀5c
-/// 收据真源）。挂断=SIGINT（子进程 tokio ctrl_c 臂=优雅 BYE）。
+/// 通话子进程（刀5b）：spawn 后由主循环 try_wait 轮询，退出即按 stdout
+/// 标记分类终局回喂。stdout 管道必须**后台排水**（刀5c 根因：tracing
+/// 默认写 stdout，rvoip 每帧 INFO 洪流 ~0.6s 灌满 64KB 管道，子进程写
+/// 日志一阻塞媒体线程就冻死——手机→对端断流在第 30 帧、进程僵而不死
+/// 连 SIGINT 都收不进）。排水线程顺带把标记蓄进 out 供终局分类；
+/// RUST_LOG=warn 把洪流压在源头。tracing 落 call.log。挂断=SIGINT
+/// （子进程 tokio ctrl_c 臂=优雅 BYE）。
 struct CallView {
     child: std::process::Child,
+    out: std::sync::Arc<std::sync::Mutex<Vec<u8>>>,
     target: String,
     since: Instant,
 }
@@ -99,19 +103,39 @@ fn call_lookup(name: &str) -> Option<String> {
 /// spawn 拨出腿（刀5b章程：`aginx-call talk <uri>`）。AGINX_CALL_BIND
 /// 钉本机 wlan0 IP——Config::local 把 127.0.0.1 烧进 local_ip/bind_addr/
 /// local_uri，回环套接字连 LAN 对端都发不出去（刀3 收据）。
-fn call_spawn(uri: &str) -> Result<std::process::Child, String> {
+fn call_spawn(
+    uri: &str,
+) -> Result<(std::process::Child, std::sync::Arc<std::sync::Mutex<Vec<u8>>>), String> {
     let bind = wlan0_ip().ok_or("wlan0 没地址")?;
     let log = std::fs::File::create(CALL_LOG).ok();
-    Command::new(CALL_BIN)
+    let mut child = Command::new(CALL_BIN)
         .args(["talk", uri])
         .env("AGINX_CALL_BIND", &bind)
+        .env("RUST_LOG", "warn")
         .stdout(std::process::Stdio::piped())
         .stderr(log.as_ref().and_then(|f| f.try_clone().ok()).map_or_else(
             std::process::Stdio::null,
             std::process::Stdio::from,
         ))
         .spawn()
-        .map_err(|e| format!("aginx-call spawn: {e}"))
+        .map_err(|e| format!("aginx-call spawn: {e}"))?;
+    // 排水线程：管道无人读则写满即冻（见 CallView 注释）。读到的字节
+    // 蓄进共享缓冲——终局分类只认 `[aginx-call]` 标记，不怕混流。
+    let out = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+    if let Some(mut r) = child.stdout.take() {
+        let sink = out.clone();
+        std::thread::spawn(move || {
+            use std::io::Read;
+            let mut b = [0u8; 4096];
+            loop {
+                match r.read(&mut b) {
+                    Ok(0) | Err(_) => break,
+                    Ok(n) => sink.lock().unwrap().extend_from_slice(&b[..n]),
+                }
+            }
+        });
+    }
+    Ok((child, out))
 }
 
 /// 通话中音量键（上/下皆可，章程裁决）= 挂断：SIGINT → 子进程优雅 BYE。
@@ -132,10 +156,7 @@ fn call_hangup(call: &mut Option<CallView>) {
 /// = 接通过——exit 0 = 优雅结束（Done），非 0 = 桥断（Failed）；从未
 /// 接通 = 15s 拨号窗尽/不可达（NoAnswer，窗内建在 call_and_wait）。
 fn call_classify(cv: &mut CallView) -> CallEnd {
-    let mut buf = String::new();
-    if let Some(mut r) = cv.child.stdout.take() {
-        let _ = r.read_to_string(&mut buf);
-    }
+    let buf = String::from_utf8_lossy(&cv.out.lock().unwrap()).into_owned();
     let ok = cv.child.wait().map(|s| s.success()).unwrap_or(false);
     let up = buf.contains("[aginx-call] call up");
     eprintln!(
@@ -889,10 +910,11 @@ fn run_outs(
                             followups.push(Ev::CallDone(CallEnd::NoNumber { name: target }));
                         }
                         Some(uri) => match call_spawn(&uri) {
-                            Ok(child) => {
+                            Ok((child, out)) => {
                                 eprintln!("aginx-voice: call {target} -> {uri}");
                                 *call = Some(CallView {
                                     child,
+                                    out,
                                     target,
                                     since: Instant::now(),
                                 });
