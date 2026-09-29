@@ -847,19 +847,17 @@ int main(int argc, char **argv)
 	__u32 grpc = t.grp_known ? t.grpcipher : ccmp;
 	unsigned char rsne_tx[256];
 	int rsne_len;
-	if (t.ap_rsne_len >= 2) {
-		/* stored body only — re-add the RSN IE header (0x30, len) */
-		rsne_tx[0] = 0x30;
-		rsne_tx[1] = (unsigned char)t.ap_rsne_len;
-		memcpy(rsne_tx + 2, t.ap_rsne, t.ap_rsne_len);
-		rsne_len = t.ap_rsne_len + 2;
-	} else {
-		/* fallback: hand-built template with the AP's group cipher */
-		memcpy(rsne_tx, rsne, sizeof(rsne));
-		rsne_len = sizeof(rsne);
-		rsne_tx[4] = grpc >> 24; rsne_tx[5] = grpc >> 16;
-		rsne_tx[6] = grpc >> 8;  rsne_tx[7] = grpc;
-	}
+	/* Always the hand-built PSK-only RSNE (group cipher mirrored in).
+	 * Echoing the beacon's RSNE verbatim breaks on WPA2/WPA3
+	 * transition networks: our PSK+SAE claim makes hostapd expect
+	 * an SAE-derived PMK and it silently drops the PSK M2 — the
+	 * "no EAPOL M3" shape (ZTE mixed-mode, 2026-09-29). Pure-WPA2
+	 * APs take the same PSK-only shape fine — it's what real
+	 * supplicants send for a PSK join. */
+	memcpy(rsne_tx, rsne, sizeof(rsne));
+	rsne_len = sizeof(rsne);
+	rsne_tx[4] = grpc >> 24; rsne_tx[5] = grpc >> 16;
+	rsne_tx[6] = grpc >> 8;  rsne_tx[7] = grpc;
 	fprintf(stderr, "group cipher %08x (%s) rsne %d bytes\n", grpc,
 		grpc == 0x000fac04 ? "CCMP" : grpc == 0x000fac02 ? "TKIP" : "?",
 		rsne_len);
