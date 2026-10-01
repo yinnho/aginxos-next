@@ -29,7 +29,8 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
 use aginx_svc::{
-    kmsg, load_units, log_path, path_exists, socket_for, SvcType, Unit, CTL_SOCK, LOG_DIR,
+    kmsg, load_units, log_path, path_exists, reap_detached_child, socket_for, SvcType, Unit,
+    CTL_SOCK, LOG_DIR,
     UNIT_DIRS, ABSENT_RECHECK_MS, BACKOFF_MAX_MS, BACKOFF_START_MS, BREAKER_N,
     BREAKER_WINDOW_S, DEP_WAIT_MS, SIMPLE_GRACE_MS, STABLE_S,
 };
@@ -676,6 +677,15 @@ impl Svc {
             if !fresh_names.contains(&name) {
                 out.push(format!("- {name}"));
                 self.stop(&name, AfterStop::StayStopped, now);
+                // 除名前就地收尸：记录一 remove，run 循环的 reap（只扫
+                // runs）再也看不见这个子进程——漏 wait 就是僵尸挂在 svcd
+                // 名下（2026-10-01 设备收据：aginx-voice 掉册撞上的正是
+                // 这个）。TERM 已由 stop() 发出，这里补宽限+KILL+wait。
+                if let Some(r) = self.runs.get_mut(&name) {
+                    if let Some(c) = r.child.take() {
+                        reap_detached_child(c, Duration::from_millis(STOP_KILL_MS));
+                    }
+                }
                 self.runs.remove(&name);
             }
         }
