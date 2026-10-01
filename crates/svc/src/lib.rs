@@ -294,3 +294,54 @@ pub fn socket_for(name: &str) -> String {
 pub fn path_exists(p: &str) -> bool {
     Path::new(p).exists()
 }
+
+/// 摘除式收尸：调用方即将从 `runs` 里除名这个单元（reload 掉单元路径），
+/// run 循环的 reap 只扫在册记录——除名后没人再替子进程 wait()，僵尸会
+/// 挂在 svcd 名下直到 svcd 退出（2026-10-01 设备收据：aginx-voice 掉册
+/// 即此）。TERM 应已由 `stop()` 发出；这里给满停止宽限，超时补 KILL，
+/// 最后 wait() 收走退出态。同步、有界——只该在除名路径上用。
+pub fn reap_detached_child(mut child: std::process::Child, grace: std::time::Duration) {
+    let deadline = std::time::Instant::now() + grace;
+    while let Ok(None) = child.try_wait() {
+        if std::time::Instant::now() >= deadline {
+            let _ = child.kill(); // SIGKILL——此后 wait 必回
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
+    let _ = child.wait();
+}
+
+#[cfg(test)]
+mod tests {
+    use super::reap_detached_child;
+    use std::process::Command;
+    use std::time::{Duration, Instant};
+
+    /// 收尸判据：僵尸在位时 kill(pid,0)=0；退出态被 wait 收走后进程
+    /// 消失，kill(pid,0)=ESRCH。这正是 reload 除名漏 wait 的病征探针。
+    fn pid_gone(pid: u32) -> bool {
+        unsafe { libc::kill(pid as i32, 0) != 0 }
+    }
+
+    #[test]
+    fn live_child_killed_after_grace_and_fully_reaped() {
+        let mut c = Command::new("sleep").arg("30").spawn().unwrap();
+        let pid = c.id();
+        let t0 = Instant::now();
+        reap_detached_child(c, Duration::from_millis(150));
+        assert!(t0.elapsed() < Duration::from_secs(5), "没等自然退就收场");
+        assert!(pid_gone(pid), "退出态已收走，无僵尸");
+    }
+
+    #[test]
+    fn already_exited_child_returns_without_waiting_grace() {
+        let mut c = Command::new("true").spawn().unwrap();
+        c.wait().unwrap();
+        let pid = c.id();
+        let t0 = Instant::now();
+        reap_detached_child(c, Duration::from_secs(5));
+        assert!(t0.elapsed() < Duration::from_secs(1), "已退不等宽限");
+        assert!(pid_gone(pid));
+    }
+}
