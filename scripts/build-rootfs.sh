@@ -606,8 +606,8 @@ echo "${STAMP}" > "${TREE}/etc/aginx-version"
 # 刀F（2026-09-12）：qr/pair/update 出镜像走包——L0 是 Linux，不预生成
 # 二维码；qr/pair 由 voice/term 的 depends 自动带装（face /var/bin），
 # update 由母体包 depends 锚（裸箱升级=重刷，装 aginx 后才有 apply 面）。
-# term 不烤（aginx-term 包；rcS 的 aginx-term-handoff
-# 缺席静默轮询 /var/bin/aginx-term，装包即亮屏）。批③ (09-10): wizard
+# term 不烤也不拉（#427：rcS 的 aginx-term-handoff 已删——#422 黑匣子
+# 裁决后镜像不生成任何人脸，term 包纯目录死件）。批③ (09-10): wizard
 # 出烤——装机流程是扫码/语音，wizard 无入口。
 install -m 755 "${TARGET}/aginx-pkg" "${TREE}/usr/bin/"
 install -m 755 "${TARGET}/aginx-svc" "${TREE}/usr/bin/"
