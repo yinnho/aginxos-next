@@ -210,6 +210,28 @@ case "${PKG}" in
     install -m 755 "${TARGET_DIR}/${PKG}" "${STAGE}/files/bin/${PKG}"
     MEMBERS="pkg.toml SKILL.md files"
     ;;
+  aginx-ilink)
+    # weixin 频道包（#68 ②b 第一频道）：守护+CLI 一件双面，flat bin
+    # （secretd 同形——/var/bin 面、/proc/exe 即该路径）。数据与绑定
+    # 不进包：全部住 /home/channels/weixin/（DESIGN.md §四）。
+    echo "==> zigbuild aginx-ilink（musl，缓存则秒过）"
+    (cd "${ROOT}" && cargo zigbuild --release --target aarch64-unknown-linux-musl -p aginx-ilink)
+    mkdir -p "${STAGE}/bin"
+    install -m 755 "${TARGET_DIR}/aginx-ilink" "${STAGE}/bin/aginx-ilink"
+    MEMBERS="bin pkg.toml SKILL.md"
+    ;;
+  aginx-gateway-local)
+    # 本机 ACP 口（#68 ②b）：零编译案——壳脚本（带 D13 inline 头）+
+    # 出厂配置缺省，真身 exec aginx-gateway 包的二进制（另一实例）。
+    # bin/ 是 flat 面成员（sh 壳），files/etc 是包内缺省不是落位
+    # （壳首启拷 /etc/aginx/gateway-local.toml，已存在不覆写）。
+    mkdir -p "${STAGE}/bin" "${STAGE}/files/etc"
+    install -m 755 "${ROOT}/pkgs/aginx-gateway-local/bin/aginx-gateway-local" \
+      "${STAGE}/bin/aginx-gateway-local"
+    install -m 644 "${ROOT}/pkgs/aginx-gateway-local/files/etc/gateway-local.toml" \
+      "${STAGE}/files/etc/gateway-local.toml"
+    MEMBERS="bin pkg.toml SKILL.md files"
+    ;;
   aginx-asr)
     test -x "${VOICE}/bin/ag-asr" || { echo "FATAL: missing ${VOICE}/bin/ag-asr — see devices/redfin/boot/assets.md" >&2; exit 1; }
     test -s "${VOICE}/models/asr/model.int8.onnx" || { echo "FATAL: missing asr models" >&2; exit 1; }
@@ -373,7 +395,7 @@ case "${PKG}" in
     MEMBERS="pkg.toml SKILL.md files"
     ;;
   *)
-    echo "FATAL: 未知包名 ${PKG}（两裸包/换芯树包/两树包/工具双包/三树包/刀F三包 zigbuild / 上游树包 git / aginx-proxy）" >&2
+    echo "FATAL: 未知包名 ${PKG}（两裸包/换芯树包/两树包/工具双包/三树包/刀F三包 zigbuild / 上游树包 git / aginx-proxy / ②b频道两包）" >&2
     exit 1
     ;;
 esac

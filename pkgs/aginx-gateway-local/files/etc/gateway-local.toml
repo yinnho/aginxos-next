@@ -1,0 +1,11 @@
+# gateway-local — 本机 ACP 口缺省（#68 ②b；真源=/etc/aginx/gateway-local.toml，
+# 壳首启拷贝此件，已存在不覆写）。
+# direct 模式只听回环；数据世界与 relay 腿分家（AGINX_DATA_DIR=
+# /var/lib/aginx/gateway-local，sessions/spool 整文件写不共世界），
+# agents 符号链回 ../gateway/agents——名册单一寻址点。
+[server]
+mode = "direct"
+host = "127.0.0.1"
+port = 8686
+# 仅回环可及（绑定即门）；ACP 客户端（频道桥）无 authToken 腿。
+access = "public"

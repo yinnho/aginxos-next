@@ -108,6 +108,87 @@ impl BotSession {
 // Global state manager
 // ---------------------------------------------------------------------------
 
+// ---------------------------------------------------------------------------
+// 频道会话根（#68 ②b channels/ 体系）
+// ---------------------------------------------------------------------------
+
+/// 频道模式会话根（如 `/home/channels/weixin`）。设置后扫描与落盘全走
+/// `<root>/senders/<user_key>/session.json` —— **绑定是记录里的字段**
+/// （bind_agent），换绑=改字段不搬家，无重绑清扫（没有别的家可搬）。
+/// 母体不设此根（旧 `workflows/<bind>/senders/` 形状原样），两边路径
+/// 构造上互不见面 —— ②b 纯增量刀，母体清场归刀④。
+static SESSIONS_ROOT: std::sync::OnceLock<std::path::PathBuf> = std::sync::OnceLock::new();
+
+/// Set the channel-mode sessions root (e.g. `/home/channels/weixin`).
+/// Idempotent one-shot: first call wins, later calls are ignored (CLI and
+/// daemon share the entry point; tests use the path-taking helpers below).
+pub fn set_sessions_root(root: impl Into<std::path::PathBuf>) {
+    let _ = SESSIONS_ROOT.set(root.into());
+}
+
+/// Channel-mode session file path for an account (`<root>/senders/<key>/`).
+fn channel_session_path(root: &std::path::Path, user_key: &str) -> std::path::PathBuf {
+    root.join("senders").join(user_key).join("session.json")
+}
+
+/// 扫频道布局 `<root>/senders/*/session.json`（仅 weixin）。绑定以
+/// **文件字段**为真源——频道目录下无分身目录可依，字段即唯一事实。
+fn scan_channel_sessions(root: &std::path::Path) -> Vec<BotTokenFile> {
+    let mut tfs = Vec::new();
+    let Ok(senders) = std::fs::read_dir(root.join("senders")) else {
+        return tfs;
+    };
+    for sender_entry in senders.flatten() {
+        let path = sender_entry.path().join("session.json");
+        if !path.is_file() {
+            continue;
+        }
+        let Ok(content) = std::fs::read_to_string(&path) else {
+            continue;
+        };
+        let Ok(json) = serde_json::from_str::<serde_json::Value>(&content) else {
+            warn!(path = %path.display(), "Failed to parse session file as JSON");
+            continue;
+        };
+        if json.get("channel").and_then(|v| v.as_str()) != Some("weixin") {
+            continue;
+        }
+        match serde_json::from_value::<BotTokenFile>(json) {
+            Ok(tf) => tfs.push(tf),
+            Err(e) => warn!(path = %path.display(), "Failed to parse weixin session: {e}"),
+        }
+    }
+    tfs
+}
+
+/// Write a session file: 0600, pretty JSON, tmp + rename so a reader never
+/// sees a half-written session.
+fn write_session_file(path: &std::path::Path, tf: &BotTokenFile) {
+    let Ok(json) = serde_json::to_string_pretty(tf) else {
+        warn!("Failed to serialize bot token");
+        return;
+    };
+    if let Some(parent) = path.parent() {
+        if let Err(e) = std::fs::create_dir_all(parent) {
+            warn!(dir = %parent.display(), "Failed to create sender directory: {e}");
+            return;
+        }
+    }
+    let tmp = path.with_extension("json.tmp");
+    if let Err(e) = std::fs::write(&tmp, &json) {
+        warn!(path = %tmp.display(), "Failed to write session file: {e}");
+        return;
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = std::fs::set_permissions(&tmp, std::fs::Permissions::from_mode(0o600));
+    }
+    if let Err(e) = std::fs::rename(&tmp, path) {
+        warn!(path = %path.display(), "Failed to move session file into place: {e}");
+    }
+}
+
 /// 扫 `workflows/*/senders/*/session.json` 里的 weixin 会话（JSON 旁路
 /// ——DB 不可用/为空时的兜底）。`load_from_dir`/`load_new_from_dir` 与
 /// `aginx-carrier notify` 一次性进程共用；别处复制这份过滤逻辑会漂移。
@@ -115,6 +196,9 @@ impl BotSession {
 /// 会话住在分身下（绑定即路由：从哪个分身目录下发现，就绑给哪个分身），
 /// 顶层 senders/ 命名空间已随 opencarrier 多分身模型退役。
 pub fn scan_json_token_files() -> Vec<BotTokenFile> {
+    if let Some(root) = SESSIONS_ROOT.get() {
+        return scan_channel_sessions(root);
+    }
     let home = carrier_types::config::home_dir();
     let mut tfs = Vec::new();
     let Ok(workflows) = std::fs::read_dir(home.join("workflows")) else {
@@ -370,6 +454,16 @@ impl WeixinState {
         // Try DB first
         if let Some(ref persist) = *self.session_persist.lock().unwrap() {
             persist(&tf);
+            return;
+        }
+
+        // 频道模式（②b）：落 `<root>/senders/<user_key>/session.json` ——
+        // 绑定是字段不是家，无 bind_agent 也照落（路由兜底走 channel.toml
+        // 的 default_agent），也不做重绑清扫（没有旧家可搬）。
+        if let Some(root) = SESSIONS_ROOT.get() {
+            let user_key = state.user_id.as_deref().unwrap_or(&state.bot_id);
+            let path = channel_session_path(root, user_key);
+            write_session_file(&path, &tf);
             return;
         }
 
@@ -686,5 +780,66 @@ mod tests {
         let resolved = state.get_session_for_send("default", "stranger").unwrap();
         assert_eq!(resolved.key(), "scanner-a");
         assert!(resolved.get_context_token("stranger").is_none());
+    }
+
+    // ---- 频道会话根（②b）——直接喂路径给私有助手，绕开 OnceLock 全局
+    // （set_sessions_root 进程级一次定型，测试里污染后无法重置）。
+
+    fn sample_tf(user_id: &str, bind_agent: Option<&str>) -> BotTokenFile {
+        BotTokenFile {
+            channel: "weixin".to_string(),
+            sender_key: "openid".to_string(),
+            bot_id: "bot-alpha".to_string(),
+            bot_token: "tok".to_string(),
+            baseurl: "https://example.invalid".to_string(),
+            ilink_bot_id: "b@im.bot".to_string(),
+            user_id: Some(user_id.to_string()),
+            expires_at: 4_102_444_800,
+            bind_agent: bind_agent.map(|s| s.to_string()),
+            context_tokens: HashMap::new(),
+        }
+    }
+
+    /// 频道扫描：bind_agent 以文件字段为真源（无目录可依），非 weixin
+    /// 通道的文件不收。
+    #[test]
+    fn channel_scan_takes_bind_from_file_field() {
+        let dir = std::env::temp_dir().join(format!("ilink-ch-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        // uid-1 绑 system；uid-2 无绑定（默认路由走 channel.toml）。
+        write_session_file(&channel_session_path(&dir, "uid-1"), &sample_tf("uid-1", Some("system")));
+        write_session_file(&channel_session_path(&dir, "uid-2"), &sample_tf("uid-2", None));
+        // 非 weixin 会话不收。
+        let mut other = sample_tf("uid-3", Some("x"));
+        other.channel = "qq".to_string();
+        write_session_file(&channel_session_path(&dir, "uid-3"), &other);
+
+        let tfs = scan_channel_sessions(&dir);
+        assert_eq!(tfs.len(), 2, "non-weixin session must be skipped");
+        let uid1 = tfs.iter().find(|t| t.user_id.as_deref() == Some("uid-1")).unwrap();
+        assert_eq!(uid1.bind_agent.as_deref(), Some("system"));
+        assert!(tfs.iter().any(|t| t.user_id.as_deref() == Some("uid-2")
+            && t.bind_agent.is_none()));
+        // 0600 + tmp 不残留。
+        let p = channel_session_path(&dir, "uid-1");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mode = std::fs::metadata(&p).unwrap().permissions().mode();
+            assert_eq!(mode & 0o777, 0o600);
+        }
+        assert!(!p.with_extension("json.tmp").exists());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// 路径形状钉死：`<root>/senders/<key>/session.json`——刀④清场前，
+    /// 这个形状是频道世界与母体旧世界互不相见的构造保证。
+    #[test]
+    fn channel_session_path_shape() {
+        let p = channel_session_path(std::path::Path::new("/home/channels/weixin"), "o9cq@im.wechat");
+        assert_eq!(
+            p,
+            std::path::Path::new("/home/channels/weixin/senders/o9cq@im.wechat/session.json")
+        );
     }
 }
