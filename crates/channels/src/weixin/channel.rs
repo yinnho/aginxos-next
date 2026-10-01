@@ -1,20 +1,18 @@
 //! WeChat iLink session watcher — dynamic session discovery, polling, and send.
 
-use crate::api;
-use crate::crypto;
-use crate::models::*;
-use crate::token::WEIXIN_STATE;
+use super::api;
+use super::crypto;
+use super::models::*;
+use super::token::WEIXIN_STATE;
 use dashmap::DashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::sync::mpsc;
 use tracing::{error, info, warn};
-use carrier_types::plugin::{PluginContent, PluginMessage};
+use crate::vocab::{CarrierError, CarrierResult, Channel, PluginContent, PluginMessage};
 use uuid::Uuid;
 
-use carrier_types::channel::Channel;
-use carrier_types::error::{CarrierError, CarrierResult};
 
 /// Drop redelivered getUpdates items (same message_id / seq / content window).
 /// Without this, iLink can hand the same inbound item multiple times within
@@ -499,13 +497,6 @@ impl Channel for SessionWatcher {
         "weixin"
     }
 
-    fn supports_proactive_push(&self) -> bool {
-        // iLink can push proactively when a context_token is available
-        // (persisted in session.json). The send() method returns an error
-        // when no context_token exists, and the caller falls back to buffering.
-        true
-    }
-
     fn name(&self) -> &str {
         "__watcher__"
     }
@@ -592,88 +583,6 @@ impl Channel for SessionWatcher {
 
         rx.recv()
             .map_err(|e| CarrierError::Internal(format!("Send thread disconnected: {e}")))?
-    }
-
-    fn deliver(
-        &self,
-        content: &carrier_types::content::ContentDescriptor,
-        bot_id: &str,
-        user_id: &str,
-    ) -> CarrierResult<()> {
-        let state = WEIXIN_STATE
-            .get_session_for_send(bot_id, user_id)
-            .ok_or_else(|| {
-                CarrierError::InvalidInput(format!("No session for bot {bot_id}, user {user_id}"))
-            })?;
-
-        if state.is_expired() {
-            return Err(CarrierError::Network(format!(
-                "Token expired for bot {bot_id}"
-            )));
-        }
-
-        // context_token optional — see send() for the verified protocol model.
-        let context_token = state.get_context_token(user_id);
-
-        // iLink supports video_url, image_url and text only. Pick the best
-        // representation that has a public URL (link is not a native iLink card).
-        let (send_kind, payload) = if let Some(v) = content.video.as_ref() {
-            if let Some(url) = v.url.as_deref().filter(|u| !u.is_empty()) {
-                ("video", url.to_string())
-            } else {
-                return Err(CarrierError::InvalidInput(
-                    "iLink video requires a public URL".into(),
-                ));
-            }
-        } else if let Some(img) = content.image.as_ref() {
-            if let Some(url) = img.url.as_deref().filter(|u| !u.is_empty()) {
-                ("image", url.to_string())
-            } else {
-                return Err(CarrierError::InvalidInput(
-                    "iLink image requires a public URL".into(),
-                ));
-            }
-        } else if let Some(text) = content.as_text() {
-            return self.send(bot_id, user_id, &text);
-        } else {
-            return Err(CarrierError::InvalidInput(
-                "iLink: content has no video URL, image URL, or text representation".into(),
-            ));
-        };
-
-        let client_id = format!("openclaw-weixin-{}", Uuid::new_v4().as_simple());
-        let bot_token = state.bot_token.clone();
-        let baseurl = state.baseurl.clone();
-        let http = state.http.clone();
-        let user_id = user_id.to_string();
-
-        carrier_types::channel::block_on_detached(async move {
-            match send_kind {
-                "video" => api::send_video_auto(
-                    &http,
-                    &bot_token,
-                    &baseurl,
-                    &user_id,
-                    context_token.as_deref(),
-                    &client_id,
-                    &payload,
-                )
-                .await
-                .map_err(|e| CarrierError::Network(e.to_string())),
-                "image" => api::send_image_auto(
-                    &http,
-                    &bot_token,
-                    &baseurl,
-                    &user_id,
-                    context_token.as_deref(),
-                    &client_id,
-                    &payload,
-                )
-                .await
-                .map_err(|e| CarrierError::Network(e.to_string())),
-                _ => unreachable!(),
-            }
-        })
     }
 
     fn stop(&mut self) {

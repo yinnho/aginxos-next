@@ -3,12 +3,12 @@
 //! Flow: get_bot_qrcode → poll get_qrcode_status → save token.
 //! Handles IDC redirect and QR expiry (max 3 refreshes).
 
-use crate::api;
-use crate::models::*;
-use crate::token::WEIXIN_STATE;
+use super::api;
+use super::models::*;
+use super::token::WEIXIN_STATE;
 use reqwest::Client;
 use tracing::{info, warn};
-use carrier_types::error::{CarrierError, CarrierResult};
+use crate::vocab::{CarrierError, CarrierResult};
 
 /// Maximum QR code refreshes before giving up.
 const MAX_QR_REFRESH: u32 = 3;
