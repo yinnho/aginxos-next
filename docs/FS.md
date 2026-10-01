@@ -140,9 +140,9 @@ git、aginxbrowser 客户端这类。**首选走 pkg 进 `/var/bin`**（与 prov
 
 ### channels — 在场
 
-一频道 = 一目录 + 一包（DESIGN.md §四；#68 ②b，2026-10-02）。目录只有
-数据和绑定，协议腿住 opt-in 包（`aginx-ilink` 先例）；裸 L0 零频道，
-装频道 = 落目录 + opt-in。文件夹即注册表。
+一频道 = 一目录 + 一包（DESIGN.md §四；#69 改形，2026-10-02）。目录只有
+数据和绑定，协议腿住 opt-in 包（`aginx-channels` 唯一机身，weixin=
+第一腿）；裸 L0 零频道，装频道 = 落目录 + opt-in。文件夹即注册表。
 
 - **绑定以频道为轴**：会话住 `channels/<名>/senders/<uid>/`，绑哪个能力面
   是记录里的字段（`bind_agent`）——换绑=改字段，不搬家（推翻旧

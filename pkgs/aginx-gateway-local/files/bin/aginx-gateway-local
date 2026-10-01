@@ -1,7 +1,10 @@
 #!/bin/sh
 # aginx-gateway-local — 真aginx 的本机 direct 口壳（#68 ②b）。
-# 面是本脚本（flat bin 成员）：确保数据世界+名册符号链在位，种子化
-# /etc 配置，然后 exec 真身（aginx-gateway 包的同一二进制，另一实例）。
+# v0.1.2 起住 files/bin/（pkg.toml exec 树形，pkgfiles 全树提交——
+# 缺省 etc/ 同树，SEED 路径由此可达；flat bin 形状下 files/ 被安装器
+# 静默丢弃，缺省种子从未落盘，redfin 现抓）。/var/bin/aginx-gateway-local
+# =安装器 symlink 面。壳职责：数据世界+名册符号链在位，种子化 /etc
+# 配置，然后 exec 真身（aginx-gateway 包的同一二进制，另一实例）。
 # aginx:summary=本机ACP口壳：真aginx direct 127.0.0.1:8686（频道桥对端；agents 链回主 gateway 名册）
 
 DATA=/var/lib/aginx/gateway-local

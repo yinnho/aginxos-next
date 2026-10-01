@@ -16,7 +16,7 @@ members = [
     "crates/server",
     "crates/voice",
     "crates/call",
-    "crates/aginx-ilink",
+    "crates/channels",
     "crates/wizard",
     "crates/svc",
     "crates/img",
@@ -37,7 +37,6 @@ members = [
     "crates/carrier-gateway",
     "crates/lifecycle",
     "crates/kernel",
-    "crates/ilink",
     "crates/webhook",
     "crates/aginx-file",
     "crates/aginx-mem",
@@ -140,7 +139,6 @@ carrier-gateway = { path = "crates/carrier-gateway" }
 carrier-lifecycle = { path = "crates/lifecycle" }
 carrier-runtime = { path = "crates/runtime" }
 carrier-kernel = { path = "crates/kernel" }
-carrier-ilink = { path = "crates/ilink" }
 carrier-webhook = { path = "crates/webhook" }
 carrier = { path = "crates/carrier" }
 

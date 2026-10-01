@@ -138,8 +138,9 @@ case "${PKG}" in
     # 母体树包（刀3 合一；结构刀① 起两件）：target 二进制名 aginx
     # （出自 aginx-router crate）+ aginx-server。exec=bin/aginx
     # → /var/bin/aginx symlink 面；[service] cmd 指 pkgfiles 真身。
-    # v0.1.5 起第三件 aginx-carrier：一次性 CLI 面（qr-login/notify/
-    # ticket——server 直调形态不 spawn 它，但工具面在）。
+    # v0.1.5 起第三件 aginx-carrier：一次性 CLI 面（#69 改形后
+    # qr-login/notify 已随微信接线退役，余 agent/cron/tool/ticket 等；
+    # carrier 整体拆迁归 #68 刀④）。
     echo "==> zigbuild 母体三件（musl，缓存则秒过）"
     (cd "${ROOT}" && cargo zigbuild --release --target aarch64-unknown-linux-musl \
       -p aginx-router -p aginx-server -p carrier)
@@ -210,27 +211,30 @@ case "${PKG}" in
     install -m 755 "${TARGET_DIR}/${PKG}" "${STAGE}/files/bin/${PKG}"
     MEMBERS="pkg.toml SKILL.md files"
     ;;
-  aginx-ilink)
-    # weixin 频道包（#68 ②b 第一频道）：守护+CLI 一件双面，flat bin
-    # （secretd 同形——/var/bin 面、/proc/exe 即该路径）。数据与绑定
-    # 不进包：全部住 /home/channels/weixin/（DESIGN.md §四）。
-    echo "==> zigbuild aginx-ilink（musl，缓存则秒过）"
-    (cd "${ROOT}" && cargo zigbuild --release --target aarch64-unknown-linux-musl -p aginx-ilink)
+  aginx-channels)
+    # 频道体系包（#69 改形：channels 唯一家，weixin=第一腿不是包名）：
+    # 守护+CLI 一件双面，flat bin（secretd 同形——/var/bin 面）。
+    # zigbuild 包名 channels，出件二进制名 aginx-channels。
+    # 数据与绑定不进包：全部住 /home/channels/<名>/（DESIGN.md §四）。
+    echo "==> zigbuild aginx-channels（musl，缓存则秒过）"
+    (cd "${ROOT}" && cargo zigbuild --release --target aarch64-unknown-linux-musl -p channels)
     mkdir -p "${STAGE}/bin"
-    install -m 755 "${TARGET_DIR}/aginx-ilink" "${STAGE}/bin/aginx-ilink"
+    install -m 755 "${TARGET_DIR}/aginx-channels" "${STAGE}/bin/aginx-channels"
     MEMBERS="bin pkg.toml SKILL.md"
     ;;
   aginx-gateway-local)
     # 本机 ACP 口（#68 ②b）：零编译案——壳脚本（带 D13 inline 头）+
     # 出厂配置缺省，真身 exec aginx-gateway 包的二进制（另一实例）。
-    # bin/ 是 flat 面成员（sh 壳），files/etc 是包内缺省不是落位
-    # （壳首启拷 /etc/aginx/gateway-local.toml，已存在不覆写）。
-    mkdir -p "${STAGE}/bin" "${STAGE}/files/etc"
-    install -m 755 "${ROOT}/pkgs/aginx-gateway-local/bin/aginx-gateway-local" \
-      "${STAGE}/bin/aginx-gateway-local"
+    # v0.1.2 起 exec 树形（#69）：壳住 files/bin/（/var/bin=symlink 面），
+    # files/ 全树提交 pkgfiles——缺省 etc/ 同树可达（flat bin 形状下
+    # files/ 被安装器静默丢弃，redfin 现抓）。壳首启拷
+    # /etc/aginx/gateway-local.toml（已存在不覆写）。
+    mkdir -p "${STAGE}/files/bin" "${STAGE}/files/etc"
+    install -m 755 "${ROOT}/pkgs/aginx-gateway-local/files/bin/aginx-gateway-local" \
+      "${STAGE}/files/bin/aginx-gateway-local"
     install -m 644 "${ROOT}/pkgs/aginx-gateway-local/files/etc/gateway-local.toml" \
       "${STAGE}/files/etc/gateway-local.toml"
-    MEMBERS="bin pkg.toml SKILL.md files"
+    MEMBERS="pkg.toml SKILL.md files"
     ;;
   aginx-asr)
     test -x "${VOICE}/bin/ag-asr" || { echo "FATAL: missing ${VOICE}/bin/ag-asr — see devices/redfin/boot/assets.md" >&2; exit 1; }
@@ -395,7 +399,7 @@ case "${PKG}" in
     MEMBERS="pkg.toml SKILL.md files"
     ;;
   *)
-    echo "FATAL: 未知包名 ${PKG}（两裸包/换芯树包/两树包/工具双包/三树包/刀F三包 zigbuild / 上游树包 git / aginx-proxy / ②b频道两包）" >&2
+    echo "FATAL: 未知包名 ${PKG}（两裸包/换芯树包/两树包/工具双包/三树包/刀F三包 zigbuild / 上游树包 git / aginx-proxy / 频道两包）" >&2
     exit 1
     ;;
 esac

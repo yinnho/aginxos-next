@@ -1,0 +1,28 @@
+# aginx-channels — 频道体系包（#69 改形，2026-10-02）。
+# crates/channels 唯一家：全部频道的机身（守护+CLI 一件双面），
+# weixin 是第一腿不是包名；新频道=crate 新模块，面不变。
+# DESIGN.md §四：一频道=一目录（/home/channels/<名>/channel.toml +
+# senders/，绑定=记录字段，换绑=改字段不搬家）；频道不感知引擎：
+# 桥只说 ACP 窄接口（「把文本交给某 agent，拿回文本」），对端=本机
+# aginx-gateway-local（127.0.0.1:8686），引擎随 gateway 名册条目换。
+# 子命令带频道名（login weixin / send weixin <uid> <text>）。
+# 启动序（daemon.rs）：legacy 会话一次性迁移 → set_sessions_root →
+# SessionWatcher（5s respawn 拾新扫码/换绑）→ 桥（每发信人串行）。
+# 依赖序：depends=aginx-gateway-local 只保安装序，启动序由
+# requires_weak 延到本机口 ready（8686 没起=每回合如实回信报错，
+# 不殉频道守护——扫上来的消息等口回来）。
+# 母体（aginx-server）与此包互不相见：母体的微信接线已随 #69 本刀
+# 退役（server boot 与 carrier wiring 两处均无通道管理器）。
+name = "aginx-channels"
+version = "0.1.0"
+summary = "频道体系守护+CLI（weixin 第一腿）：login/bind/send 子命令带频道名，ACP 桥对接本机 gateway-local"
+group = "net"
+depends = "aginx-gateway-local"
+url = "https://pkgs.aginx.net/aginx-channels/v0.1.0/aginx-channels-v0.1.0-4pc.tar"
+
+[service]
+cmd = "/var/bin/aginx-channels"
+args = ["daemon"]
+type = "simple"
+envs = ["AGINX_HOME=/home", "TZ=CST-8"]
+requires_weak = ["aginx-gateway-local"]

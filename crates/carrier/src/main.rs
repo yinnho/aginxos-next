@@ -7,9 +7,7 @@ mod acp;
 mod agent_cmd;
 mod api_cmd;
 mod cron_cmd;
-mod notify;
 mod probe;
-mod qrlogin;
 mod remote;
 mod start;
 mod sys_cmd;
@@ -77,27 +75,6 @@ enum Command {
     Probe {
         /// 目标网关 agent:// URL（如 agent://selvkwjv.relay.aginx.net）
         url: String,
-    },
-    /// iLink 一次性告警发送（daemon 无关，watchdog 通知原语）
-    Notify {
-        /// 告警正文
-        text: String,
-        /// 收件人 user_id（缺省 = 唯一未过期 bot 会话的绑定用户）
-        #[arg(long)]
-        to: Option<String>,
-    },
-    /// iLink 扫码登录：终端渲染 ASCII 二维码（--screen 改走 aginxbrowser
-    /// /open 上屏，AginxOS 手机形态），扫后落分身下 senders/ 会话
-    QrLogin {
-        /// 本账号的 bot 名（标签；会话文件按 user_id 存）
-        #[arg(long, default_value = "main")]
-        bot_id: String,
-        /// 绑定的分身名（绑定即路由：扫码即绑定，消息直达该分身；必填）
-        #[arg(long)]
-        bind_agent: String,
-        /// 二维码上手机屏（POST 本机 aginxbrowser /open，qr 模板）
-        #[arg(long)]
-        screen: bool,
     },
     /// 用户侧票据仓库（借用机制的会话真源在用户侧）
     Ticket {
@@ -281,10 +258,6 @@ fn main() -> anyhow::Result<()> {
         Command::Tool { name } => tool_cmd::run(name)?,
         Command::Api { action } => api_cmd::run(action)?,
         Command::Probe { url } => probe::run(url)?,
-        Command::Notify { text, to } => notify::run(text, to)?,
-        Command::QrLogin { bot_id, bind_agent, screen } => {
-            qrlogin::run(bot_id, bind_agent, screen)?
-        }
         Command::Info => {
             let data_dir = dirs::home_dir()
                 .map(|h| h.join(".aginx").join("carrier"))

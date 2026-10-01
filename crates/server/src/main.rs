@@ -19,7 +19,6 @@
 mod front;
 mod ledger;
 mod host;
-mod channels;
 mod ops;
 #[cfg(test)]
 mod testkit;

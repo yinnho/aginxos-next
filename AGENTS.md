@@ -165,9 +165,11 @@ still binding for engine work:
   keep-up obligation, no cherry-pick duty.
 - **Crate naming**: `carrier-*`; the daemon bin is `aginx-carrier`.
   User-facing copy says 「助理/化身」; internal code keeps `clone`.
-- **Inbound channels**: exactly two — iLink (human→agent) and webhook
-  (machine→agent, `daemon start` only, default off, not on mobile).
-  The webui / `web` subcommand is retired.
+- **Inbound channels**: webhook only (machine→agent, `daemon start`
+  only, default off, not on mobile). iLink/weixin left the engine with
+  the #69 reshape — it lives in `crates/channels` as the first channel
+  leg, bridging to the gateway roster over ACP. The webui / `web`
+  subcommand is retired.
 - **Gotchas inherited from the port**: config struct fields need a
   matching `Default` impl in the same change; `AgentLoopResult`'s field
   is `.response`, not `.response_text`; a flow's frontmatter
@@ -199,8 +201,7 @@ dropbear sftp subsystem is a Go static (`tools/sftp-server` +
 | `crates/hwd` | device profile reader — the single legal source of machine facts (D14) |
 | `crates/voice` | `aginx-voice` — the voice dialog daemon (M42; human-interface line retired 2026-10-01 — the stack is now SIP-line internal parts, see Positioning) |
 | `crates/call` | `aginx-call` — the SIP leg (M48): the agent's external telephony, promoted 2026-10-01 (see Positioning) |
-| `crates/ilink` | `carrier-ilink` — the weixin protocol lib (qr login, session watcher, send); hosts the channel-root surgery behind `set_sessions_root` |
-| `crates/aginx-ilink` | `aginx-ilink` — the weixin channel package (#68 ②b, 2026-10-02): daemon (ACP bridge to the gateway roster) + login/bind/send CLI; sessions live in `/home/channels/weixin/`, binding is a field not a home (DESIGN.md §四) |
+| `crates/channels` | `aginx-channels` — the channel system's one home (#69, 2026-10-02): generic daemon/config/ACP bridge + per-channel legs (`weixin/` = iLink protocol: qr login, session watcher, send). Subcommands carry the channel name (`login weixin`); new channels are modules here, never new crates. The mother's weixin wiring is retired with this knife |
 | `crates/wizard` | `aginx-net-wizard` — first-boot Wi-Fi setup TUI |
 | `crates/term` | `aginx-term` — on-device terminal UI (aterm line) |
 | `crates/pkg` | `aginx-pkg` — package manager (signed manifest, 四件套) |
@@ -212,7 +213,7 @@ dropbear sftp subsystem is a Go static (`tools/sftp-server` +
 | `crates/done` | `aginx-done` — provision done-marker discipline |
 | `crates/secret` | `aginx-secretd`/`aginx-secret` — the secret sidecar + its admin face |
 | `pkgs/aginx-gateway` | the outward-facing daemon package (v0.2.0 re-cored 2026-09-27): carries the real ecosystem `aginx` (~/Documents/aginx, independent project — this repo only builds/packages/configures it). The old replica `crates/gateway` is deleted (#412); package name kept for opt-in continuity |
-| `crates/{carrier,types,memory,clone,dup,carrier-gateway,lifecycle,kernel,webhook,web,agf,agmem}` | the mother engine (ex-`aginx-carrier`, merged 2026-09-24): kernel spawns/turns/sessions, runtime = agent loop + tools, clone = assistant format + install chain + dup VCS, memory/agmem = the memory tree, webhook = inbound channel, `carrier-gateway` = agent:// client + contacts ledger (NOT the remote-channel daemon above). `ilink` moved out to its own row above — the weixin lib now serves both the engine and the standalone channel package |
+| `crates/{carrier,types,memory,clone,dup,carrier-gateway,lifecycle,kernel,webhook,web,agf,agmem}` | the mother engine (ex-`aginx-carrier`, merged 2026-09-24): kernel spawns/turns/sessions, runtime = agent loop + tools, clone = assistant format + install chain + dup VCS, memory/agmem = the memory tree, webhook = inbound channel, `carrier-gateway` = agent:// client + contacts ledger (NOT the remote-channel daemon above). The weixin lib lived here once (`carrier-ilink`) — #69 moved it whole into `crates/channels` and cut the engine's weixin wiring |
 | `crates/testkit` | test helpers |
 | `rootfs/` | the image recipe — see `rootfs/README.md` (placement matrix, asset split) |
 | `devices/` | per-machine data, one dir per codename: `device.toml`, `modules.txt`, `bringup/`, `boot/` (pack line), `cam/` — add-a-machine checklist in `devices/README.md` |

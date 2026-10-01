@@ -32,13 +32,14 @@ pub struct AcpReply {
 
 impl AcpClient {
     pub fn new() -> Self {
-        let timeout = std::env::var("AGINX_ILINK_ACP_TIMEOUT_SECS")
+        let timeout = std::env::var("AGINX_CHANNELS_ACP_TIMEOUT_SECS")
             .ok()
             .and_then(|v| v.parse().ok())
             .filter(|&s: &u64| s >= 30)
             .unwrap_or(DEFAULT_TIMEOUT_SECS);
         Self {
-            addr: std::env::var("AGINX_ILINK_ACP_ADDR").unwrap_or_else(|_| DEFAULT_ADDR.to_string()),
+            addr: std::env::var("AGINX_CHANNELS_ACP_ADDR")
+                .unwrap_or_else(|_| DEFAULT_ADDR.to_string()),
             timeout: Duration::from_secs(timeout),
         }
     }
@@ -65,7 +66,7 @@ impl AcpClient {
             "method": "initialize",
             "params": {
                 "protocolVersion": "0.1.0",
-                "clientInfo": { "name": "aginx-ilink", "version": env!("CARGO_PKG_VERSION") },
+                "clientInfo": { "name": "aginx-channels", "version": env!("CARGO_PKG_VERSION") },
             },
         });
         self.send_line(&mut stream, &init)?;

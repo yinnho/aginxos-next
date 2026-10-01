@@ -1,12 +1,23 @@
+# channels — 频道体系唯一家（#69 改形，2026-10-02）。
+# 一频道=一目录+一包：协议腿住这里（weixin 第一腿），目录只有数据和
+# 绑定（/home/channels/<名>/）。频道不感知引擎：桥只说 ACP 窄接口，
+# 按 channel.toml 路由到 gateway 名册。新频道=本 crate 新模块，不是
+# 新 crate。
 [package]
-name = "carrier-ilink"
-version.workspace = true
-edition.workspace = true
-license.workspace = true
-description = "WeChat iLink channel adapter for aginx-carrier"
+name = "channels"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[[bin]]
+name = "aginx-channels"
+path = "src/main.rs"
 
 [dependencies]
-carrier-types = { path = "../types" }
+anyhow = "1"
+qrcodegen = "1"
+thiserror = { workspace = true }
+tracing-subscriber = { workspace = true }
 tokio = { workspace = true }
 reqwest = { workspace = true }
 dashmap = { workspace = true }
