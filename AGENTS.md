@@ -1,5 +1,44 @@
 # AginxOS — Agent Guide
 
+## Positioning (2026-10-01 re-ruling)
+
+AginxOS is a black-box ARM server for agents — back to the origin after
+the human-facing phone-as-agent detour. The machine has no human
+interface: no screen, no local voice, no camera. A human's entire
+relationship with it is flash, power, network; every operation after
+that is the agent's, over ssh / relay / `agent://`. External
+communication is a first-class *capability*, not a human feature: the
+SIP/PSTN line (M48, `aginx-call`, sip.aginx.net) is the agent's
+outbound telephony leg — the agent dials, answers, speaks and listens
+on it.
+
+Line verdicts:
+
+- **Keep, promoted** — SIP/PSTN: the agent's external channel. The M48
+  robustness gaps (talk-leg RTP stall watchdog, dial-leg 15s-window
+  CANCEL) ride this line as backlog and rise with it in priority.
+- **Reframed** — the M42 voice stack (ASR/TTS/voice daemon): no longer
+  a human dialog interface; its assets become internal machinery of
+  the SIP line (the agent's mouth and ears on a call), drawn on as
+  that line needs. No standalone investment.
+- **Frozen** — camera (M19/M45/M47, OCR, QR optics): packages and
+  `devices/` data stay, zero new investment.
+- **Already dead** — display/term/bootcard human faces (headless
+  ruling 2026-09-13); the bootcard lamp stays a redfin machine fact,
+  neither removed nor extended.
+- **Unchanged** — L0 base, mother (aginx server/gateway/relay), ssh,
+  pkg, aginxbrowser as an agent capability package (template/card
+  faces wither, the engine stays), modem/SMS (enchilada).
+
+Hardware lineage: phones are ARM servers that happen to look like
+phones — `redfin` the experiment unit, `enchilada` the second
+bring-up; server-class boards are first-class machines (Orin NX is the
+first candidate, `docs/DEVICE-ORIN-NX.md`). D14 eats the difference:
+a new `devices/<codename>/` changes only the boot face (UEFI/eMMC vs
+fastboot/bootimg); everything above the boot layer ships as-is.
+
+## Workspace
+
 Second-generation AginxOS: the architecture constitution (D1–D14) built
 as a fresh workspace. Since N4 this repo owns the bake chain and the
 device: `DEVICE=<codename> ./scripts/build-rootfs.sh` bakes a machine's
@@ -157,7 +196,8 @@ dropbear sftp subsystem is a Go static (`tools/sftp-server` +
 | `crates/agi` | fast-agi v0 frame types (both ends share) |
 | `crates/agio` | D1 output envelope |
 | `crates/hwd` | device profile reader — the single legal source of machine facts (D14) |
-| `crates/voice` | `aginx-voice` — the voice dialog daemon (voiced, M42 line) |
+| `crates/voice` | `aginx-voice` — the voice dialog daemon (M42; human-interface line retired 2026-10-01 — the stack is now SIP-line internal parts, see Positioning) |
+| `crates/call` | `aginx-call` — the SIP leg (M48): the agent's external telephony, promoted 2026-10-01 (see Positioning) |
 | `crates/wizard` | `aginx-net-wizard` — first-boot Wi-Fi setup TUI |
 | `crates/term` | `aginx-term` — on-device terminal UI (aterm line) |
 | `crates/pkg` | `aginx-pkg` — package manager (signed manifest, 四件套) |
@@ -177,7 +217,7 @@ dropbear sftp subsystem is a Go static (`tools/sftp-server` +
 | `scripts/accept/` | device acceptance suites: `n6-egg.sh` (L0 bake-day shape/equivalence: pre/paired/steady/egg2), `n7-l0.sh` (product flow: usbconf→netup→ssh→opt-in→steady), `m42c.sh` pairing gate; n4/n5 retired 2026-09-12 (headers say why) |
 | `shims/` | repo-local `aginx-*` command faces (host trial registry) |
 | `docs/FS.md` | machine-tree design authority (this repo's constitution) |
-| `docs/HARDWARE.md` | device experiment log — this repo's receipts from N4 on |
+| `docs/HARDWARE.md` | device experiment log — this repo's receipts from N4 on (active window only; older receipts archived to `docs/HARDWARE-ARCHIVE-*.md`, same local-only discipline) |
 
 ## Device Safety
 
