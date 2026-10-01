@@ -1,12 +1,17 @@
 // rtcal: pm8xxx RTC tool (M23b). Two jobs:
 //   1. wake-alarm arm/read — the suspend probes' wake path (`set <epoch>`
 //      arms the alarm; legacy name kept from the /tmp zig one-off).
-//   2. `sync` — push ntpd-corrected system time into the RTC. The PMIC RTC
-//      comes up on its own -53y scale (since_epoch ~1.76e6 = 1970-01-21,
-//      matching the stray 1970 mtimes); one sync makes early-boot wall time
-//      true on the next HCTOSYS pass and keeps alarm math on the real scale.
-// sync disarms any pending alarm first: a stale alarm epoch on the old scale
-// would land in the past and fire immediately after the time jump.
+//   2. `sync` — push ntpd-corrected system time into the RTC.
+// #63 live receipt (2026-10-01): `sync` FAILS here — RTC_SET_TIME returns
+// EACCES, the pm8xxx driver denies Linux-side writes without DT
+// qcom,allow-set-time (stock Pixels let TZ own the clock). It has never
+// succeeded on any boot; kept as the one-liner probe of that denial.
+// The durable cross-boot clock truth is the offset file
+// /var/lib/aginx/rtc-offset written by /usr/libexec/aginx/net-timesync
+// (wall_epoch - /sys/class/rtc/rtc0/since_epoch; the PMIC counter itself
+// free-runs and hctosys seeds the wall from it on a shifted scale).
+// sync still disarms any pending alarm first: a stale alarm epoch on the
+// old scale would land in the past and fire immediately after a time jump.
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
