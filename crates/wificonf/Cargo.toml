@@ -1,0 +1,16 @@
+[package]
+name = "wificonf"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "wifi.conf writer-side shared logic (#64 multi-network fallback table)"
+publish = false
+
+# #64（2026-10-01）回退表的**写方**共享件：pair（QR 配对）、voice（语音/
+# WIFI: 码配网）、wizard（首启 TUI）三个写方统一走 rewrite()，谁也不再整
+# 文件截断覆写——altN_* 回退表与注释永远骑过去。读方（net-rejoin 回退腿）
+# 是 rootfs/libexec/aginx 的 sh，格式三处同源：ssid=/psk= 当前网，
+# alt1_ssid=/alt1_psk=.. 有序回退，槽上限 ALT_MAX=4（满了覆写最后一槽）。
+# 零依赖纯文本变换，别往这里加机器事实（D14 归 devices/）。
+[lib]
+path = "src/lib.rs"

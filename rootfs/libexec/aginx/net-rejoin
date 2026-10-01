@@ -1,19 +1,39 @@
 #!/bin/sh
-# net-rejoin (M20b) — THE in-place WLAN recovery primitive.
+# net-rejoin (M20b; #64 fallback walk) — THE in-place WLAN recovery
+# primitive.
 #
 # One definition of "drop the stale association, re-associate, get a
-# lease", used by net-watch (steady-state self-heal), aginx-net-wizard
-# (re-configure without rebooting), and by hand. Proven shape from the
-# 2026-09-02 AP-flake session: the Legrand AP drops the link under
-# sustained transfers (wlan0 NO-CARRIER, DNS dies with it) and this
-# exact sequence restored the same lease in ~10 s, no reboot.
+# lease", used by net-watch (steady-state self-heal) and by hand.
+# Proven shape from the 2026-09-02 AP-flake session: the Legrand AP
+# drops the link under sustained transfers (wlan0 NO-CARRIER, DNS dies
+# with it) and this exact sequence restored the same lease in ~10 s,
+# no reboot.
 #
-# Exit 0 only when a lease was obtained. Progress goes to stdout
-# (callers redirect); nothing is written here except via udhcpc.
+# #64 (2026-10-01) multi-network fallback: /etc/wifi.conf may carry a
+# numbered fallback table alongside the current pair —
+#     ssid=…  psk=…                <- current network
+#     alt1_ssid=…  alt1_psk=…      <- fallbacks, tried in numeric order
+# The current network keeps its proven 2-attempt recovery; if both
+# fail and the table is non-empty, each alt slot gets one attempt
+# (aginx-net-join exits 2 within one ~5 s scan for an SSID not on air,
+# so the walk is effectively scan-filtered — no separate scan leg).
+# First lease wins and is persisted by slot-swap: winner becomes
+# ssid=/psk=, the old current takes the winner's slot. Sticky-until-
+# dead: no signal-quality roaming (an agent node wants stability, not
+# churn); a dead AP stays configured for the day it revives, it just
+# stops being first. No alt lines -> behavior identical to the
+# single-SSID era (n7-l0 shape). Worst case one call = current x2 +
+# MAXALT slots x (join+dhcp) — net-watch tolerates the block; its
+# loop cadence resumes after.
+# Exit 0 only when a lease was obtained. Progress goes to stdout;
+# nothing else is written except the winning swap (tmp+rename, 0600).
+# CONF/NETJOIN env knobs exist for host-side harness testing only.
 export PATH=/sbin:/bin:/usr/sbin:/usr/bin
 
 IF=${IF:-wlan0}
-CONF=/etc/wifi.conf
+CONF=${CONF:-/etc/wifi.conf}
+NETJOIN=${NETJOIN:-/usr/bin/aginx-net-join}
+MAXALT=4
 
 [ -f "$CONF" ] || { echo "net-rejoin: no $CONF" >&2; exit 2; }
 SSID=; PSK=
@@ -27,23 +47,75 @@ SSID=$(printf '%s' "$SSID" | tr -d '\r')
 PSK=$(printf '%s' "$PSK" | tr -d '\r')
 [ -n "$SSID" ] && [ -n "$PSK" ] || { echo "net-rejoin: $CONF incomplete" >&2; exit 2; }
 
+# alt_get <slot> <ssid|psk> — first matching line, CR stripped.
+alt_get() {
+  sed -n "s/^alt$1_$2=//p" "$CONF" | head -n 1 | tr -d '\r'
+}
+
+# try_one <ssid> <psk> — flush + join + lease; 0 only on a lease.
+# NB the join rc is captured explicitly: after a no-else `if` some
+# shells report the compound's status (0), not the failed command's —
+# the honest rc goes to the log.
+try_one() {
+  ip addr flush dev "$IF" 2>/dev/null
+  ip link set "$IF" up 2>/dev/null
+  "$NETJOIN" "$IF" "$1" "$2"
+  jrc=$?
+  [ "$jrc" -eq 0 ] || { echo "net-rejoin: join failed on '$1' (rc=$jrc)"; return 1; }
+  if udhcpc -i "$IF" -n -q -t 6 -T 3 >/dev/null 2>&1; then
+    # NB: plain `ip addr` — busybox ip does not take -4 and fails
+    # silently; sed not awk — this busybox's awk applet segfaults.
+    echo "net-rejoin: lease ok on '$1' ($(ip addr show "$IF" 2>/dev/null | sed -n 's/^ *inet \([0-9.][0-9.]*\)\/.*/\1/p' | head -n 1))"
+    return 0
+  fi
+  echo "net-rejoin: join ok on '$1' but no lease"
+  return 1
+}
+
+# swap_persist <slot> <win_ssid> <win_psk> — winner becomes the current
+# pair, the old current takes the winner's slot; every other line rides
+# through untouched (comments included). Pure shell line rewrite — no
+# sed substitution games with SSIDs that carry '/' or '&'. tmp+rename,
+# 0600 (persist_wifi same discipline).
+swap_persist() {
+  slot=$1; w_s=$2; w_p=$3
+  while IFS= read -r line; do
+    case "$line" in
+      ssid=*) printf 'ssid=%s\n' "$w_s" ;;
+      psk=*)  printf 'psk=%s\n' "$w_p" ;;
+      alt"$slot"_ssid=*) printf 'alt%s_ssid=%s\n' "$slot" "$SSID" ;;
+      alt"$slot"_psk=*)  printf 'alt%s_psk=%s\n' "$slot" "$PSK" ;;
+      *) printf '%s\n' "$line" ;;
+    esac
+  done <"$CONF" >"$CONF.t"
+  chmod 600 "$CONF.t"
+  mv "$CONF.t" "$CONF"
+}
+
 attempt=0
 while [ $attempt -lt 2 ]; do
   attempt=$((attempt+1))
   echo "net-rejoin: attempt $attempt — flush + join '$SSID'"
-  ip addr flush dev "$IF" 2>/dev/null
-  ip link set "$IF" up 2>/dev/null
-  if /usr/bin/aginx-net-join "$IF" "$SSID" "$PSK"; then
-    if udhcpc -i "$IF" -n -q -t 6 -T 3 >/dev/null 2>&1; then
-      # NB: plain `ip addr` — busybox ip does not take -4 and fails
-      # silently; sed not awk — this busybox's awk applet segfaults.
-      echo "net-rejoin: lease ok ($(ip addr show "$IF" | sed -n 's/^ *inet \([0-9.][0-9.]*\)\/.*/\1/p' | head -n 1))"
-      exit 0
-    fi
-    echo "net-rejoin: join ok but no lease"
-  else
-    echo "net-rejoin: join failed (rc=$?)"
+  if try_one "$SSID" "$PSK"; then
+    exit 0
   fi
 done
-echo "net-rejoin: gave up after $attempt attempts" >&2
+
+# --- fallback walk (#64): one attempt per alt slot, numeric order ------
+s=1
+while [ "$s" -le "$MAXALT" ]; do
+  A_SSID=$(alt_get "$s" ssid)
+  A_PSK=$(alt_get "$s" psk)
+  if [ -n "$A_SSID" ] && [ -n "$A_PSK" ] && [ "$A_SSID" != "$SSID" ]; then
+    echo "net-rejoin: fallback slot $s — '$A_SSID'"
+    if try_one "$A_SSID" "$A_PSK"; then
+      swap_persist "$s" "$A_SSID" "$A_PSK"
+      echo "net-rejoin: '$A_SSID' promoted to current (old '$SSID' -> alt$s)"
+      exit 0
+    fi
+  fi
+  s=$((s+1))
+done
+
+echo "net-rejoin: gave up (current x$attempt + fallback slots)" >&2
 exit 1

@@ -16,6 +16,7 @@ mint = ["dep:qrcodegen", "dep:jpeg-encoder", "aginx-qr/jpeg"]
 
 [dependencies]
 aginx-qr = { path = "../qr", default-features = false, features = [] }
+wificonf = { path = "../wificonf" } # #64 回退表：persist_wifi 换值不覆写
 qrcodegen = { version = "1", optional = true }
 jpeg-encoder = { version = "0.6", optional = true }
 
