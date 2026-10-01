@@ -17,6 +17,15 @@ mount -t tmpfs tmpfs /tmp 2>/dev/null
 /bin/busybox --install -s /bin 2>/dev/null
 mdev -s 2>/dev/null
 
+# 机器时区（#62）：device.toml 的 tz 是 POSIX TZ 串（镜像无 tzdata，
+# bionic busybox 只认 TZ env、/etc/localtime 不读——09-10 活体收据）。
+# rcS 机型盲地读本机数据文件（与 hwd 同律，D14）——export 后 rcS 全部
+# 子进程继承：crond 的 cron 表从此按本地时评（17 4 = 深夜 04:17，非
+# UTC 的午后 12:17）、心跳/kmsg forensics 戳同。svcd 单元 env_clear
+# 不继承——需要时区的单元走 hwd（voice/term 已是此律）。
+TZ="$(sed -n 's/^tz *= *"\([^"]*\)".*/\1/p' /etc/aginx/device.toml | sed -n '1p')"
+[ -n "$TZ" ] && export TZ
+
 # enchilada modem bring-up (E5 折债) — synchronous, exactly the on-device
 # tested script: qrtr stack + daemon trio (pd-mapper/tqftpserv/rmtfs) BEFORE
 # q6v5_mss (rmtfs late = EFS homeless crash-loop; pd-mapper late = 65s

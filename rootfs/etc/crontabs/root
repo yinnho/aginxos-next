@@ -4,4 +4,6 @@
 # /var/backups/aginx/, keep 7. Off-minute on purpose (fleet-uniform :00
 # piles up on the server when the push half exists someday). Log at
 # /var/log/aginx-backup.log; rcS starts crond with -c /etc/crontabs.
+# #62：crond 继承 rcS 的 TZ（device.toml）——本表从此按本地时评，
+# 04:17 = 深夜 04:17 CST（此前 UTC 语义=午后 12:17 CST，非本意）。
 17 4 * * * /usr/bin/aginx-backup now >> /var/log/aginx-backup.log 2>&1
