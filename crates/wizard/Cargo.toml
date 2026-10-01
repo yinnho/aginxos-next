@@ -15,3 +15,5 @@ name = "aginx-net-wizard"
 path = "src/main.rs"
 
 [dependencies]
+# #64 回退表：write_conf 换值不覆写（altN_* 表保留）。仍零外部依赖。
+wificonf = { path = "../wificonf" }

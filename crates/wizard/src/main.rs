@@ -95,7 +95,10 @@ fn prompt(text: &str) -> String {
 }
 
 fn write_conf(ssid: &str, psk: &str) {
-    let conf = format!("ssid={ssid}\npsk={psk}\n");
+    // #64 回退表：换值不覆写——重跑 wizard 换网时旧 altN_* 表与注释保留、
+    // 旧当前网降级进表（首启无表时产物=纯两行，与历史形状逐字节同）。
+    let existing = std::fs::read_to_string("/etc/wifi.conf").unwrap_or_default();
+    let conf = wificonf::rewrite(&existing, ssid, psk);
     std::fs::write("/etc/wifi.conf", conf).expect("write /etc/wifi.conf");
     use std::os::unix::fs::PermissionsExt;
     std::fs::set_permissions("/etc/wifi.conf", std::fs::Permissions::from_mode(0o600))

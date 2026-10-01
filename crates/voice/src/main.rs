@@ -1478,10 +1478,13 @@ fn join_wifi(ssid: &str, psk: &str) -> Result<String, String> {
 /// 开机 net-bringup 与 net-watch 自愈都读它。语音序数/拼读、WIFI: 码、
 /// 眼取景三条连网路从此持久，重启不丢网。**失败不写**：坏密钥不落盘
 /// （wizard 撤回语义）；同网重连写同值幂等。
+/// #64 回退表：换值不覆写——altN_* 表与注释保留、旧当前网降级进表
+/// （wificonf::rewrite；读方=net-rejoin 回退腿，格式契约三处同源）。
 fn persist_wifi(ssid: &str, psk: &str) {
     use std::io::Write;
     use std::os::unix::fs::OpenOptionsExt;
-    let conf = format!("ssid={ssid}\npsk={psk}\n");
+    let existing = std::fs::read_to_string("/etc/wifi.conf").unwrap_or_default();
+    let conf = wificonf::rewrite(&existing, ssid, psk);
     let tmp = "/etc/wifi.conf.tmp";
     let ok = std::fs::OpenOptions::new()
         .write(true)

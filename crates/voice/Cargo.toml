@@ -14,6 +14,7 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 ureq = { version = "3", default-features = false, features = ["rustls"] }
 libc = "0.2"
+wificonf = { path = "../wificonf" } # #64 回退表：persist_wifi 换值不覆写
 # M42b: WIFI: 码载荷解析。default-features=false——只拿纯字符串解析，
 # 不把 quircs/aginx-img 拉进 aginx-voice（解码在独立 aginx-qr 进程里做）。
 aginx-qr = { path = "../qr", default-features = false }

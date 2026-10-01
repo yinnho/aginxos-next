@@ -196,9 +196,12 @@ fn iface_ip(p: &PairPaths) -> Option<String> {
 
 /// 连上网后落 wifi.conf：0600、tmp+rename（voice persist_wifi 同法）。失败
 /// 不致命到翻转 join 结果——只 stderr（盘上没有身份，下次 bringup 会再试）。
+/// #64 回退表：换值不覆写——`ssid=`/`psk=` 原位换、altN_* 表与注释保留、
+/// 旧当前网降级进表（wificonf::rewrite，读方=net-rejoin 回退腿）。
 fn persist_wifi(p: &PairPaths, ssid: &str, psk: &str) {
     use std::os::unix::fs::OpenOptionsExt;
-    let conf = format!("ssid={ssid}\npsk={psk}\n");
+    let existing = std::fs::read_to_string(&p.wifi_conf).unwrap_or_default();
+    let conf = wificonf::rewrite(&existing, ssid, psk);
     let tmp = p.wifi_conf.with_extension("conf.tmp");
     let ok = std::fs::OpenOptions::new()
         .write(true)
@@ -598,6 +601,21 @@ mod tests {
         assert!(state.contains("dhcp ok 192.168.1.42\n"));
         assert!(state.contains("internet ok paired"));
         assert!(state.contains("time run\n")); // untouched — clock not our business here
+    }
+
+    #[test]
+    fn re_pair_preserves_alt_table_and_demotes_old_current() {
+        // #64 回退表写方纪律：QR 换网不抹表——旧当前网降级进 alt1，
+        // 原有槽位与注释逐字骑过（net-rejoin 回退腿读同一张表）。
+        let root = tmp("aginx-pair-apply-alttable");
+        let p = paths(&root);
+        fs::write(&p.wifi_conf, "ssid=oldnet\npsk=oldpass\n\n# ops note\nalt2_ssid=spare\nalt2_psk=sp\n").unwrap();
+        let msg = run_with(&p, "WIFI:T:WPA;S:home;P:secret;;").unwrap();
+        assert_eq!(msg, "网已连 home");
+        assert_eq!(
+            fs::read_to_string(&p.wifi_conf).unwrap(),
+            "ssid=home\npsk=secret\n\n# ops note\nalt2_ssid=spare\nalt2_psk=sp\nalt1_ssid=oldnet\nalt1_psk=oldpass\n"
+        );
     }
 
     #[test]

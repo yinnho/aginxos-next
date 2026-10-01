@@ -148,6 +148,9 @@ dependencies = [
 [[package]]
 name = "aginx-net-wizard"
 version = "0.1.0"
+dependencies = [
+ "wificonf",
+]
 
 [[package]]
 name = "aginx-pair"
@@ -157,6 +160,7 @@ dependencies = [
  "jpeg-encoder",
  "qrcodegen",
  "testkit",
+ "wificonf",
 ]
 
 [[package]]
@@ -282,6 +286,7 @@ dependencies = [
  "serde",
  "serde_json",
  "ureq",
+ "wificonf",
 ]
 
 [[package]]
@@ -6284,6 +6289,10 @@ name = "widestring"
 version = "1.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "72069c3113ab32ab29e5584db3c6ec55d416895e60715417b5b883a357c3e471"
+
+[[package]]
+name = "wificonf"
+version = "0.1.0"
 
 [[package]]
 name = "winapi"

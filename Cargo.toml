@@ -26,6 +26,7 @@ members = [
     "crates/secret",
     "crates/pair",
     "crates/hwd",
+    "crates/wificonf",
     # ── 母体引擎面（carrier-*，自 mother/ 并入）──
     "crates/carrier",
     "crates/types",

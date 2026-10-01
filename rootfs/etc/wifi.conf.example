@@ -6,3 +6,10 @@
 # never committed to this repo (same rule as vendor blobs, DECISIONS §7).
 ssid=YourNetworkName
 psk=YourPassphrase
+# #64 multi-network fallback table (optional): when the current pair
+# fails twice, net-rejoin tries these slots in numeric order (one
+# attempt each; an SSID not on air fails in one ~5 s scan). The winner
+# is promoted to ssid=/psk= and the old network takes its slot —
+# sticky-until-dead, no signal-quality roaming. Max 4 slots.
+#alt1_ssid=BackupNetwork
+#alt1_psk=BackupPassphrase
