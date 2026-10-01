@@ -15,7 +15,7 @@
   本仓 key（`~/.claude/projects/-Users-sophiehe-Documents-aginxos-next/`），
   两边同源；以本仓侧为准续写。
 
-## 在役快照（2026-09-26）
+## 在役快照（2026-09-26；10-01 追记重定位）
 
 - **redfin**：#388 镜像（结构四刀+刀5，裸 L0 首启自带出厂树）；
   六单元 aginx/aginx-gateway/aginx-secretd/aginx-voice/aginxbrowser/net-watch；
@@ -26,6 +26,13 @@
   刷新签名 manifest。
 - **生态仓** `~/Documents/aginx/`：aginx（5658af7 spool 丢件柜台）、
   agc（6eef4d3 配置腿）、aginx-relay（ff1a949）、aginx-carrier。
+- **10-01 重新定位（#422）**：AginxOS=黑匣子 agent 服务器——人机
+  交互产品线推翻；语音降 SIP 内件、摄像头冻结、无屏维持；**SIP/PSTN
+  升格 agent 对外腿**（backlog=talk 腿 RTP 看门狗+拨号腿 15s CANCEL+
+  PSTN 真呼验收，任务 #61）。真源=AGENTS.md Positioning 段。同日
+  HARDWARE.md 瘦身：正文只留活窗（滚动纪律在文件头），旧收据归档
+  `docs/HARDWARE-ARCHIVE-2026-09{a..d}.md`。Mac 对讲测试台已拆；
+  redfin voice 单元下次碰机 down（任务 #65）。
 
 ## 账四摊（2026-09-28 追记）
 
@@ -40,7 +47,9 @@
    ahead 24=纯收据堆）。推送姿势不变：
    `git push origin <代码尖>:master`。**教训：重排后落收据须等价垫顶
    ——09-26 后新工作直接在 master 交错落码与收据，推送窗又被顶回
-   重排；此后收据仍按「先码后收据」顺序落**。
+   重排；此后收据仍按「先码后收据」顺序落**。（10-01 又一轮重排：
+#421 两件+#422+账本瘦身四件垫顶，代码尖 4295cc9 已推，本地
+ahead 4=纯收据堆。）
 3. **一代仓工作树——已清（09-26 晚）**：~~ag-asr.c zh 修~~（已搬本仓
    v0.1.1）原件在一代仓封存落账（10c6aa9）；~~204 件 target/ 删除~~
    已提交（2fc2cd3）。「封仓零提交」由用户 09-26 裁决破例收尾件——
