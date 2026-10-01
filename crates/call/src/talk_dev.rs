@@ -37,6 +37,14 @@ pub struct RunningTalk {
     stop: Arc<AtomicBool>,
     tasks: Vec<tokio::task::JoinHandle<()>>,
     _playback_drain: bool,
+    /// 末帧到达时刻（#61 看门狗探针）：speaker loop 每收一帧盖戳。
+    rx_hb: tokio::sync::watch::Receiver<std::time::Instant>,
+}
+
+impl RunningTalk {
+    pub fn rx_heartbeat(&self) -> tokio::sync::watch::Receiver<std::time::Instant> {
+        self.rx_hb.clone()
+    }
 }
 
 impl Drop for RunningTalk {
@@ -132,10 +140,14 @@ pub async fn start(
             }
         })?;
 
+    // #61 看门狗心跳：每帧一戳，main 的 rx_stall 臂盯死线。
+    let (hb_tx, hb_rx) = tokio::sync::watch::channel(std::time::Instant::now());
+
     // Speaker side: decode frames → mono f32 → resample to device rate → buffer.
     let levels_rx = levels.clone();
     let speaker_task = tokio::spawn(async move {
         while let Some(frame) = receiver.recv().await {
+            hb_tx.send_replace(std::time::Instant::now());
             {
                 let Ok(mut l) = levels_rx.lock() else { return };
                 if l.negotiated.is_none() {
@@ -245,5 +257,6 @@ pub async fn start(
         stop,
         tasks: vec![speaker_task, mic_task, vu_task],
         _playback_drain: true,
+        rx_hb: hb_rx,
     })
 }

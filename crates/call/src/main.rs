@@ -28,6 +28,34 @@ const SAMPLE_RATE: u32 = 8_000;
 const FRAME_MS: u64 = 20;
 const TONE_AMPLITUDE: f32 = 0.30;
 const MIN_RECEIVED_SECS: f32 = 2.0;
+/// 拨号窗：INVITE 后等应答这么久，窗尽即 CANCEL（#61 刀1）。
+const DIAL_WINDOW: Duration = Duration::from_secs(15);
+
+/// talk 腿 rx 停流看门狗阈值（#61 刀2）：末帧后这么久没新帧=对端媒体
+/// 死亡。默认 15s；env `AGINX_CALL_RX_WD_SECS` 可调（地板 5s，测试用）。
+fn rx_watchdog_secs() -> Duration {
+    let s: u64 = std::env::var("AGINX_CALL_RX_WD_SECS")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(15);
+    Duration::from_secs(s.max(5))
+}
+
+/// 看门狗等待臂：新鲜帧不断把死线往后推；死线先到=停流。桥拆掉（发送
+/// 端 drop）也在此返回——媒体路径已死，同该拆线。
+async fn rx_stall(hb: &mut tokio::sync::watch::Receiver<std::time::Instant>, wd: Duration) {
+    loop {
+        let deadline = *hb.borrow_and_update() + wd;
+        tokio::select! {
+            _ = tokio::time::sleep_until(tokio::time::Instant::from_std(deadline)) => return,
+            changed = hb.changed() => {
+                if changed.is_err() {
+                    return;
+                }
+            }
+        }
+    }
+}
 
 #[derive(PartialEq)]
 enum Mode {
@@ -116,9 +144,22 @@ async fn main() -> anyhow::Result<()> {
     let call = match &mode {
         Mode::Tone { uri: Some(uri), .. } | Mode::Talk { uri: Some(uri), .. } => {
             println!("[aginx-call] dialing {uri}");
-            endpoint
-                .call_and_wait(&uri, Some(Duration::from_secs(15)))
-                .await?
+            // #61 拨号窗自持把柄：call_and_wait 的超时只取消等待
+            // （rvoip wait_for_answered 文档明言），handle 困死在函数里，
+            // INVITE 永吊——#421「15s 窗尽溜走不发 CANCEL」的机制。
+            // invite+wrap_call 自持把柄，窗尽走 hangup_and_wait：早期
+            // 会话发 CANCEL、无临时记 cancel-intent、晚到 200 OK 由库
+            // ACK+BYE 收尾；真终态错误（486/404）走 terminal 快路空转。
+            let call = endpoint.wrap_call(endpoint.invite(uri)?.send().await?);
+            match call.wait_for_answered(Some(DIAL_WINDOW)).await {
+                Ok(c) => c,
+                Err(e) => {
+                    println!("[aginx-call] no answer in {:?} — cancelling", DIAL_WINDOW);
+                    let _ = call.hangup_and_wait(Some(Duration::from_secs(5))).await;
+                    endpoint.shutdown().await?;
+                    return Err(anyhow::Error::from(e));
+                }
+            }
         }
         Mode::Tone { uri: None, .. } | Mode::Talk { uri: None } => {
             println!("[aginx-call] waiting on sip:aginx@127.0.0.1:{port} (auto-answer)");
@@ -141,9 +182,19 @@ async fn main() -> anyhow::Result<()> {
         let default_format = (SAMPLE_RATE, 1u8);
         let running = talk::start(sender, receiver, default_format).await?;
         println!("[aginx-call] talk bridge up — Ctrl+C to hang up");
+        // #61 RTP 停流看门狗：对端暴死（无 BYE）时 wait_for_end 永不回，
+        // 媒体冻结进程占线（#421 接听腿僵尸：rx-rms 冻恒值、无 ended 行）。
+        // 一条规则覆盖两形态——从未发流（首帧窗尽）与发过再死（末帧后
+        // 超时）；agent 外线腿不伺候远端静默保持，死流即拆。拆线=正常
+        // 收尾（`call up` 标记已出），rc 0。
+        let wd = rx_watchdog_secs();
+        let mut hb = running.rx_heartbeat();
         tokio::select! {
             _ = tokio::signal::ctrl_c() => println!("[aginx-call] Ctrl+C — hanging up"),
             _ = call.wait_for_end(None) => println!("[aginx-call] remote ended the call"),
+            _ = rx_stall(&mut hb, wd) => {
+                println!("[aginx-call] rx stalled {wd:?} — remote media dead, hanging up");
+            }
         }
         drop(running);
         let _ = call.hangup_and_wait(Some(Duration::from_secs(3))).await;
