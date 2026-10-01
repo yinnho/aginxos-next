@@ -26,27 +26,11 @@ mdev -s 2>/dev/null
 TZ="$(sed -n 's/^tz *= *"\([^"]*\)".*/\1/p' /etc/aginx/device.toml | sed -n '1p')"
 [ -n "$TZ" ] && export TZ
 
-# 开机时钟自愈·读腿（#63）：PMIC RTC 写腿被驱动封（RTC_SET_TIME=
-# EACCES，pm8xxx DT 无 qcom,allow-set-time——10-01 活体），但计数器自由
-# 走表跨靴不丢（hctosys 拿它种子，恒偏移尺）。net-timesync 在每次网络
-# 靴把真差写进 /var/lib/aginx/rtc-offset；这里在一切限时件（TLS/
-# crond/心跳 forensics）之前补回 counter+offset。候选年份门拦 PMIC 断电
-# 归零（旧 offset 补出来还是 1970——不设，等网回来 net-watch 补）。
-# boot.state 在此开张（原先在 bootcard 段）：恢复行必须落在 net-bringup
-# 任何 verdict 之前、又不能被后来的截断抹掉。
+# boot.state 在此开张（原先在 bootcard 段，#63 上移）：机器可读的开机
+# 收据，net-bringup 的 verdict、net-watch 的补钟行、accept suites 全吃
+# 它；开张必须先于任何写入者���bring-up 全在更下方起跑）。
 mkdir -p /run 2>/dev/null
 : > /run/boot.state
-if [ -r /sys/class/rtc/rtc0/since_epoch ] && [ -r /var/lib/aginx/rtc-offset ]; then
-  CNT=$(cat /sys/class/rtc/rtc0/since_epoch)
-  OFF=$(cat /var/lib/aginx/rtc-offset)
-  case "$CNT$OFF" in ""|*[!0-9]*) ;; *)
-    NOW=$((CNT + OFF))
-    [ "$NOW" -ge 1767225600 ] && {   # >= 2026-01-01 UTC
-      date -s "@$NOW" >/dev/null 2>&1 && \
-        echo "time restored $(date +%Y-%m-%d)" >>/run/boot.state
-    } ;;
-  esac
-fi
 
 
 # enchilada modem bring-up (E5 折债) — synchronous, exactly the on-device
@@ -65,6 +49,26 @@ fi
 # names — fold them into /var/lib/aginx before anything reads state.
 # Union + park, never deletes; no-op once the world is folded.
 /etc/init.d/varlib-migrate
+
+# 开机时钟自愈·读腿（#63）：PMIC RTC 写腿被驱动封（RTC_SET_TIME=
+# EACCES，pm8xxx DT 无 qcom,allow-set-time——10-01 活体），但计数器自由
+# 走表跨靴不丢（hctosys 拿它种子，恒偏移尺）。net-timesync 在每次网络
+# 靴把真差写进 /var/lib/aginx/rtc-offset；这里在一切限时件（TLS/
+# crond/心跳 forensics）之前补回 counter+offset。候选年份门拦 PMIC 断电
+# 归零（旧 offset 补出来还是 1970——不设，等网回来 net-watch 补）。
+# 位置在 state-restore/varlib-migrate 之后：重刷靴（CAPTURE 路径）的
+# offset 文件正是 state tar 带回来的，恢复块必须在它落地后读。
+if [ -r /sys/class/rtc/rtc0/since_epoch ] && [ -r /var/lib/aginx/rtc-offset ]; then
+  CNT=$(cat /sys/class/rtc/rtc0/since_epoch)
+  OFF=$(cat /var/lib/aginx/rtc-offset)
+  case "$CNT$OFF" in ""|*[!0-9]*) ;; *)
+    NOW=$((CNT + OFF))
+    [ "$NOW" -ge 1767225600 ] && {   # >= 2026-01-01 UTC
+      date -s "@$NOW" >/dev/null 2>&1 && \
+        echo "time restored $(date +%Y-%m-%d)" >>/run/boot.state
+    } ;;
+  esac
+fi
 
 # First-boot root-fs grow (#318, L0 缺口刀1) — SYNCHRONOUS, deliberately
 # before everything that writes big: the image bakes a 2G ext4 onto the
@@ -245,6 +249,7 @@ if grep -q '^name = "redfin"' /etc/aginx/device.toml 2>/dev/null; then
   /usr/bin/aginx-boot-ok ) &
 fi
 
-# Panel handoff (M11 → #246 v2) — spawns aginx-term (cursor face)
-# immediately; term's own DRM wait covers bootcard's time on stage.
-/etc/init.d/aginx-term-handoff &
+# Panel handoff（M11→#246 v2→#427 退役）：aginx-term 拉起曾烤在镜像里
+# 无限轮询 /var/bin/aginx-term——#422 黑匣子裁决后人机面全死，镜像不再
+# 生成任何人脸；term 包若还在机上只是无人拉起的死件，屏由 panel-off
+# 永久压黑。bootcard 的 [ -x ] 门保留（redfin 机器事实，#422 原文）。

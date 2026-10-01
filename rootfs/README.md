@@ -7,8 +7,9 @@
 
 ## 目录内容
 
-- `etc/` — 静态系统配置。init.d 通用五件（rcS/provision/
-  aginx-term-handoff/state-restore/varlib-migrate）；net-bringup 与五个
+- `etc/` — 静态系统配置。init.d 通用四件（rcS/provision/
+  state-restore/varlib-migrate——#427 删 aginx-term-handoff：#422 黑匣子
+  裁决后镜像不生成任何人脸）；net-bringup 与五个
   bringup 不在配方里——由 `devices/<codename>/bringup/` 烤机时注入
   （D14 机型是数据；E4b 起 net-bringup 同律：并网流程是机型数据）、
   aginx/svc.d 两单元（net-watch + aginxbrowser——L0 刀4 起
