@@ -7,9 +7,9 @@ use aes::cipher::{generic_array::GenericArray, BlockDecrypt, KeyInit};
 use base64::Engine;
 use reqwest::Client;
 
-use carrier_types::error::{CarrierError, CarrierResult};
+use crate::vocab::{CarrierError, CarrierResult};
 
-use crate::models::CDN_BASE_URL;
+use super::models::CDN_BASE_URL;
 
 type Aes128 = aes::Aes128;
 

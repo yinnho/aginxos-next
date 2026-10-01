@@ -6,9 +6,9 @@ use base64::Engine;
 use rand::Rng;
 use reqwest::{header::HeaderMap, Client};
 use std::time::Duration;
-use carrier_types::error::{CarrierError, CarrierResult};
+use crate::vocab::{CarrierError, CarrierResult};
 
-use crate::models::*;
+use super::models::*;
 
 /// Build the required iLink request headers (with optional Bearer token).
 fn ilink_headers(bot_token: Option<&str>) -> HeaderMap {
