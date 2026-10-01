@@ -32,8 +32,9 @@ Line verdicts:
 
 Hardware lineage: phones are ARM servers that happen to look like
 phones — `redfin` the experiment unit, `enchilada` the second
-bring-up; server-class boards are first-class machines (Orin NX is the
-first candidate, `docs/DEVICE-ORIN-NX.md`). D14 eats the difference:
+bring-up; server-class boards are first-class machines (first purchase:
+Panther X2, `docs/DEVICE-PANTHER-X2.md`; bigger brain tier on hold:
+Orin NX, `docs/DEVICE-ORIN-NX.md`). D14 eats the difference:
 a new `devices/<codename>/` changes only the boot face (UEFI/eMMC vs
 fastboot/bootimg); everything above the boot layer ships as-is.
 
