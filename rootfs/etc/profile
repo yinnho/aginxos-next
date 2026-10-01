@@ -3,3 +3,8 @@
 # interactive shells read it here. (dropbear "ssh host cmd" is a
 # non-login shell — use absolute paths there.)
 export PATH=/sbin:/bin:/usr/sbin:/usr/bin:/var/bin
+# 机器时区（#62）：dropbear 从 inittab 生、不吃 rcS 的 env——登录 shell
+# 在此自读（机型盲 sed，与 rcS 同律）。ssh 里 date 从此本地时，收据
+# 取证免 CST/UTC 手折算（#421 修账之痛）。
+TZ="$(sed -n 's/^tz *= *"\([^"]*\)".*/\1/p' /etc/aginx/device.toml | sed -n '1p')"
+[ -n "$TZ" ] && export TZ
