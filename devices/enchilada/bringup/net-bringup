@@ -73,9 +73,11 @@ else
             set -- $HTTP          # "HTTP <code> <n> bytes"
             BYTES=$3
             say internet ok "www.baidu.com ${BYTES}B"
-            # 校时：enchilada 实测形式（-d 必带——静默 -q 不动钟，E5 2026-09-14）
+            # 校时（#63）：有界重试+年份门+RTC-offset 写全在 image 助手
+            # net-timesync（-q -n -d 形——enchilada E5 实测静默 -q 不动钟
+            # 的教训已吸收进助手；与 net-watch 稳态自愈共用一权威）。
             say time run
-            if ntpd -q -n -d -p ntp.aliyun.com >/dev/null 2>&1; then
+            if /usr/libexec/aginx/net-timesync; then
               say time ok "$(date +%Y-%m-%d)"
               echo "clock synced: $(date)"
             else

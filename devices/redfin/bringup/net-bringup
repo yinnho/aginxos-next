@@ -147,42 +147,24 @@ if HTTP=$(/bin/httpget http://www.baidu.com/ /tmp/baidu.html 2>&1); then
   BYTES=$3
   echo "baidu fetch ok ($HTTP) $(date)"
   say internet ok "www.baidu.com ${BYTES}B"
-  # Clock sync (M10) — TLS certificate validation needs a roughly-correct
-  # clock, and this kernel boots at the build epoch (observed 1970/2029
-  # drift). busybox date -s misparses GNU formats, so ntpd is the only
-  # trusted path. Best-effort: a failed sync must not fail anything.
-  # N4④ 真修 (#112 立案的邻居): one-shot ntpd is a coin flip when the
-  # AP's DNS/pass-through lags the link — bounded retry instead: up to
-  # 12 tries x 10 s alternating ntp.aliyun.com / cn.pool.ntp.org, gated
-  # on the wall clock actually landing in the present (date is the only
-  # verdict a 1970 boot clock can't fake). Budget ~120 s stays inside
-  # provision's 180 s clock-gate wait — time ok|fail is phase 2's LAST
-  # line (#246: done already landed in phase 1; provision's pkg line
-  # still waits on internet ok + this verdict).
+  # Clock sync (M10 → #63) — TLS certificate validation needs a roughly
+  # correct clock, and this kernel boots at the build epoch (observed
+  # 1970/2029 drift). busybox date -s misparses GNU formats, so ntpd is
+  # the only trusted path. #63: the bounded retry (12 x alternating
+  # ntp.aliyun.com / cn.pool.ntp.org, gated on the wall clock landing in
+  # the present — date is the only verdict a 1970 boot clock can't fake)
+  # + the RTC-offset write now live in the image helper
+  # /usr/libexec/aginx/net-timesync — the single clock authority, shared
+  # with net-watch's steady-state heal. The old `rtcal sync` call here
+  # was a silent no-op every boot: RTC_SET_TIME -> EACCES, the pm8xxx
+  # driver denies Linux-side writes (2026-10-01 live receipt) — retired.
+  # Budget ~120 s stays inside provision's 180 s clock-gate wait — time
+  # ok|fail is phase 2's LAST line (#246: done already landed in phase 1;
+  # provision's pkg line still waits on internet ok + this verdict).
   say time run
-  TSYNCED=1
-  t=0
-  while [ $t -lt 12 ]; do
-    t=$((t+1))
-    case $((t % 2)) in
-      0) NTPS=cn.pool.ntp.org ;;
-      *) NTPS=ntp.aliyun.com ;;
-    esac
-    if ntpd -q -n -p "$NTPS" >/dev/null 2>&1 && [ "$(date +%Y)" -ge 2026 ]; then
-      TSYNCED=0
-      break
-    fi
-    sleep 10
-  done
-  if [ "$TSYNCED" -eq 0 ]; then
+  if /usr/libexec/aginx/net-timesync; then
     say time ok "$(date +%Y-%m-%d)"
     echo "clock synced: $(date)"
-    # M23b: push the corrected clock into the PMIC RTC. It lives on its own
-    # -53y scale until this runs, so early-boot wall time is 1970 and RTC
-    # alarm math needs the offset carried around. Best-effort like ntpd.
-    if [ -x /bin/rtcal ]; then
-      /bin/rtcal sync && echo "rtc synced to system time"
-    fi
   else
     say time fail "ntpd"
     echo "ntpd failed after bounded retry — TLS validation may break until the clock is fixed"

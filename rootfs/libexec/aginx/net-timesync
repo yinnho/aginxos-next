@@ -1,0 +1,57 @@
+#!/bin/sh
+# net-timesync (#63) — bounded NTP sync + RTC-offset write; the single
+# clock authority for boot (net-bringup) and steady state (net-watch heal).
+#
+# Why an offset file instead of the RTC: the pm8xxx driver denies
+# Linux-side writes (RTC_SET_TIME -> EACCES without DT qcom,allow-set-time
+# — stock Pixels let TZ own the clock; 2026-10-01 live receipt), while the
+# PMIC counter free-runs across reboots and hctosys seeds the wall from it
+# on a shifted scale. Durable truth therefore lives in
+#   /var/lib/aginx/rtc-offset = wall_epoch - /sys/class/rtc/rtc0/since_epoch
+# written here whenever NTP lands; rcS re-applies counter+offset before
+# anything time-sensitive runs (offline boots come up with a true clock).
+# Drift is crystal-ppm (seconds/week) — fine for TLS/crond/forensics, and
+# every networked boot refreshes the offset. If the RTC ever becomes
+# writable the offset converges to 0 and the scheme stays self-consistent.
+#
+# Busybox ntpd leg: -q -n -d — -q one-shot, -n foreground (a bare -q
+# forks-and-forgets: parent exits 0 at once, clock set later or never —
+# the "静默失败" family, enchilada E5 receipt), -d speaks stderr so a
+# failed attempt finally leaves a trace in the caller's log. One-shot ntpd
+# arms a 10s alarm per invocation: a peer that never answers self-kills
+# rc=142 at 10s sharp (root-caused 2026-10-01), so the retry budget is
+# try + sleep 10 per server.
+#
+# Exit 0 = wall clock true (and offset refreshed); rc 1 = still unsynced.
+export PATH=/sbin:/bin:/usr/sbin:/usr/bin
+
+YEAR_OK=2026   # the only verdict a 1970/shifted boot clock can't fake
+RTC=/sys/class/rtc/rtc0/since_epoch
+OFFSET_DIR=/var/lib/aginx
+OFFSET=$OFFSET_DIR/rtc-offset
+
+clock_ok() { [ "$(date +%Y)" -ge "$YEAR_OK" ]; }
+
+write_offset() {
+  [ -r "$RTC" ] || return 0     # no rtc sysfs: skip the durable half
+  cnt=$(cat "$RTC" 2>/dev/null)
+  case "$cnt" in ""|*[!0-9]*) return 0 ;; esac
+  mkdir -p "$OFFSET_DIR" 2>/dev/null
+  printf '%s\n' "$(( $(date +%s) - cnt ))" >"$OFFSET.t" 2>/dev/null && \
+    mv "$OFFSET.t" "$OFFSET"
+}
+
+t=0
+while [ $t -lt 12 ]; do
+  t=$((t+1))
+  case $((t % 2)) in
+    0) NTPS=cn.pool.ntp.org ;;
+    *) NTPS=ntp.aliyun.com ;;
+  esac
+  if ntpd -q -n -d -p "$NTPS" 2>&1 && clock_ok; then
+    write_offset
+    exit 0
+  fi
+  sleep 10
+done
+exit 1

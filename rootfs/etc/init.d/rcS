@@ -26,6 +26,29 @@ mdev -s 2>/dev/null
 TZ="$(sed -n 's/^tz *= *"\([^"]*\)".*/\1/p' /etc/aginx/device.toml | sed -n '1p')"
 [ -n "$TZ" ] && export TZ
 
+# 开机时钟自愈·读腿（#63）：PMIC RTC 写腿被驱动封（RTC_SET_TIME=
+# EACCES，pm8xxx DT 无 qcom,allow-set-time——10-01 活体），但计数器自由
+# 走表跨靴不丢（hctosys 拿它种子，恒偏移尺）。net-timesync 在每次网络
+# 靴把真差写进 /var/lib/aginx/rtc-offset；这里在一切限时件（TLS/
+# crond/心跳 forensics）之前补回 counter+offset。候选年份门拦 PMIC 断电
+# 归零（旧 offset 补出来还是 1970——不设，等网回来 net-watch 补）。
+# boot.state 在此开张（原先在 bootcard 段）：恢复行必须落在 net-bringup
+# 任何 verdict 之前、又不能被后来的截断抹掉。
+mkdir -p /run 2>/dev/null
+: > /run/boot.state
+if [ -r /sys/class/rtc/rtc0/since_epoch ] && [ -r /var/lib/aginx/rtc-offset ]; then
+  CNT=$(cat /sys/class/rtc/rtc0/since_epoch)
+  OFF=$(cat /var/lib/aginx/rtc-offset)
+  case "$CNT$OFF" in ""|*[!0-9]*) ;; *)
+    NOW=$((CNT + OFF))
+    [ "$NOW" -ge 1767225600 ] && {   # >= 2026-01-01 UTC
+      date -s "@$NOW" >/dev/null 2>&1 && \
+        echo "time restored $(date +%Y-%m-%d)" >>/run/boot.state
+    } ;;
+  esac
+fi
+
+
 # enchilada modem bring-up (E5 折债) — synchronous, exactly the on-device
 # tested script: qrtr stack + daemon trio (pd-mapper/tqftpserv/rmtfs) BEFORE
 # q6v5_mss (rmtfs late = EFS homeless crash-loop; pd-mapper late = 65s
@@ -102,9 +125,8 @@ date > /etc/.rcs-ran
 # is the return path: install the aginx-bootcard opt-in package and the
 # next boot paints the wordmark again. boot.state is still written first:
 # it is the machine-readable boot receipt (net-watch, accept suites),
-# independent of the panel.
-mkdir -p /run 2>/dev/null
-: > /run/boot.state
+# independent of the panel — opened at the TOP of rcS now (#63: the
+# time-restored line lands before any bring-up verdict).
 if [ -x /bin/bootcard ]; then
   ( exec /bin/bootcard /run/boot.state ) >/var/bootcard.log 2>&1 &
   echo $! > /run/bootcard.pid

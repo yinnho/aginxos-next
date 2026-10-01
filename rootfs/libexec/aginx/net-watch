@@ -79,6 +79,20 @@ while :; do
     if ping -c1 -W3 "$WAN_PROBE" >/dev/null 2>&1; then
       wanfail=0
       warn_net ''   # 链路+外网全通才撤红警；半恢复不算恢复
+      # 开机时钟自愈·稳态腿（#63）：网回来了而钟还是 1970/错尺——boot
+      # 时 net-bringup 的 ntpd 没赶上（离线启动、新机 offset 未落）在
+      # 这里补。钟真则一脉零开销；heal 会阻塞探测环至多 ~4 分钟
+      # （助手自带 12×(10s 闹钟+10s 歇) 有界预算），与 rejoin 的阻塞
+      # 纪律同。NTP 全灭但 ICMP 通的死局里每环重试一次，预算即节流。
+      if [ "$(date +%Y)" -lt 2026 ]; then
+        log "wan up but clock unsynced ($(date)) — ntp heal"
+        if /usr/libexec/aginx/net-timesync >>"$LOG" 2>&1; then
+          log "clock healed: $(date)"
+          echo "time ok late $(date +%Y-%m-%d)" >>"$STATE" 2>/dev/null
+        else
+          log "ntp heal failed — retrying next probe window"
+        fi
+      fi
     else
       wanfail=$(( wanfail + 1 ))
       if [ $wanfail -eq 8 ]; then
