@@ -16,6 +16,7 @@ members = [
     "crates/server",
     "crates/voice",
     "crates/call",
+    "crates/aginx-ilink",
     "crates/wizard",
     "crates/svc",
     "crates/img",

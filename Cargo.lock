@@ -121,6 +121,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "aginx-ilink"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "carrier-ilink",
+ "carrier-types",
+ "qrcodegen",
+ "serde",
+ "serde_json",
+ "tokio",
+ "toml",
+ "tracing",
+ "tracing-subscriber",
+]
+
+[[package]]
 name = "aginx-img"
 version = "0.1.0"
 dependencies = [

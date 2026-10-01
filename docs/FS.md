@@ -14,6 +14,7 @@
 | **助理** | `/home/workflows/<名>/`。分身格式的翻本：性格、干什么、自己的 flows | 用户直接切过去聊天的「第二张脸」；不是 skill 包 |
 | **tools** | 普通 CLI | 助理、provider |
 | **providers** | Codex / Claude / Grok 这类 agent CLI 的人格壳层：`providers/<名>/<名>`（几行 shim + inline 卡） | 助理、对话对象 |
+| **channels** | 在场：`channels/<名>/`，一频道=一目录+一包（§四 DESIGN.md） | 引擎本体、人的操作面 |
 | **peers** | 别人的 `agent://` | 自己家里的助理 |
 
 母体**设置**每个助理：干什么（profile / default_flow）、性格（SOUL / system_prompt）。派活是母体的事。用户不对助理点名当操作系统，也不对 Codex 说话。
@@ -63,6 +64,11 @@ OTA 不覆盖 `/home`。
 ├── providers/              # agent CLI 的人格壳层（轻 shim 指到 /var/bin 真身）
 │   └── <name>/
 │       └── <name>          # 几行脚本 + inline 卡，不放大件
+│
+├── channels/               # 在场（DESIGN.md §四；一频道=一目录+一包）
+│   └── <名>/
+│       ├── channel.toml    # 类型 + 默认绑定 + 策略
+│       └── senders/<uid>/  # 会话状态（session.json 绑定=字段；gw.json 桥会话）
 │
 ├── workflows/              # 助理编制。一个目录 = 一个助理（分身翻本）
 │   └── <name>/
@@ -131,6 +137,19 @@ git、aginxbrowser 客户端这类。**首选走 pkg 进 `/var/bin`**（与 prov
   回话。工具层 shell 300s 硬顶、relay turn gate 110s 都撑不下长活；
   轮询等待、母体手写工件（替 provider 代笔 HTML）都违宪。斥候取材
   同款异步（派工秒回、回头取果，后台腿自带 280s 闸）。
+
+### channels — 在场
+
+一频道 = 一目录 + 一包（DESIGN.md §四；#68 ②b，2026-10-02）。目录只有
+数据和绑定，协议腿住 opt-in 包（`aginx-ilink` 先例）；裸 L0 零频道，
+装频道 = 落目录 + opt-in。文件夹即注册表。
+
+- **绑定以频道为轴**：会话住 `channels/<名>/senders/<uid>/`，绑哪个能力面
+  是记录里的字段（`bind_agent`）——换绑=改字段，不搬家（推翻旧
+  `workflows/<分身>/senders/` 以分身为轴的搬家律）。
+- **频道不感知引擎**：桥只认「把文本交给某 agent、拿回文本」窄接口，按
+  channel.toml 的 `default_agent` + 会话绑定路由到 gateway 名册（本地
+  ACP 口 `127.0.0.1:8686`，`aginx-gateway-local` 包），引擎随名册条目换。
 
 ### workflows — 助理（分身翻本）
 

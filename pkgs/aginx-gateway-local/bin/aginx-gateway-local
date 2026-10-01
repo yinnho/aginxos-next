@@ -1,0 +1,22 @@
+#!/bin/sh
+# aginx-gateway-local — 真aginx 的本机 direct 口壳（#68 ②b）。
+# 面是本脚本（flat bin 成员）：确保数据世界+名册符号链在位，种子化
+# /etc 配置，然后 exec 真身（aginx-gateway 包的同一二进制，另一实例）。
+# aginx:summary=本机ACP口壳：真aginx direct 127.0.0.1:8686（频道桥对端；agents 链回主 gateway 名册）
+
+DATA=/var/lib/aginx/gateway-local
+CONF=/etc/aginx/gateway-local.toml
+SEED=/var/lib/aginx/pkgfiles/aginx-gateway-local/etc/gateway-local.toml
+REAL=/var/lib/aginx/pkgfiles/aginx-gateway/bin/aginx-gateway
+
+mkdir -p "$DATA"
+# 名册符号链：悬空（主 gateway 未装/未建 agents）= 本口起后空册拒答，
+# 主册建条目即活——不复制名册，单一寻址点。
+[ -e "$DATA/agents" ] || ln -s ../gateway/agents "$DATA/agents" 2>/dev/null
+
+# 配置：/etc 是真源，包内件只作出厂缺省（已存在不覆写）。
+if [ ! -f "$CONF" ] && [ -f "$SEED" ]; then
+  cp "$SEED" "$CONF" && chmod 600 "$CONF"
+fi
+
+exec "$REAL" -c "$CONF"

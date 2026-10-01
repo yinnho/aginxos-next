@@ -199,6 +199,8 @@ dropbear sftp subsystem is a Go static (`tools/sftp-server` +
 | `crates/hwd` | device profile reader — the single legal source of machine facts (D14) |
 | `crates/voice` | `aginx-voice` — the voice dialog daemon (M42; human-interface line retired 2026-10-01 — the stack is now SIP-line internal parts, see Positioning) |
 | `crates/call` | `aginx-call` — the SIP leg (M48): the agent's external telephony, promoted 2026-10-01 (see Positioning) |
+| `crates/ilink` | `carrier-ilink` — the weixin protocol lib (qr login, session watcher, send); hosts the channel-root surgery behind `set_sessions_root` |
+| `crates/aginx-ilink` | `aginx-ilink` — the weixin channel package (#68 ②b, 2026-10-02): daemon (ACP bridge to the gateway roster) + login/bind/send CLI; sessions live in `/home/channels/weixin/`, binding is a field not a home (DESIGN.md §四) |
 | `crates/wizard` | `aginx-net-wizard` — first-boot Wi-Fi setup TUI |
 | `crates/term` | `aginx-term` — on-device terminal UI (aterm line) |
 | `crates/pkg` | `aginx-pkg` — package manager (signed manifest, 四件套) |
@@ -210,7 +212,7 @@ dropbear sftp subsystem is a Go static (`tools/sftp-server` +
 | `crates/done` | `aginx-done` — provision done-marker discipline |
 | `crates/secret` | `aginx-secretd`/`aginx-secret` — the secret sidecar + its admin face |
 | `pkgs/aginx-gateway` | the outward-facing daemon package (v0.2.0 re-cored 2026-09-27): carries the real ecosystem `aginx` (~/Documents/aginx, independent project — this repo only builds/packages/configures it). The old replica `crates/gateway` is deleted (#412); package name kept for opt-in continuity |
-| `crates/{carrier,types,memory,clone,dup,carrier-gateway,lifecycle,kernel,ilink,webhook,web,agf,agmem}` | the mother engine (ex-`aginx-carrier`, merged 2026-09-24): kernel spawns/turns/sessions, runtime = agent loop + tools, clone = assistant format + install chain + dup VCS, memory/agmem = the memory tree, ilink/webhook = inbound channels, `carrier-gateway` = agent:// client + contacts ledger (NOT the remote-channel daemon above) |
+| `crates/{carrier,types,memory,clone,dup,carrier-gateway,lifecycle,kernel,webhook,web,agf,agmem}` | the mother engine (ex-`aginx-carrier`, merged 2026-09-24): kernel spawns/turns/sessions, runtime = agent loop + tools, clone = assistant format + install chain + dup VCS, memory/agmem = the memory tree, webhook = inbound channel, `carrier-gateway` = agent:// client + contacts ledger (NOT the remote-channel daemon above). `ilink` moved out to its own row above — the weixin lib now serves both the engine and the standalone channel package |
 | `crates/testkit` | test helpers |
 | `rootfs/` | the image recipe — see `rootfs/README.md` (placement matrix, asset split) |
 | `devices/` | per-machine data, one dir per codename: `device.toml`, `modules.txt`, `bringup/`, `boot/` (pack line), `cam/` — add-a-machine checklist in `devices/README.md` |
