@@ -28,11 +28,16 @@
   agc（6eef4d3 配置腿）、aginx-relay（ff1a949）、aginx-carrier。
 - **10-01 重新定位（#422）**：AginxOS=黑匣子 agent 服务器——人机
   交互产品线推翻；语音降 SIP 内件、摄像头冻结、无屏维持；**SIP/PSTN
-  升格 agent 对外腿**（backlog=talk 腿 RTP 看门狗+拨号腿 15s CANCEL+
-  PSTN 真呼验收，任务 #61）。真源=AGENTS.md Positioning 段。同日
-  HARDWARE.md 瘦身：正文只留活窗（滚动纪律在文件头），旧收据归档
-  `docs/HARDWARE-ARCHIVE-2026-09{a..d}.md`。Mac 对讲测试台已拆；
-  redfin voice 单元下次碰机 down（任务 #65）。
+  升格 agent 对外腿**（backlog=talk 腿 RTP 看门狗+拨号腿 15s CANCEL
+  已收=#424；PSTN 真呼验收=堵中继采购）。真源=AGENTS.md Positioning
+  段。同日 HARDWARE.md 瘦身：正文只留活窗（滚动纪律在文件头），
+  旧收据归档 `docs/HARDWARE-ARCHIVE-2026-09{a..d}.md`。
+- **10-01 bake #27（#427）黑匣子收敛烤在役**：f9c5c53 无头镜像
+  （37M，rcS 删 term handoff、屏黑真人眼验过）+CAPTURE 重刷全复放；
+  **state tar 不带 /var/bin 的 face 缺口立案**（重刷丢全部包 faces，
+  binary 包不可复原；手造 11 faces+四包重装复原，结构性修法下烤
+  裁决——收据 #427 挂账）。redfin 终态=六单元 ready（proxy 挂账：
+  PSK conf 只剩 VPS 端）、relay 往返 7.4s。
 
 ## 账四摊（2026-09-28 追记）
 
@@ -47,9 +52,11 @@
    ahead 24=纯收据堆）。推送姿势不变：
    `git push origin <代码尖>:master`。**教训：重排后落收据须等价垫顶
    ——09-26 后新工作直接在 master 交错落码与收据，推送窗又被顶回
-   重排；此后收据仍按「先码后收据」顺序落**。（10-01 又一轮重排：
-#421 两件+#422+账本瘦身四件垫顶，代码尖 4295cc9 已推，本地
-ahead 4=纯收据堆。）
+   重排；此后收据仍按「先码后收据」顺序落**。（10-01 晚又一轮重排：
+   码三件 #62/#63/#427 无头刀重排垫底、十件收据垫顶，代码尖 a384a32
+   已推（d07b0d9..a384a32），本地 ahead 10=纯收据堆。教训复发证实：
+   10-01 白天码收据交错落又把窗顶回重排——**长会话里每次落码前先想
+   推送窗**，或干脆码落完立刻重排推。）
 3. **一代仓工作树——已清（09-26 晚）**：~~ag-asr.c zh 修~~（已搬本仓
    v0.1.1）原件在一代仓封存落账（10c6aa9）；~~204 件 target/ 删除~~
    已提交（2fc2cd3）。「封仓零提交」由用户 09-26 裁决破例收尾件——
