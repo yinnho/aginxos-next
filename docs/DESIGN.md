@@ -76,8 +76,9 @@ AginxOS 是**黑匣子 ARM 服务器**（#422）：无屏、无本地语音、�
 └── senders/<uid>/    # 会话状态；绑哪个能力面是记录里的字段
 ```
 
-- **一频道 = 一目录 + 一包**：协议腿住 opt-in 包（`aginx-ilink`
-  先例），目录只有数据和绑定。装频道=落目录+opt-in，裸 L0 零频道。
+- **一频道 = 一目录 + 一包**：协议腿住 opt-in 包（`aginx-channels`
+  唯一机身，#69 改形），目录只有数据和绑定。装频道=落目录+opt-in，
+  裸 L0 零频道。
 - **文件夹即注册表**——与 workflows/ 同律（注册表=文件系统的延续）。
 - **绑定以频道为轴**：会话住 `channels/<名>/senders/<uid>/`，换绑=
   改字段，不再搬家（翻转 carrier 的以分身为轴、重绑搬家的旧律）。
@@ -129,9 +130,10 @@ boot 面以上原样复用。D13 姓氏法、升级四通道、密钥纪律、�
 ## 八、落位（任务 #68 刀序）
 
 ① 晨报 codex 化（crond→codex exec→落卡）→ ② template-gen 同名
-换芯 → ②b **channels/ 体系**：FS.md 修宪加 channels/ 节 + ilink
-改造为第一频道（活体出 `aginx-ilink` 包、会话迁 `channels/weixin/`、
-桥对 gateway 名册说话）→ ③ 修宪（FS.md 世界观折叠进本页）→
+换芯 → ②b **channels/ 体系**（#69 收形，2026-10-02）：ilink 改造为
+第一频道，全线上住 `crates/channels` 一家（`aginx-channels` 包、
+子命令带频道名、会话迁 `channels/weixin/`、桥对 gateway 名册说话、
+母体微信接线退役）→ ③ 修宪（FS.md 世界观折叠进本页）→
 ④ crates/carrier-* 退役拆迁（人格真源独立成一等件；aginx 树包
 45M 随缩）→ ⑤ 引擎池挂账（node 系等 Orin NX 档）。
 

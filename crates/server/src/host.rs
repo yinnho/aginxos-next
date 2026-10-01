@@ -137,16 +137,12 @@ impl TurnObserver for LedgerObserver {
     }
 }
 
-/// 母体宿主：kernel + 它的运行时 + 账本观察者的句柄（与 kernel 里
-/// 装的是同一份 Arc——run_turn 用它对准当前轮）。channels = iLink 通道
-/// 管理器（必须随 Mother 活着——Drop 会拆通道线程）。
+/// 母体宿主：kernel + 它的运行时 + 账本观察者的句柄。
 pub struct Mother {
     pub kernel: Arc<CarrierKernel>,
     observer: Arc<LedgerObserver>,
     rt: tokio::runtime::Runtime,
     home: PathBuf,
-    #[allow(dead_code)] // 持有即在线：Drop 拆通道，字段不读
-    channels: Option<carrier_runtime::channel_manager::ChannelManager>,
 }
 
 impl Mother {
@@ -183,12 +179,11 @@ impl Mother {
             current: Mutex::new(None),
         });
         kernel.set_turn_observer(Arc::clone(&observer) as Arc<dyn TurnObserver>);
-        let mut mother = Mother {
+        let mother = Mother {
             kernel: Arc::clone(&kernel),
             observer,
             rt,
             home,
-            channels: None,
         };
         mother.reconcile()?;
         // 定时是母体职能（显示线刀A）：cron tick 循环随母体起。老路只有
@@ -202,22 +197,9 @@ impl Mother {
             let _ctx = mother.rt.enter();
             mother.kernel.start_cron_loop();
         }
-        // iLink（微信）入站通道：watcher + 微信工具 + 出站注入（2026-09-26
-        // 上机线）。start 在 RT 上下文里跑——bridge 与 poll 线程落在这台
-        // runtime 上；cm 换进 Mother 活到进程终（Drop 会拆通道）。
-        {
-            match crate::channels::boot_ilink(&kernel) {
-                Ok(mut cm) => {
-                    let _ctx = mother.rt.enter();
-                    mother.rt.block_on(cm.start());
-                    eprintln!("mother: iLink channel online (weixin watcher + tools)");
-                    mother.channels.replace(cm);
-                }
-                // 通道层是特性不是脊柱：起不来就少个微信面，母体（轮、
-                // 定时、网关、ssh）照活——同一进程里 `?` 会连晨报一起殉。
-                Err(e) => eprintln!("mother: iLink channel OFF ({e}) — mother continues"),
-            }
-        }
+        // iLink（微信）入站通道已随 #69 改形退役：频道体系整线搬进
+        // crates/channels（aginx-channels 包，ACP 桥走本机 gateway-local
+        // 口），母体不再持有通道管理器。
         Ok(mother)
     }
 

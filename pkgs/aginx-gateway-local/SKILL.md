@@ -1,13 +1,15 @@
 # aginx-gateway-local
 
 本机 ACP 口（#68 ②b）：真 aginx 的第二个实例——direct 模式只听
-`127.0.0.1:8686`，给频道桥（aginx-ilink）当「把文本交给某 agent，
+`127.0.0.1:8686`，给频道桥（aginx-channels）当「把文本交给某 agent，
 拿回文本」窄接口的对端。主 gateway（relay 腿）在 relay 模式下没有
 本地监听，这是它的本地脸。
 
 ## 形态
 
-- 面是壳脚本 `aginx-gateway-local`（flat bin 成员）：确保数据世界
+- 壳脚本 `aginx-gateway-local` 住包内 `files/bin/`（v0.1.2 起
+  pkg.toml exec 树形，/var/bin=symlink 面——flat bin 形状下安装器
+  静默丢 files/，缺省种子从未落盘，redfin 现抓）：确保数据世界
   `/var/lib/aginx/gateway-local` + `agents → ../gateway/agents`
   符号链在位、种子化 `/etc/aginx/gateway-local.toml`（包内
   `etc/gateway-local.toml` 是出厂缺省，/etc 已存在不覆写），然后
@@ -26,4 +28,4 @@
   <名>/aginx.toml` 建条目（主册），本口符号链即见。
 - 改端口/访问面：改 `/etc/aginx/gateway-local.toml` 后
   `aginx-svc restart aginx-gateway-local`（频道桥侧同步改
-  `AGINX_ILINK_ACP_ADDR`）。
+  `AGINX_CHANNELS_ACP_ADDR`）。

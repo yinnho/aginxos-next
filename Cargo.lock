@@ -121,22 +121,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "aginx-ilink"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "carrier-ilink",
- "carrier-types",
- "qrcodegen",
- "serde",
- "serde_json",
- "tokio",
- "toml",
- "tracing",
- "tracing-subscriber",
-]
-
-[[package]]
 name = "aginx-img"
 version = "0.1.0"
 dependencies = [
@@ -238,7 +222,6 @@ dependencies = [
  "agi",
  "agio",
  "anyhow",
- "carrier-ilink",
  "carrier-kernel",
  "carrier-memory",
  "carrier-runtime",
@@ -804,7 +787,6 @@ dependencies = [
  "base64 0.22.1",
  "carrier-clone",
  "carrier-gateway",
- "carrier-ilink",
  "carrier-kernel",
  "carrier-memory",
  "carrier-runtime",
@@ -864,33 +846,6 @@ dependencies = [
  "toml",
  "tracing",
  "webpki-roots 1.0.9",
-]
-
-[[package]]
-name = "carrier-ilink"
-version = "0.1.0"
-dependencies = [
- "aes",
- "base64 0.22.1",
- "carrier-types",
- "cbc",
- "dashmap",
- "hex",
- "hmac",
- "md-5",
- "rand 0.8.8",
- "reqwest",
- "roxmltree",
- "serde",
- "serde_json",
- "sha1",
- "sha2",
- "tokio",
- "toml",
- "tracing",
- "urlencoding",
- "uuid",
- "zeroize",
 ]
 
 [[package]]
@@ -1093,6 +1048,36 @@ dependencies = [
  "cfg-if",
  "cpufeatures 0.3.1",
  "rand_core 0.10.1",
+]
+
+[[package]]
+name = "channels"
+version = "0.1.0"
+dependencies = [
+ "aes",
+ "anyhow",
+ "base64 0.22.1",
+ "cbc",
+ "dashmap",
+ "hex",
+ "hmac",
+ "md-5",
+ "qrcodegen",
+ "rand 0.8.8",
+ "reqwest",
+ "roxmltree",
+ "serde",
+ "serde_json",
+ "sha1",
+ "sha2",
+ "thiserror 2.0.20",
+ "tokio",
+ "toml",
+ "tracing",
+ "tracing-subscriber",
+ "urlencoding",
+ "uuid",
+ "zeroize",
 ]
 
 [[package]]

@@ -1,8 +1,8 @@
-//! 组装接线：kernel boot + iLink 通道。
+//! 组装接线：kernel boot + webhook 通道。
 //!
-//! 从 opencarrier `api::server::run_daemon` 的通道段抽取的 iLink 子集，
 //! `aginx-carrier start`（守护形态）使用。webui 已退役（2026-08-30
 //! AginxOS 融合）；一次性 CLI（agent 子命令）走裸 boot 不进这里。
+//! weixin 通道已随 #69 改形退役——频道体系整线住 crates/channels。
 
 use std::sync::Arc;
 
@@ -20,9 +20,9 @@ pub fn boot_kernel() -> anyhow::Result<Arc<CarrierKernel>> {
     Ok(kernel)
 }
 
-/// Wire up the iLink channel（opencarrier run_daemon 通道段的 iLink 子集）：
-/// sender router、cron 投递/通知存储、iLink watcher、微信工具、
-/// weixin_sessions DB 持久化回调、出站 send/deliver/probe 与工具分发器注入。
+/// Wire up the channels（opencarrier run_daemon 通道段的 webhook 子集）：
+/// sender router、cron 投递/通知存储、webhook 注册、出站 send/deliver/probe
+/// 与工具分发器注入。
 ///
 /// 调用方负责 `cm.start().await`（start 守护形态与桌面形态时机一致，
 /// 但保持显式以便宿主插自己的启动钩子）。
@@ -44,87 +44,6 @@ pub async fn boot_channels(kernel: &Arc<CarrierKernel>) -> anyhow::Result<Channe
     {
         let store = Arc::new(kernel.memory.notify_store().clone());
         cm.set_notify_store(store);
-    }
-
-    cm.register("weixin", Box::new(carrier_ilink::SessionWatcher::new()));
-
-    // 微信 iLink 工具（扫码登录/发消息/发图/发视频/状态）进工具分发器。
-    {
-        let dispatcher = cm.tool_dispatcher();
-        let mut builtin = carrier_runtime::plugin::BuiltinPlugin::new(
-            "weixin".to_string(),
-            "1.0.0".to_string(),
-            std::path::PathBuf::new(),
-        );
-        builtin.register_tool(Box::new(carrier_ilink::WeixinQrLoginTool));
-        builtin.register_tool(Box::new(carrier_ilink::WeixinSendMessageTool));
-        builtin.register_tool(Box::new(carrier_ilink::WeixinSendImageTool));
-        builtin.register_tool(Box::new(carrier_ilink::WeixinSendVideoTool));
-        builtin.register_tool(Box::new(carrier_ilink::WeixinStatusTool));
-        dispatcher.register(Arc::new(builtin));
-    }
-
-    // weixin_sessions DB 持久化回调——必须在 cm.start() **之前**装：iLink
-    // watcher 的 start() 走 load_from_dir，回调没装就永远读 JSON 旁路、
-    // 无视 DB 表（opencarrier 踩过：装晚了的 boot 全走 JSON）。
-    {
-        let store = kernel.memory.weixin_store().clone();
-        let persist_fn: carrier_ilink::token::SessionPersistFn = Arc::new(move |tf| {
-            let row = carrier_memory::weixin_store::WeixinSessionRow {
-                channel: tf.channel.clone(),
-                sender_key: tf.sender_key.clone(),
-                bot_id: tf.bot_id.clone(),
-                bot_token: tf.bot_token.clone(),
-                baseurl: tf.baseurl.clone(),
-                ilink_bot_id: tf.ilink_bot_id.clone(),
-                user_id: tf.user_id.clone(),
-                expires_at: tf.expires_at,
-                bind_agent: tf.bind_agent.clone(),
-                context_tokens: serde_json::to_string(&tf.context_tokens).unwrap_or_default(),
-            };
-            if let Err(e) = store.upsert(&row) {
-                tracing::warn!("Failed to persist weixin session to DB: {e}");
-            }
-        });
-        let store2 = kernel.memory.weixin_store().clone();
-        let load_fn: carrier_ilink::token::SessionsLoadFn =
-            Arc::new(move || match store2.load_all() {
-                Ok(rows) => rows
-                    .into_iter()
-                    .map(weixin_row_to_token_file)
-                    .collect::<Vec<_>>(),
-                Err(e) => {
-                    tracing::warn!("Failed to load weixin sessions from DB: {e}");
-                    Vec::new()
-                }
-            });
-        carrier_ilink::token::WEIXIN_STATE.set_persist_fns(persist_fn, load_fn);
-
-        // 绑定即路由：会话加载（DB/磁盘）与扫码注册都会带上 bind_agent
-        // 调 seeder——路由与绑定永远同源，不存在第二个路由真源可劈叉。
-        // UUID 形态的 bind_agent（opencarrier 遗留）解析成分身名。
-        {
-            let router = sender_router.clone();
-            let kernel_ref = kernel.clone();
-            let seed_fn: carrier_ilink::token::RouteSeedFn = Arc::new(
-                move |user_id: &str, agent: &str| {
-                    let agent_ref =
-                        if let Ok(id) = agent.parse::<carrier_types::agent::AgentId>() {
-                            kernel_ref
-                                .registry
-                                .get(id)
-                                .map(|e| e.manifest.name.clone())
-                                .unwrap_or_else(|| agent.to_string())
-                        } else {
-                            agent.to_string()
-                        };
-                    router.set_route(user_id, &agent_ref);
-                    tracing::info!(user = user_id, agent = %agent_ref, "Seeded route from weixin binding");
-                },
-            );
-            carrier_ilink::token::WEIXIN_STATE.set_route_seeder(seed_fn);
-        }
-        info!("WeixinState DB persistence callbacks installed");
     }
 
     cm.start().await;
@@ -236,26 +155,5 @@ pub async fn seed_system_agent(kernel: &Arc<CarrierKernel>) {
             carrier_kernel::gateway_registry::ensure_system_entry(&kernel.config);
         }
         Err(e) => tracing::warn!(error = ?e, "system 种子失败（不影响启动，重启重试）"),
-    }
-}
-
-/// WeixinSessionRow（DB 行）→ BotTokenFile（通道会话形状）。
-/// DB 加载回调与 `aginx-carrier notify` 一次性进程共用——两份手抄必漂移。
-pub fn weixin_row_to_token_file(
-    r: carrier_memory::weixin_store::WeixinSessionRow,
-) -> carrier_ilink::models::BotTokenFile {
-    let ctx: std::collections::HashMap<String, String> =
-        serde_json::from_str(&r.context_tokens).unwrap_or_default();
-    carrier_ilink::models::BotTokenFile {
-        channel: r.channel,
-        sender_key: r.sender_key,
-        bot_id: r.bot_id,
-        bot_token: r.bot_token,
-        baseurl: r.baseurl,
-        ilink_bot_id: r.ilink_bot_id,
-        user_id: r.user_id,
-        expires_at: r.expires_at,
-        bind_agent: r.bind_agent,
-        context_tokens: ctx,
     }
 }

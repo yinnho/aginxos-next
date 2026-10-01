@@ -1,6 +1,10 @@
-//! weixin 频道守护：入站轮询（SessionWatcher）→ 路由 → ACP → 回信。
+//! 频道守护：`/home/channels/*/` 扫目录起频道腿，入站 → 路由 → ACP → 回信。
 //!
-//! 启动序（顺序有讲究）：
+//! 文件夹即注册表（DESIGN.md §四）：每个目录一个频道，channel.toml 的
+//! `type` 指认协议腿（词表现只有 weixin；新腿=新模块，不是新 crate）。
+//! 不认识的 type 告警跳过——坏一个频道不殉别的频道。
+//!
+//! weixin 腿启动序（顺序有讲究）：
 //! 1. 旧世界一次性迁移：`workflows/*/senders/*/session.json` 与家根
 //!    `senders/*/session.json`（刀5 形状）里的 weixin 会话搬进频道家
 //!    `channels/weixin/senders/<uid>/`——必须在 `set_sessions_root` 之前
@@ -16,13 +20,11 @@
 //! 消息自动开新线程（agent 不一致即弃旧 sessionId）。
 
 use crate::acp::AcpClient;
-use crate::config::{channel_root, ChannelConfig};
+use crate::config::{channels_root, ChannelConfig};
+use crate::vocab::{home_dir, Channel, PluginContent, PluginMessage};
 use anyhow::Result;
-use carrier_ilink::channel::SessionWatcher;
-use carrier_types::channel::Channel;
-use carrier_types::plugin::{PluginContent, PluginMessage};
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use tracing::{error, info, warn};
 
@@ -34,33 +36,124 @@ struct GwState {
     session_id: Option<String>,
 }
 
+/// 扫出来的一个频道（目录名 + 根 + 配置）。
+struct ChannelEntry {
+    name: String,
+    root: PathBuf,
+    config: ChannelConfig,
+}
+
 pub fn run() -> Result<()> {
-    let root = channel_root();
+    // 日志：svcd 收 stderr——没装 subscriber 时 tracing 全静默（v0.1.0
+    // 首装实抓：守护活着、日志零字节、桥黑箱）。默认 info，
+    // RUST_LOG 可盖。
+    let filter = std::env::var("RUST_LOG").unwrap_or_else(|_| "info".to_string());
+    tracing_subscriber::fmt()
+        .with_env_filter(tracing_subscriber::EnvFilter::new(filter))
+        .with_target(true)
+        .init();
+
+    let root = channels_root();
     std::fs::create_dir_all(&root)?;
-    ChannelConfig::seed_default_file(&root);
+    let channels = scan_channels(&root);
+    if channels.is_empty() {
+        info!(
+            root = %root.display(),
+            "no channels installed — daemon idles (aginx-channels login <名> 起号)"
+        );
+    }
+
+    let mut handles = Vec::new();
+    for ch in channels {
+        match ch.config.channel_type.as_str() {
+            "weixin" => {
+                let name = ch.name.clone();
+                let handle = std::thread::Builder::new()
+                    .name(format!("channel-weixin-{name}"))
+                    .spawn(move || weixin_channel_main(ch))
+                    .map_err(|e| anyhow::anyhow!("spawn weixin channel thread: {e}"))?;
+                handles.push(handle);
+            }
+            other => warn!(
+                channel = %ch.name,
+                r#type = %other,
+                "unknown channel type — no leg in this build, skipping"
+            ),
+        }
+    }
+
+    for h in handles {
+        let _ = h.join();
+    }
+    Ok(())
+}
+
+/// 扫 `/home/channels/*/`：每个含 channel.toml（或空目录——播种后即频道）
+/// 的目录是一个频道候选。
+fn scan_channels(root: &Path) -> Vec<ChannelEntry> {
+    let mut out = Vec::new();
+    let Ok(rd) = std::fs::read_dir(root) else {
+        return out;
+    };
+    for entry in rd.flatten() {
+        if !entry.path().is_dir() {
+            continue;
+        }
+        let name = entry.file_name().to_string_lossy().to_string();
+        if name.starts_with('.') {
+            continue;
+        }
+        let root = entry.path();
+        let config = ChannelConfig::load(&root);
+        out.push(ChannelEntry { name, root, config });
+    }
+    out
+}
+
+/// weixin 频道腿主线（每频道一线程）。
+fn weixin_channel_main(ch: ChannelEntry) {
+    let root = ch.root;
+    let name = ch.name;
+    ChannelConfig::seed_default_file(&root, &name);
 
     let migrated = migrate_legacy_sessions(&root);
     if migrated > 0 {
         info!(count = migrated, root = %root.display(), "migrated legacy weixin sessions into the channel home");
     }
 
-    // 从这里起，本进程的会话世界=频道布局（绑定=字段）。
-    carrier_ilink::token::set_sessions_root(&root);
-    let config = ChannelConfig::load(&root);
-    info!(root = %root.display(), channel = %config.channel_type, default_agent = %config.default_agent, "aginx-ilink daemon starting");
+    // 从这里起，本进程的会话世界=频道布局（绑定=字段）。OnceLock 一次
+    // 定型：出现第二个 weixin 目录是配置错误，如实告警不硬吃。
+    crate::weixin::token::set_sessions_root(&root);
+    let config = ch.config;
+    info!(
+        channel = %name,
+        channel_type = "weixin",
+        default_agent = %config.default_agent,
+        root = %root.display(),
+        "weixin channel online (SessionWatcher + ACP bridge)"
+    );
 
     // Channel trait 的入站口是 tokio mpsc（channel.rs 线权）；桥线程从
     // async 上下文收，转发进 std 世界的处理线程（ACP 是阻塞 IO）。
-    let rt = tokio::runtime::Builder::new_multi_thread()
+    let rt = match tokio::runtime::Builder::new_multi_thread()
         .worker_threads(1)
         .enable_all()
-        .build()?;
-    rt.block_on(async move { bridge_loop(root, config).await })
+        .build()
+    {
+        Ok(rt) => rt,
+        Err(e) => {
+            error!(channel = %name, error = %e, "weixin channel runtime build failed");
+            return;
+        }
+    };
+    if let Err(e) = rt.block_on(bridge_loop(root, config)) {
+        error!(channel = %name, error = %e, "weixin channel bridge exited with error");
+    }
 }
 
-async fn bridge_loop(root: std::path::PathBuf, config: ChannelConfig) -> Result<()> {
+async fn bridge_loop(root: PathBuf, config: ChannelConfig) -> Result<()> {
     let (tx, mut rx) = tokio::sync::mpsc::channel::<PluginMessage>(1024);
-    let mut watcher = SessionWatcher::new();
+    let mut watcher = crate::weixin::SessionWatcher::new();
     if let Err(e) = watcher.start(tx) {
         anyhow::bail!("weixin SessionWatcher failed to start: {e}");
     }
@@ -86,7 +179,7 @@ async fn bridge_loop(root: std::path::PathBuf, config: ChannelConfig) -> Result<
         let root = root.clone();
         let sender_id = msg.sender_id.clone();
         std::thread::Builder::new()
-            .name(format!("ilink-bridge-{sender_id}"))
+            .name(format!("ch-bridge-{sender_id}"))
             .spawn(move || {
                 let _guard = lock.lock().unwrap();
                 if let Err(e) = bridge_one(&root, &cfg, &acp, msg) {
@@ -100,7 +193,7 @@ async fn bridge_loop(root: std::path::PathBuf, config: ChannelConfig) -> Result<
 
 /// 单条入站消息的完整回合（调用方已持有该发信人的串行锁）。
 fn bridge_one(
-    root: &std::path::Path,
+    root: &Path,
     config: &ChannelConfig,
     acp: &AcpClient,
     msg: PluginMessage,
@@ -117,7 +210,7 @@ fn bridge_one(
     };
 
     // 路由：账号 bind_agent 字段 → channel.toml default_agent。
-    let account_bind = carrier_ilink::token::WEIXIN_STATE
+    let account_bind = crate::weixin::token::WEIXIN_STATE
         .bots
         .iter()
         .find(|e| e.value().bot_id == msg.bot_id)
@@ -153,24 +246,24 @@ fn bridge_one(
         info!(sender = %msg.sender_id, "engine reply empty — nothing to send");
         return Ok(());
     }
-    let watcher = SessionWatcher::new();
+    let watcher = crate::weixin::SessionWatcher::new();
     watcher
         .send(&msg.bot_id, &msg.sender_id, &reply)
         .map_err(|e| anyhow::anyhow!("weixin send failed: {e}"))
 }
 
-fn gw_json_path(root: &std::path::Path, sender: &str) -> PathBuf {
+fn gw_json_path(root: &Path, sender: &str) -> PathBuf {
     root.join("senders").join(sender).join("gw.json")
 }
 
-fn read_gw(path: &std::path::Path) -> GwState {
+fn read_gw(path: &Path) -> GwState {
     std::fs::read_to_string(path)
         .ok()
         .and_then(|s| serde_json::from_str(&s).ok())
         .unwrap_or_default()
 }
 
-fn write_gw(path: &std::path::Path, gw: &GwState) {
+fn write_gw(path: &Path, gw: &GwState) {
     if let Some(parent) = path.parent() {
         let _ = std::fs::create_dir_all(parent);
     }
@@ -182,13 +275,13 @@ fn write_gw(path: &std::path::Path, gw: &GwState) {
     }
 }
 
-/// 一次性旧世界迁移（daemon 每次启动跑，幂等：目标在=只清源）。
+/// 一次性旧世界迁移（weixin 腿每次启动跑，幂等：目标在=只清源）。
 /// 扫两处 legacy 布局：`workflows/*/senders/*/session.json`（分身轴）
 /// 与 `senders/*/session.json`（家根，刀5 v0.1.12 搬家后的落点）。
 /// 绑定语义随迁翻转：legacy 目录=真源 → 频道字段=真源（迁移时把
 /// 目录名写进 bind_agent 字段，文件自带绑定）。
-fn migrate_legacy_sessions(root: &std::path::Path) -> usize {
-    let home = carrier_types::config::home_dir();
+fn migrate_legacy_sessions(root: &Path) -> usize {
+    let home = home_dir();
     let mut moved = 0;
 
     // (path, dir_asserted_agent) 收集
@@ -217,7 +310,7 @@ fn migrate_legacy_sessions(root: &std::path::Path) -> usize {
 
     for (path, dir_agent) in legacy {
         let Ok(content) = std::fs::read_to_string(&path) else { continue };
-        let Ok(mut tf) = serde_json::from_str::<carrier_ilink::models::BotTokenFile>(&content)
+        let Ok(mut tf) = serde_json::from_str::<crate::weixin::models::BotTokenFile>(&content)
         else {
             continue;
         };
