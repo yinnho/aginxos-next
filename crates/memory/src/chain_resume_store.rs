@@ -9,7 +9,7 @@
 //!
 //! Mirrors `AutomationRuleStore` (`automation_store.rs`): an
 //! `Arc<Mutex<Connection>>` plus sync rusqlite bodies. Daemon code calls
-//! these synchronously (same precedent as `cron_delivery().purge_expired()`).
+//! these synchronously (daemon-side sync store access).
 
 use std::sync::{Arc, Mutex};
 

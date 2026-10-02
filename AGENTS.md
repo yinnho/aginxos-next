@@ -165,11 +165,10 @@ still binding for engine work:
   keep-up obligation, no cherry-pick duty.
 - **Crate naming**: `carrier-*`; the daemon bin is `aginx-carrier`.
   User-facing copy says 「助理/化身」; internal code keeps `clone`.
-- **Inbound channels**: webhook only (machine→agent, `daemon start`
-  only, default off, not on mobile). iLink/weixin left the engine with
-  the #69 reshape — it lives in `crates/channels` as the first channel
-  leg, bridging to the gateway roster over ACP. The webui / `web`
-  subcommand is retired.
+- **Inbound channels**: none in the engine (the webhook crate and the
+  `daemon start` form retired with the #68 knives) — the channel face
+  lives whole in `crates/channels` (weixin = first leg, bridging to the
+  gateway roster over ACP). The webui / `web` subcommand is retired.
 - **Gotchas inherited from the port**: config struct fields need a
   matching `Default` impl in the same change; `AgentLoopResult`'s field
   is `.response`, not `.response_text`; a flow's frontmatter
@@ -213,7 +212,7 @@ dropbear sftp subsystem is a Go static (`tools/sftp-server` +
 | `crates/done` | `aginx-done` — provision done-marker discipline |
 | `crates/secret` | `aginx-secretd`/`aginx-secret` — the secret sidecar + its admin face |
 | `pkgs/aginx-gateway` | the outward-facing daemon package (v0.2.0 re-cored 2026-09-27): carries the real ecosystem `aginx` (~/Documents/aginx, independent project — this repo only builds/packages/configures it). The old replica `crates/gateway` is deleted (#412); package name kept for opt-in continuity |
-| `crates/{carrier,types,memory,clone,dup,carrier-gateway,lifecycle,kernel,webhook,web,agf,agmem}` | the mother engine (ex-`aginx-carrier`, merged 2026-09-24): kernel spawns/turns/sessions, runtime = agent loop + tools, clone = assistant format + install chain + dup VCS, memory/agmem = the memory tree, webhook = inbound channel, `carrier-gateway` = agent:// client + contacts ledger (NOT the remote-channel daemon above). The weixin lib lived here once (`carrier-ilink`) — #69 moved it whole into `crates/channels` and cut the engine's weixin wiring |
+| `crates/{carrier,types,memory,clone,dup,carrier-gateway,lifecycle,kernel,agf,agmem}` | the mother engine (ex-`aginx-carrier`, merged 2026-09-24): kernel spawns/turns/sessions, runtime = agent loop + tools, clone = assistant format + install chain + dup VCS, memory/agmem = the memory tree, `carrier-gateway` = agent:// client + contacts ledger (NOT the remote-channel daemon above). The channel layer left the engine with the #68/#69 knives — webhook/plugin tree dead code deleted, weixin whole in `crates/channels`, the kernel keeps zero channel plumbing (cron delivery = none/webhook/home-card only) |
 | `crates/testkit` | test helpers |
 | `rootfs/` | the image recipe — see `rootfs/README.md` (placement matrix, asset split) |
 | `devices/` | per-machine data, one dir per codename: `device.toml`, `modules.txt`, `bringup/`, `boot/` (pack line), `cam/` — add-a-machine checklist in `devices/README.md` |

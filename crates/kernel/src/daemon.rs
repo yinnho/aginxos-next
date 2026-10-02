@@ -11,7 +11,6 @@ use carrier_types::event::*;
 use carrier_types::scheduler::CronJob;
 
 use crate::kernel::CarrierKernel;
-use carrier_runtime::kernel_handle::KernelHandle;
 
 // ── Cron delivery helper ───────────────────────────────────
 
@@ -148,7 +147,6 @@ pub(super) async fn cron_fire_job(kernel: &Arc<CarrierKernel>, job: CronJob) -> 
             // tighter/looser bound set `timeout_secs` explicitly via cron_create.
             let timeout_s = timeout_secs.unwrap_or(kernel.config.agent_turn_timeout_secs);
             let delivery = job.delivery.clone();
-            let owner_id = job.owner_id.clone();
             // Generate task_id: {job_name slug}-{YYYYMMDD}. The name is slugified
             // because task_id is used as an identity/dedup key and interpolated
             // into the agent's output-path template (`output/{tid}/`); raw name
@@ -166,8 +164,8 @@ pub(super) async fn cron_fire_job(kernel: &Arc<CarrierKernel>, job: CronJob) -> 
             // Chained-pipeline session isolation (CronAction::AgentTurn
             // `session_label`): pipeline steps run in their own session so
             // user chat mid-chain can't pollute them. sender_id is still
-            // passed through — it drives the workspace sender paths and
-            // delivery routing, only the session identity is overridden.
+            // passed through — it drives the workspace sender paths; only the
+            // session identity is overridden.
             let turn_fut = kernel.send_message_with_handle_and_blocks(
                 agent_id,
                 message,
@@ -217,17 +215,19 @@ pub(super) async fn cron_fire_job(kernel: &Arc<CarrierKernel>, job: CronJob) -> 
                         // the diagnostic admins push below.
                         kernel.maybe_resume_chain(&job, job_id, "degenerate").await;
                         let agent_name = outbound_agent_key(kernel, agent_id);
-                        let content = carrier_types::content::ContentDescriptor {
-                            text: Some(format!(
+                        // admins 推送链已随 #68 刀4b 拆除——告警降级落 system
+                        // 家根卡片（可见性不断线）。
+                        let _ = write_home_card(
+                            &kernel.config.home_dir,
+                            carrier_types::config::SYSTEM_AGENT,
+                            "任务告警",
+                            "reply",
+                            &format!(
                                 "⚠️ 定时任务「{job_name}」（{agent_name}）空转失败：\
                                  turn 结束但无实质产出——模型空响应或降智，未执行任何工具。\
                                  若这是链式流水线的一步，链条可能已断，请检查。"
-                            )),
-                            ..Default::default()
-                        };
-                        let _ = kernel
-                            .do_push_message("admins", &content, &agent_id.to_string(), "")
-                            .await;
+                            ),
+                        );
                         return Ok(());
                     }
                     // Broken-chain detection (Plan A): a NON-tail chained step
@@ -273,8 +273,6 @@ pub(super) async fn cron_fire_job(kernel: &Arc<CarrierKernel>, job: CronJob) -> 
                     match cron_deliver_response(
                         kernel,
                         agent_id,
-                        owner_id.as_deref(),
-                        job.sender_id.as_deref(),
                         &result.response,
                         &delivery,
                     )
@@ -316,8 +314,6 @@ pub(super) async fn cron_fire_job(kernel: &Arc<CarrierKernel>, job: CronJob) -> 
                     if let Err(de) = cron_deliver_response(
                         kernel,
                         agent_id,
-                        owner_id.as_deref(),
-                        job.sender_id.as_deref(),
                         &notice,
                         &delivery,
                     )
@@ -342,8 +338,6 @@ pub(super) async fn cron_fire_job(kernel: &Arc<CarrierKernel>, job: CronJob) -> 
                     if let Err(de) = cron_deliver_response(
                         kernel,
                         agent_id,
-                        owner_id.as_deref(),
-                        job.sender_id.as_deref(),
                         &notice,
                         &delivery,
                     )
@@ -356,90 +350,14 @@ pub(super) async fn cron_fire_job(kernel: &Arc<CarrierKernel>, job: CronJob) -> 
                 }
             }
         }
-        // Scheduled fixed-content push (automation Phase 2): no LLM, no
-        // session — the payload is the same ContentDescriptor shape as an
-        // automation rule's task_payload, delivered via the same
-        // do_push_message path (sender_channels routing + admins fan-out).
-        carrier_types::scheduler::CronAction::Push {
-            channel,
-            bot_id,
-            payload,
-            target,
-        } => {
-            tracing::info!(job = %job_name, target = %target, channel = %channel,
-                "Cron: firing scheduled push (no LLM)");
-            let content = match serde_json::from_value::<carrier_types::content::ContentDescriptor>(
-                payload.clone(),
-            ) {
-                Ok(c) => c,
-                Err(e) => {
-                    // validate_action rejects this shape at creation — a bad
-                    // payload here means the job predates a schema drift.
-                    let msg = format!("push payload is not ContentDescriptor-shaped: {e}");
-                    kernel.cron_scheduler.record_failure(job_id, &msg);
-                    return Err(msg);
-                }
-            };
-            // Audience: "followers" expands to the pushable subset (the OA
-            // customer-service API only delivers within 48h of the user's last
-            // message — 44h leaves margin); everything else ("admins", a raw
-            // openid) goes to do_push_message as-is.
-            let recipients: Vec<String> = if target == "followers" {
-                let since = (chrono::Utc::now() - chrono::Duration::hours(44)).to_rfc3339();
-                match kernel.follower_list_pushable(channel, bot_id, &since).await {
-                    Ok(list) => list,
-                    Err(e) => {
-                        let msg = format!("follower audience lookup failed: {e}");
-                        kernel.cron_scheduler.record_failure(job_id, &msg);
-                        return Err(msg);
-                    }
-                }
-            } else {
-                vec![target.clone()]
-            };
-            if recipients.is_empty() {
-                let msg = "push to 'followers': no pushable followers in the 48h window";
-                kernel.cron_scheduler.record_failure(job_id, msg);
-                return Err(msg.to_string());
-            }
-            let mut delivered = 0usize;
-            let mut failed = 0usize;
-            for user in &recipients {
-                match kernel
-                    .do_push_message(user, &content, &agent_id.to_string(), bot_id)
-                    .await
-                {
-                    Ok(()) => delivered += 1,
-                    Err(e) => {
-                        failed += 1;
-                        tracing::warn!(job = %job_name, target_user = %user, error = %e,
-                            "Cron push delivery failed");
-                    }
-                }
-            }
-            if delivered == 0 {
-                let msg = format!(
-                    "push to '{target}': all {} deliveries failed",
-                    recipients.len()
-                );
-                kernel.cron_scheduler.record_failure(job_id, &msg);
-                return Err(msg);
-            }
-            tracing::info!(job = %job_name, delivered, failed,
-                "Cron push complete");
-            if failed > 0 {
-                tracing::warn!(job = %job_name, failed, total = recipients.len(),
-                    "Cron push partially delivered (cold followers outside the 48h \
-                     window are skipped by the sender_channels gate)");
-            }
-            kernel.cron_scheduler.record_success(job_id);
-            Ok(())
-        }
-        // weixin-oa FollowerReport/PublishPoll/CommentPull arms stripped (aginx-carrier: iLink-only scope).
-        carrier_types::scheduler::CronAction::FollowerReport { .. }
+        // weixin-oa Push/FollowerReport/PublishPoll/CommentPull arms retired
+        // (#68 刀4b: 频道推送链已拆——引擎不认识频道，old job rows fire and
+        // fail visibly instead of breaking the store load).
+        carrier_types::scheduler::CronAction::Push { .. }
+        | carrier_types::scheduler::CronAction::FollowerReport { .. }
         | carrier_types::scheduler::CronAction::PublishPoll { .. }
         | carrier_types::scheduler::CronAction::CommentPull { .. } => {
-            let msg = "weixin-oa cron actions not supported in aginx-carrier (iLink-only)".to_string();
+            let msg = "channel-push cron actions retired (#68 刀4b) — 频道体系住 crates/channels".to_string();
             kernel.cron_scheduler.record_failure(job_id, &msg);
             Err(msg)
         }
@@ -449,15 +367,14 @@ pub(super) async fn cron_fire_job(kernel: &Arc<CarrierKernel>, job: CronJob) -> 
 /// Deliver a cron job's agent response to the configured delivery target.
 ///
 /// - `None`: silent — no notification sent
-/// - `LastChannel`: route to the channel the sender (owner_id) most recently
-///   used. Buffered for later delivery if the channel doesn't support
-///   proactive push or if the send attempt fails.
 /// - `Webhook`: HTTP POST to the configured URL.
+/// - `Card`: envelope into the home card dir (显示线).
+///
+/// The channel legs (LastChannel / admins push) died with #68 刀4b — channels
+/// live in crates/channels.
 pub(super) async fn cron_deliver_response(
     kernel: &Arc<CarrierKernel>,
     agent_id: AgentId,
-    owner_id: Option<&str>,
-    sender_id: Option<&str>,
     response: &str,
     delivery: &carrier_types::scheduler::CronDelivery,
 ) -> CarrierResult<()> {
@@ -468,82 +385,17 @@ pub(super) async fn cron_deliver_response(
         return Ok(());
     }
 
-    // Same outbound pipeline as the interactive bridge (DELIVER + no-reply
-    // suppress). Cron intentionally skips NOTIFY and WeChat sanitize.
-    //
-    // Use agent **name** (not UUID) for workspace/content paths — see
-    // [`outbound_agent_key`].
-    let sender_id = sender_id.or(owner_id).unwrap_or("");
-    let (pchannel, pbot, psend_fn) = cron_publish_followup_target(kernel, sender_id);
-    let deliver_fn = kernel
-        .channel_deliver_fn
-        .read()
-        .ok()
-        .and_then(|g| g.clone());
-    let agent_name = outbound_agent_key(kernel, agent_id);
-    let content = kernel.resolve_agent_workspace(&agent_name).and_then(|ws| {
-        carrier_runtime::outbound::ContentRegistry::global().load(&agent_name, std::path::Path::new(&ws))
-    });
-    let kh: std::sync::Arc<dyn carrier_runtime::kernel_handle::KernelHandle> = kernel.clone();
-    let out = carrier_runtime::outbound::prepare_outbound(
-        response,
-        carrier_runtime::outbound::OutboundCtx {
-            kernel: Some(kh),
-            send_fn: psend_fn,
-            deliver_fn,
-            content: content.as_deref(),
-            channel_type: &pchannel,
-            bot_id: &pbot,
-            sender_id,
-            process_notify: false,
-            notify_routes: None,
-            admin_sender_ids: &[],
-            sanitize_wechat: false,
-        },
-    )
-    .await;
+    // Outbound cleanup only (strip [DELIVER] markers + no-reply suppress) —
+    // the channel push legs died with #68 刀4b (channels live in crates/channels).
+    let out = carrier_runtime::outbound::prepare_outbound(response).await;
     if out.suppress_text_send {
         return Ok(());
     }
     let response = out.cleaned_text.as_str();
+    let agent_name = outbound_agent_key(kernel, agent_id);
 
     match delivery {
         CronDelivery::None => Ok(()),
-        CronDelivery::LastChannel => match owner_id {
-            Some(sender_id) => deliver_via_last_channel(kernel, agent_id, sender_id, response).await,
-            // 无主 job（agent 自建、无 owner）：超时/失败通知不得静默——降级
-            // 落 system 家根卡片（reply 模板渲染纯文本 body）。09-28 晨报
-            // 超时事故：LastChannel 无 owner 直接报错丢弃，失败对主人全静默。
-            None => {
-                tracing::warn!(
-                    agent = %agent_id,
-                    "Cron LastChannel delivery has no owner_id — falling back to system home card"
-                );
-                deliver_ownerless_home_card(&kernel.config.home_dir, response)
-            }
-        },
-        CronDelivery::Admins => {
-            // Fan the cron result out to every admin in the agent's workspace
-            // (admins.json) via the same privileged path the automation webhook
-            // uses. This is delivery, not an agent tool call, so it bypasses the
-            // `message_push` tool's Dangerous classification and its ephemeral
-            // wechat_identity admin gate — both of which would block a scheduled
-            // (async) turn. `do_push_message("admins")` resolves the workspace
-            // via registry (id-or-name), routes each admin through sender_channels
-            // (prefix fallback), and delivers; ≥1 success returns Ok.
-            let content = carrier_types::content::ContentDescriptor {
-                text: Some(response.to_string()),
-                ..Default::default()
-            };
-            // `pbot` comes from the job sender's last-channel history and is
-            // EMPTY for senderless jobs (no owner_id/sender_id) — downstream
-            // push routing (sender_channels 优先 + prefix 兜底) handles the
-            // empty bot case. (OpenCarrier's weixin-oa binding fallback was
-            // stripped: aginx-carrier is iLink-only.)
-            kernel
-                .do_push_message("admins", &content, &agent_id.to_string(), &pbot)
-                .await
-        }
         CronDelivery::Webhook { url } => {
             tracing::debug!(url = %url, "Cron: delivering via webhook");
             carrier_types::ssrf::check_ssrf(url)?;
@@ -577,17 +429,6 @@ pub(super) async fn cron_deliver_response(
 /// fire 白跑。tmp+rename 原子写（tmp 名带前导点，term 扫目录跳过点文件
 /// 就不会读到半截）。文件名 `{本地时间戳}-{slugify(title)}.json`，同
 /// 一毫秒同标题的极端碰撞=后写覆盖（同一张卡，��接受）。
-/// 无主 cron 交付的兜底：落 system 家根卡片（09-28 晨报超时静默事故）。
-fn deliver_ownerless_home_card(home: &std::path::Path, response: &str) -> CarrierResult<()> {
-    write_home_card(
-        home,
-        carrier_types::config::SYSTEM_AGENT,
-        "任务通知",
-        "reply",
-        response,
-    )
-}
-
 fn write_home_card(
     home: &std::path::Path,
     agent_name: &str,
@@ -703,135 +544,6 @@ fn is_stranded(
             .is_some_and(|t| t > now + chrono::Duration::days(365 * 50))
 }
 
-/// Best-effort channel target for the cron outbound pipeline.
-///
-/// Resolves the sender's last known `(channel_type, bot_id)` so DELIVER and
-/// the reply text land on the channel the user last talked to us on, plus the
-/// channel send fn. When there's no known channel the fields are empty but
-/// the pipeline still runs.
-fn cron_publish_followup_target(
-    kernel: &Arc<CarrierKernel>,
-    sender_id: &str,
-) -> (
-    String,
-    String,
-    Option<carrier_runtime::plugin::bridge::ChannelSendFn>,
-) {
-    let last = kernel
-        .memory
-        .cron_delivery()
-        .get_last_channel(sender_id)
-        .ok()
-        .flatten();
-    let send_fn = kernel.channel_send_fn.read().ok().and_then(|g| g.clone());
-    match last {
-        Some(c) => (c.channel_type, c.bot_id, send_fn),
-        None => (String::new(), String::new(), send_fn),
-    }
-}
-
-/// Deliver a notification to the sender's most recent channel. Attempts a
-/// proactive push first; on failure (or for channels that don't support push)
-/// the notification is buffered for delivery on the next inbound message.
-async fn deliver_via_last_channel(
-    kernel: &Arc<CarrierKernel>,
-    agent_id: AgentId,
-    sender_id: &str,
-    response: &str,
-) -> Result<(), CarrierError> {
-    let store = kernel.memory.cron_delivery();
-    let last = match store
-        .get_last_channel(sender_id)
-        .map_err(|e| CarrierError::Internal(format!("get_last_channel failed: {e}")))?
-    {
-        Some(c) => c,
-        None => {
-            // We've never seen this sender — buffer the notification so it
-            // delivers when they first send an inbound message.
-            store
-                .buffer_notification(
-                    sender_id,
-                    &agent_id.to_string(),
-                    response,
-                    "cron",
-                    carrier_memory::cron_delivery::DEFAULT_TTL_SECS,
-                )
-                .map_err(|e| CarrierError::Internal(format!("buffer notification failed: {e}")))?;
-            tracing::info!(sender = %sender_id, "Cron: buffered (no last channel)");
-            return Ok(());
-        }
-    };
-
-    // Check if the channel supports proactive push; if not, buffer directly.
-    let supports = kernel
-        .channel_supports_proactive_fn
-        .read()
-        .ok()
-        .and_then(|guard| guard.as_ref().map(|f| f(&last.channel_type)))
-        .unwrap_or(false);
-
-    if !supports {
-        store
-            .buffer_notification(
-                sender_id,
-                &agent_id.to_string(),
-                response,
-                "cron",
-                carrier_memory::cron_delivery::DEFAULT_TTL_SECS,
-            )
-            .map_err(|e| CarrierError::Internal(format!("buffer notification failed: {e}")))?;
-        tracing::info!(
-            sender = %sender_id,
-            channel = %last.channel_type,
-            "Cron: buffered (channel does not support proactive push)"
-        );
-        return Ok(());
-    }
-
-    // Try proactive push. If it fails, fall back to buffering.
-    let send_fn = kernel
-        .channel_send_fn
-        .read()
-        .ok()
-        .and_then(|guard| guard.clone());
-    let send_fn = match send_fn {
-        Some(f) => f,
-        None => {
-            return Err(CarrierError::Config(
-                "channel_send_fn not configured".into(),
-            ));
-        }
-    };
-
-    match send_fn(&last.channel_type, &last.bot_id, sender_id, response) {
-        Ok(()) => {
-            tracing::info!(
-                sender = %sender_id,
-                channel = %last.channel_type,
-                "Cron: delivered via last channel"
-            );
-            Ok(())
-        }
-        Err(e) => {
-            tracing::warn!(
-                sender = %sender_id,
-                channel = %last.channel_type,
-                error = %e,
-                "Cron: proactive send failed, buffering"
-            );
-            store
-                .buffer_notification(
-                    sender_id,
-                    &agent_id.to_string(),
-                    response,
-                    "cron",
-                    carrier_memory::cron_delivery::DEFAULT_TTL_SECS,
-                )
-                .map_err(|e| CarrierError::Internal(format!("buffer notification failed: {e}")))?;
-            Ok(())
-        }
-    }
-}
 
 // ── Background daemon methods ──────────────────────────────
 
@@ -939,8 +651,13 @@ impl CarrierKernel {
                 warn!("Cron persist after chain-resume circuit-break failed: {e}");
             }
             let agent_name = outbound_agent_key(self, job.agent_id);
-            let content = carrier_types::content::ContentDescriptor {
-                text: Some(format!(
+            // admins 推送链已拆（#68 刀4b）——熔断告警落 system 家根卡片。
+            if let Err(e) = write_home_card(
+                &self.config.home_dir,
+                carrier_types::config::SYSTEM_AGENT,
+                "任务告警",
+                "reply",
+                &format!(
                     "🧯 链自愈熔断：流水线「{chain_id}」第 {step}/{total} 步\
                      （{job_name}，{agent_name}）已自动接续 {attempts} 次仍未推进，停止重试。\
                      请人工检查该步失败原因，并参照该流水线的接续手法从断点重建。",
@@ -949,16 +666,11 @@ impl CarrierKernel {
                     total = chain.total_steps,
                     job_name = job.name,
                     agent_name = agent_name,
-                )),
-                ..Default::default()
-            };
-            if let Err(e) = self
-                .do_push_message("admins", &content, &job.agent_id.to_string(), "")
-                .await
-            {
+                ),
+            ) {
                 warn!(
                     chain_id = %chain.chain_id,
-                    "Chain-resume circuit-break alert delivery failed: {e}"
+                    "Chain-resume circuit-break alert card write failed: {e}"
                 );
             }
             return;
@@ -1463,14 +1175,6 @@ impl CarrierKernel {
                     if let Err(e) = kernel.cron_scheduler.persist() {
                         tracing::warn!("Cron persist failed: {e}");
                     }
-                    // Periodically purge expired pending notifications.
-                    match kernel.memory.cron_delivery().purge_expired() {
-                        Ok(0) => {}
-                        Ok(n) => {
-                            tracing::debug!(deleted = n, "Purged expired pending notifications")
-                        }
-                        Err(e) => tracing::warn!("Purge expired notifications failed: {e}"),
-                    }
                     // Abandoned cap-circuited chains must not accumulate.
                     let cutoff = (chrono::Utc::now() - chrono::Duration::days(30)).to_rfc3339();
                     match kernel.memory.chain_resume().purge_stale(&cutoff) {
@@ -1686,8 +1390,8 @@ impl CarrierKernel {
 #[cfg(test)]
 mod tests {
     use super::{
-        build_resume_job, cron_turn_degenerate, deliver_ownerless_home_card, is_stranded,
-        slugify, write_home_card, MAX_AUTO_RESUMES,
+        build_resume_job, cron_turn_degenerate, is_stranded, write_home_card,
+        slugify, MAX_AUTO_RESUMES,
     };
     use crate::registry::AgentRegistry;
     use chrono::Utc;
@@ -2009,15 +1713,17 @@ mod tests {
         let _ = std::fs::remove_dir_all(&home);
     }
 
-    /// 无主 LastChannel 交付兜底（09-28 晨报超时静默事故）：不报错丢弃，
-    /// 落 system 家根卡片——source=system、reply 模板、纯文本包 body。
+    /// 家根卡片兜底（09-28 晨报超时静默事故的现行形态，#68 刀4b）：
+    /// 旧 last_channel/admins 投递行降级为 Card{任务通知, reply}——
+    /// source=system、reply 模板、纯文本包 body。
     #[test]
-    fn ownerless_last_channel_falls_back_to_system_home_card() {
+    fn degraded_channel_delivery_lands_system_home_card() {
         let home = std::env::temp_dir().join(format!("carrier-kernel-ownerless-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&home);
 
-        deliver_ownerless_home_card(&home, "⚠️ 定时任务「每日晨报」执行超时（300秒未完成）")
-            .expect("ownerless delivery must not error");
+        write_home_card(&home, carrier_types::config::SYSTEM_AGENT, "任务通知", "reply",
+            "⚠️ 定时任务「每日晨报」执行超时（300秒未完成）")
+            .expect("home card write must not error");
 
         let files: Vec<String> = std::fs::read_dir(home.join("cards"))
             .unwrap()

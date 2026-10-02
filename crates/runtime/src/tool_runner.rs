@@ -75,21 +75,21 @@ pub async fn execute_tool(
 ) -> ToolResult {
     // Unpack context into local bindings matching the old parameter names.
     let ToolContext {
-        kernel,
+        kernel: _,
         memory: _,
-        caller_agent_id,
+        caller_agent_id: _,
         mcp_connections,
         allowed_env_vars: _,
         workspace_root,
         brain: _,
         exec_policy: _,
         process_manager: _,
-        sender_id,
+        sender_id: _,
         owner_id: _,
         home_dir: _,
         agent_name: _,
         subagent_configs: _,
-        channel_type,
+        channel_type: _,
         max_tool_level,
         cli_exec_config: _,
         is_clone_admin,
@@ -280,50 +280,6 @@ pub async fn execute_tool(
                     }
                 }
             };
-        }
-    }
-
-    // Phase 1.5: Plugin tool dispatcher — remaining channel tools (e.g.
-    // charter_create_order, weixin_oa_publish_article) registered as ToolProvider
-    // instances. Rich content delivery uses the unified Channel::deliver path
-    // and [DELIVER:key] markers instead of channel-specific send tools.
-    // Run on a blocking thread: plugin tools internally block_on a fresh
-    // runtime, which would panic inside this async tokio context.
-    if let Some(kernel) = kernel {
-        let kernel = kernel.clone();
-        let tool_name_owned = tool_name.to_string();
-        let args_owned = input_ref.clone();
-        let plugin_ctx = carrier_types::plugin::PluginToolContext {
-            // bot_id (OA app_id): single-OA deployments resolve via the tool's
-            // WEIXIN_OA_STATE fallback when invoked without an inbound context.
-            bot_id: String::new(),
-            sender_id: sender_id.unwrap_or("").to_string(),
-            agent_id: caller_agent_id.unwrap_or("").to_string(),
-            channel_type: channel_type.unwrap_or("").to_string(),
-        };
-        let join = tokio::task::spawn_blocking(move || {
-            kernel.execute_plugin_tool(&tool_name_owned, &args_owned, &plugin_ctx)
-        })
-        .await;
-        if let Ok(exec_result) = join {
-            match exec_result {
-                Ok(Some(content)) => {
-                    return ToolResult {
-                        tool_use_id: tool_use_id.to_string(),
-                        content: truncate_tool_result(tool_name, content),
-                        is_error: false,
-                    };
-                }
-                Ok(None) => { /* no plugin handles it — fall through to MCP/other dispatch */ }
-                Err(err) => {
-                    warn!(tool_name = %tool_name, error = %err, "Plugin tool execution failed");
-                    return ToolResult {
-                        tool_use_id: tool_use_id.to_string(),
-                        content: format!("Error: {err}"),
-                        is_error: true,
-                    };
-                }
-            }
         }
     }
 

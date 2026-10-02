@@ -1,21 +1,7 @@
-//! Plugin system — channel adapters and tools.
+//! 插件树残部：只剩 admin_store（cron/flow 的分身管理员判定）。
 //!
-//! Channels bridge external messaging platforms to the kernel.
-//! Tools provide platform API capabilities that agents can call.
+//! 通道管理器、插件加载器、内置通道注册表、工具分发器、桥管理器
+//! 已随 #68 刀4 退役（频道体系整线住 crates/channels；母体不认识
+//! 频道——出站富媒体走 outbound/，cron 投递走 kernel 通道钩子）。
 
 pub mod admin_store;
-pub mod bridge;
-pub mod builtin;
-pub mod builtin_registry;
-pub mod instance;
-pub mod loader;
-pub mod router;
-pub mod tool_dispatch;
-
-pub use builtin::{BuiltinChannel, BuiltinPlugin};
-pub use builtin_registry::BuiltinPluginRegistry;
-pub use instance::PluginInstance;
-pub use loader::LoadedPlugin;
-
-// ChannelManager (lives at crate root, re-exported here for transition)
-pub use crate::channel_manager::ChannelManager;

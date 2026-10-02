@@ -101,11 +101,11 @@ impl ToolModule for CarrierBridge {
                         },
                         "action": {
                             "type": "object",
-                            "description": "Action: {\"kind\":\"system_event\",\"text\":\"...\"} or {\"kind\":\"agent_turn\",\"message\":\"...\",\"timeout_secs\":300,\"active_flow\":\"<flow_name>\",\"session_label\":\"<label>\"} or {\"kind\":\"push\",\"channel\":\"weixin-oa\",\"bot_id\":\"<app_id>\",\"payload\":{\"text\":\"...\"},\"target\":\"admins|followers|<openid>\"} (scheduled fixed push, no LLM) or {\"kind\":\"follower_report\",\"channel\":\"weixin-oa\",\"bot_id\":\"<app_id>\"} (follower-growth digest to admins since previous fire, no LLM). active_flow (optional) pins the flow to run, bypassing the LLM classifier. session_label (optional, for chained pipelines) runs the turn in its own isolated session so user chat can't interleave — pass the SAME label for every step of one pipeline."
+                            "description": "Action: {\"kind\":\"system_event\",\"text\":\"...\"} or {\"kind\":\"agent_turn\",\"message\":\"...\",\"timeout_secs\":300,\"active_flow\":\"<flow_name>\",\"session_label\":\"<label>\"}. (push/follower_report 等 weixin 频道动作已随 #68 刀4b 退役——频道体系住 crates/channels。) active_flow (optional) pins the flow to run, bypassing the LLM classifier. session_label (optional, for chained pipelines) runs the turn in its own isolated session so user chat can't interleave — pass the SAME label for every step of one pipeline."
                         },
                         "delivery": {
                             "type": "object",
-                            "description": "Delivery target: {\"kind\":\"none\"} or {\"kind\":\"channel\",\"channel\":\"telegram\"} or {\"kind\":\"last_channel\"}"
+                            "description": "Delivery target: {\"kind\":\"none\"} or {\"kind\":\"webhook\",\"url\":\"https://...\"} or {\"kind\":\"card\",\"title\":\"...\",\"template\":\"reply\"} (home card, 显示线正路)"
                         },
                         "one_shot": { "type": "boolean", "description": "If true, auto-delete after execution. Default: false" },
                         "chain": {

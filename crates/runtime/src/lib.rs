@@ -13,7 +13,6 @@ pub mod api_tools;
 pub mod apply_patch;
 pub mod audit;
 pub mod auth_cooldown;
-pub mod channel_manager;
 pub mod compactor;
 pub mod context_budget;
 pub mod context_overflow;
