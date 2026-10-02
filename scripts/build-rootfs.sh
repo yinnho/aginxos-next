@@ -549,7 +549,7 @@ install -m 755 "${ROOT}/out/resize2fs" "${TREE}/usr/bin/resize2fs"
 L0_SVC_COUNT="$(ls "${TREE}/etc/aginx/svc.d/" | wc -l | tr -d ' ')"
 [ "${L0_SVC_COUNT}" = "2" ] \
   || { echo "FATAL: L0 svc.d has ${L0_SVC_COUNT} units (want 2: net-watch + aginxbrowser) — engine units ride packages, not the image" >&2; exit 1; }
-# 基础 manifest（全 opt 目录）+ 11 行 opt 附加（aginx 家族包）。sha 取
+# 基础 manifest（全 opt 目录）+ 13 行 opt 附加（aginx 家族包）。sha 取
 # out/pkgs 产物（不手维护）；url/version/deps 取 pkgs/<name>/pkg.toml——
 # 配方 bump 了 version 没重跑 build-pkg → sha 文件名对不上 → die（宁死
 # 不烤错清单）。组装进树后签名（.sig 是构建产物，不回写配方；签的是树里
@@ -558,7 +558,8 @@ OPT_ADD="${TMPDIR:-/tmp}/agpkg-opt-add.$$"
 : > "${OPT_ADD}"
 for p in aginx aginx-term aginx-gateway aginx-secretd \
          aginx-asr aginx-tts aginx-ocr aginx-voice \
-         aginx-qr aginx-pair aginx-update; do
+         aginx-qr aginx-pair aginx-update \
+         aginx-gateway-local aginx-channels; do
   R="pkgs/${p}"
   p_ver="$(sed -n 's/^version *= *"\([^"]*\)"/\1/p' "${R}/pkg.toml" | sed -n '1p')"
   p_url="$(sed -n 's/^url *= *"\([^"]*\)"/\1/p' "${R}/pkg.toml" | sed -n '1p')"
