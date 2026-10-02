@@ -26,7 +26,7 @@ Line verdicts:
 - **Already dead** — display/term/bootcard human faces (headless
   ruling 2026-09-13); the bootcard lamp stays a redfin machine fact,
   neither removed nor extended.
-- **Unchanged** — L0 base, mother (aginx server/gateway/relay), ssh,
+- **Unchanged** — L0 base, the aginx line (server/gateway/relay), ssh,
   pkg, aginxbrowser as an agent capability package (template/card
   faces wither, the engine stays), modem/SMS (enchilada).
 
@@ -64,17 +64,22 @@ platform honest — machines are data (D14), living in `devices/<codename>/`.
 
 ## Constitution
 
-`docs/FS.md` is the machine-tree design authority: humans talk only to
-the mother (`aginx`, the one resident server per machine); assistants
-are folders under `{AGINX_HOME}/workflows/` — clone-format copies with
-their own flows, spawned on demand by a single engine; there are no
-skills (the clone format rejects `skills/`). The session log is the
-truth source. Externals enter as CLI-only (D12), every command carries
-the aginx surname (D13), and machines are data, not code (D14 — full
-text in `devices/README.md`). The assistant definition-layer format is
+`docs/DESIGN.md` is the system-design authority (2026-10-01): the
+system is this person's digital self — **no mother/manager layer**
+(workflows/ are its capability faces, channels/ its presence on N
+platforms, memory its personhood source, engines commodity labor).
+`docs/FS.md` is the machine-tree authority (re-worded to the new world
+model 2026-10-02): capability faces are folders under
+`{AGINX_HOME}/workflows/` with `AGENTS.md` as the personhood+rules
+file (naming settled 2026-10-02, SOUL.md migrates with knife ④).
+There are no skills (the format rejects `skills/`); flows live in
+`workflows/<name>/flows/`. The session log is the truth source.
+Externals enter as CLI-only (D12), every command carries the aginx
+surname (D13), and machines are data, not code (D14 — full text in
+`devices/README.md`). The legacy assistant definition-layer format is
 `crates/clone/CLONE-FORMAT.md`. The old constitution (`docs/ARCH.md`,
 local-only) and the public `docs/ARCHITECTURE.md` were retired
-2026-09-24 — superseded by FS.md.
+2026-09-24 — superseded first by FS.md, then by DESIGN.md (2026-10-01).
 
 ## Milestones (N series)
 
@@ -105,7 +110,7 @@ local-only) and the public `docs/ARCHITECTURE.md` were retired
   nothing else — kernel + init + supervisor + network + ssh (dropbear,
   password AND pubkey channels) + pkg + the bootcard lamp; image svc.d
   ships exactly 2 units (net-watch + absent-tolerant aginxbrowser).
-  The mother (one `aginx` tree package: router/server; the standalone
+  The system front (one `aginx` tree package: router/server; the standalone
   `aginx-runtime` binary was retired at 刀2 and deleted at the
   2026-09-24 workspace merge — the engine lives in-process), term,
   voice, gateway, secretd and the three model trees all ride packages
@@ -132,7 +137,7 @@ local-only) and the public `docs/ARCHITECTURE.md` were retired
   legal source. Machine strings in crates are unconstitutional, there is
   no default machine (a missing profile fails fast at boot), and device
   dirs never import each other.
-- Assistants live under `{AGINX_HOME}/workflows/` (FS.md; the device
+- Assistants (capability faces) live under `{AGINX_HOME}/workflows/` (FS.md; the device
   unit sets `AGINX_HOME=/home`). Host runs must point `AGINX_HOME` at a
   scratch dir — never a hidden `~/.aginx/carrier`.
 - Naming law D13: `aginx` is the only bare command (the router); every
@@ -192,15 +197,15 @@ dropbear sftp subsystem is a Go static (`tools/sftp-server` +
 
 | Path | What |
 |------|------|
-| `crates/router` | `aginx` — the bare command, mother's face |
+| `crates/router` | `aginx` — the bare command, the system's face |
 | `crates/server` | `aginx-server` — front desk, cursor, routing, ledger (boots the carrier kernel in-process, 刀2) |
-| `crates/runtime` | `carrier-runtime` — the mother engine's agent loop/tool layer (since the 2026-09-24 merge; the old standalone `aginx-runtime` binary is deleted) |
+| `crates/runtime` | `carrier-runtime` — the carrier engine's agent loop/tool layer (since the 2026-09-24 merge; the old standalone `aginx-runtime` binary is deleted) |
 | `crates/agi` | fast-agi v0 frame types (both ends share) |
 | `crates/agio` | D1 output envelope |
 | `crates/hwd` | device profile reader — the single legal source of machine facts (D14) |
 | `crates/voice` | `aginx-voice` — the voice dialog daemon (M42; human-interface line retired 2026-10-01 — the stack is now SIP-line internal parts, see Positioning) |
 | `crates/call` | `aginx-call` — the SIP leg (M48): the agent's external telephony, promoted 2026-10-01 (see Positioning) |
-| `crates/channels` | `aginx-channels` — the channel system's one home (#69, 2026-10-02): generic daemon/config/ACP bridge + per-channel legs (`weixin/` = iLink protocol: qr login, session watcher, send). Subcommands carry the channel name (`login weixin`); new channels are modules here, never new crates. The mother's weixin wiring is retired with this knife |
+| `crates/channels` | `aginx-channels` — the channel system's one home (#69, 2026-10-02): generic daemon/config/ACP bridge + per-channel legs (`weixin/` = iLink protocol: qr login, session watcher, send). Subcommands carry the channel name (`login weixin`); new channels are modules here, never new crates. The server's weixin wiring is retired with this knife |
 | `crates/wizard` | `aginx-net-wizard` — first-boot Wi-Fi setup TUI |
 | `crates/term` | `aginx-term` — on-device terminal UI (aterm line) |
 | `crates/pkg` | `aginx-pkg` — package manager (signed manifest, 四件套) |
@@ -212,14 +217,15 @@ dropbear sftp subsystem is a Go static (`tools/sftp-server` +
 | `crates/done` | `aginx-done` — provision done-marker discipline |
 | `crates/secret` | `aginx-secretd`/`aginx-secret` — the secret sidecar + its admin face |
 | `pkgs/aginx-gateway` | the outward-facing daemon package (v0.2.0 re-cored 2026-09-27): carries the real ecosystem `aginx` (~/Documents/aginx, independent project — this repo only builds/packages/configures it). The old replica `crates/gateway` is deleted (#412); package name kept for opt-in continuity |
-| `crates/{carrier,types,memory,clone,dup,carrier-gateway,lifecycle,kernel,agf,agmem}` | the mother engine (ex-`aginx-carrier`, merged 2026-09-24): kernel spawns/turns/sessions, runtime = agent loop + tools, clone = assistant format + install chain + dup VCS, memory/agmem = the memory tree, `carrier-gateway` = agent:// client + contacts ledger (NOT the remote-channel daemon above). The channel layer left the engine with the #68/#69 knives — webhook/plugin tree dead code deleted, weixin whole in `crates/channels`, the kernel keeps zero channel plumbing (cron delivery = none/webhook/home-card only) |
+| `crates/{carrier,types,memory,clone,dup,carrier-gateway,lifecycle,kernel,agf,agmem}` | the carrier engine (ex-`aginx-carrier`, merged 2026-09-24; retiring with #68 knife ④): kernel spawns/turns/sessions, runtime = agent loop + tools, clone = assistant format + install chain + dup VCS, memory/agmem = the memory tree, `carrier-gateway` = agent:// client + contacts ledger (NOT the remote-channel daemon above). The channel layer left the engine with the #68/#69 knives — webhook/plugin tree dead code deleted, weixin whole in `crates/channels`, the kernel keeps zero channel plumbing (cron delivery = none/webhook/home-card only) |
 | `crates/testkit` | test helpers |
 | `rootfs/` | the image recipe — see `rootfs/README.md` (placement matrix, asset split) |
 | `devices/` | per-machine data, one dir per codename: `device.toml`, `modules.txt`, `bringup/`, `boot/` (pack line), `cam/` — add-a-machine checklist in `devices/README.md` |
 | `scripts/build-rootfs.sh` | the bake, `DEVICE=<codename>`: recipe + zigbuild + that machine's assets (`.local/device/<codename>`) → `out/rootfs.img` |
 | `scripts/accept/` | device acceptance suites: `n6-egg.sh` (L0 bake-day shape/equivalence: pre/paired/steady/egg2), `n7-l0.sh` (product flow: usbconf→netup→ssh→opt-in→steady), `m42c.sh` pairing gate; n4/n5 retired 2026-09-12 (headers say why) |
 | `shims/` | repo-local `aginx-*` command faces (host trial registry) |
-| `docs/FS.md` | machine-tree design authority (this repo's constitution) |
+| `docs/DESIGN.md` | system-design authority — the world model (this repo's constitution, 2026-10-01) |
+| `docs/FS.md` | machine-tree authority (world model re-worded 2026-10-02; tree details' single authority) |
 | `docs/HARDWARE.md` | device experiment log — this repo's receipts from N4 on (active window only; older receipts archived to `docs/HARDWARE-ARCHIVE-*.md`, same local-only discipline) |
 
 ## Device Safety
