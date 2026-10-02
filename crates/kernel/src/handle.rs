@@ -280,25 +280,6 @@ impl KernelHandle for CarrierKernel {
         self.memory.task_list(status).await
     }
 
-    async fn automation_rule_list(
-        &self,
-        channel: &str,
-        app_id: &str,
-    ) -> CarrierResult<Vec<carrier_types::automation::AutomationRule>> {
-        self.memory.automation_rule_list(channel, app_id).await
-    }
-
-    async fn automation_rule_upsert(
-        &self,
-        rule: carrier_types::automation::AutomationRule,
-    ) -> CarrierResult<()> {
-        self.memory.automation_rule_upsert(rule).await
-    }
-
-    async fn automation_rule_delete(&self, id: &str) -> CarrierResult<()> {
-        self.memory.automation_rule_delete(id).await
-    }
-
     async fn publish_event(
         &self,
         event_type: &str,
