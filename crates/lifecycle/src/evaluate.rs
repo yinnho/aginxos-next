@@ -21,7 +21,7 @@ pub struct QualityMetrics {
     pub knowledge_total_bytes: usize,
     /// Number of flows.
     pub flow_count: usize,
-    /// Whether SOUL.md exists.
+    /// Whether a persona file (AGENTS.md, legacy SOUL.md) exists.
     pub has_soul: bool,
     /// Whether system_prompt.md exists.
     pub has_system_prompt: bool,
@@ -132,7 +132,7 @@ pub fn compute_deterministic_metrics(workspace: &Path) -> QualityMetrics {
     };
 
     // Identity files
-    let has_soul = workspace.join("SOUL.md").exists();
+    let has_soul = workspace.join("AGENTS.md").exists() || workspace.join("SOUL.md").exists();
     let has_system_prompt = workspace.join("system_prompt.md").exists();
     let has_memory = workspace.join("MEMORY.md").exists();
     let system_prompt_len = fs::read_to_string(workspace.join("system_prompt.md"))
@@ -377,6 +377,10 @@ mod tests {
         assert!(!metrics.has_soul);
         assert!(!metrics.has_system_prompt);
         assert!(metrics.score < 40);
+
+        // 旧名人格文件也认（在役设备树未重刷前）
+        fs::write(ws.join("SOUL.md"), "legacy soul").unwrap();
+        assert!(compute_deterministic_metrics(ws).has_soul);
     }
 
     #[test]
@@ -384,7 +388,7 @@ mod tests {
         let tmp = TempDir::new().unwrap();
         let ws = setup_workspace(&tmp);
 
-        fs::write(ws.join("SOUL.md"), "soul content").unwrap();
+        fs::write(ws.join("AGENTS.md"), "persona content").unwrap();
         fs::write(ws.join("system_prompt.md"), "be helpful").unwrap();
         fs::write(ws.join("MEMORY.md"), "# Index").unwrap();
 

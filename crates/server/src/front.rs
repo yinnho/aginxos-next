@@ -151,7 +151,8 @@ impl FrontDesk {
         self.root.join(name).is_dir()
     }
 
-    /// 进（建化身 = 建文件夹，D5）：sessions/ + output/ 起手，SOUL.md 可选。
+    /// 进（建化身 = 建文件夹，D5）：sessions/ + output/ 起手，AGENTS.md
+    /// 可选（人格文件定谳 2026-10-02 刀④-1）。
     pub fn create_avatar(&self, name: &str, soul: Option<&str>) -> io::Result<PathBuf> {
         validate_name(name).map_err(|e| io::Error::new(io::ErrorKind::InvalidInput, e))?;
         let ws = self.root.join(name);
@@ -164,7 +165,7 @@ impl FrontDesk {
         std::fs::create_dir_all(ws.join("sessions"))?;
         std::fs::create_dir_all(ws.join("output"))?;
         if let Some(soul) = soul.map(str::trim).filter(|s| !s.is_empty()) {
-            std::fs::write(ws.join("SOUL.md"), soul)?;
+            std::fs::write(ws.join("AGENTS.md"), soul)?;
         }
         Ok(ws)
     }
@@ -332,7 +333,7 @@ mod tests {
         assert!(d.create_avatar("../escape", None).is_err());
         assert!(d.create_avatar(".hidden", None).is_err());
         let ws = d.create_avatar("小满", Some("  你是小满。  ")).unwrap();
-        assert_eq!(std::fs::read_to_string(ws.join("SOUL.md")).unwrap(), "你是小满。");
+        assert_eq!(std::fs::read_to_string(ws.join("AGENTS.md")).unwrap(), "你是小满。");
         assert!(ws.join("sessions").is_dir());
         assert!(ws.join("output").is_dir());
     }

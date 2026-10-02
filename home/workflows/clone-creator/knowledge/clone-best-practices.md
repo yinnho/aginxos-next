@@ -10,7 +10,7 @@ tags: ["分身设计", "Agent设计", "最佳实践", "系统指令", "流程设
 - 名字要有意义，一看就知道分身做什么
 - 避免过长的名字，控制在 3-4 个词以内
 
-## 人格设计 (SOUL.md)
+## 人格设计 (AGENTS.md)
 
 - **身份**：一句话说清楚"我是谁"
 - **性格**：2-3 个关键词描述（专业、友好、简洁...）
@@ -110,7 +110,7 @@ tags: ["分身设计", "Agent设计", "最佳实践", "系统指令", "流程设
 
 蒸馏公众人物的思维方式，让用户能和"他"对话（如马斯克、刘震云）。
 
-- 核心文件：SOUL（视角+风格+内在张力+禁忌）+ system_prompt（身份锚定+回应规则+诚实边界）+ 一个主 flow + 6-8 个 references
+- 核心文件：AGENTS.md（视角+风格+内在张力+禁忌）+ system_prompt（身份锚定+回应规则+诚实边界）+ 一个主 flow + 6-8 个 references
 - 关键方法：6维研究 → 三重验证提取心智模型 → 捕捉内在张力 → 量化表达DNA
 - 流程结构：`flows/<name>-voice/flow.md` + `references/`（含必选的 iconic-quotes.md）
 - 进化策略：`aggressive`（公众分身需要广泛积累知识）
@@ -123,7 +123,7 @@ tags: ["分身设计", "Agent设计", "最佳实践", "系统指令", "流程设
 
 基于用户提供的私有数据（聊天记录、日记、社交媒体），克隆真实个体（用户自己、好友、前任等）。
 
-- 核心文件：SOUL（视角+风格+内在张力+禁忌）+ PERSONALITY-PROFILE（人格提取报告）+ EXPRESSION-DNA + 一个主 flow + relationship-context.md
+- 核心文件：AGENTS.md（视角+风格+内在张力+禁忌）+ PERSONALITY-PROFILE（人格提取报告）+ EXPRESSION-DNA + 一个主 flow + relationship-context.md
 - 关键方法：数据预处理 → 统计提取人格特征 → 表达DNA量化 → 内在张力推断
 - 流程结构：`flows/<name>-voice/flow.md` + `references/`（含必选的 iconic-moments.md、relationship-context.md）
 - 进化策略：**`conservative`（人格层冻结，只允许知识层补充事实）**

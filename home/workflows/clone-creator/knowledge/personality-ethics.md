@@ -29,7 +29,7 @@ status: active
 
 ### 2.1 授权声明
 
-**位置**：`profile.md` 或 `SOUL.md`
+**位置**：`profile.md` 或 `AGENTS.md`
 
 **必须包含的内容**：
 ```

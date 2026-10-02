@@ -1284,7 +1284,12 @@ impl CarrierKernel {
             soul_md: manifest
                 .workspace
                 .as_ref()
-                .and_then(|w| crate::prompt_sources::read_identity_file(w, "SOUL.md")),
+                .and_then(|w| {
+                    // 人格文件定谳 AGENTS.md（2026-10-02 刀④-1）；SOUL.md
+                    // 旧名回退——在役设备树未重刷前仍靠它。
+                    crate::prompt_sources::read_identity_file(w, "AGENTS.md")
+                        .or_else(|| crate::prompt_sources::read_identity_file(w, "SOUL.md"))
+                }),
             user_md: manifest
                 .workspace
                 .as_ref()

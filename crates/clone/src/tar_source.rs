@@ -2,7 +2,8 @@
 //!
 //! AginxOS 手机上化身先走本地包（duphub auth 等 M36 sidecar）：tar 是
 //! 分身定义层的平铺快照（与 dup 工作区同构：flows/、knowledge/、
-//! profile.md、SOUL.md …）。gzip 魔数嗅探，`.tar` 与 `.tar.gz` 都收。
+//! profile.md、人格文件 AGENTS.md（旧名 SOUL.md）…）。gzip 魔数嗅探，
+//! `.tar` 与 `.tar.gz` 都收。
 //! 读成 `BTreeMap<相对路径, bytes>` 后走与 DupHub 拉取完全相同的
 //! `clone_install_files` 正规管线（含 validate_install_format 硬闸），
 //! 本模块不做格式裁决——只做传输层安全（路径逃逸/大小帽）。

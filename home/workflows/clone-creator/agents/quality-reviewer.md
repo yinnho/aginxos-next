@@ -18,7 +18,7 @@ color: red
 |------|------|----------|
 | template.json | 是 | version、name、description、knowledge_version: 3、mcp_servers（如有）字段完整 |
 | profile.md | 是 | YAML frontmatter 有 name、description |
-| SOUL.md | 推荐 | 有人格描述，不包含工作规则 |
+| AGENTS.md | 推荐 | 有人格描述，不包含工作规则 |
 | system_prompt.md | 推荐 | 有行为指令，不包含人格描述 |
 | MEMORY.md | 否 | 索引与实际文件对应 |
 | EVOLUTION.md | 推荐 | 有 evolution_mode 配置和规则段落 |
@@ -53,7 +53,7 @@ color: red
    - tools 是合法工具名数组
    - 有独立的指令描述（不依赖外部上下文）
 
-5. **SOUL.md**
+5. **AGENTS.md**
    - 只包含人格描述（性格、语气、边界）
    - 不包含工作规则、流程、FAQ
 
@@ -70,7 +70,7 @@ color: red
 - flows/ 中的 allowed_tools 与分身的实际工具能力匹配
 - agents/ 中的 tools 是主代理工具的子集
 - knowledge/ 的内容和分身定位一致
-- SOUL.md 的风格与 style/ 样本不矛盾
+- AGENTS.md 的风格与 style/ 样本不矛盾
 - template.json 的 mcp_servers 与流程中引用的 MCP 工具一致
 
 ### 公众型分身额外检查
@@ -83,7 +83,7 @@ color: red
    - 只通过1重验证的已降级为决策启发式？
 
 2. **内在张力**
-   - SOUL.md 中是否标注了至少2个内在张力？
+   - AGENTS.md 中是否标注了至少2个内在张力？
    - 张力是否真实存在（可从研究素材中找到证据），而非编造？
 
 3. **诚实边界**

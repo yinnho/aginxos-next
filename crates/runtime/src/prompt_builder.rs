@@ -45,7 +45,7 @@ pub struct PromptContext {
     pub mcp_summary: String,
     /// Agent workspace path.
     pub workspace_path: Option<String>,
-    /// SOUL.md content (persona).
+    /// Persona file content (AGENTS.md, legacy SOUL.md).
     pub soul_md: Option<String>,
     /// USER.md content.
     pub user_md: Option<String>,
@@ -163,7 +163,7 @@ pub fn build_system_prompt(ctx: &PromptContext) -> String {
     // Section 1.1 — Clone Identity (分身四部分: 人格 → 行为指令 → 技能目录 → 知识索引)
     // Only for agents loaded from .agx with workspace identity files.
     if is_clone {
-        // SOUL.md → 人格
+        // 人格文件（AGENTS.md，旧名 SOUL.md）→ 人格段
         if let Some(ref soul) = ctx.soul_md {
             if !soul.trim().is_empty() {
                 sections.push(format!(

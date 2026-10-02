@@ -41,7 +41,7 @@ tools: [system_time, web_search, web_fetch, knowledge_list, knowledge_read, know
 2. **只能新建 knowledge，绝不改既有**。往知识库加东西**只能用 `knowledge_add` 新建文件**。**绝不修改、重写、重命名、删除**任何既有 knowledge 文件（哪怕你觉得它过时/有错——那不是自主成长该干的，留给人工）。
 3. **`file_write` 只许写一个地方**：
    - `flows/self-growth/log.md`（成长日志，追加一行）
-   **严禁**写任何其他路径。**尤其严禁**：改 `flows/` 下任何文件、改任何既有 flow（如 daily-admin-brief）、`flow_update`、改 `knowledge/` 下任何文件、改 SOUL/system_prompt/EVOLUTION 等身份/配置文件。
+   **严禁**写任何其他路径。**尤其严禁**：改 `flows/` 下任何文件、改任何既有 flow（如 daily-admin-brief）、`flow_update`、改 `knowledge/` 下任何文件、改 AGENTS/system_prompt/EVOLUTION 等身份/配置文件。
 4. **读 knowledge/ 只读不改**。读它只为两件事：(a) 搞清你的领域好搜对关键词；(b) 判断搜到的新信息是不是已经有了。**绝不为"改进"而读。**
 5. 不编造、不灌脏、不重复（查 log + knowledge 去重）。
 

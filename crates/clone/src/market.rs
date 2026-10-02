@@ -14,7 +14,7 @@ use futures::StreamExt;
 
 use crate::hub;
 
-/// 预览子集文件上限（防滥用：只拉 template.json + flows + SOUL.md）。
+/// 预览子集文件上限（防滥用：只拉 template.json + flows + 人格文件）。
 pub const PREVIEW_MAX_FILES: usize = 40;
 const PREVIEW_CONCURRENCY: usize = 4;
 /// 安装全量文件并行度（fetch_dup_files 是串行逐文件，大化身不可接受）。
@@ -120,7 +120,8 @@ pub async fn fetch_install_files(
         .map_err(|e| classify_hub_err(&e))
 }
 
-/// 拉权限预览子集文件（template.json + flows frontmatter + SOUL.md；
+/// 拉权限预览子集文件（template.json + flows frontmatter + 人格文件
+/// （AGENTS.md，旧名 SOUL.md）；
 /// knowledge/references 等大文件不拉）。
 pub async fn fetch_preview_files(
     hub_url: &str,
@@ -142,6 +143,7 @@ fn preview_paths(files: &BTreeMap<String, String>) -> Vec<String> {
     for p in files.keys() {
         let wanted = p == "template.json"
             || p == "SOUL.md"
+            || p == "AGENTS.md"
             || p == "profile.md"
             || (p.starts_with("flows/") && (p.ends_with("flow.md") || p.ends_with("SKILL.md")))
             || p.starts_with("skills/");
