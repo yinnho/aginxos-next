@@ -17,6 +17,7 @@
 //                      （host.rs；此后文件是真源）
 
 mod front;
+mod install;
 mod ledger;
 mod host;
 mod ops;
