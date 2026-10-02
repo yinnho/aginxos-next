@@ -30,6 +30,34 @@ pub struct AcpReply {
     pub session_id: Option<String>,
 }
 
+/// chunk 方言归一（ACP.md §2.6/§2.8）：规约上 chunk 的 text 是纯文本
+/// （接入包声明 output 时网关已翻译）；但 `raw` 方言条目（如本仓
+/// carrier 双模桥裸行模）直通引擎的整行 JSON——assistant 行是
+/// `{"message":{"content":[{"text":…}]}}`，尾行是 `{"type":"result",…}`
+/// （其 result 字段复述全文，拼上会翻倍）。两副面孔都认：
+/// 解析得 JSON 信封就取内文，纯文本原样入账；result 行只当回执不拼文。
+fn push_chunk_text(out: &mut String, raw: &str) {
+    let Ok(v) = serde_json::from_str::<serde_json::Value>(raw) else {
+        out.push_str(raw); // 规约主路：纯文本直通
+        return;
+    };
+    match v.get("type").and_then(|t| t.as_str()) {
+        Some("assistant") => {
+            if let Some(blocks) = v.pointer("/message/content").and_then(|c| c.as_array()) {
+                for b in blocks {
+                    if let Some(t) = b.get("text").and_then(|t| t.as_str()) {
+                        out.push_str(t);
+                    }
+                }
+            }
+        }
+        // raw 方言收尾行：全文已由 assistant 行拼齐，跳过（防翻倍）。
+        Some("result") => {}
+        // 陌生 JSON 形状：原样保底，宁可难看不可丢话。
+        _ => out.push_str(raw),
+    }
+}
+
 impl AcpClient {
     pub fn new() -> Self {
         let timeout = std::env::var("AGINX_CHANNELS_ACP_TIMEOUT_SECS")
@@ -118,7 +146,7 @@ impl AcpClient {
             }
             if frame.get("method").and_then(|m| m.as_str()) == Some("chunk") {
                 if let Some(t) = frame.pointer("/params/text").and_then(|t| t.as_str()) {
-                    text.push_str(t);
+                    push_chunk_text(&mut text, t);
                 }
                 continue;
             }
@@ -182,5 +210,47 @@ impl AcpClient {
 impl Default for AcpClient {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::push_chunk_text;
+
+    /// 规约主路（ACP.md §2.6）：纯文本 chunk 直通拼接。
+    #[test]
+    fn chunk_plain_text_concatenates() {
+        let mut out = String::new();
+        push_chunk_text(&mut out, "在");
+        push_chunk_text(&mut out, "的");
+        assert_eq!(out, "在的");
+    }
+
+    /// raw 方言（carrier 双模桥裸行模）：assistant 行取内文 text 块，
+    /// result 收尾行跳过（result 字段复述全文，拼上会翻倍）。
+    #[test]
+    fn chunk_raw_dialect_envelope_extracts_and_skips_result() {
+        let mut out = String::new();
+        push_chunk_text(
+            &mut out,
+            r#"{"message":{"content":[{"text":"在","type":"text"}]},"type":"assistant"}"#,
+        );
+        push_chunk_text(
+            &mut out,
+            r#"{"message":{"content":[{"text":"的","type":"text"}]},"type":"assistant"}"#,
+        );
+        push_chunk_text(
+            &mut out,
+            r#"{"duration_ms":4308,"is_error":false,"result":"在的","session_id":"s1","type":"result"}"#,
+        );
+        assert_eq!(out, "在的");
+    }
+
+    /// 陌生 JSON 形状：原样保底（宁可难看不可丢话）。
+    #[test]
+    fn chunk_unknown_json_falls_back_to_raw() {
+        let mut out = String::new();
+        push_chunk_text(&mut out, r#"{"hello":"world"}"#);
+        assert_eq!(out, r#"{"hello":"world"}"#);
     }
 }
