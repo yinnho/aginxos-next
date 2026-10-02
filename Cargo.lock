@@ -222,6 +222,7 @@ dependencies = [
  "agi",
  "agio",
  "anyhow",
+ "carrier-clone",
  "carrier-kernel",
  "carrier-memory",
  "carrier-runtime",

@@ -6,6 +6,8 @@
 //   aginx agent list                  花名册
 //   aginx agent status                前台状态（光标 + 在册）
 //   aginx agent create <名字> [SOUL]  进：建化身文件夹
+//   aginx agent install <名> <包.tar> 装：克隆格式包落 workflows/（④-3）
+//   aginx agent remove <名>           卸：三删（工位/网关条目/名册行）
 //
 // send 的回复按人面打印（这是对话，不是机器输出）；--json 打印原始
 // D1 信封给脚本用。文本里说退房词（再见/退下/…）= 退，光标回母体。
@@ -51,6 +53,22 @@ pub fn run(args: &[String]) -> i32 {
             let soul = rest.get(1).map(|s| s.as_str());
             json!({"op": "create", "avatar": name, "soul": soul})
         }
+        "install" => match (rest.first(), rest.get(1)) {
+            (Some(n), Some(p)) => json!({"op": "install", "avatar": n.as_str(), "path": p.as_str()}),
+            _ => {
+                eprintln!("aginx agent: install needs <名> <包.tar>");
+                usage();
+                return 2;
+            }
+        },
+        "remove" => match rest.first() {
+            Some(n) => json!({"op": "remove", "avatar": n.as_str()}),
+            None => {
+                eprintln!("aginx agent: remove needs a name");
+                usage();
+                return 2;
+            }
+        },
         "--help" | "-h" | "help" => {
             usage();
             return 0;
@@ -159,6 +177,9 @@ fn print_human(resp: &Value, verb: &str) {
         "create" => {
             println!("已进：化身 {}", d["avatar"].as_str().unwrap_or("?"));
         }
+        "install" | "remove" => {
+            println!("{}", d["text"].as_str().unwrap_or("完成"));
+        }
         _ => println!("{d}"),
     }
 }
@@ -167,5 +188,7 @@ fn usage() {
     eprintln!("usage: aginx agent send [<名字>] <文本…>   点名/住（退房词=回母体）");
     eprintln!("       aginx agent list | status");
     eprintln!("       aginx agent create <名字> [SOUL 描述]");
+    eprintln!("       aginx agent install <名> <包.tar>");
+    eprintln!("       aginx agent remove <名>");
     eprintln!("env:   AGINX_SOCK (default /run/aginx.sock)");
 }
