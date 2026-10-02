@@ -101,23 +101,37 @@ fn toml_str(s: &str) -> String {
     format!("\"{}\"", flat.replace('\\', "\\\\").replace('"', "\\\""))
 }
 
-/// PATH 步进找 aginx-carrier 可执行位（找到给绝对路径，稳定于网关守护
-/// 的任意 cwd/PATH；找不到裸名兜底——交给 spawn 的 PATH 解析，装不上
-/// 网关条目照样写，坏在对话轮错误路径里现形）。
-fn carrier_bin() -> String {
+/// PATH 步进找可执行位（找到给绝对路径，稳定于网关守护的任意
+/// cwd/PATH；找不到 None——调用方裸名兜底，交给 spawn 的 PATH 解析，
+/// 装不上网关条目照样写，坏在对话轮错误路径里现形）。
+fn bin_on_path(name: &str) -> Option<String> {
     if let Some(paths) = std::env::var_os("PATH") {
         for dir in std::env::split_paths(&paths) {
-            let cand = dir.join("aginx-carrier");
+            let cand = dir.join(name);
             if cand.is_file() {
                 if let Ok(meta) = std::fs::metadata(&cand) {
                     if meta.permissions().mode() & 0o111 != 0 {
-                        return cand.display().to_string();
+                        return Some(cand.display().to_string());
                     }
                 }
             }
         }
     }
-    "aginx-carrier".to_string()
+    None
+}
+
+fn carrier_bin() -> String {
+    bin_on_path("aginx-carrier").unwrap_or_else(|| "aginx-carrier".to_string())
+}
+
+/// codex 引擎档：设备真身 /var/bin/codex（provider 安家，#406）优先，
+/// 其余环境退 PATH，再裸名兜底。
+fn codex_bin() -> String {
+    let dev = Path::new("/var/bin/codex");
+    if dev.is_file() {
+        return dev.display().to_string();
+    }
+    bin_on_path("codex").unwrap_or_else(|| "codex".to_string())
 }
 
 /// ① agents 条目落盘（upsert：目录存在即覆盖重写）。
@@ -159,6 +173,50 @@ pub fn remove_entry(root: &Path, name: &str) -> std::io::Result<()> {
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
         Err(e) => Err(e),
     }
+}
+
+/// 刀④-2：系统本人的直通条目（codex 形，upsert 同 write_entry）。引擎
+/// 商品化（DESIGN.md §八）：system 不再起 `aginx-carrier acp` 桥，codex
+/// exec 直接安家 `folder`=home 根——人格=该目录 AGENTS.md（codex 原生
+/// 拾取 cwd 的 AGENTS.md，刀④-1 定谳名；Mac spike 验证 2026-10-02）。
+/// 形状对齐 #406/#430 生产验证过的 codex 条目：output=codex-exec-json、
+/// --skip-git-repo-check（folder 非信任目录防首帧被拒）、resume 走
+/// codex thread。工作流助理条目（write_entry）仍旧 carrier 形，随
+/// ④-3/④-4 收口。
+fn write_system_entry(
+    root: &Path,
+    home: &Path,
+    name: &str,
+    display: &str,
+    desc: &str,
+) -> std::io::Result<()> {
+    let dir = root.join("agents").join(name);
+    std::fs::create_dir_all(&dir)?;
+    let toml = format!(
+        "# 由 AginxOS kernel boot 期 ensure_system_entry 自动写——系统本人\n\
+         # 的对外直通条目：agent://<机>.relay.aginx.net/system。刀④-2 换芯\n\
+         # codex（引擎商品化）；人格=home 根 AGENTS.md。\n\
+         id = {}\n\
+         name = {}\n\
+         agent_type = \"codex\"\n\
+         description = {}\n\
+         folder = {}\n\
+         output = \"codex-exec-json\"\n\
+         timeout = 300\n\
+         \n\
+         [command]\n\
+         path = {}\n\
+         args = [\"exec\", \"--json\", \"--skip-git-repo-check\"]\n\
+         \n\
+         [session]\n\
+         resume_args = [\"resume\", \"${{SESSION_ID}}\"]\n",
+        toml_str(name),
+        toml_str(display),
+        toml_str(desc),
+        toml_str(&home.display().to_string()),
+        toml_str(&codex_bin()),
+    );
+    std::fs::write(dir.join("aginx.toml"), toml)
 }
 
 /// ② workflows.md 行 upsert（按键 `- `name`:` 替换；全册按名排序，重写
@@ -230,13 +288,20 @@ pub fn unregister(config: &KernelConfig, name: &str) -> std::io::Result<()> {
 /// 刀5：系统本人的直通条目（A 路：`agent://<机>.relay.aginx.net/system`
 /// 即刻可用）。只写 agents toml（①）不写注册表行（②）——workflows.md 是
 /// 助理名册，系统不是助理。幂等 upsert，kernel boot 期调用。
+/// 刀④-2 起条目为 codex 形（write_system_entry）。
 pub fn ensure_system_entry(config: &KernelConfig) {
     let root = resolve_data_root(&config.home_dir);
     if let Some(env_root) = env_data_root() {
         ensure_home_pointer(&config.home_dir, &env_root);
     }
     let desc = "系统本体 — OS 进程即智能体（无 workflows 也是智能体）";
-    if let Err(e) = write_entry(&root, carrier_types::config::SYSTEM_AGENT, "系统", desc) {
+    if let Err(e) = write_system_entry(
+        &root,
+        &config.home_dir,
+        carrier_types::config::SYSTEM_AGENT,
+        "系统",
+        desc,
+    ) {
         tracing::debug!(error = %e, "系统直通条目写入失败（agc 对外 system 面暂缺）");
     }
 }
@@ -304,6 +369,31 @@ mod tests {
         remove_entry(&d, "ai-writer").unwrap();
         assert!(!d.join("agents/ai-writer").exists());
         let _ = std::fs::remove_dir_all(&d);
+    }
+
+    /// 刀④-2：system 条目是 codex 形——agent_type=codex、folder=home 根
+    /// （人格=AGENTS.md 原生拾取）、codex-exec-json、resume 走 codex
+    /// thread；不再是 aginx-carrier acp 桥。
+    #[test]
+    fn system_entry_is_codex_shaped() {
+        let d = tmp("sysentry");
+        let home = tmp("syshome");
+        write_system_entry(&d, &home, "system", "系统", "系统本体").unwrap();
+        let toml = std::fs::read_to_string(d.join("agents/system/aginx.toml")).unwrap();
+        assert!(toml.contains("id = \"system\""));
+        assert!(toml.contains("agent_type = \"codex\""));
+        assert!(toml.contains(&format!("folder = \"{}\"", home.display())));
+        assert!(toml.contains("output = \"codex-exec-json\""));
+        assert!(toml.contains("args = [\"exec\", \"--json\", \"--skip-git-repo-check\"]"));
+        assert!(toml.contains("resume_args = [\"resume\", \"${SESSION_ID}\"]"));
+        assert!(!toml.contains("acp"), "system 不再走 carrier acp 桥");
+        // upsert 覆盖重写
+        write_system_entry(&d, &home, "system", "系统", "改").unwrap();
+        let t2 = std::fs::read_to_string(d.join("agents/system/aginx.toml")).unwrap();
+        assert!(t2.contains("改"));
+        for p in [d, home] {
+            let _ = std::fs::remove_dir_all(p);
+        }
     }
 
     #[test]
