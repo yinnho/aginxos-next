@@ -7,7 +7,6 @@
 //! Daemon-issued resume jobs bypass `handle.rs cron_create`, so the reset
 //! hook never fires for them — bump and reset stay disjoint by construction.
 //!
-//! Mirrors `AutomationRuleStore` (`automation_store.rs`): an
 //! `Arc<Mutex<Connection>>` plus sync rusqlite bodies. Daemon code calls
 //! these synchronously (daemon-side sync store access).
 

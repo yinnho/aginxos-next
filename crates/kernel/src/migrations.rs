@@ -6,8 +6,6 @@
 //!
 //! - agents 表：me 条目原 uuid 改名 system（manifest 同步换名/身份）。
 //!   uuid 不变 ⇒ cron 任务、sessions、flow_runs、事件账全部免搬。
-//! - weixin_sessions：bind_agent 'me' → 'system'（SenderRouter 是 boot
-//!   期从这张表播种的内存表，改表即改路由）。
 //! - 复活体（装机收据 #413 抓到）：system 已在册而 me 又在册——旧世界
 //!   的 `<workflows>/me/` 残目录让 host reconcile 又 spawn 出一只新 me
 //!   （新 uuid）。搬家后摘除复活体（registry + DB；复活体是零历史幽灵，
@@ -43,17 +41,6 @@ pub fn migrate_legacy_me(kernel: &CarrierKernel) {
             }
         }
         None => {}
-    }
-
-    // weixin 绑定行：名字搬家（路由 boot 播种自这张表；幂等，0 行=无事）
-    match kernel
-        .memory
-        .weixin_store()
-        .rename_bind_agent(LEGACY_SYSTEM_AGENT_ME, SYSTEM_AGENT)
-    {
-        Ok(n) if n > 0 => tracing::info!(rows = n, "刀5 迁移：weixin 绑定行 me → system"),
-        Ok(_) => {}
-        Err(e) => tracing::warn!(error = %e, "刀5 迁移：weixin 绑定行改名失败（下次 boot 重试）"),
     }
 
     // 目录世界：workflows/me 残树（senders 并家根 + 清走）

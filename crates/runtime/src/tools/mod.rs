@@ -8,7 +8,6 @@ pub mod agf_bridge;
 pub mod agmem_bridge;
 pub mod carrier_bridge;
 pub mod agent;
-pub mod automation;
 pub mod collaboration;
 pub mod data_analyze;
 pub mod document;
@@ -99,7 +98,6 @@ pub fn builtin_modules(
         Box::new(agent::DelegationTools),
         Box::new(training::TrainingTools),
         Box::new(collaboration::CollaborationTools),
-        Box::new(automation::AutomationRulesTools),
         Box::new(a2a::A2aTools),
         Box::new(gateway_hub::GatewayHubTools),
         Box::new(data_analyze::DataAnalyzeTools),
