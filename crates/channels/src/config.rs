@@ -44,9 +44,14 @@ pub struct ChannelConfig {
 
 #[derive(Debug, serde::Deserialize)]
 pub struct Policy {
-    /// v0.1 只接单聊；群消息收到即弃（记日志）。
+    /// 只收绑定号（扫码人）本人的消息，陌生人弃（记日志）。
+    ///
+    /// 注意 iLink 伴生协议里 group_id **不是群聊判定**：扫码号本人与
+    /// bot 的会话本身带 group_id（v0.1.1 首条真考实抓：from=绑定号
+    /// 本人、group_id 非空——旧母体世界 is_group 从无人消费）。
+    /// 绑定判定见 token.rs `is_bound_sender`。
     #[serde(default = "default_true")]
-    pub dm_only: bool,
+    pub bound_only: bool,
 }
 
 impl Default for ChannelConfig {
@@ -61,7 +66,7 @@ impl Default for ChannelConfig {
 
 impl Default for Policy {
     fn default() -> Self {
-        Self { dm_only: true }
+        Self { bound_only: true }
     }
 }
 
@@ -107,10 +112,48 @@ impl ChannelConfig {
                 "default_agent = \"system\"\n",
                 "\n",
                 "[policy]\n",
-                "dm_only = true      # v0.1 只接单聊，群消息收到即弃\n",
+                "bound_only = true   # 只收绑定号（扫码人）本人的消息，陌生人弃\n",
             ),
             name = name,
         );
         let _ = std::fs::write(&path, body);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// bound_only 缺省=只收绑定号本人（v0.1.2 起 iLink 政策）。
+    #[test]
+    fn policy_defaults_to_bound_only() {
+        let p: Policy = toml::from_str("").unwrap();
+        assert!(p.bound_only);
+        assert!(Policy::default().bound_only);
+    }
+
+    /// v0.1.1 播种过的存量文件写着旧键 dm_only——改名后该文件必须照常
+    /// 起频道（未知键忽略、bound_only 走缺省 true），不殉存量部署。
+    #[test]
+    fn legacy_dm_only_file_still_loads() {
+        let cfg: ChannelConfig = toml::from_str(
+            r#"
+            type = "weixin"
+            default_agent = "system"
+
+            [policy]
+            dm_only = true
+            "#,
+        )
+        .unwrap();
+        assert!(cfg.policy.bound_only);
+        assert_eq!(cfg.channel_type, "weixin");
+    }
+
+    /// 显式放开：bound_only = false 收陌生人（对外服务宿主面）。
+    #[test]
+    fn bound_only_can_be_disabled() {
+        let p: Policy = toml::from_str("bound_only = false").unwrap();
+        assert!(!p.bound_only);
     }
 }

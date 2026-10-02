@@ -433,6 +433,9 @@ async fn process_inbound_message(
     info!(
         bot_id = bot_id,
         from = %from_user_id,
+        to = ?msg.to_user_id,
+        group = ?msg.group_id,
+        client = ?msg.client_id,
         message_id = ?msg.message_id,
         seq = ?msg.seq,
         item_type = match msg.item_list.as_ref() {
