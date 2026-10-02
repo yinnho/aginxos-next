@@ -299,26 +299,6 @@ impl KernelHandle for CarrierKernel {
         self.memory.automation_rule_delete(id).await
     }
 
-    async fn push_message(
-        &self,
-        target: String,
-        content: carrier_types::content::ContentDescriptor,
-        source_agent_id: String,
-        source_bot_id: String,
-    ) -> CarrierResult<()> {
-        self.do_push_message(&target, &content, &source_agent_id, &source_bot_id)
-            .await
-    }
-
-    fn resolve_sender_channel(&self, sender_id: &str) -> Option<(String, String)> {
-        self.memory
-            .cron_delivery()
-            .get_last_channel(sender_id)
-            .ok()
-            .flatten()
-            .map(|lc| (lc.channel_type, lc.bot_id))
-    }
-
     async fn publish_event(
         &self,
         event_type: &str,
@@ -392,10 +372,13 @@ impl KernelHandle for CarrierKernel {
                 .cloned()
                 .unwrap_or(serde_json::Value::Null);
             if val.is_null() {
-                // Default to LastChannel when owner_id is set so cron results
-                // are pushed to the user automatically.
+                // Default: owned jobs land a home card so the result stays
+                // visible (#68 刀4b — LastChannel retired with the channel legs).
                 if owner_id.is_some() {
-                    CronDelivery::LastChannel
+                    CronDelivery::Card {
+                        title: "任务通知".to_string(),
+                        template: "reply".to_string(),
+                    }
                 } else {
                     CronDelivery::None
                 }
@@ -614,46 +597,6 @@ impl KernelHandle for CarrierKernel {
             .map(|p| p.to_string_lossy().to_string())
     }
 
-    fn deliver_content(
-        &self,
-        agent: &str,
-        content_key: &str,
-        channel_type: &str,
-        bot_id: &str,
-        user_id: &str,
-    ) -> CarrierResult<()> {
-        let ws = self.resolve_agent_workspace(agent).ok_or_else(|| {
-            CarrierError::AgentNotFound(format!(
-                "deliver_content: agent {agent} not found or has no workspace"
-            ))
-        })?;
-        let ws_path = std::path::Path::new(&ws);
-        let config = carrier_runtime::outbound::ContentRegistry::global()
-            .load(agent, ws_path)
-            .ok_or_else(|| {
-                CarrierError::Internal(format!(
-                    "deliver_content: failed to load content.toml for agent {agent} under {}",
-                    ws_path.display()
-                ))
-            })?;
-        let desc = config.get(content_key).cloned().ok_or_else(|| {
-            CarrierError::Internal(format!(
-                "deliver_content: key '{content_key}' not found in {}/content.toml",
-                ws_path.display()
-            ))
-        })?;
-
-        let guard = self
-            .channel_deliver_fn
-            .read()
-            .map_err(|e| CarrierError::Internal(e.to_string()))?;
-        let deliver_fn = guard.as_ref().ok_or_else(|| {
-            CarrierError::Config("deliver_content: channel_deliver_fn not wired".into())
-        })?;
-        deliver_fn(channel_type, bot_id, user_id, &desc)
-            .map_err(|e| CarrierError::Network(format!("deliver_content: {e}")))
-    }
-
     fn get_toolset_tools(
         &self,
         toolset_name: &str,
@@ -762,40 +705,6 @@ impl KernelHandle for CarrierKernel {
             }
         }
 
-        // Search plugin tool dispatcher — remaining channel tools (e.g.
-        // charter_create_order, weixin_oa_publish_article) registered as
-        // ToolProvider instances. Rich content delivery now uses the unified
-        // Channel::deliver path and [DELIVER:key] markers instead of channel-
-        // specific send tools. These are exact-match candidates: flow-declared
-        // tool names must resolve here. Flow tool resolution passes the exact
-        // tool name as the query, so prefer a high exact-match score.
-        if let Some(dispatcher) = self
-            .plugins
-            .plugin_tool_dispatcher
-            .lock()
-            .ok()
-            .and_then(|g| g.clone())
-        {
-            for tool in dispatcher.definitions() {
-                let name_lower = tool.name.to_lowercase();
-                let exact = name_lower == query_lower;
-                let score = if exact {
-                    1000 // flow-declared exact match — always wins
-                } else {
-                    CarrierKernel::score_tool(
-                        &query_lower,
-                        &keywords,
-                        &name_lower,
-                        &tool.description.to_lowercase(),
-                        "plugin",
-                    )
-                };
-                if score > 0 {
-                    scored.push((score, "plugin".to_string(), tool));
-                }
-            }
-        }
-
         scored.sort_by_key(|s| std::cmp::Reverse(s.0));
 
         // Filter by max_level. Dangerous tools (e.g. shell_exec) are only
@@ -815,27 +724,6 @@ impl KernelHandle for CarrierKernel {
             "tool catalog search executed"
         );
         scored.into_iter().map(|(_, ts, def)| (ts, def)).collect()
-    }
-
-    fn execute_plugin_tool(
-        &self,
-        tool_name: &str,
-        args: &serde_json::Value,
-        context: &carrier_types::plugin::PluginToolContext,
-    ) -> CarrierResult<Option<String>> {
-        let dispatcher = self
-            .plugins
-            .plugin_tool_dispatcher
-            .lock()
-            .ok()
-            .and_then(|g| g.clone());
-        let Some(dispatcher) = dispatcher else {
-            return Ok(None);
-        };
-        if !dispatcher.has_tool(tool_name) {
-            return Ok(None);
-        }
-        Ok(Some(dispatcher.execute(tool_name, args, context)?))
     }
 
     async fn clone_install_files(

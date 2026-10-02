@@ -80,25 +80,6 @@ impl ToolModule for AutomationRulesTools {
                     "required": ["id"]
                 }),
             },
-            ToolDefinition {
-                name: "message_push".to_string(),
-                description: "Immediately push a message to a specific user or all admins (admin only). Supports text and miniprogram card formats. target = user_id (e.g. wmVXjfCw... for wecom-kf, oOPNNv... for weixin-oa, xxx@im.wechat for iLink) or 'admins'. msgtype inferred from which content field you provide.".to_string(),
-                input_schema: serde_json::json!({
-                    "type": "object",
-                    "properties": {
-                        "target": { "type": "string", "description": "Recipient: user_id or 'admins'" },
-                        "text": { "type": "string", "description": "Text content (msgtype=text)" },
-                        "miniprogram": { "type": "object", "description": "Miniprogram card (msgtype=miniprogram): {appid, pagepath, title, thumb_media_id}", "properties": {
-                            "appid": { "type": "string" },
-                            "pagepath": { "type": "string", "description": "Must end with .html for wecom-kf" },
-                            "title": { "type": "string" },
-                            "thumb_media_id": { "type": "string" }
-                        } },
-                        "bot_id": { "type": "string", "description": "Source bot_id for OA routing (optional, auto-inferred from user_id)" }
-                    },
-                    "required": ["target"]
-                }),
-            },
         ]
     }
 
@@ -114,10 +95,6 @@ impl ToolModule for AutomationRulesTools {
             "automation_rule_list" => Some(tool_rule_list(input, kernel, sender_id).await),
             "automation_rule_upsert" => Some(tool_rule_upsert(input, kernel, sender_id).await),
             "automation_rule_delete" => Some(tool_rule_delete(input, kernel, sender_id).await),
-            "message_push" => {
-                let agent_id = ctx.caller_agent_id;
-                Some(tool_message_push(input, kernel, sender_id, agent_id).await)
-            }
             _ => None,
         }
     }
@@ -126,8 +103,7 @@ impl ToolModule for AutomationRulesTools {
         match tool_name {
             "automation_rule_list"
             | "automation_rule_upsert"
-            | "automation_rule_delete"
-            | "message_push" => PermissionLevel::Write,
+            | "automation_rule_delete" => PermissionLevel::Write,
             _ => PermissionLevel::Dangerous,
         }
     }
@@ -387,31 +363,6 @@ fn build_content_descriptor(input: &Value) -> CarrierResult<carrier_types::conte
     Err(CarrierError::InvalidInput(
         "requires 'text' or 'miniprogram' content".to_string(),
     ))
-}
-
-/// Immediately push a message to a specific user or all admins (admin only).
-async fn tool_message_push(
-    input: &Value,
-    kernel: Option<&Arc<dyn KernelHandle>>,
-    sender_id: Option<&str>,
-    caller_agent_id: Option<&str>,
-) -> CarrierResult<String> {
-    require_admin(sender_id)?;
-    let kh = crate::tools::require_kernel(kernel)?;
-    let target = input["target"]
-        .as_str()
-        .ok_or_else(|| CarrierError::InvalidInput("Missing 'target'".to_string()))?;
-    let content = build_content_descriptor(input)?;
-    let agent_id = caller_agent_id.unwrap_or("");
-    let bot_id = input["bot_id"].as_str().unwrap_or("");
-    kh.push_message(
-        target.to_string(),
-        content,
-        agent_id.to_string(),
-        bot_id.to_string(),
-    )
-    .await?;
-    Ok(format!("Message pushed to {target}"))
 }
 
 #[cfg(test)]

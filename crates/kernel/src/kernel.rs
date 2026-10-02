@@ -75,9 +75,6 @@ pub struct KernelPlugins {
     pub toolset_registry: std::sync::RwLock<std::collections::HashMap<String, Vec<ToolDefinition>>>,
     /// Configured MCP server list (from config, used for MCP connections).
     pub effective_mcp_servers: std::sync::RwLock<Vec<carrier_types::config::McpServerConfigEntry>>,
-    /// Plugin tool dispatcher — routes plugin tool calls to loaded shared libraries.
-    pub plugin_tool_dispatcher:
-        std::sync::Mutex<Option<Arc<carrier_runtime::plugin::tool_dispatch::PluginToolDispatcher>>>,
     /// Per-server consecutive reconnection failure count for exponential backoff.
     /// Key: normalized server name, Value: failure count.
     pub mcp_reconnect_failures: dashmap::DashMap<String, u32>,
@@ -122,9 +119,6 @@ pub struct KernelCoordination {
     pub(crate) self_handle: OnceLock<Weak<CarrierKernel>>,
 }
 
-/// A probe that returns whether a given channel type supports proactive push.
-pub type ChannelProactivePushFn = Arc<dyn Fn(&str) -> bool + Send + Sync>;
-
 /// The main Carrier kernel — coordinates all subsystems.
 pub struct CarrierKernel {
     /// Kernel configuration.
@@ -153,19 +147,6 @@ pub struct CarrierKernel {
     /// carrier_types::observer）。
     pub turn_observer:
         std::sync::RwLock<Option<Arc<dyn carrier_types::observer::TurnObserver>>>,
-
-    /// Channel send function: (channel_type, bot_id, user_id, text) → Result.
-    /// Wired up by the API server after the ChannelManager starts. Used by
-    /// cron delivery to send notifications back to users.
-    pub channel_send_fn: std::sync::RwLock<Option<carrier_runtime::plugin::bridge::ChannelSendFn>>,
-    /// Channel deliver function: (channel_type, bot_id, user_id, content) -> Result.
-    /// Wired up alongside channel_send_fn. Backs `[DELIVER:key]` marker handling
-    /// and script/no-agent rich-content delivery.
-    pub channel_deliver_fn:
-        std::sync::RwLock<Option<carrier_runtime::plugin::bridge::ChannelDeliverFn>>,
-    /// Channel proactive-push capability probe: channel_type → bool.
-    /// Wired up alongside channel_send_fn.
-    pub channel_supports_proactive_fn: std::sync::RwLock<Option<ChannelProactivePushFn>>,
 
     /// LLM brain.
     pub brain: KernelBrain,
@@ -593,9 +574,6 @@ impl CarrierKernel {
             compaction_inflight: std::sync::Mutex::new(std::collections::HashSet::new()),
             metering,
             cron_scheduler,
-            channel_send_fn: std::sync::RwLock::new(None),
-            channel_deliver_fn: std::sync::RwLock::new(None),
-            channel_supports_proactive_fn: std::sync::RwLock::new(None),
             brain: KernelBrain {
                 brain: Arc::new(std::sync::RwLock::new(brain_arc)),
                 brain_path: brain_path.clone(),
@@ -610,7 +588,6 @@ impl CarrierKernel {
                 mcp_tools: std::sync::Mutex::new(Vec::new()),
                 toolset_registry: std::sync::RwLock::new(std::collections::HashMap::new()),
                 effective_mcp_servers: std::sync::RwLock::new(all_mcp_servers),
-                plugin_tool_dispatcher: std::sync::Mutex::new(None),
                 mcp_reconnect_failures: dashmap::DashMap::new(),
             },
             runtime: KernelRuntime {
@@ -1436,323 +1413,6 @@ impl CarrierKernel {
             carrier_runtime::prompt_builder::build_system_prompt(&prompt_ctx);
     }
 
-    /// Push a notification to admins (automation `notify_admin` rule bypass).
-    /// Looks up `notify_type` in `notify_routes`, resolves recipients (admins
-    /// fan-out via the agent's `admins.json`, or the route's explicit user_id),
-    /// and pushes via `channel_send_fn`. Does NOT touch the agent turn -- the
-    /// caller still runs the agent to reply to the user.
-    pub async fn notify_admins(
-        &self,
-        agent_id: &str,
-        notify_type: &str,
-        content: &str,
-        source_sender: &str,
-        source_bot: &str,
-    ) -> carrier_types::error::CarrierResult<()> {
-        use carrier_types::error::CarrierError;
-
-        // 1. Find the route for this notify type.
-        let route = {
-            let routes = self.memory.notify_store().load_all()?;
-            routes
-                .iter()
-                .find(|r| r.name == notify_type)
-                .cloned()
-                .ok_or_else(|| CarrierError::Config(format!("no notify route '{notify_type}'")))?
-        };
-
-        // 2. Build the push message (prefix + content + source).
-        let msg = match route.prefix.as_ref().filter(|p| !p.is_empty()) {
-            Some(p) => format!("{p}\n{content}\n来源用户: {source_sender}"),
-            None => format!("{content}\n来源用户: {source_sender}"),
-        };
-
-        // 3. Resolve recipient (channel, bot_id, user_id) tuples.
-        //    recipients="admins" -> fan out via admins.json, routing each admin
-        //    through sender_channels (authoritative) with prefix fallback — this
-        //    also handles wecom (`wm…`) admins, which the old inline logic missed.
-        let cron_store = self.memory.cron_delivery();
-        let recipient_ids: Vec<(String, String, String)> =
-            if route.recipients.as_deref() == Some("admins") {
-                // Inline resolve_agent_workspace (it's a KernelHandle trait
-                // method; inlining avoids importing the trait here).
-                let ws = self
-                    .registry
-                    .resolve(agent_id)
-                    .ok()
-                    .and_then(|(_, entry)| entry.manifest.workspace.clone())
-                    .map(|p| p.to_string_lossy().to_string());
-                match ws {
-                    Some(ws) => {
-                        let admins = carrier_runtime::plugin::admin_store::read_admins(
-                            std::path::Path::new(&ws),
-                        );
-                        admins
-                            .admins
-                            .into_iter()
-                            .map(|a| {
-                                carrier_memory::cron_delivery::route_recipient(
-                                    &a.sender_id,
-                                    cron_store,
-                                    source_bot,
-                                )
-                            })
-                            .collect()
-                    }
-                    None => {
-                        tracing::warn!(
-                            agent_id = %agent_id, notify_type = %notify_type,
-                            "notify_admins: recipients=admins but workspace unresolved"
-                        );
-                        Vec::new()
-                    }
-                }
-            } else if route.user_id.is_empty() {
-                tracing::warn!(
-                    notify_type = %notify_type,
-                    "notify_admins: route has empty user_id and recipients != admins"
-                );
-                Vec::new()
-            } else {
-                vec![(
-                    route.channel.clone(),
-                    route.bot_id.clone(),
-                    route.user_id.clone(),
-                )]
-            };
-
-        // 4. Push via channel_send_fn (sync fn -> spawn_blocking, fire-and-forget + log).
-        let send_fn = self
-            .channel_send_fn
-            .read()
-            .ok()
-            .and_then(|guard| guard.clone());
-        let send_fn = match send_fn {
-            Some(f) => f,
-            None => {
-                return Err(CarrierError::Config(
-                    "channel_send_fn not configured".into(),
-                ))
-            }
-        };
-
-        for (channel, bot_id, user_id) in recipient_ids {
-            let send_fn = std::sync::Arc::clone(&send_fn);
-            let msg = msg.clone();
-            let (ch, bot, user) = (channel.clone(), bot_id.clone(), user_id.clone());
-            let nt = notify_type.to_string();
-            match tokio::task::spawn_blocking(move || send_fn(&ch, &bot, &user, &msg)).await {
-                Ok(Ok(())) => tracing::info!(
-                    notify_type = %nt, target_channel = %channel, target_user = %user_id,
-                    "automation notify_admin pushed"
-                ),
-                Ok(Err(e)) => tracing::warn!(
-                    notify_type = %notify_type, target_user = %user_id, error = %e,
-                    "automation notify_admin push failed"
-                ),
-                Err(e) => tracing::warn!(
-                    notify_type = %notify_type, target_user = %user_id, error = %e,
-                    "automation notify_admin join failed"
-                ),
-            }
-        }
-        Ok(())
-    }
-
-    /// Followers ledger (automation Phase 2). Thin substrate passthroughs —
-    /// callers: the weixin-oa webhook (follow/touch/unfollow) and cron
-    /// `Push`/`FollowerReport` actions (audience + growth stats).
-    pub async fn follower_record_follow(
-        &self,
-        channel: &str,
-        app_id: &str,
-        openid: &str,
-        unionid: Option<&str>,
-        scene: Option<&str>,
-    ) -> CarrierResult<()> {
-        self.memory
-            .follower_record_follow(channel, app_id, openid, unionid, scene)
-            .await
-    }
-
-    pub async fn follower_touch(
-        &self,
-        channel: &str,
-        app_id: &str,
-        openid: &str,
-    ) -> CarrierResult<()> {
-        self.memory.follower_touch(channel, app_id, openid).await
-    }
-
-    pub async fn follower_mark_unfollowed(
-        &self,
-        channel: &str,
-        app_id: &str,
-        openid: &str,
-    ) -> CarrierResult<()> {
-        self.memory
-            .follower_mark_unfollowed(channel, app_id, openid)
-            .await
-    }
-
-    /// Active followers seen since `since_rfc3339` — the deliverable audience
-    /// for a scheduled push (OA customer-service 48h window).
-    pub async fn follower_list_pushable(
-        &self,
-        channel: &str,
-        app_id: &str,
-        since_rfc3339: &str,
-    ) -> CarrierResult<Vec<String>> {
-        self.memory
-            .follower_list_pushable(channel, app_id, since_rfc3339)
-            .await
-    }
-
-    pub async fn follower_stats(
-        &self,
-        channel: &str,
-        app_id: &str,
-        since_rfc3339: &str,
-        push_window_since_rfc3339: &str,
-    ) -> CarrierResult<carrier_memory::follower_store::FollowerStats> {
-        self.memory
-            .follower_stats(channel, app_id, since_rfc3339, push_window_since_rfc3339)
-            .await
-    }
-
-    /// Unified push: deliver a `ContentDescriptor` (text/miniprogram/image/link)
-    /// to any target — a specific user_id or `"admins"` (fan-out). Uses
-    /// `channel_deliver_fn` (supports rich content on all channels). The agent
-    /// turn is NOT affected (caller decides whether to skip agent).
-    pub async fn do_push_message(
-        &self,
-        target: &str,
-        content: &carrier_types::content::ContentDescriptor,
-        source_agent_id: &str,
-        source_bot_id: &str,
-    ) -> carrier_types::error::CarrierResult<()> {
-        use carrier_types::error::CarrierError;
-
-        let deliver_fn = self
-            .channel_deliver_fn
-            .read()
-            .ok()
-            .and_then(|guard| guard.clone());
-        let deliver_fn = match deliver_fn {
-            Some(f) => f,
-            None => {
-                return Err(CarrierError::Config(
-                    "channel_deliver_fn not configured".into(),
-                ))
-            }
-        };
-
-        // Resolve recipients: (channel, bot_id, user_id) via sender_channels
-        // (authoritative, multi-tenant safe) with prefix fallback. `"admins"`
-        // fans out via admins.json.
-        let cron_store = self.memory.cron_delivery();
-        let recipients: Vec<(String, String, String)> = if target == "admins" {
-            let ws = self
-                .registry
-                .resolve(source_agent_id)
-                .ok()
-                .and_then(|(_, entry)| entry.manifest.workspace.clone())
-                .map(|p| p.to_string_lossy().to_string());
-            match ws {
-                Some(w) => {
-                    let admins =
-                        carrier_runtime::plugin::admin_store::read_admins(std::path::Path::new(&w));
-                    admins
-                        .admins
-                        .into_iter()
-                        .map(|a| {
-                            carrier_memory::cron_delivery::route_recipient(
-                                &a.sender_id,
-                                cron_store,
-                                source_bot_id,
-                            )
-                        })
-                        .collect()
-                }
-                None => {
-                    tracing::warn!(
-                        agent_id = %source_agent_id, target = %target,
-                        "push_message: target=admins but workspace unresolved"
-                    );
-                    Vec::new()
-                }
-            }
-        } else {
-            // Security gate: only push to recipients the bot has actually
-            // interacted with (recorded in sender_channels). This blocks an
-            // automation rule from pushing to an arbitrary陌生 openid via a
-            // public keyword trigger, and also fails fast for doomed deliveries
-            // — OA/wecom can only reach users who have followed / entered the
-            // kf session, which is exactly when sender_channels gets a row.
-            if cron_store.get_last_channel(target).ok().flatten().is_none() {
-                return Err(CarrierError::InvalidInput(format!(
-                    "cannot push to '{target}': no recorded interaction with this \
-                     recipient (not in sender_channels). Have them send the bot a \
-                     message first, or target 'admins'."
-                )));
-            }
-            vec![carrier_memory::cron_delivery::route_recipient(
-                target,
-                cron_store,
-                source_bot_id,
-            )]
-        };
-
-        // Fail loudly on zero recipients or total delivery failure so the caller
-        // (tool_message_push) surfaces an error instead of a false success.
-        let total = recipients.len();
-        if total == 0 {
-            return Err(CarrierError::Config(format!(
-                "push to '{target}': no recipients resolved"
-            )));
-        }
-
-        let mut failed = 0usize;
-        for (channel, bot_id, user_id) in recipients {
-            let deliver_fn = std::sync::Arc::clone(&deliver_fn);
-            let content = content.clone();
-            let (ch, bot, user) = (channel.clone(), bot_id.clone(), user_id.clone());
-            match tokio::task::spawn_blocking(move || deliver_fn(&ch, &bot, &user, &content)).await
-            {
-                Ok(Ok(())) => tracing::info!(
-                    target_channel = %channel, target_user = %user_id,
-                    "push_message delivered"
-                ),
-                Ok(Err(e)) => {
-                    failed += 1;
-                    tracing::warn!(
-                        target_user = %user_id, error = %e,
-                        "push_message failed"
-                    );
-                }
-                Err(e) => {
-                    failed += 1;
-                    tracing::warn!(
-                        target_user = %user_id, error = %e,
-                        "push_message join failed"
-                    );
-                }
-            }
-        }
-
-        if failed == total {
-            return Err(CarrierError::Internal(format!(
-                "push to '{target}': all {total} deliveries failed"
-            )));
-        }
-        if failed > 0 {
-            tracing::warn!(
-                target = %target, failed, total,
-                "push_message partial failure"
-            );
-        }
-        Ok(())
-    }
 }
 
 #[cfg(test)]

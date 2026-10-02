@@ -9,7 +9,6 @@ mod api_cmd;
 mod cron_cmd;
 mod probe;
 mod remote;
-mod start;
 mod sys_cmd;
 mod tool_cmd;
 
@@ -31,8 +30,6 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Command {
-    /// 运行时分身守护进程（个人部署形态）
-    Start,
     /// 化身管理 CLI 面（AginxOS 融合后唯一管理入口：供 aterm 启动器/脚本调用）
     Agent {
         #[command(subcommand)]
@@ -250,7 +247,6 @@ enum RemoteAction {
 fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
     match cli.command {
-        Command::Start => start::run()?,
         Command::Agent { action } => agent_cmd::run(action)?,
         Command::Cron { action } => cron_cmd::run(action)?,
         Command::Acp { clone, session } => acp::run(clone, session)?,

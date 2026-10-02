@@ -177,28 +177,6 @@ pub trait KernelHandle: Send + Sync {
         ))
     }
 
-    /// Unified push: deliver a `ContentDescriptor` to any target (user_id or
-    /// "admins"). Uses `channel_deliver_fn` (rich content on all channels).
-    async fn push_message(
-        &self,
-        target: String,
-        content: carrier_types::content::ContentDescriptor,
-        source_agent_id: String,
-        source_bot_id: String,
-    ) -> CarrierResult<()> {
-        let _ = (target, content, source_agent_id, source_bot_id);
-        Err(CarrierError::Internal("push_message not available".into()))
-    }
-
-    /// Look up the `(channel_type, bot_id)` a sender most recently used, from
-    /// the `sender_channels` table (written on every inbound). Sync — used by
-    /// outbound routing (e.g. `process_notify_markers`) to route admin
-    /// fan-out authoritatively instead of by id-prefix guesswork. Returns None
-    /// when the sender has no recorded inbound (caller falls back to inference).
-    fn resolve_sender_channel(&self, _sender_id: &str) -> Option<(String, String)> {
-        None
-    }
-
     /// List discovered external A2A agents as (name, url) pairs.
     fn list_a2a_agents(&self) -> Vec<(String, String)> {
         vec![]
@@ -236,22 +214,6 @@ pub trait KernelHandle: Send + Sync {
         Vec::new()
     }
 
-    /// Execute a plugin (channel) tool by name via the PluginToolDispatcher.
-    ///
-    /// Returns `None` if no dispatcher is registered or the tool isn't a plugin
-    /// tool (so the caller can fall through to other dispatch paths).
-    /// Returns `Ok(Some(content))` on success, `Ok(None)` if no plugin handles
-    /// the tool, or `Err(_)` if a plugin handled it but execution failed.
-    fn execute_plugin_tool(
-        &self,
-        tool_name: &str,
-        args: &serde_json::Value,
-        context: &carrier_types::plugin::PluginToolContext,
-    ) -> CarrierResult<Option<String>> {
-        let _ = (tool_name, args, context);
-        Ok(None)
-    }
-
     /// Get the home directory path (~/.aginx/carrier/).
     fn home_dir(&self) -> Option<std::path::PathBuf> {
         None
@@ -260,23 +222,6 @@ pub trait KernelHandle: Send + Sync {
     /// Public base URL for constructing file `view_url`s (e.g. `https://file.yinnho.cn`).
     fn external_url(&self) -> Option<String> {
         None
-    }
-
-    /// Deliver rich content by key for an agent, without running an agent loop.
-    /// Scripts/cron call this to send `[DELIVER:key]`-equivalent content directly
-    /// to a user on a given channel/bot. Default implementation returns an error
-    /// - real kernels override it with the wired-up `channel_deliver_fn`.
-    fn deliver_content(
-        &self,
-        _agent: &str,
-        _content_key: &str,
-        _channel_type: &str,
-        _bot_id: &str,
-        _user_id: &str,
-    ) -> CarrierResult<()> {
-        Err(CarrierError::Internal(
-            "deliver_content not implemented by this kernel".into(),
-        ))
     }
 
     /// Spawn an agent with capability inheritance enforcement.

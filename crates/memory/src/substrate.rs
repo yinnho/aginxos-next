@@ -5,12 +5,10 @@
 
 use crate::automation_store::AutomationRuleStore;
 use crate::chain_resume_store::ChainResumeStore;
-use crate::cron_delivery::CronDeliveryStore;
 use crate::cron_store::CronJobStore;
 use crate::flow_run::FlowRunStore;
 use crate::follower_store::FollowerStore;
 use crate::migration::run_migrations;
-use crate::notify_store::NotifyRouteStore;
 use crate::session::{Session, SessionStore};
 use crate::system_kv::SystemKV;
 use crate::tree::ingest::IngestPipeline;
@@ -33,16 +31,14 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
 /// The unified memory substrate. Tree memory is the primary memory interface;
-/// system_kv, sessions, and cron_delivery are infrastructure stores.
+/// system_kv and sessions are infrastructure stores.
 pub struct MemorySubstrate {
     conn: Arc<Mutex<Connection>>,
     system_kv: SystemKV,
     sessions: SessionStore,
-    cron_delivery: CronDeliveryStore,
     cron_store: CronJobStore,
     followers: FollowerStore,
     weixin_store: WeixinSessionStore,
-    notify_store: NotifyRouteStore,
     flow_runs: FlowRunStore,
     automation_rules: AutomationRuleStore,
     chain_resume: ChainResumeStore,
@@ -80,11 +76,9 @@ impl MemorySubstrate {
             conn: Arc::clone(&shared),
             system_kv: SystemKV::new(Arc::clone(&shared)),
             sessions: SessionStore::new(Arc::clone(&shared)),
-            cron_delivery: CronDeliveryStore::new(Arc::clone(&shared)),
             cron_store: CronJobStore::new(Arc::clone(&shared)),
             followers: FollowerStore::new(Arc::clone(&shared)),
             weixin_store: WeixinSessionStore::new(Arc::clone(&shared)),
-            notify_store: NotifyRouteStore::new(Arc::clone(&shared)),
             flow_runs: FlowRunStore::new(Arc::clone(&shared)),
             automation_rules: AutomationRuleStore::new(Arc::clone(&shared)),
             chain_resume: ChainResumeStore::new(Arc::clone(&shared)),
@@ -118,11 +112,9 @@ impl MemorySubstrate {
             conn: Arc::clone(&shared),
             system_kv: SystemKV::new(Arc::clone(&shared)),
             sessions: SessionStore::new(Arc::clone(&shared)),
-            cron_delivery: CronDeliveryStore::new(Arc::clone(&shared)),
             cron_store: CronJobStore::new(Arc::clone(&shared)),
             followers: FollowerStore::new(Arc::clone(&shared)),
             weixin_store: WeixinSessionStore::new(Arc::clone(&shared)),
-            notify_store: NotifyRouteStore::new(Arc::clone(&shared)),
             flow_runs: FlowRunStore::new(Arc::clone(&shared)),
             automation_rules: AutomationRuleStore::new(Arc::clone(&shared)),
             chain_resume: ChainResumeStore::new(Arc::clone(&shared)),
@@ -133,10 +125,6 @@ impl MemorySubstrate {
     }
 
     /// Get a reference to the cron delivery store (last-channel tracking + buffer).
-    pub fn cron_delivery(&self) -> &CronDeliveryStore {
-        &self.cron_delivery
-    }
-
     /// Get a reference to the cron job store (persistent cron_jobs table).
     pub fn cron_store(&self) -> &CronJobStore {
         &self.cron_store
@@ -148,10 +136,6 @@ impl MemorySubstrate {
     }
 
     /// Get a reference to the notify route store.
-    pub fn notify_store(&self) -> &NotifyRouteStore {
-        &self.notify_store
-    }
-
     /// Get a reference to the flow run store (multi-step flow execution state).
     pub fn flow_runs(&self) -> &FlowRunStore {
         &self.flow_runs
@@ -163,8 +147,7 @@ impl MemorySubstrate {
     }
 
     /// Get a reference to the chain-resume ledger (断链自动接续 attempt
-    /// budgets). Daemon-side sync access — same precedent as
-    /// [`Self::cron_delivery`].
+    /// budgets). Daemon-side sync access.
     pub fn chain_resume(&self) -> &ChainResumeStore {
         &self.chain_resume
     }

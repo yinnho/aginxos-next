@@ -232,22 +232,6 @@ impl CarrierKernel {
         {
             return Some(def);
         }
-        // Plugin tool dispatcher (channel tools registered as ToolProvider).
-        if let Some(dispatcher) = self
-            .plugins
-            .plugin_tool_dispatcher
-            .lock()
-            .ok()
-            .and_then(|g| g.clone())
-        {
-            if let Some(def) = dispatcher
-                .definitions()
-                .into_iter()
-                .find(|d| d.name == name)
-            {
-                return Some(def);
-            }
-        }
         None
     }
 

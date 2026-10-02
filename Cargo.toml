@@ -37,7 +37,6 @@ members = [
     "crates/carrier-gateway",
     "crates/lifecycle",
     "crates/kernel",
-    "crates/webhook",
     "crates/aginx-file",
     "crates/aginx-mem",
 ]
@@ -139,7 +138,6 @@ carrier-gateway = { path = "crates/carrier-gateway" }
 carrier-lifecycle = { path = "crates/lifecycle" }
 carrier-runtime = { path = "crates/runtime" }
 carrier-kernel = { path = "crates/kernel" }
-carrier-webhook = { path = "crates/webhook" }
 carrier = { path = "crates/carrier" }
 
 [profile.release]

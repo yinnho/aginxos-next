@@ -195,18 +195,16 @@ pub enum CronAction {
 // ---------------------------------------------------------------------------
 
 /// Where the job's output is delivered.
+///
+/// 频道投递变体（LastChannel/Admins）已随 #68 刀4b 退役——引擎不认识
+/// 频道（频道体系整线住 crates/channels）。旧库里的 `last_channel`/
+/// `admins` 行经 serde alias 降级为 Card（家根卡片，模板 reply），
+/// 不让旧 job 整行加载失败。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum CronDelivery {
     /// No delivery — fire and forget.
     None,
-    /// Deliver via the user's last communication channel (degrades to None if no channel).
-    LastChannel,
-    /// Deliver to all admins of the agent's workspace (fans out via admins.json
-    /// → `do_push_message("admins", …)`). Unlike an agent calling `message_push`,
-    /// this is a privileged delivery path with no ephemeral admin-identity gate,
-    /// so it reliably reaches admins from a scheduled (async) cron turn.
-    Admins,
     /// Deliver via HTTP webhook.
     Webhook {
         /// Webhook URL (must start with `http://` or `https://`).
@@ -216,12 +214,23 @@ pub enum CronDelivery {
     /// `{home}/cards/`，开机画面扫这个目录排横条小框；点开才由系统调
     /// 浏览器按模板渲染（模板/注册表在浏览器目录，母体不写 HTML）。
     /// 应答文本按 workflow 规程应是 JSON——不是就整段兜底 `{"text":…}`。
+    #[serde(alias = "last_channel", alias = "admins")]
     Card {
         /// 卡片标题（首页小框上的一行）。
+        #[serde(default = "default_card_title")]
         title: String,
         /// 浏览器模板名（/open 的 template 参数）。
+        #[serde(default = "default_card_template")]
         template: String,
     },
+}
+
+fn default_card_title() -> String {
+    "任务通知".to_string()
+}
+
+fn default_card_template() -> String {
+    "reply".to_string()
 }
 
 // ---------------------------------------------------------------------------
@@ -491,8 +500,6 @@ impl CronJob {
                 }
             }
             CronDelivery::None => {}
-            CronDelivery::LastChannel => {}
-            CronDelivery::Admins => {}
             CronDelivery::Card { title, template } => {
                 // 信封的两根柱子：标题是首页小框的一行，模板名是浏览器
                 // /open 的参数——空了卡片永远点不开。
@@ -1217,12 +1224,14 @@ mod tests {
         let json2 = serde_json::to_string(&d2).unwrap();
         assert!(json2.contains("\"kind\":\"webhook\""));
 
-        // Admins delivery: round-trip through {"kind":"admins"}.
-        let d3 = CronDelivery::Admins;
-        let json3 = serde_json::to_string(&d3).unwrap();
-        assert_eq!(json3, "{\"kind\":\"admins\"}");
-        let back: CronDelivery = serde_json::from_str(&json3).unwrap();
-        assert!(matches!(back, CronDelivery::Admins));
+        // 频道投递变体已退役（#68 刀4b）：旧库行 {"kind":"admins"} /
+        // {"kind":"last_channel"} 经 alias 降级为 Card（默认标题/模板），
+        // 不让旧 job 整行加载失败。
+        let back: CronDelivery = serde_json::from_str("{\"kind\":\"admins\"}").unwrap();
+        assert!(matches!(back, CronDelivery::Card { ref title, ref template }
+            if title == "任务通知" && template == "reply"));
+        let back: CronDelivery = serde_json::from_str("{\"kind\":\"last_channel\"}").unwrap();
+        assert!(matches!(back, CronDelivery::Card { .. }));
     }
 
     // -- Cron expression edge cases --

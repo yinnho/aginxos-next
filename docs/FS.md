@@ -201,11 +201,20 @@ name = "某店"
 
 ---
 
-## 母体引擎（原 aginx-carrier）
+## 引擎（商品）
 
-独立仓 `~/Documents/aginx/aginx-carrier` **停作产品**。源码已并入本仓 `crates/`（2026-09-24 workspace 合一，`carrier-*` 各件进根 workspace），引擎跑在 `crates/server`（aginx-server）进程内，不再安装 `aginx-carrier` 二进制。
+引擎=商品劳力（DESIGN.md）：codex/grok/开源 CLI，真身走 pkg 进
+`/var/bin`，按名 spawn。每个干活位（workflows 助理、channels 频道
+路由的 agent）由 gateway 名册条目（`agents/<名>/aginx.toml`）指认
+引擎与方言（output=raw / codex-exec-json / …）——**换引擎=改条目**，
+OS 面不动。刀1 晨报、刀2 模板匠已迁 codex（#429/#430）；微信频道
+绑定 codex（#431，用户裁决不用 carrier）。
 
-默认家目录已改为 `AGINX_HOME` → `/home`；助理根已改为 `{home}/workflows`。按 clone 名的 ACP 桥不再作为 OS 入口。
+carrier-* 各件（2026-09-24 并入的引擎面）**退役中**：aginx-server
+=前台+派活台，不是引擎；设备���仅 system 本体过渡期仍骑
+aginx-carrier acp 腿（迁外部引擎待本体设计），#428 spike 已证
+workflows=codex 工作目录全通（退役判据达成）。通道/词表面已随 #69
+清场——channels/ 唯一家，母体不认识频道。
 
 ---
 
@@ -213,19 +222,19 @@ name = "某店"
 
 ```
 aginxos-next/
-├── crates/                 # 单一 workspace（OS 面 + 母体引擎 carrier-* 面）
-│   ├── server/             # 母体前台，引擎在进程内
-│   ├── kernel/ runtime/ …  # 母体引擎件（carrier-kernel / carrier-runtime / …）
-│   ├── gateway/            # agent://
+├── crates/                 # 单一 workspace（OS 面 + 引擎/频道面）
+│   ├── server/             # 母体前台（引擎退役中：前台+派活台）
+│   ├── kernel/ runtime/ …  # carrier-* 引擎件（退役中，见「引擎」章）
+│   ├── channels/           # 频道体系唯一家（机身+weixin 腿，#69）
 │   ├── router/             # /usr/bin 宇宙
-│   └── term/ voice/ …
+│   └── term/ voice/ call/ …
 ├── home/                   # 出厂整树真源，烤线整树拷进机上 /home
 │   ├── SOUL.md MEMORY.md   # 母体人格（总管 + 门面）
 │   ├── photos/ files/      # 相册、文件
 │   └── workflows/          # 出厂助理编制（clone-creator）
 ├── devices/<codename>/
 ├── rootfs/
-├── pkgs/                   # 出厂 tool 的签名包 → /usr/bin
+├── pkgs/                   # 签名包（tool/引擎/频道，/usr/bin 与 /var/bin 两面）
 └── docs/FS.md
 ```
 
