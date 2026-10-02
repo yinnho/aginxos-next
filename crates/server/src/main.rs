@@ -1,31 +1,23 @@
-// aginx-server — 母体（宪法 D4/D10/D11）：前台登记（进/住/切/退）、会话
-// 光标、请求路由、D8 会话账、kernel 直调宿主。
+// aginx-server — 前台（刀④-4 裁形，2026-10-02）：UDS 面 + 装卸链 +
+// 系统直通条目。
 //
-// 入口 = UDS（v0 不开 TCP）：每条连线一问一答——读一行 op JSON，回一行
-// D1 信封，连接即关。化身轮次在连线线程里同步跑完（前台一次一轮，
-// turn 锁在 front 层）；真 brain 一轮可以跑几分钟，客户端就等几分钟，
-// 这正是语音/终端对话的产品形状。
-//
-// 刀2（直调）：server 进程内 boot carrier kernel（host.rs），轮到时
-// 直调 send_message——OS 进程=agent 进程，盒内零 hop。aginx-runtime
-// 子进程与它的 env（AGINX_RUNTIME_BIN）退役。
+// 引擎商品化（DESIGN.md §八）后 server 不再进程内 boot carrier
+// kernel——对话真源=网关 agent://（system 与助理都是 gateway 名册里的
+// codex 条目，④-2/④-3 定形）；send/create 面随 in-process 引擎退役。
+// 剩余职责：
+//   ① boot：落系统本人直通条目（ensure_system_entry，codex 形）
+//   ② UDS 面：list/status/install/remove（装卸链 ④-3 搬入）
 //
 // env：
 //   AGINX_SOCK         UDS 路径，默认 /run/aginx.sock（host 试跑必设）
-//   AGINX_HOME         home 根（workflows/ 与 sessions/ 的父），默认 ~/.aginx
-//   AGINX_BRAIN_URL / AGINXBRAIN_API_KEY  brain.json 缺席时的一次性桥
-//                      （host.rs；此后文件是真源）
+//   AGINX_HOME         home 根（workflows/ 的父），默认 ~/.aginx
+//   AGINX_DATA_DIR     网关数据根（agents/ 条目落处；缺席走 home 指针）
 
-mod front;
+mod gateway_registry;
 mod install;
-mod ledger;
-mod host;
 mod ops;
-#[cfg(test)]
-mod testkit;
 
-use front::FrontDesk;
-use host::Mother;
+use carrier_types::config::KernelConfig;
 use std::io::{BufRead, BufReader, Write};
 use std::os::unix::net::UnixListener;
 use std::path::PathBuf;
@@ -49,9 +41,6 @@ impl ServerCfg {
 }
 
 fn main() {
-    // 引擎（kernel/runtime）全走 tracing——server 不挂 subscriber 的话
-    // LLM 重试/turn 事件全进黑洞（设备日志对 turn 静默的根因）。
-    // 与 carrier::start 同形：RUST_LOG 缺席时 info。
     tracing_subscriber::fmt()
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_default_env()
@@ -60,27 +49,24 @@ fn main() {
         .init();
 
     let cfg = Arc::new(ServerCfg::from_env());
-    // kernel 内部多处读全局 home_dir()（AGINX_HOME env）——boot 前把
-    // resolved home 写回 env，保证进程内全局一致（edition 2021 安全）。
-    std::env::set_var("AGINX_HOME", &cfg.home);
 
-    let desk = Arc::new(FrontDesk::new(cfg.home.join("workflows")));
-    let mother = match Mother::boot(cfg.home.clone(), Arc::clone(&desk)) {
-        Ok(m) => m,
-        Err(e) => {
-            eprintln!("aginx-server: {e}");
-            std::process::exit(1);
-        }
+    let kernel_cfg = KernelConfig {
+        home_dir: cfg.home.clone(),
+        data_dir: cfg.home.join("data"),
+        workflows_dir: Some(cfg.home.join("workflows")),
+        ..KernelConfig::default()
     };
-    let mother = Arc::new(mother);
+    let kernel_cfg = Arc::new(kernel_cfg);
+    // 系统本人直通条目（agent://<机>.relay.aginx.net/system）——boot 期
+    // 幂等补写，新机世界第一拍在这里落。
+    gateway_registry::ensure_system_entry(&kernel_cfg);
 
     // 陈旧 socket 文件（上次崩溃留下的）先清；v0 单实例，不做存活探测
     let _ = std::fs::remove_file(&cfg.sock);
     let listener = match UnixListener::bind(&cfg.sock) {
         Ok(l) => l,
         Err(e) => {
-            eprintln!("aginx-server: cannot bind {}: {e}", cfg.sock.display());
-            eprintln!("aginx-server: host 试跑请设 AGINX_SOCK（/run 在 mac 上不存在）");
+            eprintln!("aginx-server: {e}");
             std::process::exit(1);
         }
     };
@@ -92,15 +78,14 @@ fn main() {
 
     for conn in listener.incoming() {
         let Ok(stream) = conn else { continue };
-        let desk = Arc::clone(&desk);
-        let mother = Arc::clone(&mother);
+        let kernel_cfg = Arc::clone(&kernel_cfg);
         std::thread::spawn(move || {
-            let _ = handle_conn(&desk, &mother, stream);
+            let _ = handle_conn(&kernel_cfg, stream);
         });
     }
 }
 
-fn handle_conn(desk: &FrontDesk, mother: &Mother, stream: std::os::unix::net::UnixStream) -> std::io::Result<()> {
+fn handle_conn(kernel_cfg: &KernelConfig, stream: std::os::unix::net::UnixStream) -> std::io::Result<()> {
     let mut reader = BufReader::new(&stream);
     let mut line = String::new();
     // 一问一答 v0：读一行（上限粗防：op 行不该超 1 MiB）
@@ -109,7 +94,7 @@ fn handle_conn(desk: &FrontDesk, mother: &Mother, stream: std::os::unix::net::Un
         let _ = writeln!(&mut &stream, "{}", agio::fail(agio::ErrorType::Usage, "bad_request", "op line over 1MiB"));
         return Ok(());
     }
-    let resp = ops::handle_line(desk, mother, &line);
+    let resp = ops::handle_line(kernel_cfg, &line);
     let mut w = &stream;
     writeln!(w, "{resp}")?;
     w.flush()

@@ -16,7 +16,7 @@
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
-use carrier_kernel::gateway_registry;
+use crate::gateway_registry;
 use carrier_types::config::{KernelConfig, SYSTEM_AGENT};
 
 #[derive(Debug)]

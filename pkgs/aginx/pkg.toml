@@ -1,5 +1,9 @@
-# aginx — 母体包（D11 母体=aginx）。刀2 起 server 进程内直调 kernel，
-# 不再 spawn aginx-runtime（该二进制已随结构刀①物理删除）。
+# aginx — 前台包（刀④-4 引擎商品化裁形，2026-10-02）。
+# v0.1.14（2026-10-02）：刀④-4 拆迁——carrier/kernel/runtime/carrier-gateway/
+# agi 五 crate 删除；server 裁形（send/create/光标/会话账随 in-process
+# 引擎退役，剩 UDS list/status/install/remove + boot 落系统直通条目）；
+# 第三件 aginx-carrier 退役出包；助理装卸链=server install/remove（④-3）
+# 写 codex 形网关条目。对话真源=网关 agent://（system ④-2 已换芯）。
 # v0.1.13（2026-09-28）：晨报超时静默堵口——cron LastChannel 无 owner_id
 # 的交付（超时/失败通知）不再报错丢弃，降级落 system 家根卡片（reply
 # 模板）。收据 #414：09-28 08:00 晨报超时被杀、失败对主人全静默。
@@ -46,11 +50,11 @@
 # AGINX_BIN 指 /var/bin/aginx（face symlink）。刀F 起 depends 锚
 # aginx-update（装母体自动带自更新器；裸箱升级=重刷）。
 name = "aginx"
-version = "0.1.13"
-summary = "母体：路由器 face /var/bin/aginx + 心脏 server（进程内直调 kernel）+ carrier CLI 面"
+version = "0.1.14"
+summary = "前台：路由器 face /var/bin/aginx + server（UDS 装卸链+系统直通条目；引擎商品化，对话走网关 agent://）"
 group = "agent"
 depends = "aginx-update"
-url = "https://pkgs.aginx.net/aginx/v0.1.13/aginx-v0.1.13-4pc.tar"
+url = "https://pkgs.aginx.net/aginx/v0.1.14/aginx-v0.1.14-4pc.tar"
 exec = "bin/aginx"
 
 [service]

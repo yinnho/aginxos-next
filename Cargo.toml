@@ -1,18 +1,17 @@
 [workspace]
 resolver = "2"
-# 单 workspace（2026-09-24 结构刀①合并：原 mother/ 独立 workspace 并入，
-# 两把锁合一，check.sh 从此盖全部 34 件）。crates/runtime 现指母体引擎
-# carrier-runtime（原 aginx-runtime 已退役删除）。
+# 单 workspace（2026-09-24 结构刀①合并）。刀④-4（2026-10-02）引擎商品
+# 化拆迁：carrier/kernel/runtime/carrier-gateway 四 crate 删除（in-process
+# 引擎退役，对话真源=网关 agent://）；types/memory/clone/dup/lifecycle
+# 留役改嫁（aginx-mem/aginx-file/server 装卸链供养）。
 members = [
     # ── OS 面（aginx-*）──
-    "crates/agi",
     "crates/agio",
     "crates/qr",
     "crates/sign",
     "crates/download",
     "crates/update",
     "crates/router",
-    "crates/runtime",
     "crates/server",
     "crates/voice",
     "crates/call",
@@ -28,15 +27,13 @@ members = [
     "crates/pair",
     "crates/hwd",
     "crates/wificonf",
-    # ── 母体引擎面（carrier-*，自 mother/ 并入）──
-    "crates/carrier",
+    # ── 引擎遗留面（types/memory/clone/dup/lifecycle——人格真源与
+    #    格式层，④-5 接手 memory 线）──
     "crates/types",
     "crates/memory",
     "crates/clone",
     "crates/dup",
-    "crates/carrier-gateway",
     "crates/lifecycle",
-    "crates/kernel",
     "crates/aginx-file",
     "crates/aginx-mem",
 ]
@@ -102,13 +99,8 @@ base64 = "0.22"
 urlencoding = "2"
 flate2 = "1"
 tar = "0.4"
-# Phone-size kernel: core-WASM sandbox only. No component-model/gc/threads/
-# async/parallel-compilation/cache — 母体刀5 (裁死重不裁可选性). wat is
-# test-only (dev-dependencies in crates/runtime re-adds it for fixtures).
-wasmtime = { version = "47", default-features = false, features = ["cranelift", "runtime", "std"] }
 hmac = "0.12"
 zeroize = { version = "1", features = ["derive"] }
-libloading = "0.8"
 shlex = "1"
 
 # agent:// 客户端所在 crate（经网关路由外部 CLI 工具），版本对齐 agc
@@ -127,18 +119,13 @@ aes = "0.8"
 cbc = "0.1"
 
 # Internal crates (OS 面)
-agi = { path = "crates/agi" }
 agio = { path = "crates/agio" }
 
-# Internal crates (母体引擎面)
+# Internal crates（引擎遗留面：格式层/人格真源线）
 carrier-types = { path = "crates/types" }
 carrier-memory = { path = "crates/memory" }
 carrier-clone = { path = "crates/clone" }
-carrier-gateway = { path = "crates/carrier-gateway" }
 carrier-lifecycle = { path = "crates/lifecycle" }
-carrier-runtime = { path = "crates/runtime" }
-carrier-kernel = { path = "crates/kernel" }
-carrier = { path = "crates/carrier" }
 
 [profile.release]
 lto = true

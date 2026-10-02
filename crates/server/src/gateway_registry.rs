@@ -1,4 +1,5 @@
-//! gateway_registry — 安装链三写的对外两笔（刀3，2026-09-27）。
+//! gateway_registry — 安装链三写的对外两笔（刀3，2026-09-27；刀④-4
+//! 自 kernel crate 搬入 server，2026-10-02）。
 //!
 //! 裁决（docs/PLAN-真aginx入机.md 裁定1/裁定4，刀3）：安装 workflows/<名>
 //! 助理时除 kernel 注册表（DB，spawn_agent 已写）外同步写两件——
