@@ -464,6 +464,16 @@ impl WeixinState {
         }
     }
 
+    /// 该发信人是不是绑定号本人（任一扫码会话的 user_id）。
+    ///
+    /// v0.1.2 入站政策真源（用户 10-01 裁决「ilink 绑定的号才能发
+    /// 信息」）：iLink 是伴生协议——bot 会话由扫码号本人发起，消息的
+    /// group_id 是会话标记不是群聊判定（首条真考实抓 from=绑定号本人
+    /// 且 group_id 非空）；只放行绑定号本人，陌生人交 daemon 弃。
+    pub fn is_bound_sender(&self, sender_id: &str) -> bool {
+        self.bots.contains_key(sender_id)
+    }
+
     /// Get status of all bots for the API.
     pub fn status_list(&self) -> Vec<serde_json::Value> {
         self.bots
@@ -553,6 +563,17 @@ mod tests {
         let resolved = state.get_session_for_send("default", "stranger").unwrap();
         assert_eq!(resolved.key(), "scanner-a");
         assert!(resolved.get_context_token("stranger").is_none());
+    }
+
+    /// 绑定判定：扫码号本人（bots 的键=user_id）放行，陌生人拒——
+    /// v0.1.2 bound_only 政策的入站门（daemon 桥消费）。
+    #[test]
+    fn is_bound_sender_matches_scanner_only() {
+        let state = WeixinState::new();
+        register(&state, "scanner-a");
+        assert!(state.is_bound_sender("scanner-a"));
+        assert!(!state.is_bound_sender("stranger"));
+        assert!(!state.is_bound_sender(""));
     }
 
     // ---- 频道会话根（②b）——直接喂路径给私有助手，绕开 OnceLock 全局

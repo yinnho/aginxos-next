@@ -32,7 +32,7 @@ weixin 是第一腿不是包名，新频道=crate 新模块、面不变。
 
 ```
 /home/channels/<名>/
-├── channel.toml        # type/default_agent/[policy] dm_only（缺省播种）
+├── channel.toml        # type/default_agent/[policy] bound_only（缺省播种，只收绑定号本人）
 └── senders/
     ├── <账号uid>/session.json   # 协议会话（bind_agent 字段=绑定真源）
     └── <发信人id>/gw.json       # 该人的引擎对话挂点 {agent, session_id}

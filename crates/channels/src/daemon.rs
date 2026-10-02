@@ -164,8 +164,18 @@ async fn bridge_loop(root: PathBuf, config: ChannelConfig) -> Result<()> {
     let config = Arc::new(config);
 
     while let Some(msg) = rx.recv().await {
-        if config.policy.dm_only && msg.is_group {
-            info!(sender = %msg.sender_id, "dropped group message (dm_only)");
+        // 入站门（v0.1.2，真源=用户 10-01 裁决「ilink 绑定的号才能发
+        // 信息」）：只放行绑定号本人。v0.1.1 的 dm_only=is_group 判定
+        // 错了协议形状——伴生会话本身带 group_id（首条真考实抓被误弃），
+        // 旧母体世界也从未按 is_group 过滤过。陌生人弃但记足上下文。
+        if config.policy.bound_only
+            && !crate::weixin::token::WEIXIN_STATE.is_bound_sender(&msg.sender_id)
+        {
+            info!(
+                sender = %msg.sender_id,
+                thread = ?msg.thread_id,
+                "dropped message from unbound sender (bound_only)"
+            );
             continue;
         }
         let lock = {

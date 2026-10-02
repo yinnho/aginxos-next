@@ -14,11 +14,11 @@
 # 母体（aginx-server）与此包互不相见：母体的微信接线已随 #69 本刀
 # 退役（server boot 与 carrier wiring 两处均无通道管理器）。
 name = "aginx-channels"
-version = "0.1.1"
-summary = "频道体系守护+CLI（weixin 第一腿）：login/bind/send 子命令带频道名，ACP 桥对接本机 gateway-local"
+version = "0.1.2"
+summary = "频道体系守护+CLI（weixin 第一腿）：login/bind/send 子命令带频道名，ACP 桥对接本机 gateway-local；bound_only 只收绑定号本人"
 group = "net"
 depends = "aginx-gateway-local"
-url = "https://pkgs.aginx.net/aginx-channels/v0.1.1/aginx-channels-v0.1.1-4pc.tar"
+url = "https://pkgs.aginx.net/aginx-channels/v0.1.2/aginx-channels-v0.1.2-4pc.tar"
 
 [service]
 cmd = "/var/bin/aginx-channels"
