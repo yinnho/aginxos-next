@@ -135,18 +135,16 @@ case "${PKG}" in
     MEMBERS="pkg.toml SKILL.md files"
     ;;
   aginx)
-    # 母体树包（刀3 合一；结构刀① 起两件）：target 二进制名 aginx
-    # （出自 aginx-router crate）+ aginx-server。exec=bin/aginx
+    # 前台树包（刀④-4 裁形，2026-10-02）：两件——aginx（router face）
+    # + aginx-server（UDS 面：list/status/install/remove + 系统直通条目）。
+    # 第三件 aginx-carrier 随引擎商品化拆迁退役（#68 刀④；send/create
+    # 面退役，对话走网关 agent://）。exec=bin/aginx
     # → /var/bin/aginx symlink 面；[service] cmd 指 pkgfiles 真身。
-    # v0.1.5 起第三件 aginx-carrier：一次性 CLI 面（#69 改形后
-    # qr-login/notify 已随微信接线退役，余 agent/cron/tool/ticket 等；
-    # carrier 整体拆迁归 #68 刀④）。
-    echo "==> zigbuild 母体三件（musl，缓存则秒过）"
+    echo "==> zigbuild 前台两件（musl，缓存则秒过）"
     (cd "${ROOT}" && cargo zigbuild --release --target aarch64-unknown-linux-musl \
-      -p aginx-router -p aginx-server -p carrier)
+      -p aginx-router -p aginx-server)
     mkdir -p "${STAGE}/files/bin"
     install -m 755 "${TARGET_DIR}/aginx" "${TARGET_DIR}/aginx-server" \
-      "${TARGET_DIR}/aginx-carrier" \
       "${STAGE}/files/bin/"
     MEMBERS="pkg.toml SKILL.md files"
     ;;

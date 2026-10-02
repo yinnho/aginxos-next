@@ -1,32 +1,21 @@
-//! Core types and traits for the Carrier Agent Operating System.
+//! Core types — 引擎遗留面的共享数据结构（刀④-4 裁形，2026-10-02）。
 //!
-//! This crate defines all shared data structures used across the Carrier kernel,
-//! runtime, memory substrate, and wire protocol. It contains no business logic.
+//! 引擎商品化后只剩消费面还在的模块：config（KernelConfig/home 路径律）、
+//! error、agent/flow（clone 格式层与 memory substrate 供养）、
+//! memory_tree/message/scheduler（人格真源线）、ssrf（duphub 拉取面）。
 
 pub mod agent;
-pub mod api_tool;
-pub mod brain;
-pub mod capability;
 pub mod config;
 pub mod content;
-pub mod env;
-pub mod dotenv;
 pub mod error;
-pub mod event;
 pub mod flow;
-pub mod manifest_signing;
-pub mod mcp_manifest;
 pub mod media;
 pub mod memory_tree;
 pub mod message;
-pub mod observer;
 pub mod scheduler;
 pub mod serde_compat;
-pub mod sidecar;
 pub mod ssrf;
-pub mod taint;
 pub mod tool;
-pub mod tool_compat;
 
 /// Walk `bp` back to the nearest UTF-8 char boundary (≤ bp, clamped to `s.len()`).
 ///
