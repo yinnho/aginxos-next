@@ -3,11 +3,9 @@
 //! Composes the system KV store, session store, cron delivery store,
 //! and tree memory behind a single API.
 
-use crate::automation_store::AutomationRuleStore;
 use crate::chain_resume_store::ChainResumeStore;
 use crate::cron_store::CronJobStore;
 use crate::flow_run::FlowRunStore;
-use crate::follower_store::FollowerStore;
 use crate::migration::run_migrations;
 use crate::session::{Session, SessionStore};
 use crate::system_kv::SystemKV;
@@ -15,10 +13,8 @@ use crate::tree::ingest::IngestPipeline;
 use crate::tree::retrieval;
 use crate::tree::types::SourceKind;
 use crate::usage::UsageStore;
-use crate::weixin_store::WeixinSessionStore;
 
 use carrier_types::agent::{AgentEntry, AgentId, SessionId};
-use carrier_types::automation::AutomationRule;
 use carrier_types::error::{CarrierError, CarrierResult};
 use carrier_types::memory_tree::{
     DrillDownQuery, EntityMatch, EntitySearch, FetchLeavesQuery, GlobalQuery, IngestRequest,
@@ -37,10 +33,7 @@ pub struct MemorySubstrate {
     system_kv: SystemKV,
     sessions: SessionStore,
     cron_store: CronJobStore,
-    followers: FollowerStore,
-    weixin_store: WeixinSessionStore,
     flow_runs: FlowRunStore,
-    automation_rules: AutomationRuleStore,
     chain_resume: ChainResumeStore,
     tickets: crate::ticket_store::TicketStore,
     content_root: PathBuf,
@@ -77,10 +70,7 @@ impl MemorySubstrate {
             system_kv: SystemKV::new(Arc::clone(&shared)),
             sessions: SessionStore::new(Arc::clone(&shared)),
             cron_store: CronJobStore::new(Arc::clone(&shared)),
-            followers: FollowerStore::new(Arc::clone(&shared)),
-            weixin_store: WeixinSessionStore::new(Arc::clone(&shared)),
             flow_runs: FlowRunStore::new(Arc::clone(&shared)),
-            automation_rules: AutomationRuleStore::new(Arc::clone(&shared)),
             chain_resume: ChainResumeStore::new(Arc::clone(&shared)),
             tickets: crate::ticket_store::TicketStore::new(Arc::clone(&shared)),
             content_root,
@@ -113,10 +103,7 @@ impl MemorySubstrate {
             system_kv: SystemKV::new(Arc::clone(&shared)),
             sessions: SessionStore::new(Arc::clone(&shared)),
             cron_store: CronJobStore::new(Arc::clone(&shared)),
-            followers: FollowerStore::new(Arc::clone(&shared)),
-            weixin_store: WeixinSessionStore::new(Arc::clone(&shared)),
             flow_runs: FlowRunStore::new(Arc::clone(&shared)),
-            automation_rules: AutomationRuleStore::new(Arc::clone(&shared)),
             chain_resume: ChainResumeStore::new(Arc::clone(&shared)),
             tickets: crate::ticket_store::TicketStore::new(Arc::clone(&shared)),
             content_root: PathBuf::from("/tmp/opencarrier_tree_content"),
@@ -124,26 +111,14 @@ impl MemorySubstrate {
         })
     }
 
-    /// Get a reference to the cron delivery store (last-channel tracking + buffer).
     /// Get a reference to the cron job store (persistent cron_jobs table).
     pub fn cron_store(&self) -> &CronJobStore {
         &self.cron_store
     }
 
-    /// Get a reference to the weixin session store.
-    pub fn weixin_store(&self) -> &WeixinSessionStore {
-        &self.weixin_store
-    }
-
-    /// Get a reference to the notify route store.
-    /// Get a reference to the flow run store (multi-step flow execution state).
+    /// Get the reference to the flow run store (multi-step flow execution state).
     pub fn flow_runs(&self) -> &FlowRunStore {
         &self.flow_runs
-    }
-
-    /// Get a reference to the automation rule store.
-    pub fn automation_rules(&self) -> &AutomationRuleStore {
-        &self.automation_rules
     }
 
     /// Get a reference to the chain-resume ledger (断链自动接续 attempt
@@ -156,143 +131,6 @@ impl MemorySubstrate {
     /// 用户侧——App/CLI 把借道轮返回的票据存这里，下次借用取回提交)。
     pub fn tickets(&self) -> &crate::ticket_store::TicketStore {
         &self.tickets
-    }
-
-    // -----------------------------------------------------------------
-    // Automation rules (subscribe/keyword -> fixed push, no LLM)
-    // -----------------------------------------------------------------
-
-    /// List automation rules for (channel, app_id), highest priority first.
-    pub async fn automation_rule_list(
-        &self,
-        channel: &str,
-        app_id: &str,
-    ) -> CarrierResult<Vec<AutomationRule>> {
-        let store = self.automation_rules.clone();
-        let channel = channel.to_string();
-        let app_id = app_id.to_string();
-        tokio::task::spawn_blocking(move || store.list_by_app(&channel, &app_id))
-            .await
-            .map_err(|e| CarrierError::Internal(e.to_string()))?
-    }
-
-    /// Insert or update an automation rule.
-    pub async fn automation_rule_upsert(&self, rule: AutomationRule) -> CarrierResult<()> {
-        let store = self.automation_rules.clone();
-        tokio::task::spawn_blocking(move || store.upsert(&rule))
-            .await
-            .map_err(|e| CarrierError::Internal(e.to_string()))?
-    }
-
-    /// Delete an automation rule by id.
-    pub async fn automation_rule_delete(&self, id: &str) -> CarrierResult<()> {
-        let store = self.automation_rules.clone();
-        let id = id.to_string();
-        tokio::task::spawn_blocking(move || store.delete(&id))
-            .await
-            .map_err(|e| CarrierError::Internal(e.to_string()))?
-    }
-
-    // -----------------------------------------------------------------
-    // Followers ledger (automation Phase 2: scheduled pushes + growth digests)
-    // -----------------------------------------------------------------
-
-    /// Record a follow (upsert; re-follow clears unfollowed_at).
-    pub async fn follower_record_follow(
-        &self,
-        channel: &str,
-        app_id: &str,
-        openid: &str,
-        unionid: Option<&str>,
-        scene: Option<&str>,
-    ) -> CarrierResult<()> {
-        let store = self.followers.clone();
-        let (channel, app_id, openid) =
-            (channel.to_string(), app_id.to_string(), openid.to_string());
-        let (unionid, scene) = (unionid.map(str::to_string), scene.map(str::to_string));
-        let now = chrono::Utc::now().to_rfc3339();
-        tokio::task::spawn_blocking(move || {
-            store.record_follow(
-                &channel,
-                &app_id,
-                &openid,
-                unionid.as_deref(),
-                scene.as_deref(),
-                &now,
-            )
-        })
-        .await
-        .map_err(|e| CarrierError::Internal(e.to_string()))?
-    }
-
-    /// Refresh `last_seen` on any inbound message (creates the row if missing).
-    pub async fn follower_touch(
-        &self,
-        channel: &str,
-        app_id: &str,
-        openid: &str,
-    ) -> CarrierResult<()> {
-        let store = self.followers.clone();
-        let (channel, app_id, openid) =
-            (channel.to_string(), app_id.to_string(), openid.to_string());
-        let now = chrono::Utc::now().to_rfc3339();
-        tokio::task::spawn_blocking(move || store.touch(&channel, &app_id, &openid, &now))
-            .await
-            .map_err(|e| CarrierError::Internal(e.to_string()))?
-    }
-
-    /// Stamp unfollowed_at (row kept for growth stats).
-    pub async fn follower_mark_unfollowed(
-        &self,
-        channel: &str,
-        app_id: &str,
-        openid: &str,
-    ) -> CarrierResult<()> {
-        let store = self.followers.clone();
-        let (channel, app_id, openid) =
-            (channel.to_string(), app_id.to_string(), openid.to_string());
-        let now = chrono::Utc::now().to_rfc3339();
-        tokio::task::spawn_blocking(move || store.mark_unfollowed(&channel, &app_id, &openid, &now))
-            .await
-            .map_err(|e| CarrierError::Internal(e.to_string()))?
-    }
-
-    /// Active followers with `last_seen_at` >= since (deliverable audience).
-    pub async fn follower_list_pushable(
-        &self,
-        channel: &str,
-        app_id: &str,
-        since_rfc3339: &str,
-    ) -> CarrierResult<Vec<String>> {
-        let store = self.followers.clone();
-        let (channel, app_id, since) = (
-            channel.to_string(),
-            app_id.to_string(),
-            since_rfc3339.to_string(),
-        );
-        tokio::task::spawn_blocking(move || store.list_pushable_since(&channel, &app_id, &since))
-            .await
-            .map_err(|e| CarrierError::Internal(e.to_string()))?
-    }
-
-    /// Growth summary for FollowerReport digests.
-    pub async fn follower_stats(
-        &self,
-        channel: &str,
-        app_id: &str,
-        since_rfc3339: &str,
-        push_window_since_rfc3339: &str,
-    ) -> CarrierResult<crate::follower_store::FollowerStats> {
-        let store = self.followers.clone();
-        let (channel, app_id, s1, s2) = (
-            channel.to_string(),
-            app_id.to_string(),
-            since_rfc3339.to_string(),
-            push_window_since_rfc3339.to_string(),
-        );
-        tokio::task::spawn_blocking(move || store.stats_since(&channel, &app_id, &s1, &s2))
-            .await
-            .map_err(|e| CarrierError::Internal(e.to_string()))?
     }
 
     // -----------------------------------------------------------------

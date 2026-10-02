@@ -146,37 +146,6 @@ pub trait KernelHandle: Send + Sync {
         ))
     }
 
-    /// List automation rules for (channel, app_id), highest priority first.
-    async fn automation_rule_list(
-        &self,
-        channel: &str,
-        app_id: &str,
-    ) -> CarrierResult<Vec<carrier_types::automation::AutomationRule>> {
-        let _ = (channel, app_id);
-        Err(CarrierError::Internal(
-            "Automation rule store not available".into(),
-        ))
-    }
-
-    /// Insert or update an automation rule.
-    async fn automation_rule_upsert(
-        &self,
-        rule: carrier_types::automation::AutomationRule,
-    ) -> CarrierResult<()> {
-        let _ = rule;
-        Err(CarrierError::Internal(
-            "Automation rule store not available".into(),
-        ))
-    }
-
-    /// Delete an automation rule by id.
-    async fn automation_rule_delete(&self, id: &str) -> CarrierResult<()> {
-        let _ = id;
-        Err(CarrierError::Internal(
-            "Automation rule store not available".into(),
-        ))
-    }
-
     /// List discovered external A2A agents as (name, url) pairs.
     fn list_a2a_agents(&self) -> Vec<(String, String)> {
         vec![]

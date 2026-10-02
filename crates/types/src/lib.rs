@@ -5,7 +5,6 @@
 
 pub mod agent;
 pub mod api_tool;
-pub mod automation;
 pub mod brain;
 pub mod capability;
 pub mod config;
