@@ -30,18 +30,18 @@ version: 2
 
 信息收集完毕后，**逐个文件**用 `file_write` 写入 `staging/<clone-name>/`（相对路径，落在你自己的 workspace 里）。一次 `file_write` 只写一个文件——写一个落一个盘，制作中断也不丢。
 
-**写入顺序**：先 template.json（对齐 name/display_name/default_flow），再身份层（SOUL.md / system_prompt.md / profile.md），再知识层，再流程层，最后 MEMORY.md / EVOLUTION.md。
+**写入顺序**：先 template.json（对齐 name/display_name/default_flow），再身份层（AGENTS.md / system_prompt.md / profile.md），再知识层，再流程层，最后 MEMORY.md / EVOLUTION.md。
 
 **续作规则（每次生成开工必做）**：
 
 1. 先 `file_list("staging/<clone-name>/")` 看半成品清单
-2. 如果已有半成品（上次中断/超时/被压缩），`file_read` 只读 template.json 和 SOUL.md 对齐名称与人格锚点，**不要全量重读**
+2. 如果已有半成品（上次中断/超时/被压缩），`file_read` 只读 template.json 和 AGENTS.md 对齐名称与人格锚点，**不要全量重读**
 3. 只写缺失或需要修改的文件，绝不从零重做
 4. 全新生成时（staging 为空）不读直接写
 
 需要准备的文件清单：
 
-- **SOUL.md**（必需）：人格定义
+- **AGENTS.md**（必需）：人格定义
 - **system_prompt.md**（必需）：行为指令
 - **profile.md**（可选）：基本信息
 - **MEMORY.md**（可选）：初始知识索引
@@ -117,7 +117,7 @@ INDEX.md 包含摘要（< 500 字），始终加载；references/ 包含详细�
   # 身份层（冻结）
   template.json           ← category: "公众对话", knowledge_version: 3
   profile.md              ← 核心身份 + 标签
-  SOUL.md                 ← 视角摘要 + 说话风格 + 价值观 + 内在张力 + 禁忌（摘要+指针）
+  AGENTS.md                 ← 视角摘要 + 说话风格 + 价值观 + 内在张力 + 禁忌（摘要+指针）
   MENTAL-MODELS.md        ← 心智模型详解（3-7个：一句话/证据/应用/局限）
   DECISION-HEURISTICS.md  ← 决策启发式（5-10条：规则/场景/案例）
   EXPRESSION-DNA.md       ← 表达DNA详解 + 经典句式速查 + 中文适配表
@@ -200,7 +200,7 @@ INDEX.md 包含摘要（< 500 字），始终加载；references/ 包含详细�
   # 身份层（冻结，evolution_mode 强制 conservative）
   template.json           ← category: "人格对话", knowledge_version: 3
   profile.md              ← 核心身份 + 数据来源声明 + 授权确认
-  SOUL.md                 ← 视角摘要 + 说话风格 + 价值观 + 内在张力 + 禁忌
+  AGENTS.md                 ← 视角摘要 + 说话风格 + 价值观 + 内在张力 + 禁忌
   PERSONALITY-PROFILE.md  ← 人格提取报告（表达DNA + 认知 + 情感 + 关系模式）
   EXPRESSION-DNA.md       ← 表达DNA详解 + 高频句式速查 + 口癖列表
   TIMELINE.md             ← 可选（如有日记时间跨度）
@@ -364,7 +364,7 @@ template.json 关键字段（生成时参考，文件在 staging 里）：
 ## 生成规则
 
 - profile.md 必须有 YAML frontmatter
-- SOUL.md 用自然语言描述人格，**不包含**工作规则
+- AGENTS.md 用自然语言描述人格，**不包含**工作规则
 - system_prompt.md 是最关键的文件，要详细且可操作
 - 流程的 description 写用途不写触发条件，50字以内
 - 知识文件按主题拆分，每个 1000-3000 字为宜
@@ -383,7 +383,7 @@ template.json 关键字段（生成时参考，文件在 staging 里）：
 ## 文件操作效率规则
 
 - **绝不先读后写（全新生成时）**：staging 为空、从零生成时不要 file_read——你已经知道分身的定位和风格，直接写
-- **续作半成品时只读锚点**：staging 已有文件时，只 file_read template.json 和 SOUL.md 对齐名称与人格，其余文件看 file_list 清单补缺，不全量重读
+- **续作半成品时只读锚点**：staging 已有文件时，只 file_read template.json 和 AGENTS.md 对齐名称与人格，其余文件看 file_list 清单补缺，不全量重读
 - **用户说"直接写"时**：立即调用 file_write，零次 file_read
 - **避免冗余 file_read**：确认文件存在用 file_list，不用 file_read
 - **一次只做一件事**：收到"写入2个参考文件"→ 只写入2个文件，不做其他操作

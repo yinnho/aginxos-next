@@ -11,7 +11,7 @@ use carrier_types::error::{CarrierError, CarrierResult};
 pub fn is_internal_path(rel: &str) -> bool {
     matches!(
         rel,
-        "agent.toml" | "SOUL.md" | "system_prompt.md" | "profile.md" | "style.md" | "evolution.md"
+        "agent.toml" | "AGENTS.md" | "SOUL.md" | "system_prompt.md" | "profile.md" | "style.md" | "evolution.md"
     ) || rel.starts_with("knowledge/")
         || rel.starts_with("flows/")
         || rel.starts_with("sessions/")
@@ -131,7 +131,7 @@ pub fn resolve_sandbox_path(user_path: &str, workspace_root: &Path) -> CarrierRe
 /// Resolve a user-supplied path for write operations within a workspace sandbox.
 ///
 /// Enforces:
-/// - **Blocked**: `agent.toml`, `SOUL.md` (only trainer tools may modify these)
+/// - **Blocked**: `agent.toml`, `AGENTS.md`, `SOUL.md` (only trainer tools may modify these)
 /// - **Blocked**: identity-frozen files when EVOLUTION.md declares identity freeze
 ///
 /// Note: output/, memory/, and catch-all (non-internal) paths are handled by the
@@ -161,7 +161,10 @@ pub fn resolve_sandbox_path_for_write(
 
     // Block writes to protected config files (unless clone admin).
     // These files define the clone's identity — only trainers should modify them.
-    if (rel_str == "agent.toml" || rel_str == "SOUL.md" || rel_str == "system_prompt.md")
+    if (rel_str == "agent.toml"
+        || rel_str == "AGENTS.md"
+        || rel_str == "SOUL.md"
+        || rel_str == "system_prompt.md")
         && !is_clone_admin
     {
         return Err(CarrierError::InvalidInput(format!(

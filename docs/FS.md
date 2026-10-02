@@ -49,7 +49,7 @@ OTA 不覆盖 `/home`。
 
 ```
 /home/
-├── AGENTS.md               # 系统人格（定谳 2026-10-02 统一此名；SOUL.md 物理改名随刀④）
+├── AGENTS.md               # 系统人格（定谳 2026-10-02；物理改名已收，刀④-1。SOUL.md 旧名兼容读取）
 ├── MEMORY.md               # 人格真源索引（长期记忆）
 ├── config.toml             # 预留（v0 未接线——brain 真源=brain.json/env 桥）
 ├── sessions/               # 人对系统的会话账
@@ -78,7 +78,6 @@ OTA 不覆盖 `/home`。
 │       ├── AGENTS.md       # 人格+规程（codex 工位原生名，刀1 起在役；对外叫「助理」）
 │       ├── template.json   # 干什么、default_flow（clone 遗产，随刀④拆迁处置）
 │       ├── profile.md      # 名称、职责（clone 遗产）
-│       ├── SOUL.md         # 旧名人格文件（→AGENTS.md，物理迁移随刀④）
 │       ├── system_prompt.md
 │       ├── MEMORY.md       # 这个能力面自己的知识索引
 │       ├── EVOLUTION.md
@@ -161,7 +160,8 @@ git、aginxbrowser 客户端这类。**首选走 pkg 进 `/var/bin`**（与 prov
 叫「助理」。**在役形态 = codex 工位**：`AGENTS.md`（人格+规程）+
 `flows/`，gateway 名册条目 `folder=` 指到这里，引擎随条目换（#428
 spike、刀1/刀2 已证）。carrier clone 格式件（`template.json`/
-`profile.md`/`SOUL.md`/`system_prompt.md`，格式真源
+`profile.md`/`system_prompt.md`（人格件 SOUL.md→AGENTS.md 已改名，
+刀④-1），格式真源
 `crates/clone/CLONE-FORMAT.md`）是过渡遗产，随刀④拆迁处置：
 
 - **干什么**：AGENTS.md 规程（旧：profile.md、template.json 的
@@ -240,7 +240,7 @@ aginxos-next/
 │   ├── router/             # /usr/bin 宇宙
 │   └── term/ voice/ call/ …
 ├── home/                   # 出厂整树真源，烤线整树拷进机上 /home
-│   ├── SOUL.md MEMORY.md   # 系统人格（→AGENTS.md 随刀④改名）+ 真源索引
+│   ├── AGENTS.md MEMORY.md # 系统人格（刀④-1 改名）+ 真源索引
 │   ├── photos/ files/      # 相册、文件
 │   └── workflows/          # 出厂能力面（clone-creator）
 ├── devices/<codename>/
@@ -266,4 +266,4 @@ aginxos-next/
 | 记忆=会话账 | memory=**人格真源**（越用越懂你的模型） |
 | 引擎=自研母体 | 引擎=**商品劳动力**（codex/grok，可换） |
 | 对外两脸 | **N 个频道** |
-| SOUL.md（人格文件名） | **AGENTS.md**（定谳 2026-10-02；物理迁移随刀④） |
+| SOUL.md（人格文件名） | **AGENTS.md**（定谳 2026-10-02；物理迁移已收，刀④-1） |

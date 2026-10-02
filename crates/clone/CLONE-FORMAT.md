@@ -55,7 +55,7 @@
 <clone-name>/
 ├── template.json       # 元数据（必需）
 ├── profile.md          # 名称、描述、标签（必需）
-├── SOUL.md             # 人格定义（推荐）
+├── AGENTS.md           # 人格定义（定谳 2026-10-02；旧名 SOUL.md 兼容读取）
 ├── system_prompt.md    # 系统指令（推荐）
 ├── MEMORY.md           # 知识索引（可选，系统维护）
 ├── EVOLUTION.md        # 进化策略（推荐）

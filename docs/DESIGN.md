@@ -54,7 +54,7 @@ AginxOS 是**黑匣子 ARM 服务器**（#422）：无屏、无本地语音、�
 
 ```
 /home/
-├── SOUL.md               # 系统人格（定谳 2026-10-02：统一 AGENTS.md，物理改名随刀④）
+├── AGENTS.md             # 系统人格（定谳 2026-10-02；物理改名已收，刀④-1）
 ├── MEMORY.md  knowledge/ # 人格真源索引
 ├── channels/<名>/        # 在场（§四）
 ├── workflows/<名>/       # 能力面（AGENTS.md 即人格）
@@ -128,8 +128,8 @@ boot 面以上原样复用。D13 姓氏法、升级四通道、密钥纪律、�
 - **系统人格文件命名**：~~SOUL.md → AGENTS.md？~~ **定谳（2026-10-02
   修宪刀，用户裁定）：统一 AGENTS.md**——codex 原生读 cwd 的
   AGENTS.md（#428 spike+刀1 已证），系统本体走外部引擎时 `/home`
-  即工位。物理改名（/home/SOUL.md、clone 格式件）随刀④拆迁/下烤
-  执行。
+  即工位。物理改名已收（2026-10-02 刀④-1：/home 与 clone-creator 树已改，
+  kernel 读 AGENTS.md 优先/SOUL.md 兼容，设备树上烤携载）。
 
 ## 八、落位（任务 #68 刀序）
 
@@ -140,7 +140,7 @@ boot 面以上原样复用。D13 姓氏法、升级四通道、密钥纪律、�
 母体微信接线退役）→ ③ 修宪 ✅（2026-10-02：FS.md 世界观折叠换代，
 SOUL.md→AGENTS.md 定谳）→ ④ crates/carrier-* 退役拆迁（人格真源
 独立成一等件；aginx 树包 45M 随缩；频道耦合死码已随刀4/4b 先拆，
-#432）→ ⑤ 引擎池挂账（node 系等 Orin NX 档）。
+#432；④-0 死码清扫+④-1 SOUL→AGENTS 改名已收）→ ⑤ 引擎池挂账（node 系等 Orin NX 档）。
 
 ## 九、对照（世界观换代）
 

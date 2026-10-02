@@ -298,14 +298,16 @@ fn resolve_patch_path(raw: &str, workspace_root: &Path) -> CarrierResult<PathBuf
 }
 
 /// Check if a relative path targets a protected config file.
-/// Protected files (agent.toml, SOUL.md) may only be modified via trainer tools.
+/// Protected files (agent.toml, AGENTS.md, SOUL.md) may only be modified via trainer tools.
 fn is_protected_path(path: &str) -> bool {
     let normalized = path.replace('\\', "/");
     let name = normalized.trim_end_matches('/');
     // Match both "agent.toml" and "./agent.toml" etc.
     name == "agent.toml"
+        || name == "AGENTS.md"
         || name == "SOUL.md"
         || name.ends_with("/agent.toml")
+        || name.ends_with("/AGENTS.md")
         || name.ends_with("/SOUL.md")
 }
 
