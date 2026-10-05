@@ -225,7 +225,7 @@ fn write_system_entry(
                   # codex（引擎商品化）；人格=home 根 AGENTS.md。\n";
     std::fs::write(
         dir.join("aginx.toml"),
-        codex_entry_toml(header, name, display, desc, home, 300),
+        codex_entry_toml(header, name, display, desc, home, 900),
     )
 }
 

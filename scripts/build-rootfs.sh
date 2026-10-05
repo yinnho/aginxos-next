@@ -50,7 +50,7 @@ IMG="${IMG:-${ROOT}/out/rootfs.img}"
 SIZE="${SIZE:-2g}"
 # L0 无头底座（刀4，2026-09-11，蛋案转正）：镜像=内核+init+svc+网络+
 # ssh+pkg，刷完就是一台活的机器。母体三件（aginx 树包）、面板
-# （aginx-term 包+字体）、网关/密钥/语音/三模型树全是包——8 行 opt 附加
+# （aginx-term 包+字体）、网关/密钥/语音/三模型树全是包——13 行 opt 附加
 # 在 etc 装配段组装+签名进树（全 opt：provision 默认什么都不装）。
 # 裸机=哑终端：显示/触摸/扫码/联网/ssh 在，装什么是用户的 opt-in。
 
@@ -585,7 +585,7 @@ rm -f "${OPT_ADD}"
 (cd "${ROOT}" && cargo run -q -p aginx-sign -- sign .local/keys/aginx.key "${TREE}/etc/agpkg.manifest")
 (cd "${ROOT}" && cargo run -q -p aginx-sign -- verify .local/keys/aginx.pub "${TREE}/etc/agpkg.manifest") \
   || { echo "FATAL: L0 manifest sig does not verify" >&2; exit 1; }
-echo "==> L0 manifest: 基础清单（全 opt）+ 11 行 opt 附加已签名进树"
+echo "==> L0 manifest: 基础清单（全 opt）+ 13 行 opt 附加已签名进树"
 cp -R "${RECIPE}/usr/bin/." "${TREE}/usr/bin/"
 cp -R "${RECIPE}/libexec/aginx/." "${TREE}/usr/libexec/aginx/"
 # 批② C1（09-10）：包管件的 sidecar 一律由安装器从 pkg.toml 生成（安装
