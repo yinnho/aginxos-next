@@ -40,6 +40,7 @@
 
 pub mod knowledge;
 pub mod kv;
+pub mod persona;
 pub mod tree;
 
 use carrier_memory::MemorySubstrate;

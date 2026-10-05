@@ -50,7 +50,7 @@
 # AGINX_BIN 指 /var/bin/aginx（face symlink）。刀F 起 depends 锚
 # aginx-update（装母体自动带自更新器；裸箱升级=重刷）。
 name = "aginx"
-version = "0.1.14"
+version = "0.1.15"
 summary = "前台：路由器 face /var/bin/aginx + server（UDS 装卸链+系统直通条目；引擎商品化，对话走网关 agent://）"
 group = "agent"
 depends = "aginx-update"

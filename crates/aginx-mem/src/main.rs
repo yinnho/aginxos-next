@@ -133,6 +133,15 @@ enum Command {
     },
     /// 分身质量体检（knowledge/skills/identity 面的确定性打分）
     Evaluate,
+    /// ④-5 人格真源导出：kv 域 → knowledge/ + MEMORY.md；敏感入 secret；--prune 死表
+    Persona {
+        /// 敏感条目不投 secretd、只跳过并留清单（host 测试用）
+        #[arg(long)]
+        no_secret: bool,
+        /// 导出后备份（VACUUM INTO .pre-knife45/）并 DROP 10 张引擎孤儿空表
+        #[arg(long)]
+        prune: bool,
+    },
     /// 机读面：工具名 + stdin JSON 入参 → stdout D1 信封（runtime 桥用）
     Tool {
         /// 工具名（lib.rs TOOL_NAMES 为准：kv_* / memory_tree /
@@ -246,6 +255,17 @@ fn fallback_of(cli: &Cli) -> aginx_mem::AgmemCtx {
 async fn run(cli: Cli) -> anyhow::Result<()> {
     let db_flag = cli.db.as_ref().map(PathBuf::from);
     let ws_flag = cli.workspace.as_ref().map(PathBuf::from);
+    // persona 是管理面（非工具面）：先于 execute_tool 分派
+    if let Command::Persona { no_secret, prune } = &cli.command {
+        let ws = ws_flag
+            .as_ref()
+            .ok_or_else(|| anyhow::anyhow!("persona 需要 --workspace（knowledge/ 的家，设备上即 /home）"))?;
+        let dbp = db_flag
+            .as_ref()
+            .ok_or_else(|| anyhow::anyhow!("persona 需要 --db（carrier.db 路径）"))?;
+        aginx_mem::persona::run(dbp, ws, !*no_secret, *prune).await?;
+        return Ok(());
+    }
     let fallback = fallback_of(&cli);
     match &cli.command {
         Command::Tool { name } => {
@@ -479,6 +499,7 @@ fn args_to_input(cmd: &Command) -> anyhow::Result<(&'static str, serde_json::Map
         Command::Evaluate => Ok(("clone_evaluate", m)),
         // 已在 run() 里分走；穷尽匹配留这层保险
         Command::Tool { .. } => unreachable!("Tool 在 run() 先行分派"),
+        Command::Persona { .. } => unreachable!("Persona 在 run() 先行分派"),
     }
 }
 

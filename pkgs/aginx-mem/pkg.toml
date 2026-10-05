@@ -3,7 +3,7 @@
 # 三元组身份，stdout=D1 信封）；人面 = kv/tree/knowledge/flow 子命令。
 # 直开同一 sqlite（WAL 并发安全，M35a）。装包自动生成 .aginxmd sidecar。
 name = "aginx-mem"
-version = "0.1.0"
+version = "0.1.1"
 summary = "记忆面工具：kv/tree/knowledge/flows（母体桥+人面 CLI，直开 substrate 库）"
 group = "mem"
 url = "https://pkgs.aginx.net/aginx-mem/v0.1.0/aginx-mem-v0.1.0-4pc.tar"
