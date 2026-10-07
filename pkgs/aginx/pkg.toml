@@ -54,7 +54,7 @@ version = "0.1.15"
 summary = "前台：路由器 face /var/bin/aginx + server（UDS 装卸链+系统直通条目；引擎商品化，对话走网关 agent://）"
 group = "agent"
 depends = "aginx-update"
-url = "https://pkgs.aginx.net/aginx/v0.1.14/aginx-v0.1.14-4pc.tar"
+url = "https://pkgs.aginx.net/aginx/v0.1.15/aginx-v0.1.15-4pc.tar"
 exec = "bin/aginx"
 
 [service]
