@@ -13,6 +13,10 @@ extraargs 追加 `init=/aginxos/init` 切入；回滚=删该半截。故无 pack
   静态 musl aarch64、与机型无关：2026-10-07 自 `.local/device/redfin/
   dropbear/` 逐字拷贝（再生法见 devices/redfin/boot/assets.md，同源同
   字节）。不进 git。
+- `../fleet.sh` + `../fleet-config.tpl` — fleet 复制线（#451）：snapshot
+  从在役机抽满配无密快照、kit 收身份三件、init 铺新板。产物落
+  `.local/device/panther-x2/fleet/`（快照+manifest 可明文；kit/ 三件
+  0600 是密件，永不出 .local）。
 
 ## 明确不需要的资产（与手机机对账）
 

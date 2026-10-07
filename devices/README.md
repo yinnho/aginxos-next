@@ -39,6 +39,11 @@
 
 刷机/骑乘之上把机器升格为 relay 可寻址的 agent 服务器。顺序即依赖序：
 
+> **同型号复制线（#451）**：再来一台 panther-x2 不走本清单——
+> `devices/panther-x2/fleet.sh`（snapshot 满配快照 → kit 收身份三件 →
+> init 铺树+注身份+切 init=，全程可回滚）。本清单是它的手工底稿与
+> 异型机参照。
+
 1. **包装配**：`aginx-pkg opt-in codex`（裸 bar 验收：`codex exec` brain
    真答）→ `opt-in aginx`（树包；url 漂移有 build-pkg 闸拦，sha 不合
    改走 `install <名> <本地tar> <sha256>` 本地通道）→
