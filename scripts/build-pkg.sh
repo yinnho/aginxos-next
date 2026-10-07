@@ -76,6 +76,12 @@ DEPS="$(toml_str depends)"
 [ "${NAME}" = "${PKG}" ] || { echo "FATAL: pkg.toml name='${NAME}' != '${PKG}'" >&2; exit 1; }
 [ -n "${VER}" ] || { echo "FATAL: ${RECIPE}/pkg.toml 缺 version" >&2; exit 1; }
 [ -n "${URL}" ] || { echo "FATAL: ${RECIPE}/pkg.toml 缺 url（C10 EGG 清单组装要用）" >&2; exit 1; }
+# url 漂移闸（#450：version 已 bump 而 url 残留旧版本路径，首个消费者
+# 在 opt-in sha 不合时才逮住——出包即拦）。
+case "${URL}" in
+  */v${VER}/*) ;;
+  *) echo "FATAL: ${RECIPE}/pkg.toml url 路径不含 /v${VER}/（version 与 url 漂移）: ${URL}" >&2; exit 1 ;;
+esac
 
 TARGET_DIR="${ROOT}/target/aarch64-unknown-linux-musl/release"
 VOICE="${ROOT}/.local/device/redfin/voice"
