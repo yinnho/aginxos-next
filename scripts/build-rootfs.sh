@@ -33,11 +33,18 @@ TRAMP="${ASSETS}/trampoline"
 #     trampoline + cnss/modem 世界（preload/fake-sm/qrtr/radio）。
 #   raw-boot    = enchilada 形：boot.img 直读 userdata ext4，无 vendor
 #     世界——上述段全部门掉（段内资产本机不存在，硬跑只会烤进垃圾）。
+#   armbian-ride = 服务器盒形（2026-10-07，#66 W1）：目录骑乘卖家
+#     Armbian 启动链——raw-boot 的世界裁剪全继承，唯 qcom 固件世界
+#     不存在（无 modem、eth 内建）；rootfs 不进分区表，住卖家盘目录。
 # 读 device.toml 的既有字符串字段，schema 零变动（hwd deny_unknown_fields
 # 一代差铁律：加新键=在役老二进制硬退）。
 BOOT_STYLE="$(sed -n 's/^boot_style *= *"\([^"]*\)".*/\1/p' "${DEVDIR}/device.toml" | sed -n '1p')"
 [ -n "${BOOT_STYLE}" ] \
   || { echo "FATAL: ${DEVDIR}/device.toml 缺 boot_style" >&2; exit 1; }
+case "${BOOT_STYLE}" in
+  vendor-boot|raw-boot|armbian-ride) ;;
+  *) echo "FATAL: ${DEVDIR}/device.toml boot_style='${BOOT_STYLE}' 未登记（vendor-boot|raw-boot|armbian-ride）" >&2; exit 1 ;;
+esac
 # 冻结 trampoline 对只服务于 M22 换根更新流；device.toml 有 [update] 节
 # 才烤（enchilada 无此节：升级=重刷 userdata，aginxos-init 无对价）。
 HAS_UPDATE=0
@@ -452,7 +459,9 @@ fi
 #            拿不到 EFS crash-loop，种子必须随镜像；0600；
 #   qrtr 四件 pd-mapper/tqftpserv/rmtfs 守护 + qmi-ask 操作面，本机源码
 #            编译（rootfs/src/qcom + qmi-ask.c，配方=设备复验过的形态）。
-if [ "${BOOT_STYLE}" != "vendor-boot" ]; then
+# 精确匹配 raw-boot（2026-10-07）：armbian-ride 盒无 qcom 世界，继承
+# raw-boot 的其余裁剪但不进此门。
+if [ "${BOOT_STYLE}" = "raw-boot" ]; then
   test -d "${ASSETS}/firmware/qcom" && test -d "${ASSETS}/firmware/ath10k" \
     || { echo "FATAL: ${ASSETS}/firmware incomplete (want qcom/ + ath10k/) — pull from the live device (devices/${DEVICE}/boot/assets.md)" >&2; exit 1; }
   test -e "${ASSETS}/firmware/ath10k/WCN3990/hw1.0/wlanmdsp.mbn" \
@@ -523,11 +532,18 @@ cp -R "${ROOT}/home/." "${TREE}/home/"
 # fail-fast，正脸拒绝）。
 mkdir -p "${TREE}/etc/aginx"
 install -m 644 "${DEVDIR}/device.toml" "${TREE}/etc/aginx/device.toml"
+# armbian-ride（#66 W1）：切入脚本落树根 /init——目录骑乘后它就是卖家
+# 盘的 /aginxos/init，armbianEnv.txt 的 init= 指它。
+if [ "${BOOT_STYLE}" = "armbian-ride" ]; then
+  install -m 755 "${DEVDIR}/boot/ride-init" "${TREE}/init"
+fi
 # panel.on（D14：有屏机器的结果页上屏开关）：aginxbrowser 的面板线程
 # 只认 `--panel` 或这枚标记（main.rs 启动门），而全仓无人造它——L0 线
 # 「点卡黑屏」根因即此（09-26 晨报复验卡事故）。有 [panel] 段的机器
-# 落标记；无屏机器不落，引擎不起面板线程（省 DRM 轮询日志）。
-if grep -qE '^\[panel\]' "${DEVDIR}/device.toml"; then
+# 落标记；无屏机器（schema 强制段在，占位 width=0 即无面板信号）不落，
+# 引擎不起面板线程（省 DRM 轮询日志）。
+if grep -qE '^\[panel\]' "${DEVDIR}/device.toml" \
+   && ! grep -qE '^width *= *0$' "${DEVDIR}/device.toml"; then
   : > "${TREE}/etc/aginx/panel.on"
 fi
 for b in "${DEVDIR}"/bringup/*; do

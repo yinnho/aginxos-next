@@ -1,0 +1,73 @@
+# panther-x2 device profile — D14: 机型是数据，不是代码.
+# Panther X2（黑豹 X2 服务器盒，#66/W1）：黑匣子 agent 服务器轨第一台
+# 板卡机器（2026-10-01 重定位）。无屏、无触摸、无声卡、无相机、无电池
+# ——人机件全占位（hwd deny_unknown_fields 要全键；消费者 voice/term/qr
+# 在本机不装不跑，读到即哑）。
+# 探针收据 2026-10-07（#448/W1，ssh 进卖家预刷 Armbian 实读）：
+#   网络 = rk_gmac 内建（/proc/modules 零匹配），eth0/eth1 双口
+#          （net.ifnames=0），载波口即活口
+#   存储 = mmcblk0 29.1G：p1 /boot 511M + p2 / 28.6G（均 ext4）+
+#          boot0/boot1 各 4M；盘无尾隙
+#   启动 = 卖家 u-boot + boot.scr + uInitrd（initramfs-tools 尊重
+#          init= cmdline）——白嫖整链，本仓只产 rootfs 树
+#   无   = /sys/class/power_supply 空目录（直流供电无电量计）
+
+tz = "CST-8"
+
+[device]
+name = "panther-x2"      # must equal the directory name (bake + update gate check it)
+model = "Panther X2"
+soc = "rk3566"           # grouping reference, drives nothing
+kernel = "6.18.38-ophub" # 卖家 Armbian 内核（/proc/version 实读）——白嫖件
+boot_style = "armbian-ride"  # 目录骑乘：树住 p2:/aginxos，init= 切入；无自有启动链
+
+[panel]                  # 无屏——全零占位（width=0 即烤线不落 panel.on 的信号）
+width = 0
+height = 0
+touch_max_x = 0
+touch_max_y = 0
+
+[input.ptt]              # 无按键——占位
+device = ""
+volume_up_device = ""
+key_volume_down = 0
+key_volume_up = 0
+key_power = 0
+
+[input.term]             # 无触摸——占位
+touch_device = ""
+power_device = ""
+
+[audio]                  # 无声卡（/dev/snd 缺席）——占位
+capture_pcm = ""
+playback_pcm = ""
+rate = 48000
+channels = 1
+playback_channels = 2
+volume_min = 0
+
+[quirks]
+playback_dup_mono = false
+eye_stream_args = []     # 无相机线（cam/ 不存在 = build-rootfs 不构建 cam-shot）
+qr_scan_args = []
+
+[affinity]               # RK3566 4×A55 同簇（policy0 单簇实测）——无大小核可分
+cam_cores = []
+ui_cores = [0, 1, 2, 3]
+big_cores = [0, 1, 2, 3]
+
+[camera]                 # 无相机——占位
+rear_sensor = ""
+dark_gain = 0
+dark_dgain = 0
+
+[paths]
+power_supply = ""        # 直流供电无电量计；hwd::battery_pct 对空串返 None
+# wlan/drm_card 省略（Option）：无 wifi 世界；HDMI 的 DRM 枚举是运行时真值，
+# 本机无面板消费者。
+
+# [update]/[slots] 省略（hwd Option）：目录骑乘无 trampoline 换根流，
+# 升级=重灌 /aginxos 树；RK u-boot 无 A/B retry 烧命，无 boot-ok 对价。
+
+[adb]
+serial = ""              # 本机无 adb 面（USB gadget 未接线）；运维面=ssh

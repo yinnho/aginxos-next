@@ -78,7 +78,9 @@ fi
 # M27 discipline). Synchronous because provision's sync pulls ~239MB of
 # packages into / and racing that against a 2G fs is the M12 curse; the
 # live grow itself took 0.45 s. Always exits 0 — never blocks a boot.
-/etc/init.d/disk-grow
+# [ -x ] 门（2026-10-07）：armbian-ride 机目录骑乘、无自有分区可扩，
+# 不带此脚本——与兄弟 bringup 调用同律。
+[ -x /etc/init.d/disk-grow ] && /etc/init.d/disk-grow
 
 # Host mke2fs -d stored the macOS build user (uid 501) as owner - the
 # filesystem is rw, so the first boot normalizes it for good.

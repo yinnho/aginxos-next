@@ -56,4 +56,5 @@
   连 trampoline 一起参数化。boot_ok 的 per-LUN GPT slot 语义同理——只抽
   「值的来源」，不抽「方法」，第二种 slot 方法出现才抽象。
 
-当前机型：redfin（首目标，在役）· enchilada（bring-up 线，P5 另立计划）。
+当前机型：redfin（首目标，在役）· enchilada（bring-up 线，P5 另立计划）·
+panther-x2（服务器盒，W1 目录骑乘卖家 Armbian 链，boot_style=armbian-ride）。

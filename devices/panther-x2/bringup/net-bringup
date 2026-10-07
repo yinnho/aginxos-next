@@ -1,0 +1,66 @@
+#!/bin/sh
+# panther-x2 net bring-up — 有线 eth DHCP（服务器盒无 wifi 世界）。
+#
+# rk_gmac 内核内建（2026-10-07 探针：/proc/modules 零匹配），无模块可装；
+# 双网口 eth0/eth1（net.ifnames=0），择有载波者。udhcpc 向对端要租约
+# （开发期=Mac Internet Sharing bridge100，常驻=家里路由器）。
+# boot.state 词表与 wifi 机同（provision 等 internet、net-watch 等 done）：
+#   eth ok|fail [ifname|detail]
+#   dhcp ok|fail
+#   internet ok|fail ...
+#   time ok|fail
+#   done ok                  <- 网络缺席不判死靴（盒子的生死线是电不是网）
+export PATH=/sbin:/bin:/usr/sbin:/usr/bin
+LOG=/var/net.log
+exec >>"$LOG" 2>&1
+echo "=== net bring-up (panther-x2 eth) $(date) ==="
+
+STATE=/run/boot.state
+say() { echo "$1 $2 $3" >>"$STATE"; echo "net: $1 $2 $3"; }
+
+IF=""
+n=0
+while [ $n -lt 15 ] && [ -z "$IF" ]; do
+  for i in eth0 eth1; do
+    [ -e /sys/class/net/$i ] || continue
+    ip link set $i up 2>/dev/null
+    [ "$(cat /sys/class/net/$i/carrier 2>/dev/null)" = "1" ] && { IF=$i; break; }
+  done
+  [ -z "$IF" ] && { sleep 2; n=$((n+1)); }
+done
+if [ -z "$IF" ]; then
+  say eth fail "no carrier on eth0/eth1"
+  say done ok
+  exit 0
+fi
+say eth ok "$IF"
+
+udhcpc -i "$IF" -n -q -t 10 -T 3 >/tmp/udhcpc-eth.log 2>&1
+IP=$(ip addr show "$IF" 2>/dev/null | sed -n 's/.*inet \([0-9.]*\).*/\1/p' | head -1)
+if [ -z "$IP" ]; then
+  say dhcp fail "udhcpc"
+  say done ok
+  exit 0
+fi
+say dhcp ok "$IP"
+
+say internet run
+rm -f /tmp/baidu.html
+if HTTP=$(/bin/httpget http://www.baidu.com/ /tmp/baidu.html 2>&1); then
+  set -- $HTTP          # "HTTP <code> <n> bytes"
+  say internet ok "www.baidu.com $3B"
+  # 校时（#63）：有界重试+年份门+RTC-offset 写在 image 助手 net-timesync
+  say time run
+  if /usr/libexec/aginx/net-timesync; then
+    say time ok "$(date +%Y-%m-%d)"
+    echo "clock synced: $(date)"
+  else
+    say time fail "ntpd"
+  fi
+  echo "=== net up: $IP on $IF $(date) ==="
+else
+  say internet fail "$HTTP"
+fi
+
+say done ok
+exit 0

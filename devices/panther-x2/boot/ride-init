@@ -1,0 +1,13 @@
+#!/aginxos/bin/busybox sh
+# panther-x2 W1 目录骑乘切入（#66）——卖家启动链（u-boot→boot.scr→
+# uInitrd）整链白嫖；initramfs-tools 的 /init 尊重 cmdline 的 init=，
+# 于是本脚本以 PID1 起跑、根=卖家 p2（卖家系统）。预挂 devtmpfs
+# （chroot 后旧 /dev 不可见，busybox init 要 /dev/console）后 chroot
+# 进树跑 busybox init。
+# 铁律：任何一步失败都 exec /sbin/init 落回卖家系统——ssh 运维面不可丢。
+B=/aginxos/bin/busybox
+[ -x "$B" ] || exec /sbin/init
+"$B" mount -t devtmpfs devtmpfs /aginxos/dev 2>/dev/null
+"$B" chroot /aginxos /sbin/init
+# 上行只有 chroot 当场失败才返回（init 起跑即永续）——落回卖家 init
+exec /sbin/init

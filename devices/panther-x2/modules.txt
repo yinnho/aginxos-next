@@ -1,0 +1,5 @@
+# panther-x2 模块清单——空：唯一联网器件 rk_gmac 是内核内建
+#（2026-10-07 探针：/proc/modules 零 gmac 匹配、卖家 /lib/modules 无
+# rockchip 目录）。本机没有「先 insmod 才有」的链。
+# 将来若探出后装件：逐行列 .ko 名（烤线从 .local/device/panther-x2/
+# modules/ 逐字取，缺件宁死不烤），顺序即依赖序。
