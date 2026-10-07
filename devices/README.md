@@ -35,6 +35,35 @@
 7. `DEVICE=<codename> ./scripts/build-rootfs.sh` 出图，刷机走该机
    `boot/` 线。
 
+## W2 上机 checklist（裸 L0 → agent 服务器，#449/#450 收据固化）：
+
+刷机/骑乘之上把机器升格为 relay 可寻址的 agent 服务器。顺序即依赖序：
+
+1. **包装配**：`aginx-pkg opt-in codex`（裸 bar 验收：`codex exec` brain
+   真答）→ `opt-in aginx`（树包；url 漂移有 build-pkg 闸拦，sha 不合
+   改走 `install <名> <本地tar> <sha256>` 本地通道）→
+   `opt-in aginx-gateway`（依赖闭包自动带 aginx-secretd）。
+2. **codex 家**：真源只许 `/home/.codex`（config.toml+auth.json，0600，
+   从 Mac `~/.codex` 拷）。镜像自带 `/root/.codex → /home/.codex`
+   符号链接（旧镜像手工 `ln -sfn` 补上，旧目录备份不删）。
+   **铁律：手动腿真答 ≠ 网关腿真答**——网关守护 HOME=/home，没钉
+   CODEX_HOME 时代码读的是另一个家；空家=默认连官方云=国内死循环。
+   自 #450 起安装链写的条目自带 `[command.env] CODEX_HOME`。
+3. **config 真源 `/etc/aginx/config.toml`**（0600，secret 全程管道不
+   回显）：`[server] access="private"`；`[relay]` id/domain=
+   relay.aginx.net/port=8443/use_tls=true/url/relay_secret；
+   `[auth] jwt_secret`（`od -An -tx1` 64hex）。
+   **relay id 律：只收字母数字**——`panther-x2` 形被拒，落
+   `pantherx2`（pair 链自 #450 起自动归一，手填自己守）。
+4. **名册**：system 条目=树包 boot 自动落（codex 形）；codex 条目手铺
+   `/var/lib/aginx/gateway/agents/codex/aginx.toml`（#410 配方）。
+   Mac `agc --bind <配对码>` 配对。
+5. **验收三证**（全过才算 W2 关）：① `agc agent://<id>.relay.aginx.net/
+   system` 真答+sessionId；② 同址 `/codex` 真答；③ `--session` 续话
+   原句复述（codex resume thread 通）。超时先查 spool 存根与
+   rollout 所在 sessions 树+cwd——**判网关腿别看手动腿**。
+
+
 ## D14 三律
 
 1. crates 里出现机型字符串（redfin/1080/2340/event1/sm7250…）即违宪；
