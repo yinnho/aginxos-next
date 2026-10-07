@@ -264,12 +264,30 @@ fn write_env_keys(p: &PairPaths, kvs: &[(&str, &str)]) -> Result<(), String> {
     std::fs::rename(&tmp, &p.env_file).map_err(|e| format!("env rename: {e}"))
 }
 
+/// relay id 归一律（#450：relay 拒非字母数字——"panther-x2" 注册被
+/// 拒「ID must be alphanumeric」）。落 config.toml 前归一：ASCII 字母
+/// 数字保留并小写化，其余字符丢弃；归一后为空=Err（宁可配对失败，
+/// 也不写非法 id 让网关 5s 重试死循环）。
+fn sanitize_relay_id(id: &str) -> Result<String, String> {
+    let s: String = id
+        .chars()
+        .filter(|c| c.is_ascii_alphanumeric())
+        .map(|c| c.to_ascii_lowercase())
+        .collect();
+    if s.is_empty() {
+        Err(format!("relay id 归一后为空（原 id 无字母数字字符）: {id:?}"))
+    } else {
+        Ok(s)
+    }
+}
+
 /// 网关身份两键并入真 aginx 配置 /etc/aginx/config.toml 的 [relay] 段
 /// （id/relay_secret——真源在此，env 腿已随仿制品退役）。段内原地替换、
 /// 缺键段尾补；无段则尾补整段；[server]/[auth] 等其余行一字不动（jwt_secret
 /// 等刷机日灌注的值不能被配对冲掉）。0600 tmp+rename。
 fn write_gateway_config(p: &PairPaths, id: &str, secret: &str) -> Result<(), String> {
     use std::os::unix::fs::OpenOptionsExt;
+    let id = sanitize_relay_id(id)?;
     let existing = std::fs::read_to_string(&p.gateway_config).unwrap_or_default();
     let lines: Vec<&str> = existing.lines().collect();
     let is_header = |l: &str| l.trim().starts_with('[');
@@ -601,6 +619,21 @@ mod tests {
         assert!(state.contains("dhcp ok 192.168.1.42\n"));
         assert!(state.contains("internet ok paired"));
         assert!(state.contains("time run\n")); // untouched — clock not our business here
+    }
+
+    #[test]
+    fn relay_id_sanitized_to_alphanumeric_lowercase() {
+        // #450：relay 只收字母数字 id——"panther-x2" 实机被拒。配对落
+        // config.toml 前归一，主机侧铸码器写错形也不会把非法 id 烙进设备。
+        let root = tmp("aginx-pair-relayid");
+        let p = paths(&root);
+        write_gateway_config(&p, "Panther-X2", "s3").unwrap();
+        let c = fs::read_to_string(&p.gateway_config).unwrap();
+        assert!(c.contains("id = \"pantherx2\"\n"), "{c}");
+        assert!(c.contains("relay_secret = \"s3\"\n"), "{c}");
+        // 归一后为空=拒写（非法 id 不落盘）
+        assert!(write_gateway_config(&p, "— —", "s3").is_err());
+        let _ = fs::remove_dir_all(&root);
     }
 
     #[test]
