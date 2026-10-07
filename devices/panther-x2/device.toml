@@ -6,8 +6,10 @@
 # 探针收据 2026-10-07（#448/W1，ssh 进卖家预刷 Armbian 实读）：
 #   网络 = rk_gmac 内建（/proc/modules 零匹配），eth0/eth1 双口
 #          （net.ifnames=0），载波口即活口
-#   wifi = 芯片在（BCM43430 SDIO mmc2 双功能，#452）但骑乘世界无驱动腿
-#          ——BRCMFMAC=m 件住卖家 p2，现役纯网口
+#   wifi = BCM43430（SDIO mmc2 双功能，#452/#453）：brcmfmac 五件
+#          （rfkill/cfg80211/brcmutil/brcmfmac/brcmfmac-wcc）+固件
+#          已从卖家 p2 debugfs 收割进树（.local/…/modules/+firmware/），
+#          net-bringup wifi_phase 装载连 AP，两腿默认路由落 wifi
 #   存储 = mmcblk0 29.1G：p1 /boot 511M + p2 / 28.6G（均 ext4）+
 #          boot0/boot1 各 4M；盘无尾隙
 #   启动 = 卖家 u-boot + boot.scr + uInitrd（initramfs-tools 尊重

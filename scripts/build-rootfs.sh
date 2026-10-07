@@ -542,6 +542,14 @@ install -m 644 "${DEVDIR}/device.toml" "${TREE}/etc/aginx/device.toml"
 # 盘的 /aginxos/init，armbianEnv.txt 的 init= 指它。
 if [ "${BOOT_STYLE}" = "armbian-ride" ]; then
   install -m 755 "${DEVDIR}/boot/ride-init" "${TREE}/init"
+  # wifi 固件腿（#453）：BCM43430 brcmfmac 件——模块走上面的通用
+  # modules.txt 路（.local/…/modules/），固件树在此门（缺件宁死不烤，
+  # 同 raw-boot 纪律；内核 request_firmware 在 init ns 根下解析，
+  # 骑乘世界 PID1 chroot 后即本树的 /lib/firmware）。
+  test -e "${ASSETS}/firmware/brcm/brcmfmac43430-sdio.bin" \
+    || { echo "FATAL: ${ASSETS}/firmware/brcm/brcmfmac43430-sdio.bin missing — harvest from the seller p2 (devices/${DEVICE}/boot/assets.md)" >&2; exit 1; }
+  mkdir -p "${TREE}/lib/firmware"
+  cp -R "${ASSETS}/firmware/." "${TREE}/lib/firmware/"
 fi
 # panel.on（D14：有屏机器的结果页上屏开关）：aginxbrowser 的面板线程
 # 只认 `--panel` 或这枚标记（main.rs 启动门），而全仓无人造它——L0 线

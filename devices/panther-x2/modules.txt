@@ -1,5 +1,14 @@
-# panther-x2 模块清单——空：唯一联网器件 rk_gmac 是内核内建
-#（2026-10-07 探针：/proc/modules 零 gmac 匹配、卖家 /lib/modules 无
-# rockchip 目录）。本机没有「先 insmod 才有」的链。
-# 将来若探出后装件：逐行列 .ko 名（烤线从 .local/device/panther-x2/
-# modules/ 逐字取，缺件宁死不烤），顺序即依赖序。
+# panther-x2 模块清单（D14：机型是数据）。
+# rk_gmac 有线是内核内建（2026-10-07 探针：/proc/modules 零 gmac 匹配）
+# ——下表全是 wifi 腿（BCM43430 SDIO，#453）。.ko 从卖家 Armbian p2
+# debugfs 收割（挂载双锁 EINVAL/EBUSY 绕道，配方在 boot/assets.md），
+# 落 .local/device/panther-x2/modules/（§7 不进 git），缺件宁死不烤。
+# 顺序即装载序（net-bringup wifi_phase 逐字照此）——6.x 拆分坑：
+# brcmfmac-wcc 的符号依赖 brcmfmac，必须后挂；而 brcmfmac 挂载即自探
+# （无 wcc 必败），wcc 挂上后对 mmc2:0001:1/2 bind 重探出 wlan0。
+# bca/cyw 两变体是收割时顺手存的备件（.local 有，不烤不装）。
+rfkill
+cfg80211
+brcmutil
+brcmfmac
+brcmfmac-wcc

@@ -35,7 +35,7 @@ Armbian 论坛可证 DTB 就在 `rockchip/rk3566-panther-x2.dtb`。无考古。
 | eMMC | 29.1G 实录（lsblk；boot0/boot1 各 4M 引导分区） |
 | TF | 独立卡槽，可启动（W1 载体） |
 | 网口 | RJ45 ⚠速率（百兆/千兆）待探 |
-| wifi | **BCM43430**（SDIO vendor 0x02d0/device 0xa9a6 实读，2026-10-07 #452；树莓派 3B 同款 Cypress wifi+BT combo）。芯片在、骑乘世界无驱动腿：BRCMFMAC=m，.ko+固件住卖家 p2 够不着——现役纯网口；要用须回卖家系统收割驱动+固件进树 |
+| wifi | **BCM43430**（SDIO vendor 0x02d0/device 0xa9a6 实读，2026-10-07 #452；树莓派 3B 同款 Cypress wifi+BT combo）。驱动腿 2026-10-07 #453 落地：brcmfmac 五件+固件从卖家 p2 **debugfs 收割**（p2 挂载双锁 EINVAL/EBUSY 绕道）进树，wlan0 出生+连 AP+relay 全收据；双腿默认路由落 wifi，拔网线即无事件 |
 | 电源 | ⚠接口/规格待探 |
 | 串口 | 机内 TTL ⚠（Rockchip 惯例 1500000 波特） |
 | 价格 | 闲鱼二手 ¥88–150 |

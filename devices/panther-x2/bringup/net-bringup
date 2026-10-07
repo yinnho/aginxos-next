@@ -1,23 +1,67 @@
 #!/bin/sh
-# panther-x2 net bring-up — 有线 eth DHCP（服务器盒无 wifi 世界）。
+# panther-x2 net bring-up — 有线先行、wifi 随后（#453 wifi 腿）。
 #
-# rk_gmac 内核内建（2026-10-07 探针：/proc/modules 零匹配），无模块可装；
-# 双网口 eth0/eth1（net.ifnames=0），择有载波者。udhcpc 向对端要租约
-# （开发期=Mac Internet Sharing bridge100，常驻=家里路由器）。
-# boot.state 词表与 wifi 机同（provision 等 internet、net-watch 等 done）：
-#   eth ok|fail [ifname|detail]
-#   dhcp ok|fail
-#   internet ok|fail ...
-#   time ok|fail
-#   done ok                  <- 网络缺席不判死靴（盒子的生死线是电不是网）
+# eth：rk_gmac 内核内建（2026-10-07 探针：/proc/modules 零匹配），无模块
+# 可装；双网口 eth0/eth1（net.ifnames=0），择有载波者。
+# wifi：BCM43430（SDIO）腿 2026-10-07 落地——brcmfmac 件从卖家 p2
+# debugfs 收割进树（.local/device/panther-x2/wifi/，assets.md 配方）。
+# 6.x 拆分坑：brcmfmac-wcc 依赖 brcmfmac 的导出符号必须后挂，而
+# brcmfmac 挂载即自探（无 wcc 必败）——wcc 挂上后 bind 重探出 wlan0。
+# 两腿都要：wifi 后拿租约 → 默认路由自然落在 wlan0（拔线即无事件，
+# 网口留给台面运维）。boot.state 词表：
+#   eth ok|fail [ifname|detail] / wifi ok|fail [ip|detail]
+#   dhcp ok|fail / internet ok|fail / time ok|fail / done ok
+#   <- 网络缺席不判死靴（盒子的生死线是电不是网）
 export PATH=/sbin:/bin:/usr/sbin:/usr/bin
 LOG=/var/net.log
 exec >>"$LOG" 2>&1
-echo "=== net bring-up (panther-x2 eth) $(date) ==="
+echo "=== net bring-up (panther-x2 eth+wifi) $(date) ==="
 
 STATE=/run/boot.state
 say() { echo "$1 $2 $3" >>"$STATE"; echo "net: $1 $2 $3"; }
 
+# --- wifi 相位：模块→wlan0→join→租约。所有路径都走（拔线就绪腿）----
+wifi_phase() {
+  WMOD=/lib/modules
+  if [ ! -e /sys/class/net/wlan0 ] && [ -d "$WMOD" ]; then
+    for m in rfkill cfg80211 brcmutil brcmfmac; do
+      insmod "$WMOD/$m.ko" 2>>/tmp/wifi-insmod.log
+    done
+    insmod "$WMOD/brcmfmac-wcc.ko" 2>>/tmp/wifi-insmod.log
+    # wcc 后挂 → brcmfmac 首探已败 → bind 重探（两功能都试，错者忽略）
+    for n in mmc2:0001:1 mmc2:0001:2; do
+      echo "$n" > /sys/bus/sdio/drivers/brcmfmac/bind 2>/dev/null
+    done
+  fi
+  n=0
+  while [ $n -lt 10 ] && [ ! -e /sys/class/net/wlan0 ]; do sleep 1; n=$((n+1)); done
+  if [ ! -e /sys/class/net/wlan0 ]; then
+    say wifi fail "no wlan0"
+    return
+  fi
+  [ -f /etc/wifi.conf ] || { say wifi fail "no conf"; return; }
+  SSID=$(sed -n 's/^ssid=//p' /etc/wifi.conf | head -n 1 | tr -d '\r')
+  PSK=$(sed -n 's/^psk=//p' /etc/wifi.conf | head -n 1 | tr -d '\r')
+  [ -n "$SSID" ] && [ -n "$PSK" ] || { say wifi fail "conf incomplete"; return; }
+  ip link set wlan0 up 2>/dev/null
+  # 固件刚起的第一口气（#453：boot 首发 AUTH 超时 connect status 16，
+  # settle 后稳态一发过）——settle + 3 连试，任一发成即收
+  sleep 3
+  n=0
+  while [ $n -lt 3 ]; do
+    if /usr/bin/aginx-net-join wlan0 "$SSID" "$PSK" >/tmp/wifi-join.log 2>&1 \
+       && udhcpc -i wlan0 -n -q -t 8 -T 3 >/tmp/udhcpc-wlan.log 2>&1; then
+      WIP=$(ip addr show wlan0 2>/dev/null | sed -n 's/.*inet \([0-9.]*\).*/\1/p' | head -n 1)
+      say wifi ok "$WIP"
+      return
+    fi
+    n=$((n+1))
+    sleep 3
+  done
+  say wifi fail "join/dhcp"
+}
+
+# --- eth 相位 ---
 IF=""
 n=0
 while [ $n -lt 15 ] && [ -z "$IF" ]; do
@@ -30,6 +74,7 @@ while [ $n -lt 15 ] && [ -z "$IF" ]; do
 done
 if [ -z "$IF" ]; then
   say eth fail "no carrier on eth0/eth1"
+  wifi_phase
   say done ok
   exit 0
 fi
@@ -39,6 +84,7 @@ udhcpc -i "$IF" -n -q -t 10 -T 3 >/tmp/udhcpc-eth.log 2>&1
 IP=$(ip addr show "$IF" 2>/dev/null | sed -n 's/.*inet \([0-9.]*\).*/\1/p' | head -1)
 if [ -z "$IP" ]; then
   say dhcp fail "udhcpc"
+  wifi_phase
   say done ok
   exit 0
 fi
@@ -62,5 +108,6 @@ else
   say internet fail "$HTTP"
 fi
 
+wifi_phase
 say done ok
 exit 0

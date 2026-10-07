@@ -21,8 +21,27 @@ extraargs 追加 `init=/aginxos/init` 切入；回滚=删该半截。故无 pack
 ## 明确不需要的资产（与手机机对账）
 
 vendor ramdisk / trampoline 对 / radio blob / qcom+ath10k firmware /
-rmtfs EFS 种子 / modules/ —— 无 vendor 世界、无 modem、rk_gmac 内建
-（modules.txt 空清单即收据）。
+rmtfs EFS 种子 —— 无 vendor 世界、无 modem、rk_gmac 内建。
+（modules.txt 曾空清单，2026-10-07 #453 起载 wifi 五件，见下。）
+
+## wifi 腿资产（#453，2026-10-07 收割）
+
+卖家 p2 挂载双锁（ro=EINVAL 脏日志、ro,noload=EBUSY 与 rw 活挂冲突）
+——收割走 **debugfs 对裸设备只读 dump**，绕过挂载层：
+
+- `debugfs` 本体：Mac 侧 zig cc 按 `scripts/build-resize2fs.sh` 同配方
+  出 aarch64-musl 静态件（lib/ss 必须进 lib 序：et→ss→e2p→blkid→
+  support→ext2fs；`make subs` 先行否则 config.h 补丁被重写），
+  scp 到板 /root/debugfs。
+- 抽法：`/root/debugfs -R "dump <p2 内路径> <板上输出路径>" /dev/mmcblk0p2`
+  （modules.dep 定链；固件在 /lib/firmware/brcm/）。
+- `.local/device/panther-x2/modules/` — brcmfmac 五件+ bca/cyw 备件
+  （.ko，烤线按 modules.txt 取五件；wcc 后挂+bind 重探坑在
+  modules.txt 头注）。
+- `.local/device/panther-x2/firmware/brcm/` — brcmfmac43430-sdio
+  {bin,txt,clm_blob} + panther,x2 板级 NVRAM + b0 双件（烤线整目录
+  cp，内核 fallback 链自动选）。
+- 再生法=回卖家系统或本配方重抽（内核升级后 vermagic 变须重收）。
 
 ## 恢复线（未破，挂账）
 
