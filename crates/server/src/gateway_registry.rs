@@ -135,13 +135,16 @@ fn codex_bin() -> String {
 /// folder、timeout 与头注）。形状对齐 #406/#430 生产验证过的条目：
 /// output=codex-exec-json、--skip-git-repo-check（folder 非信任目录防
 /// 首帧被拒）、resume 走 codex thread；cwd=folder，人格=该目录
-/// AGENTS.md（codex 原生拾取，刀④-1 定谳名）。
+/// AGENTS.md（codex 原生拾取，刀④-1 定谳名）。CODEX_HOME 显式钉死
+/// <home>/.codex（#450 立法：不钉则 codex 读守护进程的 HOME——网关腿
+/// 与手动腿两个世界，空家默认连官方云在国内死循环）。
 fn codex_entry_toml(
     header: &str,
     name: &str,
     display: &str,
     desc: &str,
     folder: &Path,
+    home: &Path,
     timeout: u32,
 ) -> String {
     format!(
@@ -158,6 +161,9 @@ fn codex_entry_toml(
          path = {}\n\
          args = [\"exec\", \"--json\", \"--skip-git-repo-check\"]\n\
          \n\
+         [command.env]\n\
+         CODEX_HOME = {}\n\
+         \n\
          [session]\n\
          resume_args = [\"resume\", \"${{SESSION_ID}}\"]\n",
         toml_str(name),
@@ -166,6 +172,7 @@ fn codex_entry_toml(
         toml_str(&folder.display().to_string()),
         timeout,
         toml_str(&codex_bin()),
+        toml_str(&home.join(".codex").display().to_string()),
     )
 }
 
@@ -185,11 +192,22 @@ pub fn write_entry(
     let header = format!(
         "# 由 AginxOS 安装链自动写（agent install/remove 维护）——助理的\n\
          # 对外直通条目：agent://<机>.relay.aginx.net/{name}。刀④-3 起\n\
-         # codex 形（引擎商品化）；人格=工位 AGENTS.md。\n"
+         # codex 形（引擎商品化）；人格=工位 AGENTS.md；CODEX_HOME 钉死\n\
+         # <home>/.codex（#450）。\n"
     );
+    // folder=<home>/workflows/<名>——home 即 codex 家所在的那个世界。
+    let home = folder
+        .parent()
+        .and_then(|w| w.parent())
+        .ok_or_else(|| {
+            std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                format!("folder 非 <home>/workflows/<名> 形: {}", folder.display()),
+            )
+        })?;
     std::fs::write(
         dir.join("aginx.toml"),
-        codex_entry_toml(&header, name, display, desc, folder, 900),
+        codex_entry_toml(&header, name, display, desc, folder, home, 900),
     )
 }
 
@@ -222,10 +240,11 @@ fn write_system_entry(
     std::fs::create_dir_all(&dir)?;
     let header = "# 由 AginxOS kernel boot 期 ensure_system_entry 自动写——系统本人\n\
                   # 的对外直通条目：agent://<机>.relay.aginx.net/system。刀④-2 换芯\n\
-                  # codex（引擎商品化）；人格=home 根 AGENTS.md。\n";
+                  # codex（引擎商品化）；人格=home 根 AGENTS.md；CODEX_HOME 钉死\n\
+                  # <home>/.codex（#450）。\n";
     std::fs::write(
         dir.join("aginx.toml"),
-        codex_entry_toml(header, name, display, desc, home, 900),
+        codex_entry_toml(header, name, display, desc, home, home, 900),
     )
 }
 
@@ -369,7 +388,9 @@ mod tests {
     #[test]
     fn entry_roundtrip_and_remove_idempotent() {
         let d = tmp("entry");
-        let wf = tmp("entry-wf");
+        let home = tmp("entry-home");
+        let wf = home.join("workflows").join("ai-writer");
+        std::fs::create_dir_all(&wf).unwrap();
         write_entry(&d, &wf, "ai-writer", "AI Writer", "写东西").unwrap();
         let toml = std::fs::read_to_string(d.join("agents/ai-writer/aginx.toml")).unwrap();
         assert!(toml.contains("id = \"ai-writer\""));
@@ -379,6 +400,8 @@ mod tests {
         assert!(toml.contains("output = \"codex-exec-json\""));
         assert!(toml.contains("args = [\"exec\", \"--json\", \"--skip-git-repo-check\"]"));
         assert!(toml.contains("resume_args = [\"resume\", \"${SESSION_ID}\"]"));
+        // #450：CODEX_HOME 钉死 <home>/.codex（folder 上溯两级）
+        assert!(toml.contains(&format!("CODEX_HOME = \"{}\"", home.join(".codex").display())));
         assert!(!toml.contains("acp"), "助理不再走 carrier acp 桥");
         // 描述带引号也稳
         write_entry(&d, &wf, "quo'te", "带\"引\"号", "desc \\ slash").unwrap();
@@ -389,9 +412,19 @@ mod tests {
         remove_entry(&d, "ai-writer").unwrap();
         remove_entry(&d, "ai-writer").unwrap();
         assert!(!d.join("agents/ai-writer").exists());
-        for p in [d, wf] {
+        for p in [d, home] {
             let _ = std::fs::remove_dir_all(p);
         }
+    }
+
+    /// #450：folder 不在 <home>/workflows/<名> 形下=装链形状破了，fail fast。
+    #[test]
+    fn entry_write_rejects_shapeless_folder() {
+        let d = tmp("shapeless");
+        // 上溯两级不存在的形（"wf" 的 parent="" 再无 parent）
+        let err = write_entry(&d, Path::new("wf"), "x", "X", "y").unwrap_err();
+        assert_eq!(err.kind(), std::io::ErrorKind::InvalidInput);
+        let _ = std::fs::remove_dir_all(d);
     }
 
     /// 刀④-2：system 条目是 codex 形——agent_type=codex、folder=home 根
@@ -409,6 +442,8 @@ mod tests {
         assert!(toml.contains("output = \"codex-exec-json\""));
         assert!(toml.contains("args = [\"exec\", \"--json\", \"--skip-git-repo-check\"]"));
         assert!(toml.contains("resume_args = [\"resume\", \"${SESSION_ID}\"]"));
+        // #450：CODEX_HOME 钉死 <home>/.codex
+        assert!(toml.contains(&format!("CODEX_HOME = \"{}\"", home.join(".codex").display())));
         assert!(!toml.contains("acp"), "system 不再走 carrier acp 桥");
         // upsert 覆盖重写
         write_system_entry(&d, &home, "system", "系统", "改").unwrap();

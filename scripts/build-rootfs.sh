@@ -146,6 +146,12 @@ mkdir -p "${TREE}"
 mkdir -p "${TREE}"/{dev,proc,sys,etc,home,media,mnt,opt,root,run,srv,tmp,var/log,var/power,var/tmp}
 mkdir -p "${TREE}"/var/lib/aginx/{skills,units,stamps,pkgfiles,done,secret,voice}
 
+# codex 家立法（#450）：全机唯一真源=/home/.codex（网关守护 HOME=/home，
+# 它 spawn 的 codex 读那里）；手动 ssh 腿 HOME=/root——经此符号链接同源，
+# 两腿永不劈叉（X2 四连超时案根因即两腿两家）。运行时真源内容由
+# opt-in/provision 填 /home/.codex（config.toml+auth.json）。
+ln -sfn /home/.codex "${TREE}/root/.codex"
+
 # Android pieces: /system (adbd + linker config + lib64) and the root-level
 # property/SELinux files adbd reads at startup.
 # raw-boot 无 vendor ramdisk 无 adbd——整段跳过（E4b 门；段内保持原缩进，
