@@ -5,9 +5,25 @@
 # （chroot 后旧 /dev 不可见，busybox init 要 /dev/console）后 chroot
 # 进树跑 busybox init。
 # 铁律：任何一步失败都 exec /sbin/init 落回卖家系统——ssh 运维面不可丢。
+# 铁律二（2026-10-07 一翻取证）：shell 跑外部命令必 fork——不 exec 的
+# chroot 里 init 拿到的是子 PID，busybox init 拒跑（"must be run as
+# PID 1"，/aginxos-ride.log 一翻收据）。故末步必须 exec 保 PID1，
+# 而 exec 无回头——先以叉跑真目标当预检：回「must be run as PID 1」
+# 即 chroot+符号链接+exec 链全通（拒绝语=健康证），其余回答=链断、
+# 落回卖家系统，不 exec。
 B=/aginxos/bin/busybox
-[ -x "$B" ] || exec /sbin/init
-"$B" mount -t devtmpfs devtmpfs /aginxos/dev 2>/dev/null
-"$B" chroot /aginxos /sbin/init
-# 上行只有 chroot 当场失败才返回（init 起跑即永续）——落回卖家 init
-exec /sbin/init
+LOG=/aginxos-ride.log
+{
+  echo "=== ride alive $($B date '+%H:%M:%S' 2>&1) pid=$$ root=$($B readlink /proc/self/root 2>&1)"
+  [ -x "$B" ] || { echo "FATAL: $B not executable"; exec /sbin/init; }
+  $B mount -t devtmpfs devtmpfs /aginxos/dev 2>&1
+  echo "devtmpfs rc=$?"
+  OUT=$($B chroot /aginxos /sbin/init 2>&1)
+  echo "pre-check: $OUT"
+  case "$OUT" in
+    *"must be run as PID 1"*) ;;
+    *) echo "pre-check FAILED — fallback"; exec /sbin/init ;;
+  esac
+} >> "$LOG" 2>&1
+echo "exec real init" >> "$LOG"
+exec $B chroot /aginxos /sbin/init
