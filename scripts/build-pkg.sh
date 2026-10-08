@@ -31,6 +31,11 @@
 #                       — Alpine v3.22 aarch64 apk 闭包 15 件（sha256 逐件
 #                         钉死）+ wrapper 面 bin/git（L0 刀C：https 传输
 #                         整树自持，apk 缓存 out/apk-cache 复用）
+#   外源树包  aginxresearch
+#                       — 独立仓研究引擎（~/Documents/aginxresearch，
+#                         aginxbrowser 同级）musl 静态 CLI；无 [service]，
+#                         常驻=设备侧 crond 错峰腿；实例=设备 /home/research
+#                         系统工作文件不进包（2026-10-08 首包）
 #
 # 产物 out/pkgs/<name>-v<ver>-4pc.tar + .sha256（裸 hex），尾行打一行
 # manifest 片段（name url sha opt version [deps]）——L0 清单组装（刀4）
@@ -402,8 +407,28 @@ case "${PKG}" in
     done
     MEMBERS="pkg.toml SKILL.md files"
     ;;
+  aginxresearch)
+    # 外源树包（2026-10-08 首包 v0.1.0）：真身=独立仓 aginxresearch
+    # （~/Documents/aginxresearch，与 aginxbrowser 同级、独立开发线，
+    # 本仓只装配不仿制——aginx-gateway 同模式）。纯 CLI 引擎无
+    # [service]：常驻=设备侧 crond 错峰腿（配方注记）。out-of-tree
+    # CARGO_TARGET_DIR 保独立仓工作树零改动，--locked 钉依赖闭包。
+    RES="${AGINX_RESEARCH:-$HOME/Documents/aginxresearch}"
+    RES_BUILD="${ROOT}/out/research-build"
+    [ -f "${RES}/engine/Cargo.toml" ] || { echo "FATAL: 独立仓不在 ${RES}（AGINX_RESEARCH 可改指）" >&2; exit 1; }
+    echo "==> zigbuild aginxresearch（${RES}，musl，缓存则秒过）"
+    (cd "${RES}" && CARGO_TARGET_DIR="${RES_BUILD}" \
+      cargo zigbuild --release --locked --target aarch64-unknown-linux-musl)
+    RES_BIN="${RES_BUILD}/aarch64-unknown-linux-musl/release/aginxresearch"
+    [ -x "${RES_BIN}" ] || { echo "FATAL: ${RES_BIN} 未产出" >&2; exit 1; }
+    file "${RES_BIN}" | grep -q "statically linked" \
+      || { echo "FATAL: aginxresearch 非 musl 静态（$(file "${RES_BIN}")）" >&2; exit 1; }
+    mkdir -p "${STAGE}/files/bin"
+    install -m 755 "${RES_BIN}" "${STAGE}/files/bin/aginxresearch"
+    MEMBERS="pkg.toml SKILL.md files"
+    ;;
   *)
-    echo "FATAL: 未知包名 ${PKG}（两裸包/换芯树包/两树包/工具双包/三树包/刀F三包 zigbuild / 上游树包 git / aginx-proxy / 频道两包）" >&2
+    echo "FATAL: 未知包名 ${PKG}（两裸包/换芯树包/两树包/工具双包/三树包/刀F三包 zigbuild / 上游树包 git / aginx-proxy / 频道两包 / aginxresearch）" >&2
     exit 1
     ;;
 esac
