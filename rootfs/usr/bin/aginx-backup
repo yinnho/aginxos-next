@@ -1,24 +1,30 @@
 #!/bin/sh
-# aginx:summary=local backup line: snapshot the state world, list, verify, keep 7
+# aginx:summary=local backup line v3: snapshot the whole state world, list, verify, keep 7
 # aginx:args=now | list | verify <file>
 # aginx:examples=now
 # aginx:examples=list
 # aginx:examples=verify /var/backups/aginx/backup-<ts>.tar.gz
 # aginx:group=backup
-# N5④ (#86 v2, local line — the push half is deferred by decision): the
-# first-gen ag-backup carried carrier.db through sqlite's backup API; that
-# substrate is gone (N4 切净), so v2 snapshots what IS the state now —
-# /home/.aginx (avatars + session logs, the truth source) + /var/lib/aginx
-# (the N5③ single state home) + /etc/aginx — via a staging copy, then one
-# tar.gz. The secret store NEVER rides a backup: the (future) push half's
-# auth must not bootstrap from its own cargo (DECISIONS §9); keys are
-# re-enterable (`aginx-secret set`). `verify` asserts that exclusion
-# against the finished tar, not just the staging discipline.
-# Restore is manual: unpack and copy members back (stop aginx-server
-# first for /home/.aginx), or fish a single session log out of the tar.
-# Device-local trust domain only — same content class the aginx-update
-# state tar already carries wholesale. Pushing anywhere requires the
-# server half that does not exist yet.
+# v3 (#456, 2026-10-08): the state world moved when the world model did —
+# /home IS the root now (AGENTS.md personhood + workflows/ capability faces
+# + channels/ + research/ instances + engine homes .grok/.codex). v2 guarded
+# on /home/.aginx, which no longer exists, so the nightly 04:17 run died
+# every night with zero backups on disk. Scope now = wholesale /home
+# (nothing missed when new faces appear) minus transient dirs
+# (research/dl download staging, research/logs, .cache) + /var/lib/aginx
+# (secret store excluded, §9) + /etc/aginx. One tar = the machine's soul,
+# local half of the black-box doctrine.
+# SQLite discipline: instance .db files ride as the WAL trio (db+wal+shm)
+# copied together by cp -a; 04:17 sits ~10min clear of the 04:07 research
+# fire, and a mid-write trio restores under SQLite crash-recovery semantics.
+# The secret store NEVER rides a backup: the (future) push half's auth must
+# not bootstrap from its own cargo (DECISIONS §9); keys are re-enterable
+# (`aginx-secret set`). `verify` asserts that exclusion against the finished
+# tar, not just the staging discipline.
+# Restore is manual: unpack and copy members back (stop aginx-server first
+# for /home), or fish a single file out of the tar.
+# Device-local trust domain only. Pushing anywhere requires the server half
+# that does not exist yet.
 set -eu
 
 B=/var/backups/aginx
@@ -29,12 +35,16 @@ die() { echo "aginx-backup: $*" >&2; exit 1; }
 cmd_now() {
   TS=$(date +%Y%m%d-%H%M%S)
   S=$B/.build-$TS
-  mkdir -p "$S/home" "$S/var/lib" "$S/etc"
+  mkdir -p "$S/var/lib" "$S/etc"
 
-  [ -d /home/.aginx ] || die "no /home/.aginx — nothing to back up"
-  cp -a /home/.aginx "$S/home/"
+  # The world's anchor is the personhood file — a /home without it is not
+  # the state world but some other tree.
+  [ -f /home/AGENTS.md ] || die "no /home/AGENTS.md — this is not the state world"
+  cp -a /home "$S/"
   cp -a /var/lib/aginx "$S/var/lib/" 2>/dev/null || true
   cp -a /etc/aginx "$S/etc/" 2>/dev/null || true
+  # Transients never ride: download staging, logs, generic caches.
+  rm -rf "$S/home/research/dl" "$S/home/research/logs" "$S/home/.cache"
   # §9: the sidecar store is the one member class that must not ride.
   rm -rf "$S/var/lib/aginx/secret"
 
@@ -60,8 +70,8 @@ cmd_list() {
 cmd_verify() {
   [ -f "$1" ] || die "no such file: $1"
   gzip -t "$1" || die "gzip integrity check failed"
-  tar -tzf "$1" 2>/dev/null | grep -q '^home/\.aginx' \
-    || die "state home member missing"
+  tar -tzf "$1" 2>/dev/null | grep -q '^home/AGENTS.md' \
+    || die "personhood member missing"
   tar -tzf "$1" 2>/dev/null | grep -q '^var/lib/aginx/' \
     || die "var/lib state member missing"
   # §9 reverse assertion: the exclusion is a contract, so it is checked
@@ -70,7 +80,7 @@ cmd_verify() {
     die "SECRET STORE IN BACKUP — do not ship or push this file"
   fi
   n=$(tar -tzf "$1" 2>/dev/null | wc -l | tr -d ' ')
-  echo "verify: ok (${n} members, state home present, secret excluded)"
+  echo "verify: ok (${n} members, personhood present, secret excluded)"
 }
 
 case "${1:-}" in
