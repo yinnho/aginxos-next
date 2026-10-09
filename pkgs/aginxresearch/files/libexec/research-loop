@@ -1,0 +1,26 @@
+#!/bin/sh
+# research-loop (10-09 user ruling: serial = never idle) — continuous grinder.
+# Round-robins the instances one round at a time; we are the engine's only
+# caller, single grok account stays serial by construction. rc!=0 (rate limit
+# / net flap) -> 300s backoff, else straight on. Cron research lines retired.
+# v0.1.1 (#472 运维件归包): rode the package tree — the unit is pkg-owned
+# (/var/lib/aginx/units/aginxresearch.toml), the hand /etc/aginx/svc.d copy
+# retires.
+export HOME=/root
+export PATH=/usr/sbin:/usr/bin:/sbin:/bin
+export TZ=CST-8
+mkdir -p /home/research/logs
+while :; do
+    for name in duanju taishigong qujiu baize; do
+        log=/home/research/logs/$name.log
+        echo "=== $(date '+%F %T') $name (loop) ===" >> "$log"
+        /var/bin/aginxresearch run /home/research/$name >> "$log" 2>&1
+        rc=$?
+        echo "--- rc=$rc" >> "$log"
+        if [ $rc -ne 0 ]; then
+            sleep 300
+        else
+            sleep 5
+        fi
+    done
+done

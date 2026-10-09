@@ -579,8 +579,9 @@ install -m 755 "${ROOT}/out/resize2fs" "${TREE}/usr/bin/resize2fs"
 L0_SVC_COUNT="$(ls "${TREE}/etc/aginx/svc.d/" | wc -l | tr -d ' ')"
 [ "${L0_SVC_COUNT}" = "2" ] \
   || { echo "FATAL: L0 svc.d has ${L0_SVC_COUNT} units (want 2: net-watch + aginxbrowser) — engine units ride packages, not the image" >&2; exit 1; }
-# 基础 manifest（全 opt 目录）+ 13 行 opt 附加（aginx 家族包）。sha 取
-# out/pkgs 产物（不手维护）；url/version/deps 取 pkgs/<name>/pkg.toml——
+# 基础 manifest（全 opt 目录）+ 15 行 opt 附加（aginx 家族包 + 运维件
+# aginxresearch/morning-report，#472 归包）。sha 取 out/pkgs 产物（不手
+# 维护）；url/version/deps 取 pkgs/<name>/pkg.toml——
 # 配方 bump 了 version 没重跑 build-pkg → sha 文件名对不上 → die（宁死
 # 不烤错清单）。组装进树后签名（.sig 是构建产物，不回写配方；签的是树里
 # 的组装件，覆写 cp 进来的基础件签名）。
@@ -589,7 +590,8 @@ OPT_ADD="${TMPDIR:-/tmp}/agpkg-opt-add.$$"
 for p in aginx aginx-term aginx-gateway aginx-secretd \
          aginx-asr aginx-tts aginx-ocr aginx-voice \
          aginx-qr aginx-pair aginx-update \
-         aginx-gateway-local aginx-channels; do
+         aginx-gateway-local aginx-channels \
+         aginxresearch morning-report; do
   R="pkgs/${p}"
   p_ver="$(sed -n 's/^version *= *"\([^"]*\)"/\1/p' "${R}/pkg.toml" | sed -n '1p')"
   p_url="$(sed -n 's/^url *= *"\([^"]*\)"/\1/p' "${R}/pkg.toml" | sed -n '1p')"
@@ -615,7 +617,7 @@ rm -f "${OPT_ADD}"
 (cd "${ROOT}" && cargo run -q -p aginx-sign -- sign .local/keys/aginx.key "${TREE}/etc/agpkg.manifest")
 (cd "${ROOT}" && cargo run -q -p aginx-sign -- verify .local/keys/aginx.pub "${TREE}/etc/agpkg.manifest") \
   || { echo "FATAL: L0 manifest sig does not verify" >&2; exit 1; }
-echo "==> L0 manifest: 基础清单（全 opt）+ 13 行 opt 附加已签名进树"
+echo "==> L0 manifest: 基础清单（全 opt）+ 15 行 opt 附加已签名进树"
 cp -R "${RECIPE}/usr/bin/." "${TREE}/usr/bin/"
 cp -R "${RECIPE}/libexec/aginx/." "${TREE}/usr/libexec/aginx/"
 # 批② C1（09-10）：包管件的 sidecar 一律由安装器从 pkg.toml 生成（安装

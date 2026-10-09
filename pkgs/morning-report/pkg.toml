@@ -1,0 +1,20 @@
+# morning-report — 晨报运维件归包（#472 运维件归包线，v0.1.0
+# 2026-10-10）。
+# 前史：#68 刀1 晨报 codex 化，wrapper 手拷 /usr/libexec/aginx/
+# morning-codex.sh + 手写 crontab 行——重刷即丢（/etc/crontabs 不在
+# state tar 白名单、libexec 不在镜像）。归包后：wrapper 住包树
+# files/libexec/morning-codex.sh，face /var/bin/morning-report；
+# cron 线随 [cron] 块落位（安装器改表后自动 touch 目录——busybox
+# crond mtime 律），重装原地换块不重样。
+# 运行时依赖（��� depends）：codex（/var/bin/codex，brain 真答）+
+# /home/workflows/morning-report（晨报官工作目录，state tar 自带）+
+# channels weixin（交付腿；不在也不炸——产物核验只看 .src.md）。
+name = "morning-report"
+version = "0.1.0"
+summary = "晨报 cron 腿：08:00 拉起 codex 出晨报并核验归档（.src.md 落盘才算数）"
+group = "agent"
+url = "https://pkgs.aginx.net/morning-report/v0.1.0/morning-report-v0.1.0-4pc.tar"
+exec = "libexec/morning-codex.sh"
+
+[cron]
+lines = ["0 8 * * * /var/bin/morning-report >> /home/workflows/morning-report/logs/crond.log 2>&1"]

@@ -1,16 +1,25 @@
-# aginxresearch — 深度研究引擎包（2026-10-08 首包 v0.1.0）。
+# aginxresearch — 深度研究引擎包（2026-10-08 首包 v0.1.0；v0.1.1 2026-10-10
+# #472 运维件归包：research-loop 常驻腿入包）。
 # 真身=独立仓 ~/Documents/aginxresearch（与 aginxbrowser 同级、独立
-# 开发线），本仓只装配不仿制（aginx-gateway 同模式）。纯 CLI 引擎、
-# 无 [service]：常驻靠设备侧 crond 错峰腿（/etc/crontabs/root 四条，
-# /usr/libexec/aginx/research-round.sh 包装——改表后必须 touch
-# /etc/crontabs 目录，busybox crond 只认目录 mtime）。
+# 开发线），本仓只装配不仿制（aginx-gateway 同模式）。v0.1.1 起
+# [service] 常驻=树内 wrapper（files/libexec/research-loop，轮转四实例
+# 连磨；10-09 裁决=串行永不闲），单元归 /var/lib/aginx/units/——
+# 设备侧手拷的 /etc/aginx/svc.d/aginx-research-loop.toml 退役。
+# crond 旧四腿已死（被 loop 取代），改表律仍通用：改 /etc/crontabs
+# 后必须 touch /etc/crontabs 目录（busybox crond 只认目录 mtime）。
 # 实例=系统工作文件，唯一居所设备 /home/research/<名>/（四件套+
 # .db+assets/）——不进本仓、不进引擎仓、不上镜像；包只装引擎本体。
 # 依赖面（运行时，非 depends）：aginxbrowser :8089（搜索/抓页/下载）
 # + /var/bin/grok（综合腿，socks5h 代理 env 由引擎自带）。
 name = "aginxresearch"
-version = "0.1.0"
-summary = "深度研究引擎：取题→aginxbrowser 取材（含一手源《篇名》→维基文库）→grok 综合→SQLite 条目+新题；附件收割保留"
+version = "0.1.1"
+summary = "深度研究引擎：取题→aginxbrowser 取材（含一手源《篇名》→维基文库）→grok 综合→SQLite 条目+新题；附件收割保留；research-loop 常驻轮磨"
 group = "agent"
-url = "https://pkgs.aginx.net/aginxresearch/v0.1.0/aginxresearch-v0.1.0-4pc.tar"
+url = "https://pkgs.aginx.net/aginxresearch/v0.1.1/aginxresearch-v0.1.1-4pc.tar"
+
 exec = "bin/aginxresearch"
+
+[service]
+cmd = "/var/lib/aginx/pkgfiles/aginxresearch/libexec/research-loop"
+args = []
+type = "simple"
