@@ -1,228 +1,176 @@
 <div align="center">
 
-<img src="docs/images/home.png" width="264" alt="AginxOS boot home — hold-to-speak with the scheduled-cards band" />
-
 # AginxOS
 
-**An operating system for AI agents, written in Rust — running on a real phone.**
+**A black-box ARM server OS for AI agents — written in Rust.**
 
-Linux kernel for drivers · Rust userspace for the system · real phones, no emulator
+Linux kernel for drivers · Rust userspace for the system · real metal, no emulator
 
 [![userspace: Rust](https://img.shields.io/badge/userspace-Rust-dea584?logo=rust)](https://www.rust-lang.org)
 [![binaries: musl static](https://img.shields.io/badge/binaries-musl%20static-8b949e?logo=linux)](https://musl.libc.org)
-[![devices: redfin · enchilada (bring-up)](https://img.shields.io/badge/devices-redfin%20%C2%B7%20enchilada%20(bring--up)-34d399)](#the-metal)
+[![devices: redfin · enchilada · Panther X2](https://img.shields.io/badge/devices-redfin%20%C2%B7%20enchilada%20%C2%B7%20Panther%20X2-34d399)](#the-metal)
 [![license: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](./LICENSE)
 
-给 Agent 的操作系统 —— 人只发指令，机器干活。
+给 Agent 的黑匣子 ARM 服务器 —— 人只刷机、通电、插网，之后全是 agent。
 
 </div>
 
 ---
 
 This repository is the **platform heart** of AginxOS: it owns the device and
-the bake chain. The first-generation repo
+the bake chain. Positioning authority:
+[`AGENTS.md`](./AGENTS.md) (2026-10-01) and [`docs/DESIGN.md`](./docs/DESIGN.md).
+The first-generation repo
 ([`aginxos`](https://github.com/yinnho/aginxos)) is frozen as the asset
-library; the on-device HTML engine lives in
+library; the fetch/HTML engine lives in
 [`aginxbrowser`](https://github.com/yinnho/aginxbrowser); signed packages
 mirror at [pkgs.aginx.net](https://pkgs.aginx.net).
 
 ## An OS whose primary user is an agent
 
-AginxOS is built on one bet: the next personal device's main user is an AI
-agent, and a human-tuned app stack just gets in its way. So the machine is
-re-cut around the agent's body:
+AginxOS is a **black-box ARM server**. The machine has no human interface:
+no screen, no local voice dialog, no camera. A human's entire relationship
+with it is flash, power, and network; every operation after that is the
+agent's — over ssh / relay / `agent://`.
 
-- **Mouth and ear come first.** Push-to-talk voice in, speech out. A closed
-  local vocabulary works with zero network — the floor, not the ceiling; a
-  cloud brain (any OpenAI-format API) does the rest.
-- **The camera is a peer input.** Volume-up opens the eye: a resident
-  viewfinder with a full software ISP feeding QR decode and OCR.
-- **The screen is the agent's canvas, not a chat window.** UI is HTML; an
-  on-device engine rasterizes it and blits straight to the DRM panel.
-  Display is request semantics: pages, not apps.
-- **One machine, one server.** The platform is a single web server — the
-  mother (`aginx-server`): front desk, routing, session ledger. Avatars
-  (agent personas) are folders under `{AGINX_HOME}/workflows/`, run by one
-  engine in-process — hot when busy, cold when not.
-- **Everything external is a CLI.** Capabilities enter as `aginx-*`
-  binaries registered by the filesystem itself; a single bare `aginx`
-  router dispatches. Outbound is a CLI, inbound is a webhook — no in-process
-  plugin ABI to fight.
+External communication is a first-class *capability*, not a human feature:
 
-AginxOS is _not_ an app or an agent framework — it is a full phone bring-up:
-boot chain, DRM panel, camera pipeline, audio DSP, video codecs, A/B
-updates, a supervisor, a signed package chain, and a terminal that runs on
-the panel itself.
+- **SIP/PSTN is the agent's outbound telephony** (`aginx-call`, sip.aginx.net) —
+  the agent dials, answers, speaks and listens on the line.
+- **Channels are presence** — WeChat, relay, SIP, and more under
+  `{AGINX_HOME}/channels/`; each channel is one directory + one opt-in package.
+- **Everything external is a CLI.** Capabilities enter as `aginx-*` binaries;
+  a single bare `aginx` router dispatches. No in-process plugin ABI to fight.
+- **Engines are commodity labor** — codex / grok / other agent CLIs as
+  replaceable opt-in packages; personhood and memory stay on the machine.
+
+AginxOS is _not_ an app framework and _not_ a phone UI product. It is a
+full machine bring-up: boot chain, A/B updates, a supervisor, a signed
+package chain, and an agent-facing control plane. Phones on the bench are
+ARM servers that happen to look like phones; server-class boards
+(Panther X2, …) are first-class machines.
 
 ## Measured on the device, or it didn't happen
 
 The project's law is **compile success ≠ bring-up success** — every claim
 below carries a receipt from real hardware:
 
-- 45-check device acceptance suite, green on first run after the flash
-- Voice round-trip ~2 s end to end (down from 28 s): local ASR/TTS first,
-  cloud brain fallback
-- Resident viewfinder at ~14 fps with zero stalls — full-res demosaic +
-  area downsample, AWB / CCM / tone, LC898129 autofocus servo: a software
-  ISP tuned frame by frame against reference phones
-- Hardware H.264 decode to zero-copy DRM planes with synced audio, and
-  hardware H.264 encode on the same Venus block
-- A/B slot updates through an ed25519-signed package chain — staged, atomic,
-  self-recovering
+- Headless L0 image: kernel + init + supervisor + network + ssh + pkg;
+  image `svc.d` ships exactly 2 units; everything else is opt-in
+- Device acceptance suites green after flash (`scripts/accept/`)
+- A/B slot updates through an ed25519-signed package chain — staged,
+  atomic, self-recovering
+- Remote channel: `aginx-gateway` registers to relay — the node is
+  reachable from anywhere as if local
+- SIP leg promoted as the agent's external telephony (M48 backlog rides
+  that line)
+
+Frozen / retired human-face lines (camera, panel term, local PTT dialog as
+a product) stay in-tree as packages or assets with **zero new investment** —
+see Positioning in `AGENTS.md`.
 
 ## The metal
 
-**First target: Google Pixel 5** (`redfin`, Snapdragon 765G / SM7250),
-unlocked, one dedicated experiment unit — no Android userspace, no
-emulator. A second bring-up line (OnePlus 6, `enchilada`) exists to keep
-the platform honest about machine differences.
+**Experiment units:** Google Pixel 5 (`redfin`) and OnePlus 6 (`enchilada`) —
+unlocked, no Android userspace, no emulator. **Server-class boards** are
+first-class (first purchase: Panther X2, `docs/DEVICE-PANTHER-X2.md`).
 
 ```text
-XBL (fused, signed) → AginxOS bootloader → Linux 4.19 stock kernel + vendor modules → Rust userspace
+XBL (fused, signed) → AginxOS bootloader → Linux stock kernel + vendor modules → Rust userspace
 ```
 
-- DRM/DSI panel driven directly — dumb-buffer modeset, page flips that wait
-  on vblank; the boot card plays Matrix rain, then typewrites the wordmark
-- imx363 raw (RDI) → software ISP; cs35l41 speaker DSP with firmware
-  hand-off and calibration; Venus video codec; DMIC capture
-- Remote channel: `aginx-gateway` registers home to a relay — the mother is
-  reachable from anywhere as if local
+- L0 base only in the image; engines, channels, gateway, SIP mouth/ears
+  (asr/tts/voice as SIP-line internals), and tools ride packages
+- Remote channel: `aginx-gateway` → `relay.aginx.net`
 - busybox and a thin C / Python tool tier ride along as assets; the system
-  itself — supervisor, server, runtime, voice, terminal, packages, gateway —
-  is Rust
-
-## What it looks like
-
-<p align="center">
-<img src="docs/images/home.png" width="280" alt="Home on a OnePlus 6 — clock, signal bars, camera / photos / talk / settings" />
-</p>
-
-Live dump from the panel (OnePlus 6, 1080×2280): time and signal in the
-status bar, four apps at the bottom.
-
-<table>
-<tr>
-<td><img src="docs/images/boot-wordmark.png" width="240" alt="Boot: AginxOS wordmark" /></td>
-<td><img src="docs/images/screen-html.png" width="240" alt="Panel: an agent-written brief rendered as HTML" /></td>
-</tr>
-</table>
-
-Boot wordmark, then the home face. Right: a markdown brief the agent wrote,
-rendered as HTML on the same panel.
+  itself — supervisor, server, packages, gateway, call — is Rust
 
 ## Machines are data (D14)
 
 The platform (`crates/` + `rootfs/` + `scripts/`) carries zero machine
 references: no panel size, no event-node path, no SoC name in any crate.
-Every machine difference lives in `devices/<codename>/` — a TOML profile
-(panel/input/audio/quirks/affinity/camera), an ordered module list,
-bring-up init scripts, the boot-image packing line, and camera sensor
-sources. `DEVICE=<codename> ./scripts/build-rootfs.sh` bakes that machine.
+Every machine difference lives in `devices/<codename>/` — a TOML profile,
+module list, bring-up init, boot packing line, and optional camera sources.
+`DEVICE=<codename> ./scripts/build-rootfs.sh` bakes that machine.
 
 **Adding a machine is a new directory plus a bring-up line — the platform
 doesn't change.** Laws (enforced by a grep gate in `check.sh`): machine
-strings in crates are unconstitutional; there is no default machine (a
-missing profile fails fast at boot, never falls back); device dirs never
-import each other. OTA manifests carry a mandatory `device` field — the
-updater refuses a package baked for another machine. See
-[`devices/README.md`](devices/README.md) for the add-a-machine checklist.
+strings in crates are unconstitutional; there is no default machine; device
+dirs never import each other. OTA manifests carry a mandatory `device`
+field. See [`devices/README.md`](devices/README.md).
 
 ## Architecture
 
 ```mermaid
 flowchart TB
-    K["Linux 4.19 stock kernel + vendor modules"]
-    subgraph U["Rust userspace · musl static"]
-        S["aginx-server — the mother<br/>front desk · routing · session ledger"]
-        R["carrier-* engine — kernel / runtime / clone / memory<br/>runs avatar folders in-process"]
-        V["aginx-voice — ear + mouth<br/>local ASR/TTS, closed-vocab offline floor"]
-        T["aginx-term — panel terminal<br/>agent canvas: HTML → DRM"]
+    K["Linux stock kernel + vendor modules"]
+    subgraph U["Rust userspace · musl static · headless"]
+        S["aginx-server — system front<br/>UDS face · boot gateway entry"]
         C["aginx-* CLIs — file-is-registry<br/>one bare aginx router"]
         G["aginx-gateway — remote channel"]
+        CH["aginx-channels — presence legs<br/>weixin · …"]
+        CALL["aginx-call — SIP/PSTN leg<br/>agent dials / answers"]
+        V["asr/tts/voice — SIP mouth & ears<br/>drawn on by the call line"]
     end
-    B(("Brain<br/>OpenAI-format API"))
-    L(("relay"))
+    B(("Brain / engines<br/>codex · grok · …"))
+    L(("relay.aginx.net"))
+    SIP(("sip.aginx.net"))
     K --> U
-    V <--> S
-    T <--> S
-    S <--> R
-    R --> C
+    S --> C
     G <--> S
     G <--> L
-    R <--> B
+    CH <--> S
+    CALL <--> SIP
+    V -.-> CALL
+    C <--> B
 ```
 
-## Crates
+## Crates (selected)
 
 | Crate | Binary | Role |
 |-------|--------|------|
-| `crates/router` | `aginx` | the bare command — mother's face, file-is-registry dispatch |
-| `crates/server` | `aginx-server` | front desk (进/住/切/退), session cursor, request routing, session ledger |
-| `crates/runtime` | — | `carrier-runtime` — the mother engine's agent loop + tool layer, in-process in the server (the standalone `aginx-runtime` binary was deleted at the 2026-09-24 workspace merge) |
-| `crates/agi` | — | fast-agi v0 frame types |
-| `crates/agio` | — | D1 output envelope for every CLI |
-| `crates/hwd` | — | device profile reader — the single legal source of machine facts (D14) |
-| `crates/voice` | `aginx-voice` | voice dialog daemon — PTT input, closed-vocab protocol, face writer |
-| `crates/wizard` | `aginx-net-wizard` | first-boot Wi-Fi setup TUI |
-| `crates/term` | `aginx-term` | panel home (clock + apps) and the on-device terminal |
-| `crates/pkg` | `aginx-pkg` | package manager — signed manifest, 四件套 tars |
-| `crates/svc` | `aginx-svcd`/`aginx-svc`/`aginx-boot-ok` | supervisor, control client, A/B slot marker |
-| `crates/sign` | `aginx-sign` | host-side ed25519 signer/verifier |
-| `crates/pair` | `aginx-pair` | host-only pairing-code minter — AGINXPAIR1 bundle → PNG QR, device decodes via `aginx-qr` |
-| `crates/qr` | `aginx-qr` | QR decode CLI — quircs + jpeg decode face (built in its own zigbuild pass) |
-| `crates/img` | `aginx-img` | vendored libjpeg-turbo decode (shared FFI) |
-| `crates/download` | `aginx-download` | HTTPS downloader — streaming, .part+rename |
-| `crates/update` | `aginx-update` | signed A/B rootfs updater — swap + state tar |
-| `crates/done` | `aginx-done` | provision done markers |
-| `crates/secret` | `aginx-secretd`/`aginx-secret` | secret sidecar daemon + admin face |
-| `crates/gateway` | `aginx-gateway` | remote channel — registers to the relay, collapses external JSON-RPC onto the server's UDS front |
-| `crates/{carrier,types,memory,clone,dup,carrier-gateway,lifecycle,kernel,ilink,webhook,web,agf,agmem}` | — | the mother engine (ex-`aginx-carrier`, merged 2026-09-24): kernel, agent runtime, clone format, memory tree, `agent://` client + contacts ledger (`carrier-gateway` — NOT the remote-channel `aginx-gateway` above), inbound channels |
+| `crates/router` | `aginx` | the bare command — file-is-registry dispatch |
+| `crates/server` | `aginx-server` | system front (UDS face + boot gateway entry) |
+| `crates/call` | `aginx-call` | SIP leg — agent's outbound telephony (promoted) |
+| `crates/voice` | `aginx-voice` | SIP-line mouth/ears machinery (human dialog line retired) |
+| `crates/channels` | `aginx-channels` | channel system home — presence legs |
+| `crates/pkg` | `aginx-pkg` | signed package manager |
+| `crates/svc` | `aginx-svcd` / `aginx-svc` / `aginx-boot-ok` | supervisor + A/B marker |
+| `crates/hwd` | — | device profile reader (D14 single legal source) |
+| `crates/agio` | — | D1 output envelope |
+| `crates/{types,memory,clone,dup,lifecycle}` | — | engine leftovers feeding personhood / install lines |
+
+Frozen face packages (`aginx-term`, OCR/QR optics, …) remain installable
+but are not part of the server product story.
 
 ## Building & discipline
 
-- `./scripts/check.sh` — host gate (workspace tests, per-device camera
-  pixel-chain tests, the D14 machine-string grep gate, registry lint),
-  before every commit
+- `./scripts/check.sh` — host gate before every commit
 - `DEVICE=redfin ./scripts/build-rootfs.sh` — bake a machine's flashable
-  image (`out/rootfs.img`; device assets staged under
-  `.local/device/<codename>` — see `devices/<codename>/boot/assets.md`),
-  see `rootfs/README.md`
-- `devices/redfin/boot/flash-redfin.sh` — the flash day: packs
-  vendor_boot, gates every fastboot call on the profile's serial,
-  flashes userdata-then-vendor_boot (commit point last). Dry-run by
-  default, `GO=1` to flash
-- `./scripts/ota-manifest.sh <codename> <ver> <outdir> boot=<img> …` —
-  build + ed25519-sign an update manifest; stamps the mandatory `device`
-  field from the machine's own profile
-- `./scripts/accept/*.sh` — device acceptance suites, pinned to the
-  experiment unit's serial
-- Experiment history and receipts live in `docs/HARDWARE.md`, kept local —
-  device serials and the full experiment log stay out of the public repo
+  image (`out/rootfs.img`; see `rootfs/README.md`)
+- `devices/<codename>/boot/flash-*.sh` — flash day (dry-run default, `GO=1`)
+- `./scripts/ota-manifest.sh` — signed update manifest with mandatory `device`
+- `./scripts/accept/*.sh` — device acceptance suites
 
 Milestone history and working rules: `AGENTS.md`. Machine-tree design:
-[`docs/FS.md`](docs/FS.md).
+[`docs/FS.md`](docs/FS.md). World model: [`docs/DESIGN.md`](docs/DESIGN.md).
 
 ## Ecosystem
 
-Independent products: **aginxbrowser** (panel HTML engine) and
-**aginxbrain** (OpenAI-format brain API). Everything else — gateway,
-clone runtime (the former aginx-carrier), tooling — lives in this repo.
-Surrounding infrastructure:
-
 | Repository | Role |
 |------------|------|
-| `aginxos-next` (this repo) | platform heart — owns the device, the bake chain, the mother (gateway + clone runtime) |
-| [`aginxbrowser`](https://github.com/yinnho/aginxbrowser) | the server-side HTML engine behind the panel canvas |
-| `aginxbrain` | the brain: OpenAI-format API the mother calls |
-| [`aginx`](https://relay.aginx.net) | the gateway daemon + `relay.aginx.net` — remote channel for machines off-LAN; wire protocol ACP lives in that repo |
-| [duphub.com](https://duphub.com) | clone directory + file-level distribution (`dup push` / anonymous `dup clone`) |
-| [`aginxos`](https://github.com/yinnho/aginxos) | first generation, frozen — asset library: vendor ramdisk unpack, C tool sources, voice/OCR stacks and models, signing keys, busybox |
+| `aginxos-next` (this repo) | platform heart — device, bake chain, system front |
+| [`aginxbrowser`](https://github.com/yinnho/aginxbrowser) | agent fetch / HTML engine (capability package) |
+| `aginxbrain` | OpenAI-format brain API |
+| [`aginx`](https://relay.aginx.net) | gateway daemon + `relay.aginx.net` |
+| [duphub.com](https://duphub.com) | clone directory + file-level distribution |
+| [`aginxos`](https://github.com/yinnho/aginxos) | first generation, frozen — asset library |
 | [pkgs.aginx.net](https://pkgs.aginx.net) | signed package mirror for `aginx-pkg` |
 
 ## Status & license
 
-Early and fast-moving: one phone in daily use, a second in bring-up, daily
-experiments, no releases yet.
+Early and fast-moving: experiment phones + server-board bring-up, daily
+work, no public releases yet.
 
 MIT — except vendor firmware blobs, which are never committed (extracted
 locally, gitignored).

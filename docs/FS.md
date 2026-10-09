@@ -1,7 +1,8 @@
 # AginxOS 文件结构（2026-09-24 立；2026-10-02 修宪换代）
 
 世界观真源 = `docs/DESIGN.md`（数字世界里的人；#68 刀③ 修宪，本页
-世界观段已折叠进去）。本页只定**机上树**——树细节的唯一权威。
+世界观段已折叠进去；#422 黑匣子 ARM 服务器——无屏 / 无本地语音产品面 /
+无摄像头）。本页只定**机上树**——树细节的唯一权威。
 
 一个**系统**——这个人在数字世界里的本体（分身+助理同一实体）。
 它的家就是 `/home`。能力面是它的侧面（`workflows/`），在场是它的门
@@ -35,8 +36,8 @@
 ## 机上三层
 
 ```
-/usr/bin            出厂 tool（aginx、aginx-term…）+ .aginxmd
-/usr/libexec/aginx  守护（server / runtime / gateway / secretd）
+/usr/bin            出厂 tool（aginx、aginx-pkg…）+ .aginxmd
+/usr/libexec/aginx  守护（server / gateway / secretd；单元多随包走）
 /var                机器账：日志、模型、热换 bin
 /home               系统本体的家：人格 + 能力面 + 在场 + peers（provider 真身在 /var/bin）
 ```
@@ -55,8 +56,8 @@ OTA 不覆盖 `/home`。
 ├── sessions/               # 人对系统的会话账
 │   └── main.jsonl
 ├── data/                   # kernel 自账（carrier.db：会话史/记忆/计量；人格真源，拆迁后独立成一等件）
-├── cards/                  # 首页卡片信封（定时任务产物；term 扫目录列���框，删卡片=删文件）
-├── photos/                 # 相册（相机照片归档）
+├── cards/                  # 任务结果信封（JSON 落盘；agent/能力面可读；冻结 term 脸曾扫此目录）
+├── photos/                 # 冻结相机线归档位（#422 零新投；目录保留兼容）
 ├── files/                  # 文件（普通文档，系统可见可管）
 │
 ├── tools/                  # 普通 CLI
@@ -101,9 +102,16 @@ OTA 不覆盖 `/home`。
 
 出厂 CLI 已经在 `/usr/bin`（同样 `.aginxmd`）。系统找命令走 router 三层路由（resolve.rs 实装）：**先 `<home>/providers/<名>/`，再 `<home>/tools/<名>/`，再 PATH 的 `aginx-*`**——provider 走裸名路由（`codex` 就是 `codex`），aginx 宇宙带姓。不必把 `aginx-qr` 再复制一份进 `/home`。
 
-### cards — 首页卡片 + 结果信封
+### cards — 任务结果信封
 
-定时任务自备数据落盘 JSON 进 `cards/`（信封 `title/template/data/created/source`），term 扫目录列小框，删卡片=删文件。按住说话链的**结果信封**不落盘：系统 send 回包整段是 JSON 对象、带非空 `template` 与 `data`（可选 `say` 上脸一句话）即信封，voice 原样 POST /open 交浏览器按模板出页；非 JSON 回包走 `reply` 模板兜底。不许把数据拆成 markdown 改写成文章再包回 HTML。浏览器缺模板（/open 返 `unknown_template`）→ voice 报系统安排写一次并登记。
+定时任务 / 能力面自备数据落盘 JSON 进 `cards/`（信封
+`title/template/data/created/source`）。**真源是文件**：agent 与能力面
+读目录即可；删卡片=删文件。冻结的 term 脸曾扫此目录列小框——服务器版
+无屏，不再把「上脸」当产品面。
+
+历史：本地 PTT/voice 曾把带 `template`+`data` 的 JSON 回包 POST `/open`
+交浏览器出页（非 JSON 走 `reply` 模板）。该人机链已停投（#422）；信封
+格式仍可被 agent 工具复用，勿再按「按住说话上屏」扩需求。
 
 ### tools — 普通 CLI
 
@@ -204,7 +212,7 @@ name = "某店"
 ├── etc/aginx/
 ├── var/log/aginx-svc/
 ├── var/models/
-├── var/bin/                # 热换中的 term/voice 等
+├── var/bin/                # 热换中的包面（gateway/channels/SIP 嘴耳…）
 └── home/                   # AGINX_HOME
 ```
 
@@ -238,10 +246,10 @@ aginxos-next/
 │   ├── kernel/ runtime/ …  # carrier-* 引擎件（退役中，见「引擎」章）
 │   ├── channels/           # 频道体系唯一家（机身+weixin 腿，#69）
 │   ├── router/             # /usr/bin 宇宙
-│   └── term/ voice/ call/ …
+│   └── call/ voice/ …      # call=SIP 外线；voice=SIP 嘴耳内件（term=冻结人脸）
 ├── home/                   # 出厂整树真源，烤线整树拷进机上 /home
 │   ├── AGENTS.md MEMORY.md # 系统人格（刀④-1 改名）+ 真源索引
-│   ├── photos/ files/      # 相册、文件
+│   ├── photos/ files/      # photos=冻结相机线归档；files=普通文档
 │   └── workflows/          # 出厂能力面（clone-creator）
 ├── devices/<codename>/
 ├── rootfs/
@@ -267,3 +275,4 @@ aginxos-next/
 | 引擎=自研母体 | 引擎=**商品劳动力**（codex/grok，可换） |
 | 对外两脸 | **N 个频道** |
 | SOUL.md（人格文件名） | **AGENTS.md**（定谳 2026-10-02；物理迁移已收，刀④-1） |
+| 手机人机面（屏/PTT/相机） | **黑匣子服务器**（#422）：人只刷机电插网；SIP=agent 外线 |

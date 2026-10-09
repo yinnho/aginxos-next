@@ -27,8 +27,8 @@
   （aginx-file/mem = 桥到 provision 后的包二进制 aginx-file/aginx-mem，
   aginx-sys-status。桥壳**不声明 aginx:exec**——目标 sync 后才存在是合法暂缺。
   2026-09-26：aginx-web 桥壳退役——web 工具回迁母体进程内，不再有 CLI）。
-- `var/bin/` — 3 个 voice 内部件 sidecar（aginx-asr/tts/ocr，hidden，被
-  aginx-voice 直接 spawn，不是 brain 面）。
+- `var/bin/` — SIP 嘴耳 / 冻结光学 sidecar 元数据位（aginx-asr/tts/ocr；
+  #422：asr/tts=SIP 内件，ocr=冻结眼；hidden，不是 brain 面）。
 
 ## 放置矩阵（谁烤进去、落哪）
 

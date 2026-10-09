@@ -116,12 +116,13 @@ local-only) and the public `docs/ARCHITECTURE.md` were retired
   voice, gateway, secretd and the three model trees all ride packages
   carrying their own `[service]` units; provision installs NOTHING
   (manifest is all-opt) — `aginx-pkg opt-in <name>` pulls a package
-  with its dependency closure (voice brings asr/tts/ocr, gateway brings
-  secretd). Flash is zero-prep — one universal image, no personal data
-  baked; configuration is post-flash over adb (`/etc/wifi.conf` +
-  `busybox chpasswd -c sha512` or authorized_keys, then ssh takes
-  over; acceptance = `n7-l0.sh`). `./flash-redfin.sh capture` is the
-  upgrade path (pre-arms
+  with its dependency closure (voice brings asr/tts as SIP mouth/ears;
+  ocr/qr/pair/term are frozen face packages, not pulled by voice;
+  gateway brings secretd). Flash is zero-prep — one universal image,
+  no personal data baked; configuration is post-flash over adb
+  (`/etc/wifi.conf` + `busybox chpasswd -c sha512` or authorized_keys,
+  then ssh takes over; acceptance = `n7-l0.sh`). `./flash-redfin.sh
+  capture` is the upgrade path (pre-arms
   the state tar so /root/.ssh + wifi.conf survive a re-flash); the
   default flash wants the factory shape.
 
@@ -150,7 +151,7 @@ local-only) and the public `docs/ARCHITECTURE.md` were retired
   ssh+pkg is a package. New engine work lands as `pkgs/<name>/` with
   its `[service]` unit, never as a baked unit — `build-rootfs.sh` dies
   if image svc.d grows past 2. Provision ships an all-opt manifest and
-  installs nothing; what runs on a phone is the user's `opt-in`.
+  installs nothing; what runs on a node is the user's `opt-in` (server narrative).
 - Secrets never enter the repo or docs. Brain access is
   `AGINXBRAIN_API_KEY` in `/etc/aginx/env` at runtime (unit env_file) —
   never committed, never echoed; on host it rides the environment only.
