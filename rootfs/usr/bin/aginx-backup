@@ -86,9 +86,13 @@ cmd_verify() {
     || die "var/lib state member missing"
   # §9 reverse assertion: the exclusion is a contract, so it is checked
   # against the tar itself — a staging bug must fail verify, loudly.
-  # Credential class rides the same contract (#467).
-  for banned in 'var/lib/aginx/secret' 'etc/aginx/env' 'etc/aginx/config.toml' \
-                'home/.codex/auth.json' 'home/.grok/auth.json'; do
+  # Credential class rides the same contract (#467). Exact members are
+  # line-anchored (^…$): a bare substring would false-positive on
+  # auth.json.lock (caught live on device, 2026-10-09 — fail-closed but
+  # noisy). The secret store keeps prefix semantics: ANY member under it
+  # is a violation.
+  for banned in '^var/lib/aginx/secret' '^etc/aginx/env$' '^etc/aginx/config.toml$' \
+                '^home/.codex/auth.json$' '^home/.grok/auth.json$'; do
     if tar -tzf "$1" 2>/dev/null | grep -q "$banned"; then
       die "SECRET IN BACKUP ($banned) — do not ship or push this file"
     fi
