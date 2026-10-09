@@ -1,10 +1,11 @@
 # aginx-call — SIP 实时通话 CLI（M48 刀5a 入树 2026-09-28，rvoip/Opus）。
-# 纯 bin 面，无 [service] 单元——由 aginx-voice 按需 spawn（零脑直拨），
-# 不驻留。SIGINT=优雅挂断（BYE）。opus-media 折 audiopus_sys，交叉
-# 配方（CMAKE_POLICY_VERSION_MINIMUM=3.5）在 scripts/build-pkg.sh。
+# #422 / Positioning：agent 外线腿——由 agent（CLI / 频道工具 / 能力面）
+# 拨与接；纯 bin 面，无 [service] 单元，不驻留。SIGINT=优雅挂断（BYE）。
+# opus-media 折 audiopus_sys，交叉配方（CMAKE_POLICY_VERSION_MINIMUM=3.5）
+# 在 scripts/build-pkg.sh。禁止当垃圾线删除（与 asr/tts 同为 SIP 资产）。
 name = "aginx-call"
 version = "0.1.0"
-summary = "SIP 实时语音通话：talk 拨出/守听自动接（语音零脑直拨拉起，不驻留）"
+summary = "SIP 实时语音：agent 外线拨出/守听自动接（CLI，不驻留）"
 group = "call"
 url = "https://pkgs.aginx.net/aginx-call/v0.1.0/aginx-call-v0.1.0-4pc.tar"
 

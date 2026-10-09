@@ -1,8 +1,11 @@
-# SIP·PSTN 中继备忘（真人对讲线）
+# SIP·PSTN 中继备忘（agent 外线）
 
-2026-09-29 立档。真人对讲（agent 手机打给真人手机）选定路线：
-**阿里云语音服务·语音 SIP（SIP Trunk 中继）**。本文 = 申请清单 + 技术
-对接要点 + 已落的地基；账号到手后照单施工。
+2026-09-29 立档；2026-10-10 按 #422 / AGENTS Positioning 换挂：
+**这是 agent 的外线电话能力**，不是「人机对讲产品面」。agent 自己拨号、
+接听、说、听——人只在远端当被叫/主叫对象时出现。
+
+选定路线：**阿里云语音服务·语音 SIP（SIP Trunk 中继）**。本文 = 申请清单
++ 技术对接要点 + 已落的地基；账号到手后照单施工。
 
 官方文档（真源，参数以它为准）：
 https://help.aliyun.com/zh/vms/voice-sip-access-process
@@ -10,7 +13,7 @@ https://help.aliyun.com/zh/vms/voice-sip-access-process
 ## 架构
 
 ```
-agent 手机 aginx-call
+agent 节点  aginx-call（agent 拨 / 接）
    │ (opus, LAN/公网直连或经服务器路由)
    ▼
 sip.aginx.net = 86quan (106.75.32.216)  Asterisk
@@ -18,8 +21,12 @@ sip.aginx.net = 86quan (106.75.32.216)  Asterisk
    ▼
 sh.siptrunk.aliyun.com:5060  阿里云云通信（持牌方，对运营商互联）
    ▼
-真人手机（妈/家人）
+PSTN 对端（人或另一台电话）
 ```
+
+嘴耳内件（`aginx-asr` / `aginx-tts` / `aginx-voice`）按 Positioning 是
+**SIP 线内部机械**——通话需要听/说时由 call 线拉起，不再当本地 PTT
+人机对话框投资。`crates/call` 与 SIP 资产保留，禁止当垃圾线删。
 
 刀6（远程设备间对讲）与本线（PSTN 出局）共用同一台服务器与同一条
 设备腿——服务器选 Asterisk 则中继腿只是多一段配置。
@@ -31,7 +38,7 @@ sh.siptrunk.aliyun.com:5060  阿里云云通信（持牌方，对运营商互联
 | 企业证件 | 营业执照（或事业单位法人证书/统一社会信用代码证书） |
 | 身份 | 法定代表人身份证明 |
 | 账户 | 对公账户（认证 + 扣费） |
-| 用途 | 企业资质页提交用途说明——写「企业自用联络/对讲」，**勿写营销外呼** |
+| 用途 | 企业资质页提交用途说明——写「企业自用联络 / agent 外线」，**勿写营销外呼** |
 | 网络 | 86quan 公网 IP `106.75.32.216` 报白名单（弹性 IP，稳定） |
 
 不需要电信牌照（持牌方是阿里云）；不需要专线（公网 SIP 对接，
@@ -59,7 +66,7 @@ sh.siptrunk.aliyun.com:5060  阿里云云通信（持牌方，对运营商互联
 - 呼入送号格式：区号 + 7~8 位本地号码。
 - Caps 默认 20；并发建议单号 ≤20（超频触发运营商拦截）。
 - 流控：同一被叫 **1 次/分钟、5 次/小时、20 次/24 小时**（专属号码
-  可在控制台申请放宽）——家人通话绰绰有余。
+  可在控制台申请放宽）。
 - 默认限拨 400/95 开头号码。
 - 回执：呼叫记录/录音/DTMF 走 MNS 队列或 HTTP 批量推送（选 HTTP
   回调到 hub 更 D12）。
@@ -72,7 +79,7 @@ sh.siptrunk.aliyun.com:5060  阿里云云通信（持牌方，对运营商互联
 
 - `sip.aginx.net` DNS 已解析 → 106.75.32.216（Cloudflare 灰云
   DNS only，直出真 IP——UDP 可达的前提）。
-- 86quan 磁盘 95% → 74%（journald 真空 + 三 target/ + debug/ 清理；
+- 86quan 磁盘 95% → 74%（journald 真空 + 三 target/ + workspace/ 清理；
   **aginxbrowser 在产二进制跑在 target/release，其 deps 18G 未删**）。
 - 探测实证：86quan → `sh.siptrunk.aliyun.com` UDP SIP OPTIONS 得
   `200 Keepalive`（来自 47.103.169.66:5060，rport 回填正常；未进
@@ -90,13 +97,14 @@ sh.siptrunk.aliyun.com:5060  阿里云云通信（持牌方，对运营商互联
 1. 刀6：sip.aginx.net 立服务器（选型随刀6 立案定；走本线则 Asterisk
    一石二鸟）+ 设备腿接通。
 2. 刀7：Asterisk 挂中继腿（host=上海环境 + 前缀拨号计划 + opus↔PCMU
-   转码）+ 名录 `妈 = sip:<前缀>86138…@sip.aginx.net` + 回执落账。
-3. 设备侧零新码——aginx-call 已会说 SIP/RTP/opus/PCMU，名录换行即可。
+   转码）+ 名录 `contact = sip:<前缀>86138…@sip.aginx.net` + 回执落账。
+3. 设备侧零新码——`aginx-call` 已会说 SIP/RTP/opus/PCMU；agent 经 CLI
+   / 频道工具拨号，名录换行即可。
 
 ## 合规与产品注意
 
 - 用途如实报备；话务量小（流控内），别触营销红线。
-- 对方看到的是中继/云号码，不是手机 SIM 号——**让家人把该号码存进
-  通讯录**，否则易当骚扰挂断。
+- 对端看到的是中继/云号码，不是手机 SIM 号——若对端是人，让其把该
+  号码存进通讯录，否则易当骚扰挂断。
 - 走 SIM 蜂窝语音（CS/IMS）不在选项：需整套 RIL/IMS 栈，且 CT 卡
   固件拒 CS（enchilada 短信线已证死）。
