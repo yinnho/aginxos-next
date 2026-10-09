@@ -491,7 +491,7 @@ fn daemon() {
                             .take()
                             .is_some_and(|d| d.elapsed() < Duration::from_millis(300));
                         if short_tap {
-                            // 短按不再减音量（enchilada 对话是按住屏幕；
+                            // 短按不再减音量（enchilada 对话是按住屏幕； // D14-exempt
                             // 音量下短按会把 TTS 打到听不见）。采集弃掉。
                             if let Some(mut c) = capturing.take() {
                                 let _ = c.kill();

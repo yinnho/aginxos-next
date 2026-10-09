@@ -62,9 +62,11 @@ fi
 #     (schema-truth tests) and their helper fns
 #   - provenance comments in svc/boot_ok.rs pointing at [slots]/[update]
 #     registrations in devices/redfin/device.toml
+#   - provenance comments / relay-id law tests in pair (#450) and voice
+#     history notes (#467 widening: enchilada/panther + their SoCs)
 #   - first-gen frozen-offset exemptions noted in ARCH.md D14
 if [ "${MODE}" != "lint" ]; then
-  BAD="$(grep -rnE '1080|2340|event[0-9]|qpnp_pon|sm7250|redfin' \
+  BAD="$(grep -rnE '1080|2340|event[0-9]|qpnp_pon|sm7250|redfin|enchilada|panther|sm845|sdm845|rk3566' \
       "${ROOT}"/crates/*/src --include='*.rs' | grep -v 'D14-exempt' || true)"
   if [ -n "${BAD}" ]; then
     echo "D14 gate: machine strings in platform crates (mark reviewed lines" >&2

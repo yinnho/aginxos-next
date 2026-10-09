@@ -321,7 +321,7 @@ pub fn capture_start() -> std::io::Result<Child> {
 }
 
 /// 读采集产物并封 WAV。过短（<0.1s）或全静音返回 None。
-/// 静音仍喂 sense-voice 会听成「我。」「。」（enchilada 2026-09-19）。
+/// 静音仍喂 sense-voice 会听成「我。」「。」（enchilada 2026-09-19）。 // D14-exempt
 pub fn capture_take() -> Option<Vec<u8>> {
     let raw = fs::read("/tmp/aginx-voice-cap.raw").ok()?;
     let raw = &raw[..raw.len() - raw.len() % 2]; // 整样本截齐

@@ -266,7 +266,7 @@ fn write_env_keys(p: &PairPaths, kvs: &[(&str, &str)]) -> Result<(), String> {
     std::fs::rename(&tmp, &p.env_file).map_err(|e| format!("env rename: {e}"))
 }
 
-/// relay id 归一律（#450：relay 拒非字母数字——"panther-x2" 注册被
+/// relay id 归一律（#450：relay 拒非字母数字——"panther-x2" 注册被 // D14-exempt
 /// 拒「ID must be alphanumeric」）。落 config.toml 前归一：ASCII 字母
 /// 数字保留并小写化，其余字符丢弃；归一后为空=Err（宁可配对失败，
 /// 也不写非法 id 让网关 5s 重试死循环）。
@@ -625,13 +625,13 @@ mod tests {
 
     #[test]
     fn relay_id_sanitized_to_alphanumeric_lowercase() {
-        // #450：relay 只收字母数字 id——"panther-x2" 实机被拒。配对落
+        // #450：relay 只收字母数字 id——"panther-x2" 实机被拒。配对落 // D14-exempt
         // config.toml 前归一，主机侧铸码器写错形也不会把非法 id 烙进设备。
         let root = tmp("aginx-pair-relayid");
         let p = paths(&root);
         write_gateway_config(&p, "Panther-X2", "s3").unwrap();
         let c = fs::read_to_string(&p.gateway_config).unwrap();
-        assert!(c.contains("id = \"pantherx2\"\n"), "{c}");
+        assert!(c.contains("id = \"pantherx2\"\n"), "{c}"); // D14-exempt
         assert!(c.contains("relay_secret = \"s3\"\n"), "{c}");
         // 归一后为空=拒写（非法 id 不落盘）
         assert!(write_gateway_config(&p, "— —", "s3").is_err());
