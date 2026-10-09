@@ -4,9 +4,9 @@
 # DOWNLOAD_BIN=/usr/bin/aginx-download 都是 L0 直装件——包体零改。
 # hwd 消费者：device.toml 加键=重打本包。
 name = "aginx-update"
-version = "0.1.0"
+version = "0.1.1"
 summary = "A/B 自更新：capture/state tar/status/apply（face /var/bin/aginx-update）"
 group = "sys"
-url = "https://pkgs.aginx.net/aginx-update/v0.1.0/aginx-update-v0.1.0-4pc.tar"
+url = "https://pkgs.aginx.net/aginx-update/v0.1.1/aginx-update-v0.1.1-4pc.tar"
 
 exec = "bin/aginx-update"

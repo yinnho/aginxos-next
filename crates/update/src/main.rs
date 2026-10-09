@@ -160,6 +160,12 @@ const STATE_MAX: u64 = 512 << 20;
 /// 补拉）。/var/models 的 symlink 让位 ensure 归 provision（每靴）。
 const STATE_TAR_EXCLUDES: &str = "--exclude=etc/aginx/svc.d --exclude=etc/aginx/secret.policy --exclude=etc/aginx/gateway.toml --exclude=etc/aginx/groups.desc --exclude=etc/aginx/device.toml --exclude=var/lib/aginx/pkgfiles/aginx-asr --exclude=var/lib/aginx/pkgfiles/aginx-tts --exclude=var/lib/aginx/pkgfiles/aginx-ocr";
 
+/// state tar 的成员白名单（testable 单一真源）。/etc/agpkg.manifest(+.sig)
+/// 随行（#472①）：重刷否则把设备的包钉回烤机版——B 线 mirror repair 腿
+/// 正是从这份 manifest 补装。
+const STATE_TAR_MEMBERS: &str =
+    "/etc/wifi.conf /etc/agpkg.manifest /etc/agpkg.manifest.sig /etc/aginx /home /root /var/log /var/power /var/lib";
+
 fn swap_header(payload_len: u64, sha256_hex: &str, old_len: u64) -> Vec<u8> {
     let mut h = vec![0u8; SWAP_HDR as usize];
     h[..8].copy_from_slice(SWAP_MAGIC);
@@ -234,11 +240,12 @@ fn stage_state_tar() {
     let _ = std::fs::remove_file(tar_path);
     // best-effort: an agent mid-write means one file is torn, not lost.
     // umask 077: the staging tar carries credentials — 0644 would expose
-    // them to every reader for the capture window.
+    // them to every reader for the capture window. Member whitelist =
+    // STATE_TAR_MEMBERS (manifest+sig ride along, #472①).
     let st = Command::new("/bin/sh")
         .arg("-c")
         .arg(format!(
-            "umask 077; tar -cf {tar_path} {STATE_TAR_EXCLUDES} /etc/wifi.conf /etc/aginx /home /root /var/log /var/power /var/lib 2>/dev/null"
+            "umask 077; tar -cf {tar_path} {STATE_TAR_EXCLUDES} {STATE_TAR_MEMBERS} 2>/dev/null"
         ))
         .status()
         .unwrap_or_else(|e| die(&format!("spawn tar: {e}")));
@@ -872,6 +879,22 @@ mod tests {
             3,
             "pkgfiles excludes must stay exactly the three model trees"
         );
+    }
+
+    #[test]
+    fn state_tar_carries_manifest_and_sig_for_repair() {
+        // #472①: a capture re-flash keeps the ledger (stamps) but wipes
+        // /var/bin; the baked manifest would pin stale package versions —
+        // the device's own manifest + detached sig must survive the swap
+        // so aginx-pkg repair --net re-fetches exactly what was installed.
+        assert!(STATE_TAR_MEMBERS.contains("/etc/agpkg.manifest"));
+        assert!(STATE_TAR_MEMBERS.contains("/etc/agpkg.manifest.sig"));
+        // the pre-#472 member set is otherwise unchanged
+        for member in ["/etc/wifi.conf", "/etc/aginx", "/home", "/root", "/var/log", "/var/power", "/var/lib"] {
+            assert!(STATE_TAR_MEMBERS.contains(member), "missing {member}");
+        }
+        // /var/bin stays out by design — the whole point of the repair leg
+        assert!(!STATE_TAR_MEMBERS.contains("/var/bin"));
     }
 
     #[test]
