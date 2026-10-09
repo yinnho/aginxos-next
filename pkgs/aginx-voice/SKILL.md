@@ -1,21 +1,24 @@
 # aginx-voice
 
-语音对话守护（M42a）：PTT=按住音量下、眼=音量上；脸写
-/run/aginx-voice/face 由 aginx-term 渲染；一眼自举配网委外
-`aginx-pair apply`（C4 薄化）。嘴耳优先本地三件（aginx-asr/aginx-tts/
-aginx-ocr——本包 depends 全三），缺件落 brain 云。
+SIP 线嘴耳内件（M42 资产 · #422 换挂）：本地 ASR/TTS 优先，缺件可落
+brain 云。硬依赖只有 `aginx-asr` + `aginx-tts`——opt-in 本包自动带装
+这两件。
 
-刀5b（v0.2.2，M48 刀5）：语音直拨——「找X语音 / 打给X / 呼叫X」
-零脑直拨（封闭词表本地，不进 brain），查 /etc/aginx/call.conf 名录后
-spawn `/var/bin/aginx-call talk <uri>`（通话中音量上/下=挂断）。
-aginx-call 不在 depends：需另 opt-in；缺包说「呼叫失败」。
-名录一行一目（`mac = sip:aginx@192.168.3.26:5060`），刷后灌注。
+**不再**硬依赖：`aginx-ocr` / `aginx-qr` / `aginx-pair`（冻结相机 /
+扫码配网脸线）。需要眼/扫码时单独 `aginx-pkg opt-in`；缺件则相关
+路径失败，不拖垮嘴耳。
+
+`aginx-call` 不在 depends：SIP 外线另 opt-in；agent 直接调
+`aginx-call talk …` 拨号（见 `docs/SIP-PSTN-中继备忘.md`）。
+
+历史人机面（PTT 音量键、脸写 `/run/aginx-voice/face`、term 渲染、
+「找 X 语音」零脑直拨）已停投，二进制保留供 SIP 内件与回归，勿按
+上脸产品扩需求。
 
 ## 验证
 
-- voice 日志 `local=true`
-- PTT 一轮：识别上脸、点名（「你说给我听」）出声
-- 直拨：说「找mac语音」→ 日志 `call mac -> sip:...`、call.log 有 rvoip 走线
+- voice 日志 `local=true`（asr/tts 在）
+- SIP 路径：opt-in `aginx-call` 后 agent 拨通对讲（不以 PTT 验收）
 
 ## 回滚
 

@@ -5,7 +5,7 @@ join+IP 轮询+落 wifi.conf、env 三键合并、快速校时、internet 探测
 母体两单元 restart-ready、boot.state 定点刷新；汇总行回 stdout。
 秘密只进 env 文件（0600）；argv 恒两词——psk/三键永不进
 /proc/*/cmdline，两侧日志都永不记值。铸码 mint 是 host-only 面。
-依赖身份进 opt-in 闭包——随 aginx-voice / aginx-term 自动带装。
+冻结扫码配网脸线（#422）。不再随 aginx-voice 自动带装；需要时单独 opt-in，或由仍声明 depends 的 aginx-term 带装。
 
 ## 验证
 

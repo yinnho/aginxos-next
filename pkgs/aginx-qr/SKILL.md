@@ -1,9 +1,10 @@
 # aginx-qr
 
 QR 解码器（M42f）：jpeg 解码 + quirc 定位 + Bradley 窗 + AGINXPAIR1
-配对码解析。voice/term 的取景扫码都 spawn 本面（`/var/bin/aginx-qr
-<jpg>`，stdout 一行一个 payload）。依赖身份进 opt-in 闭包——随
-aginx-voice / aginx-term 的 depends 自动带装，不单独 opt-in。
+配对码解析（冻结光学脸线，#422）。仍可被 term / 手工 spawn
+（`/var/bin/aginx-qr <jpg>`，stdout 一行一个 payload）。
+**不再**随 aginx-voice depends 自动带装；需要时单独 opt-in，或由
+aginx-term 的 depends 带装。
 
 ## 验证
 

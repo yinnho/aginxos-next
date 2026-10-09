@@ -1,17 +1,16 @@
-# aginx-voice — 语音对话守护的包形态（C8 蛋案 → L0 刀3：单元入包）。
-# 嘴耳三件是硬依赖：缺 aginx-asr/tts/ocr 时落 brain 云（离线即产品，
-# 所以 depends 声明全三——刀1 起 opt-in 自动带装）。刀F 起 qr/pair
-# 同列（出镜像走包——扫码/配网 spawn /var/bin/aginx-{qr,pair}）。
-# VOICED_FRONT 指 /var/bin/aginx（母体包 face）：L0 镜像不烤路由器，
-# 自由文本走包面。env_file 与 server 同读（brain key）。
-# 刀5b（v0.2.2）：语音直拨「找X语音/打给X/呼叫X」——aginx-call 刻意
-# 不进 depends（19M 大件，通话是可选能力）：缺包=地板话「呼叫失败」，
-# 名录 /etc/aginx/call.conf 刷后灌注（D14，不烤镜像）。
+# aginx-voice — SIP 嘴耳内件的包形态（C8 蛋案 → L0 刀3：单元入包）。
+# #422 / Positioning（2026-10-01）：不再是人机 PTT/上脸产品面；资产归
+# SIP 线内部机械（agent 通话时的嘴与耳）。硬依赖只留嘴耳两件：
+#   depends = aginx-asr,aginx-tts
+# 冻结脸线（ocr 眼 / qr·pair 扫码配网）**不再**随 voice 自动带装——
+# 需要时单独 opt-in；缺件时相关 spawn 失败，不影响 SIP 嘴耳主路径。
+# aginx-call 仍不进 depends（19M 大件，通话另 opt-in）。
+# VOICED_FRONT 指 /var/bin/aginx；env_file 与 server 同读（brain key）。
 name = "aginx-voice"
 version = "0.2.2"
-summary = "语音对话守护：PTT 嘴耳 + 眼取景 + 语音直拨（刀5b），脸写 /run/aginx-voice/face"
+summary = "SIP 嘴耳内件：本地 ASR/TTS 腿（人机 PTT/上脸已停投，#422）"
 group = "snd"
-depends = "aginx-asr,aginx-tts,aginx-ocr,aginx-qr,aginx-pair"
+depends = "aginx-asr,aginx-tts"
 url = "https://pkgs.aginx.net/aginx-voice/v0.2.2/aginx-voice-v0.2.2-4pc.tar"
 
 [service]

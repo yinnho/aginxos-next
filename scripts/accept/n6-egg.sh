@@ -38,8 +38,10 @@ set -euo pipefail
 ACCEPT_DEVICE=redfin . "$(dirname "$0")/_serial.sh"  # SERIAL：env 最高，默认读 redfin 档案 [adb]
 NROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 PORT_HEX=20FB          # 8443 = 0x20FB（busybox netstat 必炸，走 /proc/net/tcp）
-# L0 十一包（刀4 定档；刀F +3）：五连 opt-in 的落地面——voice 带 asr/
-# tts/ocr/qr/pair、gateway 带 secretd、母体带 update 全靠 depends；
+# L0 十一包（刀4 定档；刀F +3；#422：含 Layer B 冻结人脸，仅蛋案等价用——
+# 服务器默认叙事不宣传 term/ocr/qr/pair）。五连 opt-in 落地面——voice 现只
+# 带 asr/tts（SIP 嘴耳）；ocr/qr/pair/term 需显式装或历史 depends；
+# gateway 带 secretd、母体带 update 仍靠 depends；
 # aginxbrowser 是基础清单裸二进制 opt 行（无配方、无依赖，缺席容忍单元
 # 30s 拾取——svc.d=2 里它活着的理由）。
 CORE11="aginx aginx-term aginx-voice aginx-asr aginx-tts aginx-ocr aginx-gateway aginx-secretd aginx-qr aginx-pair aginx-update"

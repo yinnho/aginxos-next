@@ -55,11 +55,11 @@ TREE="${TREE:-/tmp/aginxos-n4-rootfs}"
 IMG="${IMG:-${ROOT}/out/rootfs.img}"
 # 2 GB sparse-ish image (bake #18 data: 651M used; N4 drops carrier+relay).
 SIZE="${SIZE:-2g}"
-# L0 无头底座（刀4，2026-09-11，蛋案转正）：镜像=内核+init+svc+网络+
-# ssh+pkg，刷完就是一台活的机器。母体三件（aginx 树包）、面板
-# （aginx-term 包+字体）、网关/密钥/语音/三模型树全是包——13 行 opt 附加
-# 在 etc 装配段组装+签名进树（全 opt：provision 默认什么都不装）。
-# 裸机=哑终端：显示/触摸/扫码/联网/ssh 在，装什么是用户的 opt-in。
+# L0 无头底座（刀4，2026-09-11，蛋案转正；#422 黑匣子服务器叙事）：
+# 镜像=内核+init+svc+网络+ssh+pkg，刷完就是一台活的 agent 节点。
+# aginx 树包、网关/密钥、SIP 嘴耳（asr/tts/voice）、频道/运维件全是包——
+# opt 附加在 etc 装配段按两层组装+签名进树（全 opt：provision 默认什么
+# 都不装）。裸机=黑匣子：联网+ssh 在；屏/PTT/相机脸线冻结，不进默认宣传。
 
 if [ "${BOOT_STYLE}" = "vendor-boot" ]; then
   test -x "${RAMDISK}/system/bin/adbd" || { echo "missing ${RAMDISK} — see devices/${DEVICE}/boot/assets.md (run pack-vendor-boot.sh)" >&2; exit 1; }
@@ -579,19 +579,19 @@ install -m 755 "${ROOT}/out/resize2fs" "${TREE}/usr/bin/resize2fs"
 L0_SVC_COUNT="$(ls "${TREE}/etc/aginx/svc.d/" | wc -l | tr -d ' ')"
 [ "${L0_SVC_COUNT}" = "2" ] \
   || { echo "FATAL: L0 svc.d has ${L0_SVC_COUNT} units (want 2: net-watch + aginxbrowser) — engine units ride packages, not the image" >&2; exit 1; }
-# 基础 manifest（全 opt 目录）+ 15 行 opt 附加（aginx 家族包 + 运维件
-# aginxresearch/morning-report，#472 归包）。sha 取 out/pkgs 产物（不手
-# 维护）；url/version/deps 取 pkgs/<name>/pkg.toml——
-# 配方 bump 了 version 没重跑 build-pkg → sha 文件名对不上 → die（宁死
-# 不烤错清单）。组装进树后签名（.sig 是构建产物，不回写配方；签的是树里
-# 的组装件，覆写 cp 进来的基础件签名）。
+# 基础 manifest（全 opt 目录）+ opt 附加两层（#422 服务器叙事分层）：
+#   A 服务器/agent 节点 —— 默认宣传与文档举例用这一层
+#   B 冻结人脸（term/ocr/qr/pair）—— 仍进清单可装，零新投、不进默认故事
+# sha 取 out/pkgs 产物；url/version/deps 取 pkgs/<name>/pkg.toml。
+# 配方 bump 了 version 没重跑 build-pkg → sha 文件名对不上 → die。
+# 组装进树后签名（.sig 是构建产物，不回写配方）。
 OPT_ADD="${TMPDIR:-/tmp}/agpkg-opt-add.$$"
 : > "${OPT_ADD}"
-for p in aginx aginx-term aginx-gateway aginx-secretd \
-         aginx-asr aginx-tts aginx-ocr aginx-voice \
-         aginx-qr aginx-pair aginx-update \
-         aginx-gateway-local aginx-channels \
-         aginxresearch morning-report; do
+# Layer A — server / agent node
+OPT_LAYER_A="aginx aginx-gateway aginx-secretd aginx-asr aginx-tts aginx-voice aginx-update aginx-gateway-local aginx-channels aginxresearch morning-report"
+# Layer B — frozen human-face (available; not default narrative)
+OPT_LAYER_B="aginx-term aginx-ocr aginx-qr aginx-pair"
+for p in ${OPT_LAYER_A} ${OPT_LAYER_B}; do
   R="pkgs/${p}"
   p_ver="$(sed -n 's/^version *= *"\([^"]*\)"/\1/p' "${R}/pkg.toml" | sed -n '1p')"
   p_url="$(sed -n 's/^url *= *"\([^"]*\)"/\1/p' "${R}/pkg.toml" | sed -n '1p')"
@@ -617,7 +617,7 @@ rm -f "${OPT_ADD}"
 (cd "${ROOT}" && cargo run -q -p aginx-sign -- sign .local/keys/aginx.key "${TREE}/etc/agpkg.manifest")
 (cd "${ROOT}" && cargo run -q -p aginx-sign -- verify .local/keys/aginx.pub "${TREE}/etc/agpkg.manifest") \
   || { echo "FATAL: L0 manifest sig does not verify" >&2; exit 1; }
-echo "==> L0 manifest: 基础清单（全 opt）+ 15 行 opt 附加已签名进树"
+echo "==> L0 manifest: 基础清单（全 opt）+ 分层 opt 附加已签名进树（A 服务器 / B 冻结人脸）"
 cp -R "${RECIPE}/usr/bin/." "${TREE}/usr/bin/"
 cp -R "${RECIPE}/libexec/aginx/." "${TREE}/usr/libexec/aginx/"
 # 批② C1（09-10）：包管件的 sidecar 一律由安装器从 pkg.toml 生成（安装
