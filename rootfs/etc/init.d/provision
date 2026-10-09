@@ -17,6 +17,15 @@
 #               exhausted it during the empty-/var/bin window of earlier
 #               boots (observed 2026-09-03 on the old line: 5 restarts
 #               -> failed, manual revive).
+#   repair    — #472①: a capture re-flash keeps /var/lib (ledger: stamps,
+#               units, skills, pkgfiles trees) but wipes /var/bin — every
+#               face gone while the ledger says installed, and the all-opt
+#               manifest makes sync's core self-heal a no-op. Local leg
+#               (every boot, offline, never blocks): rebuild tree faces +
+#               heal missing sidecars/units from the persisted pkg.toml.
+#               Net leg (only when pending): binary packages re-fetch
+#               from the device's own manifest (which rides the state
+#               tar) behind the internet + time gates.
 #   finalize  — one-shot steps, gated by `aginx-done` markers in
 #               /var/lib/aginx/done: run only while unmarked, mark only on
 #               success, so a failed step retries next boot and a wiped
@@ -37,6 +46,17 @@ mkdir -p /var/lib/aginx/done /var/lib/aginx/skills /var/lib/aginx/units /var/lib
 
 [ -f /etc/agpkg.manifest ] || exit 0
 grep -qE '^[a-z]' /etc/agpkg.manifest || exit 0   # all entries commented
+
+# ---- repair ①: local leg (every boot, offline, never blocks) ---------------
+# Bare L0 (no stamps) logs "0 local, 0 mirror, 0 pending" and costs one
+# fast no-op walk of the stamps dir.
+RLOG=/var/tmp/aginx-pkg-repair.log
+aginx-pkg repair >"$RLOG" 2>&1
+# a face rebuilt/units revived this boot may belong to a unit that gave up
+# restarting during the empty-/var/bin window (same law as resync's loop)
+for u in $(sed -n 's/^aginx-pkg: rebuilt face \([^ ]*\).*/\1/p' "$RLOG" 2>/dev/null); do
+  aginx-svc restart "$u" 2>/dev/null
+done
 
 # L0 (刀4): the manifest ships ALL-opt — sync has no core work, so the
 # 6-minute net wait + sync are skipped entirely and the boot line goes
@@ -97,6 +117,38 @@ for u in $(sed -n 's/^aginx-pkg: installed \([^ ]*\).*/\1/p' "$LOG" 2>/dev/null)
   aginx-svc restart "$u" 2>/dev/null
 done
 fi  # (a core entry present — wait + sync ran; all-opt took the early `pkg ok` above)
+
+# ---- repair ②: net leg (only when the local leg left pending) --------------
+# Binary packages have no local source (their bytes live only on the
+# mirror); the asr/tts/ocr model trees are state-tar-excluded by D15
+# law. Both re-fetch from the device's own manifest — which now rides
+# the state tar (#472①), so a re-flash keeps the pins it was installed
+# against. Behind the same internet + clock gates as resync (TLS on a
+# 1970 clock dies); a hard net fail just leaves the pending list for
+# the next boot — repair never blocks or fails the boot.
+if grep -q '^aginx-pkg: repair-pending' "$RLOG" 2>/dev/null; then
+  n=0
+  while [ $n -lt 90 ]; do
+    grep -q '^internet ok' "$STATE" 2>/dev/null && break
+    grep -qE '^(wifi|dhcp|internet) fail' "$STATE" 2>/dev/null && break
+    sleep 2; n=$((n+1))
+  done
+  if grep -q '^internet ok' "$STATE" 2>/dev/null; then
+    n=0
+    while [ $n -lt 45 ]; do
+      grep -qE '^time (ok|fail)' "$STATE" 2>/dev/null && break
+      sleep 2; n=$((n+1))
+    done
+    if aginx-pkg repair --net >"$RLOG.net" 2>&1; then
+      say pkg heal ok
+      for u in $(sed -n 's/^aginx-pkg: reinstalled \([^ ]*\).*/\1/p' "$RLOG.net" 2>/dev/null); do
+        aginx-svc restart "$u" 2>/dev/null
+      done
+    else
+      say pkg heal fail "see $RLOG.net"
+    fi
+  fi
+fi
 
 # ---- model links (2026-09-09 蛋案) ----------------------------------------
 # asr/tts/ocr 三包的模型树住 pkgfiles（大件可重下物，不进 state tar），
