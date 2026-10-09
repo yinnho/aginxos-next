@@ -15,3 +15,9 @@
 
 # 硬件收据账本：只本地、永不进 git（#467 出清公开史后立此闸）
 docs/HARDWARE*.md
+
+# 本地工作/投资者文档：永不进公开仓（已迁 .local/docs/，此闸防误加）
+docs/DSH-STUDY.md
+docs/HANDOFF-*.md
+docs/INVESTOR-*
+docs/MERGE-PLAN.md
