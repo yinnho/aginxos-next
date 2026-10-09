@@ -28,6 +28,18 @@
  * --hold: keep the fd open (master held) after blanking, in case the
  * last-master-close fbdev restore ever re-enables the pipeline. Default
  * is off-and-exit; the live receipt decides which mode rcS bakes.
+ *
+ * Mainline trap (2026-10-10 enchilada receipt, msm 1.12.0 on 6.11):
+ * the exit itself is the bug. Closing the last master fd runs
+ * drm_lastclose -> drm_fb_helper_restore_fbdev_mode(), and the fbcon
+ * console (console=tty0 machines) goes right back on the panel — the
+ * "penguin page" — seconds after "pipeline down". Holding the master
+ * prevents the restore, and a held fd stays dark even under live
+ * console output (probe-verified with a post-blank /dev/kmsg write).
+ * So the exit now adapts: drop master + close, give the restore its
+ * window, reopen and read the crtc. Still dead = the 4.19 shape, exit
+ * with the master free for an opt-in client. Alive again = re-kill and
+ * hold the master forever (regardless of --hold).
  */
 #include <errno.h>
 #include <fcntl.h>
@@ -81,7 +93,9 @@ struct drm_mode_rmfb { uint32_t fb_id; };
 #define DRM_IOWR(nr, type) _IOWR(DRM_IOCTL_BASE, nr, type)
 #define DRM_IO(nr) _IO(DRM_IOCTL_BASE, nr)
 #define DRM_IOCTL_SET_MASTER DRM_IO(0x1e)
+#define DRM_IOCTL_DROP_MASTER DRM_IO(0x1f)
 #define DRM_IOCTL_MODE_GETRESOURCES DRM_IOWR(0xA0, struct drm_mode_card_res)
+#define DRM_IOCTL_MODE_GETCRTC DRM_IOWR(0xA1, struct drm_mode_crtc)
 #define DRM_IOCTL_MODE_SETCRTC DRM_IOWR(0xA2, struct drm_mode_crtc)
 #define DRM_IOCTL_MODE_GETENCODER DRM_IOWR(0xA6, struct drm_mode_get_encoder)
 #define DRM_IOCTL_MODE_GETCONNECTOR DRM_IOWR(0xA7, struct drm_mode_get_connector)
@@ -115,6 +129,62 @@ static int get_resources(int fd, struct drm_mode_card_res *res,
   return 0;
 }
 
+/* SET_MASTER on this driver family returns EINVAL (not EBUSY) when
+ * another master holds the card — any failure is treated as busy and
+ * retried on a fast poll (2026-09-06 receipt). */
+static int become_master(int fd) {
+  int n = 0;
+  while (ioctl(fd, DRM_IOCTL_SET_MASTER) != 0) {
+    if (++n > 100) return -1;
+    usleep(20000);
+  }
+  return 0;
+}
+
+/* M15 kill: one black dumb fb, real SETCRTC (the driver takes the
+ * pipeline over from whatever owned it), then null SETCRTC to take the
+ * whole chain down. */
+static int kill_pipeline(int fd, uint32_t crtc_id, uint64_t conn,
+                         const struct drm_mode_modeinfo *mode) {
+  struct drm_mode_create_dumb dumb;
+  memset(&dumb, 0, sizeof dumb);
+  dumb.width = mode->hdisplay;
+  dumb.height = mode->vdisplay;
+  dumb.bpp = 32;
+  if (ioctl(fd, DRM_IOCTL_MODE_CREATE_DUMB, &dumb)) { kmsg("panel-off: DUMB fail\n"); return -1; }
+  struct drm_mode_map_dumb md;
+  memset(&md, 0, sizeof md);
+  md.handle = dumb.handle;
+  if (ioctl(fd, DRM_IOCTL_MODE_MAP_DUMB, &md) == 0) {
+    void *p = mmap(NULL, dumb.size, PROT_READ | PROT_WRITE, MAP_SHARED, fd, (long)md.offset);
+    if (p != MAP_FAILED) { memset(p, 0, dumb.size); munmap(p, dumb.size); }
+  }
+  struct drm_mode_fb_cmd2 fb2;
+  memset(&fb2, 0, sizeof fb2);
+  fb2.width = dumb.width;
+  fb2.height = dumb.height;
+  fb2.pixel_format = DRM_FORMAT_XRGB8888;
+  fb2.handles[0] = dumb.handle;
+  fb2.pitches[0] = dumb.pitch;
+  if (ioctl(fd, DRM_IOCTL_MODE_ADDFB2, &fb2)) { kmsg("panel-off: ADDFB2 fail\n"); return -1; }
+
+  struct drm_mode_crtc sc;
+  memset(&sc, 0, sizeof sc);
+  sc.set_connectors_ptr = (uint64_t)(uintptr_t)&conn;
+  sc.count_connectors = 1;
+  sc.crtc_id = crtc_id;
+  sc.fb_id = fb2.fb_id;
+  sc.mode_valid = 1;
+  sc.mode = *mode;
+  if (ioctl(fd, DRM_IOCTL_MODE_SETCRTC, &sc)) { kmsg("panel-off: SETCRTC-on fail\n"); return -1; }
+  sleep(1); /* let the off-sequence see a stable enabled state */
+
+  memset(&sc, 0, sizeof sc);
+  sc.crtc_id = crtc_id;
+  if (ioctl(fd, DRM_IOCTL_MODE_SETCRTC, &sc)) { kmsg("panel-off: SETCRTC-off fail\n"); return -1; }
+  return 0;
+}
+
 int main(int argc, char **argv) {
   int hold = argc > 1 && strcmp(argv[1], "--hold") == 0;
   uint32_t crtcs[16], conns[16];
@@ -129,11 +199,7 @@ int main(int argc, char **argv) {
   }
   if (fd < 0) { kmsg("panel-off: no card0 after 180s\n"); return 1; }
 
-  n = 0;
-  while (ioctl(fd, DRM_IOCTL_SET_MASTER) != 0) {
-    if (++n > 100) { kmsg("panel-off: SET_MASTER never granted\n"); return 1; }
-    usleep(20000);
-  }
+  if (become_master(fd)) { kmsg("panel-off: SET_MASTER never granted\n"); return 1; }
 
   /* Wait for the DSI panel to finish registering and grab its mode +
    * encoder + crtc (bootcard probe path, DSI-preferred). */
@@ -178,48 +244,31 @@ int main(int argc, char **argv) {
   }
   if (!found) { kmsg("panel-off: no connected DSI after 180s\n"); return 1; }
 
-  /* One black dumb fb, mapped + zeroed explicitly. */
-  struct drm_mode_create_dumb dumb;
-  memset(&dumb, 0, sizeof dumb);
-  dumb.width = mode.hdisplay;
-  dumb.height = mode.vdisplay;
-  dumb.bpp = 32;
-  if (ioctl(fd, DRM_IOCTL_MODE_CREATE_DUMB, &dumb)) { kmsg("panel-off: DUMB fail\n"); return 1; }
-  struct drm_mode_map_dumb md;
-  memset(&md, 0, sizeof md);
-  md.handle = dumb.handle;
-  if (ioctl(fd, DRM_IOCTL_MODE_MAP_DUMB, &md) == 0) {
-    void *p = mmap(NULL, dumb.size, PROT_READ | PROT_WRITE, MAP_SHARED, fd, (long)md.offset);
-    if (p != MAP_FAILED) { memset(p, 0, dumb.size); munmap(p, dumb.size); }
-  }
-  struct drm_mode_fb_cmd2 fb2;
-  memset(&fb2, 0, sizeof fb2);
-  fb2.width = dumb.width;
-  fb2.height = dumb.height;
-  fb2.pixel_format = DRM_FORMAT_XRGB8888;
-  fb2.handles[0] = dumb.handle;
-  fb2.pitches[0] = dumb.pitch;
-  if (ioctl(fd, DRM_IOCTL_MODE_ADDFB2, &fb2)) { kmsg("panel-off: ADDFB2 fail\n"); return 1; }
-
-  /* Ownership grab: real modeset with the black frame — the driver takes
-   * the pipeline over from the bootloader's smooth-takeover state. */
   uint64_t conn64 = conn_id;
-  struct drm_mode_crtc sc;
-  memset(&sc, 0, sizeof sc);
-  sc.set_connectors_ptr = (uint64_t)(uintptr_t)&conn64;
-  sc.count_connectors = 1;
-  sc.crtc_id = crtc_id;
-  sc.fb_id = fb2.fb_id;
-  sc.mode_valid = 1;
-  sc.mode = mode;
-  if (ioctl(fd, DRM_IOCTL_MODE_SETCRTC, &sc)) { kmsg("panel-off: SETCRTC-on fail\n"); return 1; }
-  sleep(1); /* let the off-sequence see a stable enabled state */
-
-  /* M15 kill: null SETCRTC takes the whole pipeline down. */
-  memset(&sc, 0, sizeof sc);
-  sc.crtc_id = crtc_id;
-  if (ioctl(fd, DRM_IOCTL_MODE_SETCRTC, &sc)) { kmsg("panel-off: SETCRTC-off fail\n"); return 1; }
+  if (kill_pipeline(fd, crtc_id, conn64, &mode)) return 1;
   kmsg("panel-off: pipeline down\n");
+
+  /* The exit probe (see header): drop master, close, give a possible
+   * lastclose fbdev restore its window, then re-read the crtc. Still
+   * dead = nothing restores, exit clean (master free for an opt-in
+   * client). Alive again = the console reclaimed the panel; re-kill
+   * and hold the master forever. */
+  ioctl(fd, DRM_IOCTL_DROP_MASTER);
+  close(fd);
+  sleep(3);
+  fd = open("/dev/dri/card0", O_RDWR | O_CLOEXEC);
+  if (fd < 0) { kmsg("panel-off: reopen fail\n"); return 1; }
+  struct drm_mode_crtc probe;
+  memset(&probe, 0, sizeof probe);
+  probe.crtc_id = crtc_id;
+  if (ioctl(fd, DRM_IOCTL_MODE_GETCRTC, &probe)) { kmsg("panel-off: GETCRTC fail\n"); return 1; }
+  if (probe.mode_valid || probe.fb_id) {
+    if (become_master(fd)) { kmsg("panel-off: SET_MASTER never granted (2nd)\n"); return 1; }
+    if (kill_pipeline(fd, crtc_id, conn64, &mode)) return 1;
+    kmsg("panel-off: fbcon restored on close — re-killed, holding master\n");
+    for (;;) pause();
+  }
+  kmsg("panel-off: stayed down\n");
 
   if (hold) for (;;) pause();
   return 0;
