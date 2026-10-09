@@ -21,6 +21,13 @@
 # not bootstrap from its own cargo (DECISIONS §9); keys are re-enterable
 # (`aginx-secret set`). `verify` asserts that exclusion against the finished
 # tar, not just the staging discipline.
+# Credential class (#467, aligned with fleet.sh EXCLUDES): /etc/aginx/env
+# (brain key), /etc/aginx/config.toml (relay_secret + jwt_secret) and the
+# engine OAuth files (.codex/.grok auth.json) never ride either — same §9
+# rationale: a backup that carries its own auth bootstraps an impostor.
+# Restore therefore re-enters four things: brain key (env), relay_secret +
+# jwt (config.toml — re-pair or pipe), codex/grok login (device-code login).
+# Engine session history and everything else in .codex/.grok still rides.
 # Restore is manual: unpack and copy members back (stop aginx-server first
 # for /home), or fish a single file out of the tar.
 # Device-local trust domain only. Pushing anywhere requires the server half
@@ -47,6 +54,9 @@ cmd_now() {
   rm -rf "$S/home/research/dl" "$S/home/research/logs" "$S/home/.cache"
   # §9: the sidecar store is the one member class that must not ride.
   rm -rf "$S/var/lib/aginx/secret"
+  # Credential class (#467, fleet.sh-aligned): config/env/engine OAuth.
+  rm -rf "$S/etc/aginx/env" "$S/etc/aginx/config.toml" \
+         "$S/home/.codex/auth.json" "$S/home/.grok/auth.json"
 
   OUT=$B/backup-$TS.tar.gz
   tar czf "$OUT" -C "$S" home var etc
@@ -76,11 +86,15 @@ cmd_verify() {
     || die "var/lib state member missing"
   # §9 reverse assertion: the exclusion is a contract, so it is checked
   # against the tar itself — a staging bug must fail verify, loudly.
-  if tar -tzf "$1" 2>/dev/null | grep -q 'var/lib/aginx/secret'; then
-    die "SECRET STORE IN BACKUP — do not ship or push this file"
-  fi
+  # Credential class rides the same contract (#467).
+  for banned in 'var/lib/aginx/secret' 'etc/aginx/env' 'etc/aginx/config.toml' \
+                'home/.codex/auth.json' 'home/.grok/auth.json'; do
+    if tar -tzf "$1" 2>/dev/null | grep -q "$banned"; then
+      die "SECRET IN BACKUP ($banned) — do not ship or push this file"
+    fi
+  done
   n=$(tar -tzf "$1" 2>/dev/null | wc -l | tr -d ' ')
-  echo "verify: ok (${n} members, personhood present, secret excluded)"
+  echo "verify: ok (${n} members, personhood present, secret + credential class excluded)"
 }
 
 case "${1:-}" in
