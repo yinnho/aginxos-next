@@ -12,3 +12,6 @@
 /.local
 /dist
 .DS_Store
+
+# 硬件收据账本：只本地、永不进 git（#467 出清公开史后立此闸）
+docs/HARDWARE*.md
