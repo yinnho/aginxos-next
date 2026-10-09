@@ -1441,13 +1441,15 @@ fn eye_read_text() -> Option<Vec<String>> {
     }
 }
 
-/// wifi-join wlan0 ssid psk，然后读 wlan0 的 IPv4。
+/// net-join wlan0 ssid（PSK 走 AGINX_WIFI_PSK env，#467：argv 全局可读），
+/// 然后读 wlan0 的 IPv4。
 /// net-join 只装钥匙；租约靠 udhcpc（net-bringup/net-rejoin 同款分法，
 /// 2026-09-09 蛋首配收据：关联成而 IP 永不来——voice 旧路是被 net-watch
 /// 的 net-rejoin 兜住的）。地址已在（开机路径跑过 udhcpc）就跳过。
 fn join_wifi(ssid: &str, psk: &str) -> Result<String, String> {
     let mut child = Command::new("/usr/bin/aginx-net-join")
-        .args(["wlan0", ssid, psk])
+        .args(["wlan0", ssid])
+        .env("AGINX_WIFI_PSK", psk)
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null())
         .spawn()

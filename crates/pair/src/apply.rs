@@ -149,8 +149,10 @@ fn apply_wifi(p: &PairPaths, ssid: &str, psk: &str) -> Result<String, ApplyErr> 
 /// 关联成而 IP 永不来（2026-09-09 蛋首配收据，assoc UP 而 inet 空）。
 /// 成功才落 wifi.conf；坏密钥不落盘（wizard 撤回语义）。
 fn join_wifi(p: &PairPaths, ssid: &str, psk: &str) -> Result<String, String> {
+    // PSK 走 env 不走 argv（#467 硬红线：/proc/*/cmdline 全局可读）。
     let mut child = Command::new(&p.net_join)
-        .args([&p.iface, ssid, psk])
+        .args([&p.iface, ssid])
+        .env("AGINX_WIFI_PSK", psk)
         .stdout(Stdio::null())
         .stderr(Stdio::null())
         .spawn()

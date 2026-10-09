@@ -764,20 +764,52 @@ static int parse_eapol(const unsigned char *frame, size_t flen, struct eapol_key
 
 int main(int argc, char **argv)
 {
-	/* NETJOIN_DEFAULT_SPLIT (enchilada/raw-boot bake): mainline mac80211
-	 * SME — CMD_CONNECT's cfg80211 built-in SME dies silently (E5: 90+
-	 * null-air failures), split auth/assoc is the only live path, so the
-	 * 4-arg call IS split there. redfin (qcacld) builds without the flag
-	 * and keeps the explicit-arg contract. */
-	int split = (argc == 5 && !strcmp(argv[4], "split"));
+	/* PSK channel (#467): the passphrase rides AGINX_WIFI_PSK in the
+	 * environment — /proc/<pid>/cmdline is world-readable and the pair
+	 * module's own hard line forbids a PSK on any command line. The
+	 * legacy argv shape stays accepted as a fallback for staggered
+	 * deploys (old callers against an updated binary); every in-tree
+	 * caller is env-only. */
+	int split = 0;
+	const char *psk_env = getenv("AGINX_WIFI_PSK");
+	const char *arg_psk = NULL;
+	if (psk_env && *psk_env) {
+		/* env channel: wifi-join <ifname> <ssid> [split] */
+		if (argc == 4 && !strcmp(argv[3], "split"))
+			split = 1;
+		else if (argc != 3) {
+			fprintf(stderr, "usage: wifi-join <ifname> <ssid> [split]"
+				"  (passphrase via AGINX_WIFI_PSK env; legacy"
+				" <ifname> <ssid> <passphrase> [split] still accepted)\n");
+			return 2;
+		}
 #ifdef NETJOIN_DEFAULT_SPLIT
-	if (argc == 4)
+		/* NETJOIN_DEFAULT_SPLIT (enchilada/raw-boot bake): mainline
+		 * mac80211 SME — CMD_CONNECT's cfg80211 built-in SME dies
+		 * silently (E5: 90+ null-air failures), split auth/assoc is
+		 * the only live path, so the no-split-word call IS split
+		 * there. redfin (qcacld) builds without the flag. */
 		split = 1;
 #endif
-	if (argc != 4 && !(argc == 5 && !strcmp(argv[4], "split"))) {
-		fprintf(stderr, "usage: wifi-join <ifname> <ssid> <passphrase> [split]\n");
-		return 2;
+	} else {
+		/* legacy argv channel: wifi-join <ifname> <ssid> <passphrase> [split] */
+		if (argc == 4)
+			;
+		else if (argc == 5 && !strcmp(argv[4], "split"))
+			split = 1;
+		else {
+			fprintf(stderr, "usage: wifi-join <ifname> <ssid> [split]"
+				"  (passphrase via AGINX_WIFI_PSK env; legacy"
+				" <ifname> <ssid> <passphrase> [split] still accepted)\n");
+			return 2;
+		}
+		arg_psk = argv[3];
+#ifdef NETJOIN_DEFAULT_SPLIT
+		if (argc == 4)
+			split = 1;
+#endif
 	}
+	const char *passphrase = (psk_env && *psk_env) ? psk_env : arg_psk;
 	const char *ifname = argv[1];
 	struct target t = { .ssid = argv[2] };
 	t.ifindex = if_nametoindex(ifname);
@@ -938,7 +970,7 @@ int main(int argc, char **argv)
 
 	/* --- PMK --- */
 	unsigned char pmk[32];
-	pbkdf2_sha1(argv[3], strlen(argv[3]), t.ssid, strlen(t.ssid), 4096, 32, pmk);
+	pbkdf2_sha1(passphrase, strlen(passphrase), t.ssid, strlen(t.ssid), 4096, 32, pmk);
 
 	/* --- 4WHS driver loop: answer every M1 (retransmission) with a fresh
 	 * M2, grab M3 when it comes. One-shot M2 is not enough: the first TX

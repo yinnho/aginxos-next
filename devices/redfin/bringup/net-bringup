@@ -110,7 +110,7 @@ rc=1
 while [ $attempt -lt 2 ]; do
   attempt=$((attempt+1))
   echo "--- join attempt $attempt $(date)"
-  if /usr/bin/aginx-net-join wlan0 "$SSID" "$PSK"; then
+  if AGINX_WIFI_PSK="$PSK" /usr/bin/aginx-net-join wlan0 "$SSID"; then
     say wifi ok "$SSID"
   else
     jrc=$?

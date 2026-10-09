@@ -59,7 +59,7 @@ alt_get() {
 try_one() {
   ip addr flush dev "$IF" 2>/dev/null
   ip link set "$IF" up 2>/dev/null
-  "$NETJOIN" "$IF" "$1" "$2"
+  AGINX_WIFI_PSK="$2" "$NETJOIN" "$IF" "$1"
   jrc=$?
   [ "$jrc" -eq 0 ] || { echo "net-rejoin: join failed on '$1' (rc=$jrc)"; return 1; }
   if udhcpc -i "$IF" -n -q -t 6 -T 3 >/dev/null 2>&1; then

@@ -49,7 +49,7 @@ wifi_phase() {
   sleep 3
   n=0
   while [ $n -lt 3 ]; do
-    if /usr/bin/aginx-net-join wlan0 "$SSID" "$PSK" >/tmp/wifi-join.log 2>&1 \
+    if AGINX_WIFI_PSK="$PSK" /usr/bin/aginx-net-join wlan0 "$SSID" >/tmp/wifi-join.log 2>&1 \
        && udhcpc -i wlan0 -n -q -t 8 -T 3 >/tmp/udhcpc-wlan.log 2>&1; then
       WIP=$(ip addr show wlan0 2>/dev/null | sed -n 's/.*inet \([0-9.]*\).*/\1/p' | head -n 1)
       say wifi ok "$WIP"

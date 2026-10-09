@@ -56,8 +56,9 @@ else
       ip link set wlan0 up
       ip addr flush dev wlan0
       say wifi run
-      # psk 经 sed 管道从 wifi.conf 取值，只进 argv——永不入日志
-      /usr/bin/aginx-net-join wlan0 "$S" "$P" >/var/net-join.log 2>&1
+      # psk 经 sed 管道从 wifi.conf 取值，走 AGINX_WIFI_PSK env——argv
+      # 全局可读（/proc/*/cmdline），env 只有属主能看（#467）
+      AGINX_WIFI_PSK="$P" /usr/bin/aginx-net-join wlan0 "$S" >/var/net-join.log 2>&1
       rc=$?
       if [ $rc -eq 0 ]; then
         say wifi ok "$S"
