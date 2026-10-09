@@ -10,7 +10,8 @@ use std::path::Path;
 use std::process::exit;
 
 use aginx_pkg::{
-    cmd_available, cmd_list, cmd_opt_in, cmd_rollback, cmd_sync, install_file, usage, Fail, Paths, PkgLock,
+    cmd_available, cmd_list, cmd_opt_in, cmd_repair, cmd_rollback, cmd_sync, install_file, usage, Fail, Paths,
+    PkgLock,
 };
 
 /// Acquire the cross-process install lock, or yield. A live concurrent
@@ -91,6 +92,23 @@ fn main() {
             };
             if let Err(f) = cmd_rollback(&p, name) {
                 fail(f, json);
+            }
+        }
+        "repair" => {
+            // no manifest argument: repair reads the ledger (stamps) and
+            // only opens the DEFAULT manifest, and only in the net leg.
+            let net = rest.iter().any(|a| *a == "--net");
+            if rest.iter().any(|a| *a != "--net") {
+                die_usage();
+            }
+            let _lock = lock_or_yield(&p, json);
+            let out = cmd_repair(&p, None, pubkey, net).unwrap_or_else(|f| fail(f, json));
+            // pending after the net leg = honest failure for provision's
+            // boot.state line; the offline leg always exits 0 (provision
+            // parses the repair-pending lines to decide whether to wait
+            // for the network at all).
+            if net && !out.pending.is_empty() {
+                exit(1);
             }
         }
         "list" => match cmd_list(&p) {

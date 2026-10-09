@@ -62,6 +62,7 @@ pub struct Paths {
     pub svcctl: PathBuf,
     pub apps_d: PathBuf,
     pub lockdir: PathBuf,
+    pub crontab: PathBuf,
 }
 
 fn envp(var: &str, default: &str) -> PathBuf {
@@ -83,6 +84,7 @@ impl Paths {
             svcctl: envp("AGINX_PKG_AGCTL", "/usr/bin/aginx-svc"),
             apps_d: envp("AGINX_PKG_APPS_D", "/etc/apps.d"),
             lockdir: envp("AGINX_PKG_LOCK", "/var/tmp/aginx-pkg.lock"),
+            crontab: envp("AGINX_PKG_CRONTAB", "/etc/crontabs/root"),
         }
     }
 }
@@ -350,6 +352,15 @@ pub struct PkgMeta {
     pub group: Option<String>,
 }
 
+impl PkgMeta {
+    /// Does the meta carry anything write_face_sidecar would write?
+    /// (repair's sidecar-heal gate — an empty meta writes nothing, so
+    /// a missing sidecar is the normal shape, not a wound.)
+    fn meta_has_face_meta(&self) -> bool {
+        self.summary.is_some() || self.args.is_some() || !self.examples.is_empty() || self.group.is_some()
+    }
+}
+
 /// One non-empty, single-line string or None.
 fn one_line(v: &toml::Value) -> Option<&str> {
     let s = v.as_str()?;
@@ -600,10 +611,110 @@ fn install_bundle(p: &Paths, name: &str, src: &Path) -> Result<Kind, Fail> {
     if let Some(v) = &meta.version {
         write_stamp_version(p, name, v)?;
     }
+    // The package's own pkg.toml rides its skill dir: repair's offline
+    // leg rebuilds the face symlink + sidecar + unit from it after a
+    // re-flash wipes /var/bin (#472 — the pkgfiles tree rides the state
+    // tar, /var/bin does not).
+    write_644(&skill_dir.join("pkg.toml"), &pkg_raw)
+        .map_err(|e| io_fail("skill_write", format!("{}: {e}", skill_dir.join("pkg.toml").display())))?;
+    // [cron] (optional): the package owns a marked block in the crontab
+    // (运维件归包, #472) — reinstall replaces the block in place.
+    if let Some(cron) = tbl.get("cron") {
+        let lines = parse_cron_lines(name, cron)?;
+        apply_cron(p, name, &lines)?;
+    }
     if has_unit {
         reload_units(p);
     }
     Ok(Kind::Bundle { skill: true, unit: has_unit })
+}
+
+/// pkg.toml [cron]: `lines = ["…", …]` — a package-owned crontab block
+/// (运维件归包, #472). Lines are raw crontab rows; '#' rows are refused
+/// (they are the marker language), as is any line smuggling the marker
+/// itself. Non-empty single-line strings only (one_line), same law as
+/// examples.
+fn parse_cron_lines(name: &str, cron: &toml::Value) -> Result<Vec<String>, Fail> {
+    let bad = |want: &str| io_fail("pkg_cron", format!("pkg.toml [cron] {name}: {want}"));
+    let tbl = cron.as_table().ok_or_else(|| bad("want a table"))?;
+    if tbl.len() != 1 || !tbl.contains_key("lines") {
+        return Err(bad("only 'lines' is valid here"));
+    }
+    let arr = tbl.get("lines").and_then(|v| v.as_array()).ok_or_else(|| bad("lines = [\"…\"] — want an array of strings"))?;
+    let mut out = Vec::new();
+    for item in arr {
+        let s = one_line(item).ok_or_else(|| bad("want non-empty single-line strings"))?;
+        if s.starts_with('#') {
+            return Err(bad("a cron line may not start with '#' (the marker language is reserved)"));
+        }
+        if s.contains("aginx:cron=") {
+            return Err(bad("a cron line may not contain the aginx:cron= marker"));
+        }
+        out.push(s.to_string());
+    }
+    if out.is_empty() {
+        return Err(bad("lines is empty — drop the [cron] table instead"));
+    }
+    Ok(out)
+}
+
+/// Rewrite the package's marked block in the crontab (replace-in-place,
+/// never duplicate) and bump the crontab DIRECTORY mtime — busybox crond
+/// rescans only on dir mtime; a rewritten file alone never fires (the
+/// 10-09 aginxresearch lesson, in memory as busybox-crond-dir-mtime).
+fn apply_cron(p: &Paths, name: &str, lines: &[String]) -> Result<(), Fail> {
+    let begin = format!("# aginx:cron={name} begin");
+    let end = format!("# aginx:cron={name} end");
+    let old = std::fs::read_to_string(&p.crontab).unwrap_or_default();
+    let mut kept: Vec<&str> = Vec::new();
+    let mut inside = false;
+    for l in old.lines() {
+        if l == begin {
+            inside = true;
+            continue;
+        }
+        if l == end {
+            inside = false;
+            continue;
+        }
+        if !inside {
+            kept.push(l);
+        }
+    }
+    while kept.last().map(|s| s.trim().is_empty()).unwrap_or(false) {
+        kept.pop();
+    }
+    let mut body = kept.join("\n");
+    if !body.is_empty() {
+        body.push('\n');
+    }
+    body.push('\n');
+    body.push_str(&begin);
+    body.push('\n');
+    for l in lines {
+        body.push_str(l);
+        body.push('\n');
+    }
+    body.push_str(&end);
+    body.push('\n');
+    if let Some(dir) = p.crontab.parent() {
+        mkdir_all(dir)?;
+    }
+    write_644(&p.crontab, body.as_bytes())
+        .map_err(|e| io_fail("cron_write", format!("{}: {e}", p.crontab.display())))?;
+    touch_dir_mtime(&p.crontab);
+    Ok(())
+}
+
+/// UTIME_NOW on the file's directory (busybox crond's rescan trigger).
+fn touch_dir_mtime(file: &Path) {
+    use std::ffi::CString;
+    use std::os::unix::ffi::OsStrExt;
+    let Some(dir) = file.parent() else { return };
+    let Ok(c) = CString::new(dir.as_os_str().as_bytes()) else { return };
+    unsafe {
+        libc::utimensat(libc::AT_FDCWD, c.as_ptr(), std::ptr::null(), 0);
+    }
 }
 
 /// Stream one files/ member to its place in the temp tree, keeping the
@@ -668,7 +779,11 @@ fn relative_path(link: &Path, to: &Path) -> Option<PathBuf> {
 
 /// Write the aginx-svc overlay unit: [unit] name + the package's [service]
 /// table verbatim (aginx-svcd scans /var/lib/aginx/units — M16's overlay
-/// channel, finally written by its intended author).
+/// channel, finally written by its intended author). A unit parked as
+/// `<name>.toml.off` (the manual disable — svc only scans *.toml) stays
+/// off: the definition updates in place under the .off name, so a
+/// reinstall/update never silently re-enables a service the user switched
+/// off (the voice daemon's fate after the SIP repositioning).
 fn write_unit(p: &Paths, name: &str, svc: &toml::map::Map<String, toml::Value>) -> Result<(), Fail> {
     let mut doc = toml::map::Map::new();
     let mut unit = toml::map::Map::new();
@@ -677,10 +792,22 @@ fn write_unit(p: &Paths, name: &str, svc: &toml::map::Map<String, toml::Value>) 
     doc.insert("service".to_string(), toml::Value::Table(svc.clone()));
     let text = toml::to_string(&toml::Value::Table(doc))
         .map_err(|e| io_fail("unit_write", format!("serialize unit: {e}")))?;
+    let dst = unit_path_for(p, name);
     mkdir_all(&p.units)?;
-    write_644(&p.units.join(format!("{name}.toml")), text.as_bytes())
-        .map_err(|e| io_fail("unit_write", format!("{}: {e}", p.units.join(format!("{name}.toml")).display())))?;
+    write_644(&dst, text.as_bytes())
+        .map_err(|e| io_fail("unit_write", format!("{}: {e}", dst.display())))?;
     Ok(())
+}
+
+/// Where this package's unit lives: `<name>.toml.off` if the disabled
+/// shape is parked there, else the live `<name>.toml`.
+fn unit_path_for(p: &Paths, name: &str) -> PathBuf {
+    let off = p.units.join(format!("{name}.toml.off"));
+    if off.exists() {
+        off
+    } else {
+        p.units.join(format!("{name}.toml"))
+    }
 }
 
 /// Best-effort `aginx-svc reload`: the unit file is on disk either way and
@@ -1128,6 +1255,165 @@ pub fn cmd_rollback(p: &Paths, name: &str) -> Result<(), Fail> {
     Ok(())
 }
 
+// ------------------------------------------------------------ repair
+
+/// The persisted pkg.toml in skills/<name>/ (written by install): the
+/// offline half of face-repair rebuilds the symlink face + sidecar +
+/// unit from it — the files/ tree under pkgfiles rides the state tar,
+/// /var/bin does not (#472).
+struct Persisted {
+    exec: Option<String>,
+    meta: PkgMeta,
+    svc: Option<toml::map::Map<String, toml::Value>>,
+}
+
+fn persisted_pkg_toml(p: &Paths, name: &str) -> Option<Persisted> {
+    let text = std::fs::read_to_string(p.skills.join(name).join("pkg.toml")).ok()?;
+    let doc: toml::Value = toml::from_str(&text).ok()?;
+    let tbl = doc.as_table()?;
+    Some(Persisted {
+        exec: tbl.get("exec").and_then(|v| v.as_str()).map(str::to_string),
+        meta: parse_pkg_meta(tbl).ok()?,
+        svc: tbl.get("service").and_then(|v| v.as_table()).cloned(),
+    })
+}
+
+#[derive(Debug, Default)]
+pub struct RepairOut {
+    pub local: usize,
+    pub mirror: usize,
+    pub pending: Vec<String>,
+}
+
+/// #472① face-repair: a capture re-flash keeps /var/lib (stamps ledger,
+/// units, skills, pkgfiles trees) but wipes /var/bin — every face and
+/// sidecar gone while the ledger still says "installed" (the #427
+/// shape), and the all-opt L0 manifest makes sync's core self-heal a
+/// no-op. Repair walks the LEDGER (stamps), not the manifest: every
+/// stamped package is ours. Local leg (every call): tree faces rebuilt
+/// offline from the persisted pkg.toml + the surviving pkgfiles tree;
+/// missing sidecars and units healed the same way. Mirror leg (net,
+/// provision gates it behind internet ok): binary packages and
+/// state-tar-excluded trees re-fetched from the manifest. Never fails
+/// the boot — unresolved packages ride `pending` (one
+/// `aginx-pkg: repair-pending <name> (<why>)` line each) and retry
+/// next boot.
+pub fn cmd_repair(p: &Paths, manifest: Option<&Path>, pubkey_b64: &str, net: bool) -> Result<RepairOut, Fail> {
+    let mut out = RepairOut::default();
+    let rd = match std::fs::read_dir(&p.stamps) {
+        Ok(rd) => rd,
+        Err(_) => return Ok(out), // no ledger dir = nothing installed by us
+    };
+    let mut names: Vec<String> = rd
+        .filter_map(|e| e.ok())
+        .map(|e| e.file_name().to_string_lossy().into_owned())
+        .filter(|n| !n.starts_with('.') && !n.ends_with(".version"))
+        .collect();
+    names.sort();
+    let mut entries: Option<Vec<Entry>> = None;
+    for name in names {
+        let per = persisted_pkg_toml(p, &name);
+        let face = p.bindir.join(&name);
+        let mut healed_unit = false;
+        if let Some(svc) = per.as_ref().and_then(|x| x.svc.as_ref()) {
+            // .toml.off = parked disabled (svc scans only *.toml) — not a
+            // wound; the definition rides write_unit's .off-preserving path.
+            if !unit_path_for(p, &name).exists() {
+                write_unit(p, &name, svc)?;
+                healed_unit = true;
+            }
+        }
+        if face.exists() {
+            // a face without its .aginxmd is router-invisible — heal it
+            let meta_missing = per.as_ref().map(|x| x.meta.meta_has_face_meta()).unwrap_or(false)
+                && !p.bindir.join(format!("{name}.aginxmd")).exists();
+            if meta_missing {
+                if let Some(x) = per.as_ref() {
+                    write_face_sidecar(p, &name, &x.meta)?;
+                }
+                out.local += 1;
+                println!("aginx-pkg: healed sidecar {name}");
+            } else if healed_unit {
+                out.local += 1;
+                println!("aginx-pkg: healed unit {name}");
+            }
+            if healed_unit {
+                reload_units(p);
+            }
+            continue;
+        }
+        // face missing: local rebuild first (tree survived the swap)
+        if let Some(ex) = per.as_ref().and_then(|x| x.exec.as_deref()) {
+            let target = p.pkgfiles.join(&name).join(ex);
+            if target.exists() {
+                place_symlink_face(p, &name, &target)?;
+                if let Some(x) = per.as_ref() {
+                    write_face_sidecar(p, &name, &x.meta)?;
+                }
+                if healed_unit {
+                    reload_units(p);
+                }
+                out.local += 1;
+                println!("aginx-pkg: rebuilt face {name} (tree)");
+                continue;
+            }
+        }
+        // mirror or pending
+        let why = if per.as_ref().and_then(|x| x.exec.as_deref()).is_some() {
+            "tree missing"
+        } else {
+            "no local source"
+        };
+        if !net {
+            out.pending.push(format!("{name} ({why})"));
+            println!("aginx-pkg: repair-pending {name} ({why})");
+            continue;
+        }
+        if entries.is_none() {
+            let path = manifest.unwrap_or(&p.manifest);
+            if !path.exists() {
+                eprintln!("aginx-pkg: no manifest {} — mirror repair unavailable", path.display());
+                entries = Some(Vec::new());
+            } else {
+                match load_manifest(path, manifest.is_some() || std::env::var_os("AGPKG_MANIFEST").is_some(), pubkey_b64) {
+                    Ok(v) => entries = Some(v),
+                    Err(f) => {
+                        eprintln!("aginx-pkg: manifest load failed ({}), mirror repair unavailable", f.message);
+                        entries = Some(Vec::new());
+                    }
+                }
+            }
+        }
+        let entry = entries
+            .as_ref()
+            .unwrap()
+            .iter()
+            .find(|e| e.name == name)
+            .cloned();
+        match entry {
+            Some(e) => {
+                fetch_install(p, &e)?;
+                if healed_unit {
+                    reload_units(p);
+                }
+                out.mirror += 1;
+                println!("aginx-pkg: reinstalled {name} (mirror)");
+            }
+            None => {
+                out.pending.push(format!("{name} (not in manifest)"));
+                println!("aginx-pkg: repair-pending {name} (not in manifest)");
+            }
+        }
+    }
+    println!(
+        "aginx-pkg: repair done — {} local, {} mirror, {} pending",
+        out.local,
+        out.mirror,
+        out.pending.len()
+    );
+    Ok(out)
+}
+
 pub fn cmd_list(p: &Paths) -> Result<CmdOut, Fail> {
     let mut out = CmdOut::default();
     let rd = std::fs::read_dir(&p.bindir)
@@ -1170,7 +1456,7 @@ pub fn cmd_list(p: &Paths) -> Result<CmdOut, Fail> {
 
 pub fn usage() -> &'static str {
     "usage: aginx-pkg install <name> <src> <sha256> | sync [manifest] | available [manifest] [--json] \
-     | opt-in <name> | rollback <name> | list [--json]"
+     | opt-in <name> | rollback <name> | repair [--net] | list [--json]"
 }
 
 // -------------------------------------------------------------- tests
@@ -1202,6 +1488,7 @@ mod tests {
             svcctl: root.join("svcctl"),
             apps_d: root.join("apps.d"),
             lockdir: root.join("lock"),
+            crontab: root.join("crontabs/root"),
         }
     }
 
@@ -1859,5 +2146,169 @@ mod tests {
         assert_eq!(out.data[0]["skill"], true);
         assert_eq!(out.data[0]["unit"], false);
         assert_eq!(out.data[0]["stamp"], serde_json::Value::Null);
+    }
+
+    #[test]
+    fn cron_block_replace_in_place_never_duplicates() {
+        let root = tmp("cron");
+        let p = paths(&root);
+        fs::create_dir_all(p.crontab.parent().unwrap()).unwrap();
+        fs::write(&p.crontab, "# header\n17 4 * * * backup\n\nhand-line\n").unwrap();
+        let toml_a = "name = \"dup\"\nversion = \"0.1.0\"\n[cron]\nlines = [\"0 8 * * * run-a\"]\n";
+        let t = root.join("a.tar");
+        build_tar(
+            &t,
+            &[("bin/dup", b"X"), ("pkg.toml", toml_a.as_bytes()), ("SKILL.md", b"s")],
+        );
+        install_file(&p, "dup", &t, &sha256_file(&t).unwrap()).unwrap();
+        let body = fs::read_to_string(&p.crontab).unwrap();
+        assert!(body.contains("# aginx:cron=dup begin\n0 8 * * * run-a\n# aginx:cron=dup end\n"));
+        assert_eq!(body.matches("aginx:cron=dup").count(), 2, "one block, both markers");
+        assert!(body.contains("17 4 * * * backup"), "pre-existing lines kept");
+        assert!(body.contains("hand-line"), "hand lines kept");
+        // reinstall with a DIFFERENT line: the block is replaced, not duplicated
+        let toml_b = "name = \"dup\"\nversion = \"0.1.0\"\n[cron]\nlines = [\"0 8 * * * run-b\"]\n";
+        let t2 = root.join("b.tar");
+        build_tar(
+            &t2,
+            &[("bin/dup", b"X"), ("pkg.toml", toml_b.as_bytes()), ("SKILL.md", b"s")],
+        );
+        install_file(&p, "dup", &t2, &sha256_file(&t2).unwrap()).unwrap();
+        let body = fs::read_to_string(&p.crontab).unwrap();
+        assert!(body.contains("0 8 * * * run-b"));
+        assert!(!body.contains("run-a"), "old block replaced");
+        assert_eq!(body.matches("aginx:cron=dup").count(), 2);
+        // a second package appends its own block without touching dup's
+        let toml_c = "name = \"od\"\nversion = \"0.1.0\"\n[cron]\nlines = [\"7 * * * * run-c\"]\n";
+        let t3 = root.join("c.tar");
+        build_tar(
+            &t3,
+            &[("bin/od", b"X"), ("pkg.toml", toml_c.as_bytes()), ("SKILL.md", b"s")],
+        );
+        install_file(&p, "od", &t3, &sha256_file(&t3).unwrap()).unwrap();
+        let body = fs::read_to_string(&p.crontab).unwrap();
+        assert!(body.contains("0 8 * * * run-b"));
+        assert!(body.contains("7 * * * * run-c"));
+        // marker smuggling / comment lines / empty list are refused
+        let bad = "name = \"e\"\nversion = \"0.1.0\"\n[cron]\nlines = [\"# aginx:cron=x begin\"]\n";
+        let t4 = root.join("d.tar");
+        build_tar(&t4, &[("bin/e", b"X"), ("pkg.toml", bad.as_bytes()), ("SKILL.md", b"s")]);
+        let f = install_file(&p, "e", &t4, &sha256_file(&t4).unwrap()).unwrap_err();
+        assert_eq!(f.code, "pkg_cron");
+        let bad2 = "name = \"e2\"\nversion = \"0.1.0\"\n[cron]\nlines = []\n";
+        let t5 = root.join("e.tar");
+        build_tar(&t5, &[("bin/e2", b"X"), ("pkg.toml", bad2.as_bytes()), ("SKILL.md", b"s")]);
+        let f = install_file(&p, "e2", &t5, &sha256_file(&t5).unwrap()).unwrap_err();
+        assert_eq!(f.code, "pkg_cron");
+    }
+
+    #[test]
+    fn repair_rebuilds_tree_face_offline_and_heals_sidecar() {
+        let root = tmp("repair-tree");
+        let p = paths(&root);
+        let toml = "name = \"python3\"\nversion = \"3.12\"\nsummary = \"py\"\nexec = \"bin/python3\"\n";
+        let t = root.join("p.tar");
+        build_tree_tar(
+            &t,
+            &[("pkg.toml", toml.as_bytes()), ("SKILL.md", b"# s\n")],
+            &[("bin/python3", b"ELF", 0o755)],
+            &[],
+        );
+        install_file(&p, "python3", &t, &sha256_file(&t).unwrap()).unwrap();
+        // pkg.toml persisted beside the skill (repair's source of truth)
+        assert!(p.skills.join("python3/pkg.toml").is_file());
+        // the re-flash shape: /var/bin wiped, /var/lib survived
+        fs::remove_file(p.bindir.join("python3")).unwrap();
+        fs::remove_file(p.bindir.join("python3.aginxmd")).unwrap();
+        let out = cmd_repair(&p, None, "irrelevant", false).unwrap();
+        assert_eq!(out.pending.len(), 0);
+        assert_eq!(out.local, 1);
+        let face = p.bindir.join("python3");
+        assert!(face.is_symlink());
+        assert_eq!(fs::read(&face).unwrap(), b"ELF");
+        assert!(p.bindir.join("python3.aginxmd").is_file(), "sidecar rebuilt from persisted meta");
+        // idempotent: a healthy second call does nothing
+        let out = cmd_repair(&p, None, "irrelevant", false).unwrap();
+        assert_eq!(out.local, 0);
+        assert_eq!(out.pending.len(), 0);
+        // tree gone too (asr/tts/ocr shape) -> pending offline, mirror online
+        fs::remove_file(p.bindir.join("python3")).unwrap();
+        fs::remove_dir_all(p.pkgfiles.join("python3")).unwrap();
+        let out = cmd_repair(&p, None, "irrelevant", false).unwrap();
+        assert_eq!(out.pending.len(), 1);
+        assert!(out.pending[0].contains("tree missing"));
+    }
+
+    #[test]
+    fn disabled_unit_stays_off_across_reinstall() {
+        let root = tmp("unit-off");
+        let p = paths(&root);
+        let mk = |tag: &str, ver: &str| {
+            let t = root.join(format!("{tag}.tar"));
+            build_tar(
+                &t,
+                &[("bin/d", b"X"), ("pkg.toml", format!("name = \"d\"\nversion = \"{ver}\"\n[service]\ncmd = \"/var/bin/d\"\ntype = \"simple\"\n").as_bytes()), ("SKILL.md", b"s")],
+            );
+            t
+        };
+        let t = mk("a", "1.0");
+        install_file(&p, "d", &t, &sha256_file(&t).unwrap()).unwrap();
+        assert!(p.units.join("d.toml").exists());
+        // the manual disable: park the unit out of svc's scan
+        fs::rename(p.units.join("d.toml"), p.units.join("d.toml.off")).unwrap();
+        // reinstall (update): the definition must land UNDER .off, the
+        // live shape must not come back
+        let t2 = mk("b", "2.0");
+        install_file(&p, "d", &t2, &sha256_file(&t2).unwrap()).unwrap();
+        assert!(!p.units.join("d.toml").exists(), "disabled unit re-enabled by reinstall");
+        let body = fs::read_to_string(p.units.join("d.toml.off")).unwrap();
+        assert!(body.contains("name = \"d\""), "definition updated in place under .off");
+        // repair's unit-heal sees .off as present — the face rides the
+        // normal legs (flat binary: pending offline), and the unit stays
+        // parked through them
+        fs::remove_file(p.bindir.join("d")).unwrap();
+        let out = cmd_repair(&p, None, "irrelevant", false).unwrap();
+        assert_eq!(out.pending.len(), 1, "flat binary face cannot heal locally");
+        assert!(!p.units.join("d.toml").exists(), "repair healed a disabled unit back on");
+    }
+
+    #[test]
+    fn repair_mirror_reinstalls_binary_package() {
+        let root = tmp("repair-mirror");
+        let p = paths(&root);
+        // stub downloader: copies a fixture to $2
+        let payload = root.join("payload.bin");
+        fs::write(&payload, b"NEWBIN").unwrap();
+        let stub = root.join("downloader");
+        fs::write(&stub, "#!/bin/sh\ncp \"$DLPAY\" \"$2\"\n").unwrap();
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(&stub, fs::Permissions::from_mode(0o755)).unwrap();
+        // a binary package installed via manifest (stub downloader);
+        // DLPAY stays exported for the whole test — repair's net leg
+        // re-invokes the stub too
+        let sha = sha256_hex(b"NEWBIN");
+        let m = root.join("m");
+        fs::write(&m, format!("tool http://x/{sha} {sha} opt 1.0\n")).unwrap();
+        std::env::set_var("DLPAY", payload.display().to_string());
+        fs::create_dir_all(&p.dldir).unwrap();
+        fetch_install(&p, &parse_manifest(&fs::read_to_string(&m).unwrap()).unwrap()[0].clone()).unwrap();
+        assert!(p.bindir.join("tool").is_file());
+        // the re-flash shape: face gone, ledger there, no persisted pkg.toml
+        fs::remove_file(p.bindir.join("tool")).unwrap();
+        let out = cmd_repair(&p, Some(&m), "irrelevant", false).unwrap();
+        assert_eq!(out.pending.len(), 1, "offline: binary package cannot heal locally");
+        // net leg: manifest default is absent here, explicit path = dev
+        let out = cmd_repair(&p, Some(&m), "irrelevant", true).unwrap();
+        assert_eq!(out.mirror, 1);
+        assert_eq!(out.pending.len(), 0);
+        assert_eq!(fs::read(p.bindir.join("tool")).unwrap(), b"NEWBIN");
+        // net leg but the package is not in the manifest -> pending, honest
+        fs::remove_file(p.bindir.join("tool")).unwrap();
+        let m2 = root.join("m2");
+        fs::write(&m2, format!("other http://x/{sha} {sha} opt 1.0\n")).unwrap();
+        let out = cmd_repair(&p, Some(&m2), "irrelevant", true).unwrap();
+        std::env::remove_var("DLPAY");
+        assert_eq!(out.pending.len(), 1);
+        assert!(out.pending[0].contains("not in manifest"));
     }
 }
