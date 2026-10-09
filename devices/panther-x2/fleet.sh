@@ -196,10 +196,22 @@ do_init() {
     || die "铺树后结构不对（init/config.toml 缺）"
 
   echo ">> 身份注入（id=${id}；密件不回显）"
+  # #467 修⑥：不再用 sed 注入——relay_secret 经 $(tr …) 展开进了 sed 的
+  # argv（/proc/*/cmdline 全局可读），且密值里出现 / & \ 等 sed 元字符
+  # 会被吞或炸。改 bash 参数展开逐行替换：密值全程留在当前 shell 变量
+  # 里，对元字符免疫，模板行尾换行保原样。
+  local relay_secret jwt line
+  IFS= read -r relay_secret < "$secretf"
+  relay_secret="${relay_secret//$'\r'/}"
+  [ -n "$relay_secret" ] || die "relay-secret 文件是空的"
+  jwt="$(openssl rand -hex 32)"
   local cfg; cfg=$(mktemp)
-  sed -e "s/__ID__/$id/g" \
-      -e "s/__RELAY_SECRET__/$(tr -d '\n\r' < "$secretf")/g" \
-      -e "s/__JWT_SECRET__/$(openssl rand -hex 32)/g" "$TPL" > "$cfg"
+  while IFS= read -r line || [ -n "$line" ]; do
+    line="${line//__ID__/$id}"
+    line="${line//__RELAY_SECRET__/$relay_secret}"
+    line="${line//__JWT_SECRET__/$jwt}"
+    printf '%s\n' "$line"
+  done < "$TPL" > "$cfg"
   chmod 600 "$cfg"
   scp -q "${SSH_OPTS[@]}" "$cfg" "root@$host:/aginxos/etc/aginx/config.toml"
   scp -q "${SSH_OPTS[@]}" "$envf" "root@$host:/aginxos/etc/aginx/env"
