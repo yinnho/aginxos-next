@@ -82,5 +82,5 @@ method = "per-lun-gpt"
 luns = ["sda","sdb","sdc","sdd","sde","sdf"]
 
 [adb]
-serial = "aginxosredfin"
-fastboot_serial = "REDACTED-REDFIN-FASTBOOT"
+serial = "aginxosredfin"          # 自造 USB gadget 串号（trampoline.c 写入，非工厂串号，可公开）
+fastboot_serial = ""              # 真机串号不进仓——真源 .local/device/serials.env（#467 修⑤）

@@ -68,5 +68,5 @@ drm_card = "/dev/dri/card0"  # [v1] registered (probed: card0 + renderD128)
 # 升级=重刷 userdata；GPT slot attrs 未探针，aginx-boot-ok 由 rcS 机型门关掉。
 
 [adb]
-serial = "REDACTED-ENCHILADA"          # adb 与 fastboot 同串号 (probed: androidboot.serialno)
-fastboot_serial = "REDACTED-ENCHILADA"
+serial = ""                  # 真机串号不进仓——真源 .local/device/serials.env（#467 修⑤；adb 与 fastboot 同串，probed: androidboot.serialno）
+fastboot_serial = ""

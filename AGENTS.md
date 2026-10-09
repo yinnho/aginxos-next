@@ -227,13 +227,15 @@ dropbear sftp subsystem is a Go static (`tools/sftp-server` +
 
 ## Device Safety
 
-Two phones on the bench. Pixel 5 redfin (adb serial `aginxosredfin`,
-fastboot `REDACTED-REDFIN-FASTBOOT`) is the experiment unit; OnePlus 6 enchilada
-(`REDACTED-ENCHILADA`) is the second bring-up machine. The neighboring Huawei
-`REDACTED-NEVER-TOUCH` and Redmi 7A (`REDACTED-NEVER-TOUCH`) are NEVER touched. Before
+Two phones on the bench. Pixel 5 redfin (adb serial `aginxosredfin`, a
+self-invented gadget string) is the experiment unit; OnePlus 6 enchilada
+is the second bring-up machine. Real factory serials (redfin fastboot,
+enchilada, and the NEVER-touch neighbors Huawei + Redmi 7A) live in
+`.local/device/serials.env` — never in this repo (#467). Before
 any destructive fastboot command, confirm the attached serial is the
 machine you meant — `devices/<codename>/boot/flash-<codename>.sh` gates
-this by the profile's serial; a hand-typed fastboot line must gate
+this by the profile's serial (falling through to serials.env when the
+profile value is empty); a hand-typed fastboot line must gate
 itself the same way.
 Ground truths inherited from the first-generation receipts (full history
 in the old repo's `docs/HARDWARE.md`):

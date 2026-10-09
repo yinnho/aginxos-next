@@ -53,10 +53,22 @@ test -f "${PROFILE}" || { echo "missing ${PROFILE}" >&2; exit 1; }
 
 # The serial gate: this script flashes exactly one machine, by its
 # profile. Grep'd from the sibling device.toml (sed with [^"]* — a
-# greedy .* swallows inline comments on BSD sed).
+# greedy .* swallows inline comments on BSD sed). The REAL fastboot
+# serial no longer lives in the (public) profile — its home is
+# .local/device/serials.env (#467 修⑤); an empty profile value falls
+# through to that overlay, so the gate stays as hard as ever.
 FB_SERIAL="$(sed -n 's/^fastboot_serial *= *"\([^"]*\)".*/\1/p' "${PROFILE}")"
-test -n "${FB_SERIAL}" || { echo "no fastboot_serial in ${PROFILE}" >&2; exit 1; }
 ADB_SERIAL="$(sed -n 's/^serial *= *"\([^"]*\)".*/\1/p' "${PROFILE}")"
+SERIALS_ENV="${REPO}/.local/device/serials.env"
+if [ -z "${FB_SERIAL}" ]; then
+  [ -f "${SERIALS_ENV}" ] || { echo "profile fastboot_serial empty and no ${SERIALS_ENV} — cannot gate" >&2; exit 1; }
+  FB_SERIAL="$(sed -n 's/^REDFIN_FASTBOOT_SERIAL=//p' "${SERIALS_ENV}" | tail -n 1)"
+fi
+if [ -z "${ADB_SERIAL}" ]; then
+  ADB_SERIAL="$(sed -n 's/^REDFIN_ADB_SERIAL=//p' "${SERIALS_ENV}" 2>/dev/null | tail -n 1)"
+fi
+test -n "${FB_SERIAL}" || { echo "no fastboot serial (profile + ${SERIALS_ENV})" >&2; exit 1; }
+test -n "${ADB_SERIAL}" || { echo "no adb serial (profile + ${SERIALS_ENV})" >&2; exit 1; }
 
 say() { printf '%s\n' "$*"; }
 

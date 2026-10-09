@@ -168,8 +168,9 @@
 
 ## 上机日备忘
 
-- **样机是 Pixel 5（redfin）**，不是 OnePlus 6。adb `aginxosredfin`，
-  fastboot / cmdline serial `REDACTED-REDFIN-FASTBOOT`。在跑的是槽 **b**，内核仍是
+- **样机是 Pixel 5（redfin）**，不是 OnePlus 6。adb `aginxosredfin`
+  （自造 gadget 串），fastboot / cmdline serial 见
+  `.local/device/serials.env`。在跑的是槽 **b**，内核仍是
   机器自带的 4.19（`rdinit=/aginxos/trampoline`），不是 enchilada 那棵 6.11。
 - 2026-09-22 收据（详见 HARDWARE.md 同日 redfin 条）：空的 `/home` 上，
   新 server 退出前种出 `SOUL.md`、`MEMORY.md`、`sessions/`，并写出

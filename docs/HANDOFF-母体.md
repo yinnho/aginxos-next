@@ -56,7 +56,7 @@
 
 ## 真机（enchilada）
 
-实验机 OnePlus 6，serial `REDACTED-ENCHILADA`。槽 a = L0（`6.11.0-sdm845`，NCM `root@10.9.8.1`），槽 b = Lineage。
+实验机 OnePlus 6，serial 见 `.local/device/serials.env`。槽 a = L0（`6.11.0-sdm845`，NCM `root@10.9.8.1`），槽 b = Lineage。
 
 2026-09-22：曾卡在 fastboot，槽 a **unbootable**。`fastboot set_active a` 后 L0 回来，屏亮，pcmC0D0p/D1c 在。**succ_a 仍 0**——再冷启动失败会把 a 标死。
 
@@ -70,7 +70,7 @@
 
 - 编译成功 ≠ 上机成功。上机结果只进 `HARDWARE.md`。
 - 不提交 vendor 固件；不 wipe userdata；不 flash 除非这次需要。
-- 闸 serial `REDACTED-ENCHILADA` 再动 fastboot。
+- 闸 serial（serials.env）再动 fastboot。
 - 不发明没探针过的节点。
 - 不把 `docs/FS.md` 再抄一份到别处当第二真相。改树只改 FS.md。
 
