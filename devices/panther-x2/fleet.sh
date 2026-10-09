@@ -52,6 +52,7 @@ EXCLUDES=(
   ./home/.codex/tmp/* ./home/.codex/.tmp/*
   ./home/.codex/installation_id ./home/.codex/.sandbox_migration
   ./home/.codex/thread-writer-locks/*
+  ./home/.grok/auth.json
 )
 
 # ---------------------------------------------------------------- snapshot
@@ -89,7 +90,8 @@ do_snapshot() {
     [ -e "$tmp/$p" ] || [ -L "$tmp/$p" ] || die "结构缺件: $p"
   done
   for p in ./proc ./sys ./dev ./run ./etc/aginx/env ./etc/aginx/config.toml \
-           ./home/.codex/auth.json ./var/lib/aginx/gateway/sessions.json \
+           ./home/.codex/auth.json ./home/.grok/auth.json \
+           ./var/lib/aginx/gateway/sessions.json \
            ./var/lib/aginx/gateway/binding.json ./var/lib/aginx/rtc-offset; do
     [ ! -e "$tmp/$p" ] || die "排除失效（不该在快照里）: $p"
   done

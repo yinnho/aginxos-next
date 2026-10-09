@@ -221,15 +221,24 @@ fn state_header(len: u64) -> Vec<u8> {
 /// /root/bin/codex) — a partial tar the swap boot then extracted,
 /// leaving a truncated codex. tar's exit status is now fatal: a killed
 /// or ENOSPC'd capture must refuse the update, not ship half a state.
+///
+/// 凭据法条（#467 续）：state tar **按设计**带凭据（换根保活——wifi
+/// 三件、brain env、relay/config、引擎 auth 都必须活着渡过重刷），因此
+/// 它只许以两种形态存在：userdata 64GiB 偏移的 AGXSTATE 裸块（一次性
+/// marker 消费），或 /var/tmp 下 umask 077 的短暂 staging 件。绝不当
+/// 备份拷出机（§9 同律：能自举凭据的包=冒充者启动包）；aginx-backup
+/// 的路径面（/home、/var/lib/aginx、/etc/aginx）也不含 /var/tmp。
 fn stage_state_tar() {
     let _ = std::fs::create_dir_all("/var/tmp");
     let tar_path = "/var/tmp/aginx-update-state.tar";
     let _ = std::fs::remove_file(tar_path);
-    // best-effort: an agent mid-write means one file is torn, not lost
+    // best-effort: an agent mid-write means one file is torn, not lost.
+    // umask 077: the staging tar carries credentials — 0644 would expose
+    // them to every reader for the capture window.
     let st = Command::new("/bin/sh")
         .arg("-c")
         .arg(format!(
-            "tar -cf {tar_path} {STATE_TAR_EXCLUDES} /etc/wifi.conf /etc/aginx /home /root /var/log /var/power /var/lib 2>/dev/null"
+            "umask 077; tar -cf {tar_path} {STATE_TAR_EXCLUDES} /etc/wifi.conf /etc/aginx /home /root /var/log /var/power /var/lib 2>/dev/null"
         ))
         .status()
         .unwrap_or_else(|e| die(&format!("spawn tar: {e}")));
