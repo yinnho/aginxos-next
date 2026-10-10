@@ -91,4 +91,4 @@ git            https://pkgs.aginx.net/git/v2.49.1/git-v2.49.1-4pc.tar 8a4923db94
 # aginxbrowser 同级；本仓只装配出包）。纯 CLI 无 [service]，常驻=设备侧
 # crond 错峰腿；运行时依赖 aginxbrowser(:8089)+grok（非 depends，装时
 # 不自动拉）。研究实例=设备 /home/research/ 系统工作文件，不进包不上镜像。
-aginxresearch  https://pkgs.aginx.net/aginxresearch/v0.1.0/aginxresearch-v0.1.0-4pc.tar 22d9ddb9c7bd47f5c66fe762da509c60ad8e17ff336cdadc056b98ee7a6daf59 opt
+aginxresearch  https://pkgs.aginx.net/aginxresearch/v0.1.2/aginxresearch-v0.1.2-4pc.tar 09c7a0f3d793ae3543108b4b6879ffb325471216b28dab4e2104fbd7b078c4e2 opt

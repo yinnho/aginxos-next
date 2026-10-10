@@ -19,7 +19,7 @@ echo
 for n in duanju taishigong qujiu baize; do
   f=/home/research/logs/$n.log
   [ -f "$f" ] || continue
-  rounds=0; rc0=0; rcbad=0; skipped=0; vtoday=0; lastts="-"; lastbad=""; titles=""; inwin=0
+  rounds=0; rc0=0; rcbad=0; skipped=0; vtoday=0; lastts="-"; lastbad=""; badcause=""; titles=""; inwin=0
   while IFS= read -r line; do
     case "$line" in
       "=== 20"*)
@@ -37,6 +37,10 @@ for n in duanju taishigong qujiu baize; do
             *) rcbad=$((rcbad+1)); lastbad="$lastts $line" ;;
           esac
         fi
+        ;;
+      "aginxresearch: "*)
+        # 失败原因行（搜索零结果/grok 死等）——随账进晨报，不再「原因未记录」
+        [ "$inwin" = "1" ] && badcause="$line"
         ;;
       *预算阀*)
         if [ "$inwin" = "1" ]; then
@@ -60,6 +64,7 @@ $line"
   [ -n "$w" ] && echo "⚠ 异常:$w"
 
   [ -n "$lastbad" ] && echo "最近失败: $lastbad"
+  [ -n "$badcause" ] && echo "失败原因: $(echo "$badcause" | cut -c1-120)"
   echo "窗口内题目（末 6 条）:"
   echo "$titles" | grep . | tail -6 | cut -c1-80
   echo
