@@ -48,4 +48,18 @@ if ! find "$WS/output" -name "晨报-*.src.md" -mmin -40 2>/dev/null | grep -q .
   exit 1
 fi
 rm -f "$LAST"
+
+# 微信直推（best-effort，不碰归档真源）：uid 从频道绑定态取，不硬编码。
+# 会话没绑=记 SKIP 照常收工——报告在 output/，人可自救；发了要留痕，
+# self-patrol 按日志尾巴抓 FAILED/SKIPPED。
+WUID=$(aginx-channels status weixin 2>/dev/null \
+  | sed -n 's/.*"user_id": "\([^"]*\)".*/\1/p' | head -1)
+SRC=$(ls -t "$WS"/output/晨报-*.src.md | head -1)
+if [ -z "$WUID" ]; then
+  echo "weixin push SKIPPED (no bound session) — report archived: $SRC" >> "$LOG"
+elif aginx-channels send weixin "$WUID" "$(cat "$SRC")" >>"$LOG" 2>&1; then
+  echo "weixin push ok -> $WUID ($(wc -c <"$SRC") bytes)" >> "$LOG"
+else
+  echo "weixin push FAILED — report archived but NOT delivered: $SRC" >> "$LOG"
+fi
 echo "morning-report done ($(date '+%F %T') 归档已核)"

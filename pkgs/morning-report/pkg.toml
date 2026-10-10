@@ -1,5 +1,7 @@
 # morning-report — 晨报运维件归包（#472 运维件归包线，v0.1.0
-# 2026-10-10）。
+# 2026-10-10）。v0.1.1（2026-10-10）：补微信交付腿——wrapper 归档核验
+# 后直推绑定会话（uid 从 channels status 现取不硬编码；未绑=SKIP 不炸），
+# 修「wrapper 头注释说直推但全树无一处发送代码」的断头路。
 # 前史：#68 刀1 晨报 codex 化，wrapper 手拷 /usr/libexec/aginx/
 # morning-codex.sh + 手写 crontab 行——重刷即丢（/etc/crontabs 不在
 # state tar 白名单、libexec 不在镜像）。归包后：wrapper 住包树
@@ -10,10 +12,10 @@
 # /home/workflows/morning-report（晨报官工作目录，state tar 自带）+
 # channels weixin（交付腿；不在也不炸——产物核验只看 .src.md）。
 name = "morning-report"
-version = "0.1.0"
-summary = "晨报 cron 腿：08:00 拉起 codex 出晨报并核验归档（.src.md 落盘才算数）"
+version = "0.1.1"
+summary = "晨报 cron 腿：08:00 拉起 codex 出晨报，核验归档后微信直推绑定会话"
 group = "agent"
-url = "https://pkgs.aginx.net/morning-report/v0.1.0/morning-report-v0.1.0-4pc.tar"
+url = "https://pkgs.aginx.net/morning-report/v0.1.1/morning-report-v0.1.1-4pc.tar"
 exec = "libexec/morning-codex.sh"
 
 [cron]
