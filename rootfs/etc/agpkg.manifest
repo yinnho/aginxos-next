@@ -79,7 +79,7 @@ aginx-file     https://pkgs.aginx.net/aginx-file/v0.1.0/aginx-file-v0.1.0-4pc.ta
 aginx-mem      https://pkgs.aginx.net/aginx-mem/v0.2.0/aginx-mem-v0.2.0-4pc.tar 203a585b54964ccb160095c2cd16b25a008f9141a06458c3a234661baae5abe4 opt
 # grok is optional since M23 (选装 tier): an agent CLI like codex, but
 # self-built and not needed for the phone's own loop — pick it via "+".
-grok           https://pkgs.aginx.net/grok/v1.0.12/grok-v1.0.12-aarch64-unknown-linux-musl dac1ccb2084ee8ccbfd3e9656210e5dfb689c080b05d0fc1c5349c010fd6796d opt
+grok           https://pkgs.aginx.net/grok/v1.0.41/grok-v1.0.41-aarch64-unknown-linux-musl 7c0b8c973af6a78e2037f19ed93033471b8c5e722f9ff04b86b092e066e60d74 opt
 # git (L0 缺口刀C, 2026-09-12) — Alpine v3.22 aarch64 apk 闭包整树
 # （route D）：git 2.49.1 全功能 + musl 1.2.5 loader + https 传输闭包
 # （libcurl/openssl…，CA 走镜像烤入的 /etc/ssl/certs 绝对路径）。
