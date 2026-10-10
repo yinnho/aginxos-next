@@ -49,11 +49,13 @@
    改走 `install <名> <本地tar> <sha256>` 本地通道）→
    `opt-in aginx-gateway`（依赖闭包自动带 aginx-secretd）。
 2. **codex 家**：真源只许 `/home/.codex`（config.toml+auth.json，0600，
-   从 Mac `~/.codex` 拷）。镜像自带 `/root/.codex → /home/.codex`
-   符号链接（旧镜像手工 `ln -sfn` 补上，旧目录备份不删）。
-   **铁律：手动腿真答 ≠ 网关腿真答**——网关守护 HOME=/home，没钉
-   CODEX_HOME 时代码读的是另一个家；空家=默认连官方云=国内死循环。
-   自 #450 起安装链写的条目自带 `[command.env] CODEX_HOME`。
+   从 Mac `~/.codex` 拷）。**不造 `/root/.codex` 桥**（10-10 裁决推翻
+   #450 软链半腿：装的时候就对，不留 symlink 补丁）——每条 spawn 腿
+   自钉家：kernel/安装链写条目自带 `[command.env] CODEX_HOME`（#450），
+   引擎/工作流 spawn 带 HOME。手动 ssh 腿裸跑 codex 落空家死循环=诚实
+   报错，手动配方 `CODEX_HOME=/home/.codex codex …`。
+   **铁律：手动腿真答 ≠ 网关腿真答**——没钉 CODEX_HOME 时代码读的是
+   另一个家；空家=默认连官方云=国内死循环。
 3. **config 真源 `/etc/aginx/config.toml`**（0600，secret 全程管道不
    回显）：`[server] access="private"`；`[relay]` id/domain=
    relay.aginx.net/port=8443/use_tls=true/url/relay_secret；

@@ -1,4 +1,8 @@
 # aginx — 前台包（刀④-4 引擎商品化裁形，2026-10-02）。
+# v0.1.16（2026-10-10）：codex 家改法出包——#450 条目 env 腿（kernel
+# ensure_system_entry+安装链 write_entry 写 [command.env] CODEX_HOME）
+# 首次上机；软链半腿同日废除（10-10 裁决：装的时候就对，不造
+# /root/.codex 桥——烤线已删，设备侧拆链见收据 #478）。
 # v0.1.14（2026-10-02）：刀④-4 拆迁——carrier/kernel/runtime/carrier-gateway/
 # agi 五 crate 删除；server 裁形（send/create/光标/会话账随 in-process
 # 引擎退役，剩 UDS list/status/install/remove + boot 落系统直通条目）；
@@ -50,11 +54,11 @@
 # AGINX_BIN 指 /var/bin/aginx（face symlink）。刀F 起 depends 锚
 # aginx-update（装母体自动带自更新器；裸箱升级=重刷）。
 name = "aginx"
-version = "0.1.15"
-summary = "前台：路由器 face /var/bin/aginx + server（UDS 装卸链+系统直通条目；引擎商品化，对话走网关 agent://）"
+version = "0.1.16"
+summary = "前台：路由器 face /var/bin/aginx + server（UDS 装卸链+系统直通条目，codex 家 env 钉死；引擎商品化，对话走网关 agent://）"
 group = "agent"
 depends = "aginx-update"
-url = "https://pkgs.aginx.net/aginx/v0.1.15/aginx-v0.1.15-4pc.tar"
+url = "https://pkgs.aginx.net/aginx/v0.1.16/aginx-v0.1.16-4pc.tar"
 exec = "bin/aginx"
 
 [service]
