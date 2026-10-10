@@ -142,6 +142,23 @@ enum Command {
         #[arg(long)]
         prune: bool,
     },
+    /// 日循环 Leg A：材料化当天（会话/晨报/研究/频道/已知索引）→ JSON；
+    /// --prompt 出 Leg B 的整装 prompt（docs/日循环.md）
+    Day {
+        /// 日期 YYYY-MM-DD（缺省今天）
+        #[arg(long)]
+        date: Option<String>,
+        /// 出整装 prompt 而非材料 JSON（喂 codex exec）
+        #[arg(long)]
+        prompt: bool,
+    },
+    /// 日循环 Leg C：stdin 吃 codex 原样 JSON → 落 knowledge/ + 版本 +
+    /// 索引 + 缺口件（inputs/day-review.md）；坏 JSON 拒收标 degraded
+    Digest {
+        /// 汇总件落位（缺省 morning-report/inputs/day-review.md）
+        #[arg(long)]
+        out: Option<String>,
+    },
     /// 机读面：工具名 + stdin JSON 入参 → stdout D1 信封（runtime 桥用）
     Tool {
         /// 工具名（lib.rs TOOL_NAMES 为准：kv_* / memory_tree /
@@ -265,6 +282,16 @@ async fn run(cli: Cli) -> anyhow::Result<()> {
             .ok_or_else(|| anyhow::anyhow!("persona 需要 --db（carrier.db 路径）"))?;
         aginx_mem::persona::run(dbp, ws, !*no_secret, *prune).await?;
         return Ok(());
+    }
+    // 日循环腿是管理面（非 _ctx 工具面）：先于 execute_tool 分派。
+    if let Command::Day { date, prompt } = &cli.command {
+        aginx_mem::dailycycle::run_day(date.as_deref(), *prompt, ws_flag.as_deref()).await?;
+        return Ok(());
+    }
+    if let Command::Digest { out } = &cli.command {
+        let out_path = out.as_deref().map(PathBuf::from);
+        let rc = aginx_mem::dailycycle::run_digest(ws_flag.as_deref(), out_path.as_deref()).await?;
+        std::process::exit(rc);
     }
     let fallback = fallback_of(&cli);
     match &cli.command {
@@ -500,6 +527,8 @@ fn args_to_input(cmd: &Command) -> anyhow::Result<(&'static str, serde_json::Map
         // 已在 run() 里分走；穷尽匹配留这层保险
         Command::Tool { .. } => unreachable!("Tool 在 run() 先行分派"),
         Command::Persona { .. } => unreachable!("Persona 在 run() 先行分派"),
+        Command::Day { .. } => unreachable!("Day 在 run() 先行分派"),
+        Command::Digest { .. } => unreachable!("Digest 在 run() 先行分派"),
     }
 }
 

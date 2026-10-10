@@ -222,6 +222,12 @@ case "${PKG}" in
     (cd "${ROOT}" && cargo zigbuild --release --target aarch64-unknown-linux-musl -p "${PKG}")
     mkdir -p "${STAGE}/files/bin"
     install -m 755 "${TARGET_DIR}/${PKG}" "${STAGE}/files/bin/${PKG}"
+    # v0.2.0 日循环腿：wrapper 随树（[cron] 23:47 线指 pkgfiles 真身）。
+    if [ "${PKG}" = "aginx-mem" ]; then
+      mkdir -p "${STAGE}/files/libexec"
+      install -m 755 "${ROOT}/pkgs/aginx-mem/files/libexec/day-review.sh" \
+        "${STAGE}/files/libexec/day-review.sh"
+    fi
     MEMBERS="pkg.toml SKILL.md files"
     ;;
   aginx-channels)

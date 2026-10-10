@@ -2,10 +2,16 @@
 # 母体 agmem_bridge spawn `aginx-mem tool <name>`（stdin=入参 JSON 含 _ctx
 # 三元组身份，stdout=D1 信封）；人面 = kv/tree/knowledge/flow 子命令。
 # 直开同一 sqlite（WAL 并发安全，M35a）。装包自动生成 .aginxmd sidecar。
+# v0.2.0（2026-10-10，日循环线上机）：+day/digest 两子命令 + 本 wrapper
+# + [cron] 23:47 腿——系统每晚自己整理当天（材料化→codex 分析→落账
+# knowledge/，缺口喂次日晨报）。设计=docs/日循环.md；day 材料绝不出设备。
 name = "aginx-mem"
-version = "0.1.1"
-summary = "记忆面工具：kv/tree/knowledge/flows（母体桥+人面 CLI，直开 substrate 库）"
+version = "0.2.0"
+summary = "记忆面工具：kv/tree/knowledge/flows + 日循环腿（day/digest 材料化落账，23:47 自整理）"
 group = "mem"
-url = "https://pkgs.aginx.net/aginx-mem/v0.1.1/aginx-mem-v0.1.1-4pc.tar"
+url = "https://pkgs.aginx.net/aginx-mem/v0.2.0/aginx-mem-v0.2.0-4pc.tar"
 
 exec = "bin/aginx-mem"
+
+[cron]
+lines = ["47 23 * * * /var/lib/aginx/pkgfiles/aginx-mem/libexec/day-review.sh >> /var/log/day-review.log 2>&1"]

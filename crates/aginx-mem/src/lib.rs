@@ -38,6 +38,7 @@
 //! kv 域按 (agent, owner, user) 隔离——人面默认身份看不到化身私域是
 //! 正确行为，不是 bug。
 
+pub mod dailycycle;
 pub mod knowledge;
 pub mod kv;
 pub mod persona;

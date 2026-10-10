@@ -14,6 +14,12 @@
 直开 substrate 库（与 daemon 同一 sqlite，WAL 并发安全）；身份与库路径
 的单真源在 kernel 侧，CLI 只消费。
 
+v0.2.0 日循环腿（docs/日循环.md）：`aginx-mem day [--date] [--prompt]`
+材料化当天（codex 会话/晨报账/研究账/频道日志/已知索引→JSON，--prompt
+出 codex 整装 prompt）；`aginx-mem digest` stdin 吃 codex 原样 JSON 落账
+knowledge/+版本+索引+缺口件（坏件拒收标 degraded）。wrapper
+libexec/day-review.sh 随包，[cron] 23:47 三段式自跑。
+
 缺包时母体的记忆/知识工具全部报错——晨报类 cron 流程的第一步
 （knowledge_list）就会死；本包是 agent 记忆的地板依赖。
 
