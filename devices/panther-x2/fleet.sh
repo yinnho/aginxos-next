@@ -84,16 +84,19 @@ do_snapshot() {
            ./var/lib/aginx/gateway/agents/system \
            ./var/lib/aginx/skills/_system \
            ./home/.codex/config.toml ./home/.codex/skills \
-           ./home/workflows ./home/AGENTS.md ./root/.codex \
+           ./home/workflows ./home/AGENTS.md \
            ./var/lib/aginx/secret ./var/lib/aginx/gateway/spool; do
-    # -L 兜符号链接：/root/.codex 等指向设备绝对路径，Mac 解包必悬空。
+    # -L 兜符号链接：./var/bin/codex 等指向设备绝对路径，Mac 解包必悬空。
     [ -e "$tmp/$p" ] || [ -L "$tmp/$p" ] || die "结构缺件: $p"
   done
   for p in ./proc ./sys ./dev ./run ./etc/aginx/env ./etc/aginx/config.toml \
            ./home/.codex/auth.json ./home/.grok/auth.json \
            ./var/lib/aginx/gateway/sessions.json \
-           ./var/lib/aginx/gateway/binding.json ./var/lib/aginx/rtc-offset; do
-    [ ! -e "$tmp/$p" ] || die "排除失效（不该在快照里）: $p"
+           ./var/lib/aginx/gateway/binding.json ./var/lib/aginx/rtc-offset \
+           ./root/.codex; do
+    # 10-10 裁决废 /root/.codex 软链（codex 家只走条目 env 腿）——快照
+    # 里出现它（无论悬空与否）= 复制线会把桥重新铺上新机，判死。
+    [ ! -e "$tmp/$p" ] && [ ! -L "$tmp/$p" ] || die "排除失效（不该在快照里）: $p"
   done
   [ -z "$(ls -A "$tmp/root/.ssh" 2>/dev/null || true)" ] || die "root/.ssh 非空"
   [ -z "$(ls -A "$tmp/var/lib/aginx/secret" 2>/dev/null || true)" ] || die "secret 库非空"
