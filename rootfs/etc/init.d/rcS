@@ -142,8 +142,13 @@ elif [ -x /usr/bin/aginx-panel-off ]; then
   # burn + battery drain). panel-off waits for the DSI connector to
   # register (~60s), grabs the pipeline with a black SETCRTC, then
   # null-SETCRTCs it down (M15 path). Backgrounded; logs to kmsg.
-  # A later-installed bootcard/term simply takes master next boot.
-  /usr/bin/aginx-panel-off &
+  # --hold (10-10 #479): keep MASTER after blanking — aginxbrowser's
+  # panel leg lights the glass on any localhost POST /open (show.html
+  # protocol), and headless nothing ever clears it. Held master =
+  # browser's SET_MASTER fails ("master busy", 500ms retry spin),
+  # /open itself stays functional offscreen. Want the glass back?
+  # bootcard/term opt-ins must kill the holder first.
+  /usr/bin/aginx-panel-off --hold &
 fi
 
 # Touch bring-up (M3) — backgrounded: it waits out the ~60s panel

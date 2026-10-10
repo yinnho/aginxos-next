@@ -25,9 +25,16 @@
  * master holds the card — any failure is treated as busy and retried on
  * a fast poll (2026-09-06 receipt).
  *
- * --hold: keep the fd open (master held) after blanking, in case the
- * last-master-close fbdev restore ever re-enables the pipeline. Default
- * is off-and-exit; the live receipt decides which mode rcS bakes.
+ * --hold: keep the master held after blanking. 2026-10-10 (#479) this
+ * became the headless 正法: aginxbrowser's panel leg (show.html ownership
+ * protocol) lights the glass whenever any localhost POST /open lands —
+ * on a headless box nothing ever clears show.html, so one call locks the
+ * panel lit until reboot. Holding the master blocks the browser's
+ * SET_MASTER ("master busy", one try + 500ms retry in panel.rs — a
+ * 2-ioctl/s idle spin, no crash), while /open itself stays functional
+ * (offscreen render, ok:true — template-gen's smoke gate unaffected).
+ * NB: the hold must hold MASTER, not just an open fd — a reopened fd
+ * without SET_MASTER blocks nobody.
  *
  * Mainline trap (2026-10-10 enchilada receipt, msm 1.12.0 on 6.11):
  * the exit itself is the bug. Closing the last master fd runs
@@ -270,6 +277,13 @@ int main(int argc, char **argv) {
   }
   kmsg("panel-off: stayed down\n");
 
-  if (hold) for (;;) pause();
+  if (hold) {
+    /* Re-acquire MASTER on the reopened fd — an open fd without master
+     * blocks nothing (#479). Contention only if someone grabbed it in
+     * the 3s probe window; retry, and fail loud if we end up naked. */
+    if (become_master(fd)) { kmsg("panel-off: hold lost race, master taken\n"); return 1; }
+    kmsg("panel-off: holding master\n");
+    for (;;) pause();
+  }
   return 0;
 }
