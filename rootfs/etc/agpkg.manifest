@@ -76,7 +76,7 @@ codex          https://pkgs.aginx.net/codex/v0.151.0/codex-v0.151.0-aarch64-unkn
 # browser/search/fetch now run in-mother; names D13-re-cut below.)
 dup            https://pkgs.aginx.net/dup/v0.2.0/dup-v0.2.0-4pc.tar 652f9d583611826cdb3c5c02ee62a07b3e710df786c914f3a0e2629173c32a82 opt
 aginx-file     https://pkgs.aginx.net/aginx-file/v0.1.0/aginx-file-v0.1.0-4pc.tar f2318f15e2887fb463bc09a7231284583f106b732e7ecc2ca3333bd18099de2c opt
-aginx-mem      https://pkgs.aginx.net/aginx-mem/v0.1.1/aginx-mem-v0.1.1-4pc.tar 39f7ccd42bca4b44a5b2a72c5e3f389e75ebcc1c5aab9d98e9b487266fbd881a opt
+aginx-mem      https://pkgs.aginx.net/aginx-mem/v0.2.0/aginx-mem-v0.2.0-4pc.tar 203a585b54964ccb160095c2cd16b25a008f9141a06458c3a234661baae5abe4 opt
 # grok is optional since M23 (选装 tier): an agent CLI like codex, but
 # self-built and not needed for the phone's own loop — pick it via "+".
 grok           https://pkgs.aginx.net/grok/v1.0.12/grok-v1.0.12-aarch64-unknown-linux-musl dac1ccb2084ee8ccbfd3e9656210e5dfb689c080b05d0fc1c5349c010fd6796d opt
