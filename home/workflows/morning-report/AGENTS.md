@@ -16,6 +16,12 @@
 产出件）——读它，它是「昨日自查」段的唯一素材；件不在或标 degraded
 也如实说，不补不编。
 
+**结构化查询**（研究库直查，读数与取数器对账用）：
+`/var/bin/sqlite3 'file:/home/research/<名>/<名>.db?mode=ro' "SQL"`
+——只读姿势（`?mode=ro`，WAL 库引擎在写也不挡），四线
+duanju/taishigong/qujiu/baize；例：题目库存
+`SELECT status,count(*) FROM research_questions GROUP BY status;`。
+
 **外面取材**（命令行，直连本机 aginxbrowser 引擎，输出 JSON）：
 - `aginx-web-search "查询词" -t 3 -r day` —— 聚合搜索；`-t 3` 顺带取
   前 3 条正文，`-r day|week` 限时间窗（找新动态必带，免翻出旧闻）

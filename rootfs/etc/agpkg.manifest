@@ -87,6 +87,12 @@ grok           https://pkgs.aginx.net/grok/v1.0.12/grok-v1.0.12-aarch64-unknown-
 # 工艺、自持共存）。配方 pkgs/git/，apk sha256 钉表在 build-pkg.sh
 # git) 分支；PATH 面 CLI（D12 agent-CLI 口味），不注册 aginx 命令面。
 git            https://pkgs.aginx.net/git/v2.49.1/git-v2.49.1-4pc.tar 8a4923db9431664bef22e212e0ed9547a20c94651a37aef082547114b9c93a9f opt
+# sqlite3 (2026-10-10) — 官方 amalgamation zig cc musl 全静态单件
+# （一切皆CLI 裁决：结构化查询工具 CLI 上机；研究库只读查询
+# 'file:...?mode=ro'，WAL 并发读者安全）。PATH 面 CLI（git/codex/
+# grok 同族），不注册 aginx 命令面。zip 尺寸+sha256 钉表在
+# build-pkg.sh sqlite3) 分支，缓存 out/sqlite-cache。
+sqlite3        https://pkgs.aginx.net/sqlite3/v3.54.0/sqlite3-v3.54.0-4pc.tar 1a7bb960270f40530510edb3617c6cbf50f3ee650592ea8679abed96a8939ae8 opt
 # aginxresearch (2026-10-08) — 深度研究引擎（独立仓 ~/Documents/aginxresearch，
 # aginxbrowser 同级；本仓只装配出包）。纯 CLI 无 [service]，常驻=设备侧
 # crond 错峰腿；运行时依赖 aginxbrowser(:8089)+grok（非 depends，装时

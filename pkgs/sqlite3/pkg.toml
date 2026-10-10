@@ -1,0 +1,17 @@
+# sqlite3 — 上游官方 amalgamation 单件静态包（D12 agent-CLI 口味，git/
+# codex/grok 同族：PATH 面 CLI，不注册 aginx 命令面；一切皆CLI 裁决
+# 2026-10-10——结构化查询工具一律 CLI 上机，daemon 形态只许技术上被迫
+# 的例外如 aginxbrowser）。源=sqlite.org 3.54.0 amalgamation（zip 以
+# 尺寸+sha256 钉死，TOFU 于下载日——sqlite.org 官方只登 SHA3-256，
+# 本仓 sha256 自钉，配方在 scripts/build-pkg.sh sqlite3) 分支），zig cc
+# aarch64-linux-musl 全静态（-s 链接期 strip，1.5MB 量级，零闭包零
+# loader——比 git 的 apk 整树路线轻一整档）。face /var/bin/sqlite3。
+# 主用例：研究库只读查询 sqlite3 'file:/home/research/<名>/<名>.db?mode=ro'
+# （WAL 库并发读者安全；写操作走引擎本体，CLI 默认只读姿势）。
+name = "sqlite3"
+version = "3.54.0"
+summary = "SQLite 3.54.0 CLI（amalgamation zig cc 全静态；研究库只读查询/调试）"
+group = "dev"
+url = "https://pkgs.aginx.net/sqlite3/v3.54.0/sqlite3-v3.54.0-4pc.tar"
+
+exec = "bin/sqlite3"

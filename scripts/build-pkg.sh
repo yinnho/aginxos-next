@@ -31,6 +31,11 @@
 #                       — Alpine v3.22 aarch64 apk 闭包 15 件（sha256 逐件
 #                         钉死）+ wrapper 面 bin/git（L0 刀C：https 传输
 #                         整树自持，apk 缓存 out/apk-cache 复用）
+#   上游静态包  sqlite3
+#                       — sqlite.org amalgamation（zip 尺寸+sha256 钉死，
+#                         TOFU 于下载日）zig cc musl 全静态单件，face
+#                         /var/bin/sqlite3（一切皆CLI 裁决 2026-10-10；
+#                         研究库只读查询，缓存 out/sqlite-cache 复用）
 #   外源树包  aginxresearch
 #                       — 独立仓研究引擎（~/Documents/aginxresearch，
 #                         aginxbrowser 同级）musl 静态 CLI；v0.1.1 起
@@ -417,6 +422,42 @@ case "${PKG}" in
     done
     MEMBERS="pkg.toml SKILL.md files"
     ;;
+  sqlite3)
+    # 上游静态包（一切皆CLI 裁决 2026-10-10）：sqlite.org amalgamation
+    # 单件 zig cc musl 全静态——零闭包零 loader，直接落 bin/sqlite3。
+    # zip 以尺寸+sha256 双钉（TOFU 于下载日：官方只登 SHA3-256，本仓
+    # sha256 自钉；升版=改钉改 pkg.toml）。缓存 out/sqlite-cache 复用。
+    SQLITE_DIR="${ROOT}/out/sqlite-cache"
+    SQLITE_ZIP="${SQLITE_DIR}/sqlite-amalgamation-3540000.zip"
+    SQLITE_SIZE=2990479
+    SQLITE_SHA=68e913b0fe8ec6b4e5f391c594a28872884e80d6cd042a1e50c957be46b5aa4d
+    mkdir -p "${SQLITE_DIR}"
+    if [ ! -s "${SQLITE_ZIP}" ] || [ "$(wc -c < "${SQLITE_ZIP}" | tr -d '[:space:]')" != "${SQLITE_SIZE}" ] \
+       || [ "$(shasum -a 256 "${SQLITE_ZIP}" | cut -d' ' -f1)" != "${SQLITE_SHA}" ]; then
+      echo "  fetch sqlite-amalgamation-3540000.zip"
+      curl -fsSL -o "${SQLITE_ZIP}" "https://sqlite.org/2026/sqlite-amalgamation-3540000.zip" \
+        || { echo "FATAL: fetch amalgamation 失败" >&2; exit 1; }
+    fi
+    sz="$(wc -c < "${SQLITE_ZIP}" | tr -d '[:space:]')"
+    [ "${sz}" = "${SQLITE_SIZE}" ] || { echo "FATAL: amalgamation 尺寸不符（钉 ${SQLITE_SIZE} 得 ${sz}）" >&2; exit 1; }
+    got="$(shasum -a 256 "${SQLITE_ZIP}" | cut -d' ' -f1)"
+    [ "${got}" = "${SQLITE_SHA}" ] || { echo "FATAL: amalgamation sha256 不符（钉 ${SQLITE_SHA} 得 ${got}）" >&2; exit 1; }
+    AMAL="${SQLITE_DIR}/src-3540000"
+    if [ ! -f "${AMAL}/sqlite-amalgamation-3540000/sqlite3.c" ]; then
+      rm -rf "${AMAL}" && mkdir -p "${AMAL}"
+      unzip -qo "${SQLITE_ZIP}" -d "${AMAL}"
+    fi
+    echo "==> zig cc sqlite3（aarch64-linux-musl 静态，-s 链接期 strip）"
+    SQL_BIN="${SQLITE_DIR}/sqlite3-aarch64"
+    zig cc -target aarch64-linux-musl -O2 -s -DSQLITE_THREADSAFE=1 -DHAVE_READLINE=0 \
+      -o "${SQL_BIN}" "${AMAL}/sqlite-amalgamation-3540000/shell.c" \
+      "${AMAL}/sqlite-amalgamation-3540000/sqlite3.c" -lm
+    file "${SQL_BIN}" | grep -q "statically linked" \
+      || { echo "FATAL: sqlite3 非 musl 静态（$(file "${SQL_BIN}")）" >&2; exit 1; }
+    mkdir -p "${STAGE}/files/bin"
+    install -m 755 "${SQL_BIN}" "${STAGE}/files/bin/sqlite3"
+    MEMBERS="pkg.toml SKILL.md files"
+    ;;
   aginxresearch)
     # 外源树包（2026-10-08 首包 v0.1.0）：真身=独立仓 aginxresearch
     # （~/Documents/aginxresearch，与 aginxbrowser 同级、独立开发线，
@@ -451,7 +492,7 @@ case "${PKG}" in
     MEMBERS="pkg.toml SKILL.md files"
     ;;
   *)
-    echo "FATAL: 未知包名 ${PKG}（两裸包/换芯树包/两树包/工具双包/三树包/刀F三包 zigbuild / 上游树包 git / aginx-proxy / 频道两包 / aginxresearch / morning-report）" >&2
+    echo "FATAL: 未知包名 ${PKG}（两裸包/换芯树包/两树包/工具双包/三树包/刀F三包 zigbuild / 上游树包 git / sqlite3 / aginx-proxy / 频道两包 / aginxresearch / morning-report）" >&2
     exit 1
     ;;
 esac
