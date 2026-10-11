@@ -16,6 +16,25 @@ df -h / | sed -n '2p'
 echo "备份日志尾: $(tail -1 /var/log/aginx-backup.log 2>/dev/null)"
 echo
 
+echo "# 守夜（无人盯的账，晨报自查段的料）"
+svc=$(/usr/bin/aginx-svc list 2>/dev/null)
+echo "单元: $(echo "$svc" | grep -c 'ready')/$(echo "$svc" | grep -c '.') ready"
+echo "$svc" | grep -v 'ready' | grep '.' | cut -f1,2 | sed 's/^/  ⚠ /'
+b=/sys/class/power_supply/battery
+if [ -r "$b/capacity" ]; then
+  echo "电量: $(cat $b/capacity)% $(cat $b/status) 温度=$(($(cat $b/temp 2>/dev/null || echo 0)/10))°C"
+else
+  echo "电量: 无电池面（服务器板）"
+fi
+wl=$(ls /run/aginx-warn/ 2>/dev/null | grep .)
+if [ -n "$wl" ]; then echo "$wl" | sed 's/^/  ⚠ 警告: /'; else echo "警告注册表: 清"; fi
+echo "重启次数(全期 start 行): $(grep -c 'net-watch start' /var/log/net-watch.log 2>/dev/null)"
+echo "守夜日志尾(电量/告警/重启):"
+grep -E 'battery:|alert|net-watch start' /var/log/net-watch.log 2>/dev/null | tail -8 | sed 's/^/  /'
+echo "日循环(23:47)尾: $(tail -1 /var/log/day-review.log 2>/dev/null)"
+echo "知识库最新件: $(ls -lt /home/knowledge 2>/dev/null | sed -n 2p | sed 's/^[-dl][^ ]* *[0-9]* [^ ]* [^ ]* [0-9]* //')"
+echo
+
 for n in duanju taishigong qujiu baize; do
   f=/home/research/logs/$n.log
   [ -f "$f" ] || continue
