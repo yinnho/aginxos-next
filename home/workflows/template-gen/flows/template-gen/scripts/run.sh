@@ -35,7 +35,9 @@ PROMPT="任务：给 aginxbrowser 生成新模板 $ID。目录 $TDIR。先读 re
 
 say "codex 开跑：$ID —— $DESC"
 cd /tmp || exit 1
-CODEX_HOME=/home/.codex /var/bin/codex exec --skip-git-repo-check --sandbox danger-full-access "$PROMPT"
+# 缰绳：gen.sh 把本腿 setsid 甩出（父死不死它都活着），codex 挂死
+# 没人收——Mac grok 死转案同构（裸调+脱离=烧到天亮）。30 分钟上吊。
+CODEX_HOME=/home/.codex timeout 1800 /var/bin/codex exec --skip-git-repo-check --sandbox danger-full-access "$PROMPT"
 RC=$?
 say "codex 退出码 $RC"
 if [ "$RC" -ne 0 ]; then

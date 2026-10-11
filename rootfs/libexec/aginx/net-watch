@@ -28,6 +28,16 @@
 # 干死」的盲区（低电告警只看放电沿）。告警走微信腿 best-effort——
 # 会话过期/无频道路时只记账，不阻塞探测环。
 #
+# CPU 看门狗腿（Mac grok 死转案, 2026-10-11）：Mac 上一个孤儿
+# grok（裸调无 timeout、父进程已死、SIGTERM 不理）烧满一核
+# 13.7 小时才被撞见。带电池的黑匣子机器同样的事一夜干死机器，
+# 而电量腿看的是症状——掉到 20% 才叫，烧核者是谁没人点名。本腿
+# 每环 schedstat 采样（本系 utime 是冻结垃圾，sum_exec_runtime 是
+# 唯一真源），单进程持续占核 ≥CPUHOG_PCT 达 CPUHOG_MIN 分钟 →
+# 微信点名+警告注册表；只报不杀（误杀比晚杀贵）。窗口按实测耗时
+# 归一（idle 60s 档/heal 阻塞不失真）。机器盲：内核无 schedstat
+# 整腿 no-op。
+#
 # Boot race: net-bringup owns the FIRST join (its 2-attempt pair with
 # boot.state reporting). We stay hands-off until it has written its
 # `done` verdict (ok or fail), up to 10 min. No /etc/wifi.conf yet
@@ -185,6 +195,85 @@ case "$(cat "$BATT_PSY/status" 2>/dev/null)" in
   *) [ -r "$BATT_PSY/capacity" ] && batt_ext=1 ;;
 esac
 
+# ---- CPU 看门狗腿（Mac grok 死转案, 2026-10-11）----
+CPUHOG_PCT=${CPUHOG_PCT:-90}
+CPUHOG_MIN=${CPUHOG_MIN:-5}
+CPU_PREV=/run/nw-cpu.snap
+CPU_STREAK=/run/nw-cpu.streak
+CPU_TS=/run/nw-cpu.ts
+WARN_CPU=$WARN_DIR/cpu
+
+cpu_snap() {  # 每进程一行：pid 累计CPU(ns) comm
+  for pd in /proc/[0-9]*; do
+    ns=$(cut -d' ' -f1 "$pd/schedstat" 2>/dev/null)
+    [ -n "$ns" ] || continue
+    echo "${pd#/proc/} $ns $(cat "$pd/comm" 2>/dev/null)"
+  done
+}
+
+cpu_send() {  # $1 文案；与电量腿同款 best-effort
+  if [ -x /var/bin/aginx-channels ]; then
+    uid=$(/var/bin/aginx-channels status 2>/dev/null \
+      | sed -n 's/.*"user_id": *"\([^"]*\)".*/\1/p' | head -n 1)
+    if [ -n "$uid" ] \
+      && /var/bin/aginx-channels send weixin "$uid" "$1" >>"$LOG" 2>&1; then
+      log "cpu: alert sent"
+    else
+      log "cpu: alert FAILED (uid=${uid:-none}) — best-effort"
+    fi
+  else
+    log "cpu: no channels face — $1"
+  fi
+}
+
+cpu_check() {
+  [ -r /proc/1/schedstat ] || return 0
+  cpu_snap >/run/nw-cpu.cur 2>/dev/null
+  [ -s /run/nw-cpu.cur ] || return 0
+  now=$(date +%s)
+  if [ ! -r "$CPU_PREV" ]; then
+    mv /run/nw-cpu.cur "$CPU_PREV"
+    echo "$now" >"$CPU_TS"
+    return 0
+  fi
+  # 窗口按实测耗时归一：idle 档 60s、heal 阻塞数分钟都不失真；
+  # 时钟回跳钳到 15s 下限（前跳只会让 lim 变大=漏报一窗，安全向）
+  prev_t=$(cat "$CPU_TS" 2>/dev/null)
+  case "$prev_t" in ''|*[!0-9]*) prev_t=$now ;; esac
+  echo "$now" >"$CPU_TS"
+  wms=$(( (now - prev_t) * 1000 ))
+  [ "$wms" -lt 15000 ] && wms=15000
+  lim=$(( wms * CPUHOG_PCT / 100 ))
+  fire_ms=$(( CPUHOG_MIN * 60000 ))
+  while read -r p n c; do eval "PV_$p=$n"; done <"$CPU_PREV"
+  : >/run/nw-cpu.new
+  while read -r pid ns comm; do
+    eval "pv=\$PV_$pid"
+    case "$pv" in ''|*[!0-9]*) continue ;; esac
+    d=$(((ns - pv) / 1000000))
+    [ "$d" -ge "$lim" ] || continue
+    # 连续烧核毫秒累计：同 pid 同 comm 才续计（pid 复用即重计）；
+    # 一窗不达标即清零——累计的是「连续」不是「总和」
+    line=$(grep "^$pid|" "$CPU_STREAK" 2>/dev/null | head -n 1)
+    oldms=0
+    if [ -n "$line" ]; then
+      om=$(echo "$line" | cut -d'|' -f2)
+      case "$om" in ''|*[!0-9]*) om=0 ;; esac
+      [ "$(echo "$line" | cut -d'|' -f3-)" = "$comm" ] && oldms=$om
+    fi
+    ms=$(( oldms + d ))
+    echo "$pid|$ms|$comm" >>/run/nw-cpu.new
+    if [ "$ms" -ge "$fire_ms" ] && [ "$oldms" -lt "$fire_ms" ]; then
+      printf '烧核 %s(%s) 已连续 %s 分钟\n' "$comm" "$pid" "$CPUHOG_MIN" \
+        >"$WARN_CPU.t" 2>/dev/null && mv "$WARN_CPU.t" "$WARN_CPU"
+      cpu_send "${HOST} CPU 告警：${comm}（pid ${pid}）连续烧核 ${CPUHOG_MIN} 分钟——请查"
+    fi
+  done </run/nw-cpu.cur
+  mv /run/nw-cpu.new "$CPU_STREAK"
+  mv /run/nw-cpu.cur "$CPU_PREV"
+  [ -s "$CPU_STREAK" ] || rm -f "$WARN_CPU"
+}
+
 # atomic tmp+rename like the face file (sole writer / poll reader)
 warn_net() { # $1 message; empty = clear
   if [ -n "$1" ]; then
@@ -208,6 +297,7 @@ fail=0
 wanfail=0
 while :; do
   batt_check
+  cpu_check
   # 有线兜底腿（X2 W2）：idle 门从「无 wifi.conf」放宽到「无 conf 且无
   # 有线载波」——纯有线服务器板（无 wifi 面或未配网）也有守门人：探测/
   # 红警/时钟自愈照跑，断链走 heal 的 udhcpc 分支。载波在而 conf 无=
