@@ -34,14 +34,16 @@ msoc 冻结在 PON；本包提供：
 `run` 种子优先 `sys_soc`/`cc_soc`；放电时 stamp 用 `hold_udata_monotonic`
 把 CC 钳到 `min(soco, live_cc)`。勿与常驻 daemon 并行 `run --once`。
 
-## 重启耐久（未做真 reboot）
+## 重启耐久（2026-10-12 夜真考 PASS）
 
-`process_udata_work` 在 SYS 有效时写 SDAM（SOC/OCV/RBAT/VALID）——运行期
-周期 stamp 即在喂下次 PON。非破坏核查（2026-10-12 夜，跳过真 reboot）：
+路径：`/usr/bin/aginx-reboot reboot`（勿用 `adb reboot`）。
 
-- `sys_soc == cc_soc` 齐跌、`soc_reporting_ready=1`
-- `check-canonical` OK；库仑符号与 CC 单调钳位在役（v0.1.1）
-- dmesg PON/SHUTDOWN_SOC 行可能已滚出缓冲——真考需 `aginx-reboot reboot`
-  后读「using SHUTDOWN_SOC / PON ocv」+ capacity≥解锁值
+| | 重启前 (~23:30) | 重启后 (uptime~5min) |
+|--|--|--|
+| bms/capacity | 92 | **91** |
+| sys_soc / cc_soc | 9171 / 9171 | **9075 / 9075**（齐、库仑续跌） |
+| battery | 94% Discharging | 93% Discharging |
+| dmesg PON | （缓冲已滚） | `using SHUTDOWN_SOC @ PON ocv_uv=4159198uV soc=91` |
 
-夜半未主动 reboot（服务面恢复风险）；白天再跑重启考。
+**结案**：SDAM 重放正确，**未复零**；`aginx-fg` v0.1.1 周期 stamp 足以喂 PON。
+全 unit ready（含 channels/research/browser/net-watch）；channels `active:true`。
