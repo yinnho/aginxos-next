@@ -82,12 +82,38 @@ wired_if() {  # echo 第一个有载波的非 lo/wlan 口；无则 rc1
 # 断链自愈的运输分叉：wifi.conf 在=先 wifi rejoin（旧行为原序），败或
 # 无 conf 落有线 udhcpc（-n -q -t4 有界 ~12s，与 rejoin 的阻塞纪律同）。
 # 两腿全无=只记账（无运输可医）。
+#
+# 踢频道（2026-10-12）：换地点/AP 抖动后 iLink 长轮询会挂在旧半开
+# 连接上最多 ~40s 才超时；网刚回来立刻 restart aginx-channels，让
+# getUpdates 马上用新 DNS/源地址重挂，而不是干等到长轮询超时。
+# best-effort：没装频道包/ctl 不在=只记账，不挡 heal。
+kick_channels() {
+  if [ -x /usr/bin/aginx-svc ]; then
+    if /usr/bin/aginx-svc restart aginx-channels >>"$LOG" 2>&1; then
+      log "kicked aginx-channels (net heal)"
+    else
+      log "kick aginx-channels failed (aginx-svc)"
+    fi
+  elif [ -x /var/bin/aginx ]; then
+    if /var/bin/aginx svc restart aginx-channels >>"$LOG" 2>&1; then
+      log "kicked aginx-channels (net heal)"
+    else
+      log "kick aginx-channels failed (aginx svc)"
+    fi
+  else
+    log "kick aginx-channels skipped — no svc CLI"
+  fi
+}
+
 heal() {
   if [ -f /etc/wifi.conf ] && /usr/libexec/aginx/net-rejoin >>"$LOG" 2>&1; then
     log "rejoin ok"
+    kick_channels
   elif W=$(wired_if); then
     log "wifi heal unavailable — wired udhcpc on $W"
-    udhcpc -i "$W" -n -q -t 4 -T 3 >>"$LOG" 2>&1
+    if udhcpc -i "$W" -n -q -t 4 -T 3 >>"$LOG" 2>&1; then
+      kick_channels
+    fi
   else
     log "no transport to heal"
   fi
@@ -314,6 +340,12 @@ while :; do
   gw=$(ip route 2>/dev/null | sed -n 's/^default via \([0-9.][0-9.]*\) .*/\1/p' | head -n 1)
   if [ -n "$gw" ] && ping -c1 -W3 "$gw" >/dev/null 2>&1; then
     if ping -c1 -W3 "$WAN_PROBE" >/dev/null 2>&1; then
+      # 上游从断到通的沿：踢一次频道，丢掉挂死的长轮询（AP 侧 WAN
+      # 闪断不走 rejoin，所以 heal 里的 kick 覆盖不到这条路径）。
+      if [ "$wanfail" -gt 0 ]; then
+        log "wan recovered after $wanfail probes — kicking channels"
+        kick_channels
+      fi
       wanfail=0
       warn_net ''   # 链路+外网全通才撤红警；半恢复不算恢复
       # 开机时钟自愈·稳态腿（#63）：网回来了而钟还是 1970/错尺——boot

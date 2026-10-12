@@ -126,6 +126,10 @@ async fn poll_loop_inner(
     shutdown: &AtomicBool,
 ) {
     info!(session_key = session_key, "Poll loop started");
+    // Consecutive getUpdates transport failures. Reset on any Ok response.
+    // After a few in a row, recreate the HTTP client so a Wi-Fi AP change
+    // (new DNS / new source IP / half-open sockets) cannot poison the loop.
+    let mut consecutive_net_errs: u32 = 0;
 
     loop {
         if shutdown.load(Ordering::Relaxed) {
@@ -168,7 +172,7 @@ async fn poll_loop_inner(
             (
                 state.bot_token.clone(),
                 state.baseurl.clone(),
-                state.http.clone(),
+                state.http_client(),
                 state.bot_id.clone(),
             )
         };
@@ -181,6 +185,7 @@ async fn poll_loop_inner(
 
         match api::get_updates(&http, &bot_token, &baseurl, &cursor).await {
             Ok(resp) => {
+                consecutive_net_errs = 0;
                 if resp.errcode == Some(SESSION_EXPIRED_ERRCODE)
                     || resp.ret == Some(SESSION_EXPIRED_ERRCODE)
                 {
@@ -270,8 +275,30 @@ async fn poll_loop_inner(
                 }
             }
             Err(e) => {
-                error!(session_key = session_key, "getUpdates error: {e}");
-                tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+                consecutive_net_errs = consecutive_net_errs.saturating_add(1);
+                error!(
+                    session_key = session_key,
+                    consecutive = consecutive_net_errs,
+                    "getUpdates error: {e}"
+                );
+                // Recreate on the 3rd failure, then every 10th — sheds DNS /
+                // half-open sockets left over from a Wi-Fi flap without
+                // thrashing on every blip.
+                if consecutive_net_errs == 3 || consecutive_net_errs % 10 == 0 {
+                    if let Some(state) = WEIXIN_STATE.bots.get(session_key) {
+                        state.refresh_http();
+                        warn!(
+                            session_key = session_key,
+                            consecutive = consecutive_net_errs,
+                            "Recreated iLink HTTP client after network errors"
+                        );
+                    }
+                }
+                // Backoff 2/4/8/16/30s — recovers quickly after a short flap,
+                // backs off when the upstream is truly gone.
+                let shift = consecutive_net_errs.saturating_sub(1).min(4);
+                let backoff_secs = (2u64 << shift).min(30);
+                tokio::time::sleep(std::time::Duration::from_secs(backoff_secs)).await;
             }
         }
     }
@@ -550,7 +577,7 @@ impl Channel for SessionWatcher {
         let client_id = format!("openclaw-weixin-{}", Uuid::new_v4().as_simple());
         let bot_token = state.bot_token.clone();
         let baseurl = state.baseurl.clone();
-        let http = state.http.clone();
+        let http = state.http_client();
         let user_id = user_id.to_string();
         let text = text.to_string();
 

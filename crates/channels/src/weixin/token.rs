@@ -38,8 +38,10 @@ pub struct BotSession {
     pub user_id: Option<String>,
     /// Unix timestamp (seconds) when this token expires.
     pub expires_at: AtomicI64,
-    /// Shared HTTP client.
-    pub http: Client,
+    /// Shared HTTP client (interior-mutable so the poll loop can recreate
+    /// it after consecutive network errors / Wi-Fi AP changes without
+    /// restarting the daemon).
+    pub http: Mutex<Client>,
     /// Per-user context_token cache: user_id → context_token.
     context_tokens: Mutex<HashMap<String, String>>,
     /// get_updates_buf cursor for long-polling.
@@ -72,6 +74,21 @@ impl BotSession {
         (self.expires_at.load(Ordering::Relaxed) - now).max(0)
     }
 
+
+    /// Clone the current HTTP client (cheap: reqwest::Client is Arc-backed).
+    pub fn http_client(&self) -> Client {
+        self.http
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone()
+    }
+
+    /// Drop the pooled client and build a fresh one. Call after consecutive
+    /// network errors so DNS / half-open sockets from a prior Wi-Fi do not
+    /// poison the long-poll loop.
+    pub fn refresh_http(&self) {
+        *self.http.lock().unwrap_or_else(|e| e.into_inner()) = super::build_http_client();
+    }
     /// Store a context_token for a user (from an inbound message).
     pub fn store_context_token(&self, user_id: &str, token: &str) {
         self.context_tokens
@@ -233,7 +250,7 @@ impl WeixinState {
                 ilink_bot_id: tf.ilink_bot_id,
                 user_id: Some(user_id.clone()),
                 expires_at: AtomicI64::new(tf.expires_at),
-                http: super::build_http_client(),
+                http: Mutex::new(super::build_http_client()),
                 context_tokens: Mutex::new(persisted_ctx),
                 cursor: Mutex::new(String::new()),
                 active: AtomicBool::new(false),
@@ -269,7 +286,7 @@ impl WeixinState {
             ilink_bot_id: ilink_bot_id.to_string(),
             user_id: user_id.map(|s| s.to_string()),
             expires_at: AtomicI64::new(now + SESSION_DURATION_SECS),
-            http: super::build_http_client(),
+            http: Mutex::new(super::build_http_client()),
             context_tokens: Mutex::new(HashMap::new()),
             cursor: Mutex::new(String::new()),
             active: AtomicBool::new(true),
@@ -453,7 +470,7 @@ impl WeixinState {
                 ilink_bot_id: tf.ilink_bot_id,
                 user_id: Some(sender_id.clone()),
                 expires_at: AtomicI64::new(tf.expires_at),
-                http: super::build_http_client(),
+                http: Mutex::new(super::build_http_client()),
                 context_tokens: Mutex::new(persisted_ctx),
                 cursor: Mutex::new(String::new()),
                 active: AtomicBool::new(false),
