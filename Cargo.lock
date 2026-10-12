@@ -88,6 +88,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "aginx-fg"
+version = "0.1.0"
+dependencies = [
+ "md-5",
+]
+
+[[package]]
 name = "aginx-file"
 version = "0.1.0"
 dependencies = [

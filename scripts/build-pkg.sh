@@ -45,6 +45,10 @@
 #   零编译运维包  morning-report
 #                       — 晨报 cron 腿归包（#472）：wrapper 壳脚本 +
 #                         [cron] 08:00 块（2026-10-10 首包 v0.1.0）
+#   可选电源包  aginx-fg
+#                       — redfin qpnp-qg 用户态 FG（crates/fg musl）；
+#                         unlock/hold/run + [service]；服务器板可不装
+#                         （2026-10-12 首包 v0.1.0）
 #
 # 产物 out/pkgs/<name>-v<ver>-4pc.tar + .sha256（裸 hex），尾行打一行
 # manifest 片段（name url sha opt version [deps]）——L0 清单组装（刀4）
@@ -491,8 +495,19 @@ case "${PKG}" in
       "${STAGE}/files/libexec/morning-codex.sh"
     MEMBERS="pkg.toml SKILL.md files"
     ;;
+  aginx-fg)
+    # 可选电源包（2026-10-12）：crates/fg musl 静态 → files/bin/aginx-fg
+    # + [service] run 常驻。redfin 有 /dev/qg；服务器板不装。
+    echo "==> zigbuild aginx-fg（musl，缓存则秒过）"
+    (cd "${ROOT}" && cargo zigbuild --release --target aarch64-unknown-linux-musl -p aginx-fg)
+    mkdir -p "${STAGE}/files/bin"
+    install -m 755 "${TARGET_DIR}/aginx-fg" "${STAGE}/files/bin/aginx-fg"
+    file "${STAGE}/files/bin/aginx-fg" | grep -q "statically linked" \
+      || { echo "FATAL: aginx-fg 非 musl 静态（$(file "${STAGE}/files/bin/aginx-fg")）" >&2; exit 1; }
+    MEMBERS="pkg.toml SKILL.md files"
+    ;;
   *)
-    echo "FATAL: 未知包名 ${PKG}（两裸包/换芯树包/两树包/工具双包/三树包/刀F三包 zigbuild / 上游树包 git / sqlite3 / aginx-proxy / 频道两包 / aginxresearch / morning-report）" >&2
+    echo "FATAL: 未知包名 ${PKG}（两裸包/换芯树包/两树包/工具双包/三树包/刀F三包 zigbuild / 上游树包 git / sqlite3 / aginx-proxy / 频道两包 / aginxresearch / morning-report / aginx-fg）" >&2
     exit 1
     ;;
 esac

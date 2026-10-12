@@ -1,0 +1,25 @@
+[package]
+name = "aginx-fg"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+description = "redfin qpnp-qg minimal fuel-gauge: 144B udata pack/write + FG daemon skeleton"
+publish = false
+
+# L0 缺用户态 FG：内核 /dev/qg 出 kdata，用户态回写 udata 才抬 msoc。
+# 本 crate = 已验证 144B 布局的 Rust 真源（取代 devices/redfin 研究用 .py）
+# + daemon 骨架。首版：unlock/pack 可用；run = 开设备 + 定期复戳 SYS/CC
+#（凍結保持）；FIFO 库仑积分已接 run；svc/可选包配方已有。
+
+[dependencies]
+md-5 = "0.10"
+
+[[bin]]
+name = "aginx-fg"
+path = "src/main.rs"
+
+[lib]
+name = "aginx_fg"
+path = "src/lib.rs"

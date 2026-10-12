@@ -27,6 +27,7 @@ members = [
     "crates/pair",
     "crates/hwd",
     "crates/wificonf",
+    "crates/fg",
     # ── 引擎遗留面（types/memory/clone/dup/lifecycle——人格真源与
     #    格式层，④-5 接手 memory 线）──
     "crates/types",
