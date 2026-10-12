@@ -40,3 +40,9 @@
 子题 `INSERT` 继承父题 `priority`（主线多为 10）。禁止再写死 0。
 存量：`pending AND priority=0 AND parent.priority≥10` 可一次抬到 10
 （备份后 UPDATE；dead 不动）。
+
+## 噪声命中（v0.1.6）
+
+抓页前丢弃明显 junk：`Port seems to be open`、Object moved/验证标题、
+微软系统帮助误召。不替代 aginxbrowser 反爬（见
+`docs/REQ-aginxbrowser-search-captcha-challenge.md`）。
