@@ -3,9 +3,10 @@
 //! crates/channels 的第一频道模块；会话真源=频道家
 //! `<root>/senders/<key>/session.json`（token.rs 的频道根手术）。
 
-// api/models 是 iLink 线上格式的全量面：富媒体出站（send_image/video
-// 族）与诊断字段本轮母体退役后暂无调用方，属协议保留面不是腐坏。
-#[allow(dead_code)]
+// api/models：iLink 线上格式全量面。v0.1.5 起 CDN 富媒体出站闭环
+// （getuploadurl → novac2c PUT/POST → sendmessage image_item/video_item）
+// 已接 CLI send --image/--video/--file 与 ACP 媒体回信。
+#[allow(dead_code)] // 部分诊断字段仍无调用方
 pub mod api;
 pub mod auth;
 pub mod channel;

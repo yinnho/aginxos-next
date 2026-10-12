@@ -629,6 +629,117 @@ impl Channel for SessionWatcher {
 
 }
 
+impl SessionWatcher {
+    /// Upload a local media file to WeChat CDN and send it (image/video/file).
+    ///
+    /// `kind`: `"image"` | `"video"` | `"file"` (default guess from extension).
+    pub fn send_media(
+        &self,
+        bot_id: &str,
+        user_id: &str,
+        path: &std::path::Path,
+        kind: Option<&str>,
+    ) -> CarrierResult<()> {
+        let state = WEIXIN_STATE
+            .get_session_for_send(bot_id, user_id)
+            .ok_or_else(|| {
+                CarrierError::InvalidInput(format!("No session for bot {bot_id}, user {user_id}"))
+            })?;
+
+        if state.is_expired() {
+            return Err(CarrierError::Network(format!(
+                "Token expired for bot {bot_id}"
+            )));
+        }
+
+        let context_token = state.get_context_token(user_id);
+        let client_id = format!("openclaw-weixin-{}", Uuid::new_v4().as_simple());
+        let bot_token = state.bot_token.clone();
+        let baseurl = state.baseurl.clone();
+        let http = state.http_client();
+        let user_id = user_id.to_string();
+        let path = path.to_path_buf();
+        let kind = kind.map(|s| s.to_string());
+
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let rt = match tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+            {
+                Ok(rt) => rt,
+                Err(e) => {
+                    let _ = tx.send(Err(CarrierError::Internal(format!(
+                        "Failed to create send runtime: {e}"
+                    ))));
+                    return;
+                }
+            };
+            let result = rt.block_on(async {
+                let guessed = kind
+                    .as_deref()
+                    .unwrap_or_else(|| guess_media_kind(&path));
+                match guessed {
+                    "image" => api::send_image_file(
+                        &http,
+                        &bot_token,
+                        &baseurl,
+                        &user_id,
+                        context_token.as_deref(),
+                        &client_id,
+                        &path,
+                    )
+                    .await
+                    .map(|_| ()),
+                    "video" => api::send_video_file(
+                        &http,
+                        &bot_token,
+                        &baseurl,
+                        &user_id,
+                        context_token.as_deref(),
+                        &client_id,
+                        &path,
+                    )
+                    .await
+                    .map(|_| ()),
+                    "file" => api::send_file_path(
+                        &http,
+                        &bot_token,
+                        &baseurl,
+                        &user_id,
+                        context_token.as_deref(),
+                        &client_id,
+                        &path,
+                    )
+                    .await
+                    .map(|_| ()),
+                    other => Err(CarrierError::InvalidInput(format!(
+                        "unknown media kind {other:?} (want image|video|file)"
+                    ))),
+                }
+                .map_err(|e| CarrierError::Network(e.to_string()))
+            });
+            let _ = tx.send(result);
+        });
+
+        rx.recv()
+            .map_err(|e| CarrierError::Internal(format!("Send thread disconnected: {e}")))?
+    }
+}
+
+fn guess_media_kind(path: &std::path::Path) -> &'static str {
+    let ext = path
+        .extension()
+        .and_then(|e| e.to_str())
+        .unwrap_or("")
+        .to_ascii_lowercase();
+    match ext.as_str() {
+        "png" | "jpg" | "jpeg" | "gif" | "webp" | "bmp" => "image",
+        "mp4" | "mov" | "m4v" | "avi" | "mkv" | "webm" => "video",
+        _ => "file",
+    }
+}
+
 /// Spawn poll threads for all bots that are loaded but not yet active.
 fn spawn_all_bots(sender: &mpsc::Sender<PluginMessage>) {
     for entry in WEIXIN_STATE.bots.iter() {

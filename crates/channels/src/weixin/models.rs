@@ -14,7 +14,7 @@ pub const ILINK_API_BASE: &str = "https://ilinkai.weixin.qq.com";
 /// Protocol channel version string sent in every request.
 pub const CHANNEL_VERSION: &str = "1.0.2";
 
-/// CDN base URL for media downloads (Phase 2).
+/// CDN base URL for media upload/download (novac2c).
 pub const CDN_BASE_URL: &str = "https://novac2c.cdn.weixin.qq.com/c2c";
 
 /// Bot type parameter for QR code login.
@@ -51,6 +51,12 @@ pub const ITEM_TYPE_VOICE: u32 = 3;
 pub const ITEM_TYPE_FILE: u32 = 4;
 /// Item type: video.
 pub const ITEM_TYPE_VIDEO: u32 = 5;
+
+/// Upload media_type for `getuploadurl` (proto UploadMediaType).
+pub const UPLOAD_MEDIA_IMAGE: u32 = 1;
+pub const UPLOAD_MEDIA_VIDEO: u32 = 2;
+pub const UPLOAD_MEDIA_FILE: u32 = 3;
+pub const UPLOAD_MEDIA_VOICE: u32 = 4;
 
 // ---------------------------------------------------------------------------
 // Common
@@ -229,6 +235,8 @@ pub struct SendItem {
     pub image_item: Option<SendImageItem>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub video_item: Option<SendVideoItem>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub file_item: Option<SendFileItem>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -236,16 +244,88 @@ pub struct SendTextItem {
     pub text: String,
 }
 
-/// Outbound image item — just a URL to the image.
+/// Outbound CDN media reference (aes_key = base64 of hex ASCII).
 #[derive(Debug, Clone, Serialize)]
-pub struct SendImageItem {
-    pub image_url: String,
+pub struct SendCdnMedia {
+    pub encrypt_query_param: String,
+    pub aes_key: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub encrypt_type: Option<u32>,
 }
 
-/// Outbound video item — just a URL to the video.
+/// Outbound image item — CDN refs after encrypt+upload (supersedes image_url).
+#[derive(Debug, Clone, Serialize)]
+pub struct SendImageItem {
+    pub media: SendCdnMedia,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub aeskey: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub mid_size: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub hd_size: Option<u64>,
+}
+
+/// Outbound video item — CDN refs after encrypt+upload (supersedes video_url).
 #[derive(Debug, Clone, Serialize)]
 pub struct SendVideoItem {
-    pub video_url: String,
+    pub media: SendCdnMedia,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub video_size: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub play_length: Option<u64>,
+}
+
+/// Outbound file attachment item.
+#[derive(Debug, Clone, Serialize)]
+pub struct SendFileItem {
+    pub media: SendCdnMedia,
+    pub file_name: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub len: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub md5: Option<String>,
+}
+
+// ---------------------------------------------------------------------------
+// GetUploadUrl
+// ---------------------------------------------------------------------------
+
+/// Request body for `POST /ilink/bot/getuploadurl`.
+#[derive(Debug, Clone, Serialize)]
+pub struct GetUploadUrlRequest {
+    pub filekey: String,
+    pub media_type: u32,
+    pub to_user_id: String,
+    pub rawsize: u64,
+    pub rawfilemd5: String,
+    /// Ciphertext size (AES-128-ECB PKCS7).
+    pub filesize: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub no_need_thumb: Option<bool>,
+    /// AES key as hex (16 bytes → 32 hex chars).
+    pub aeskey: String,
+    pub base_info: BaseInfo,
+}
+
+/// Response from getuploadurl.
+#[derive(Debug, Clone, Deserialize)]
+pub struct GetUploadUrlResponse {
+    pub upload_param: Option<String>,
+    pub thumb_upload_param: Option<String>,
+    pub upload_full_url: Option<String>,
+}
+
+/// Result of a completed CDN upload (ready for sendmessage).
+#[derive(Debug, Clone)]
+pub struct UploadedMedia {
+    pub filekey: String,
+    /// From CDN response header `x-encrypted-param`.
+    pub download_encrypt_query_param: String,
+    /// Raw AES key (hex for getuploadurl / dual-encode for media.aes_key).
+    pub aes_key: [u8; 16],
+    pub plaintext_size: u64,
+    pub ciphertext_size: u64,
+    pub plaintext_md5_hex: String,
 }
 
 // ---------------------------------------------------------------------------

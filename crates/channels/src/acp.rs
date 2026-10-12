@@ -10,6 +10,12 @@
 //!
 //! 已知取舍：服务器空闲 300s 断连，codex 单长回合若无 chunk 可能静默
 //! 超 300s——v0.1 接受（本客户端读超时给足 1200s，断了如实报错回信）。
+//!
+//! 富媒体最小扩展（v0.1.5，DESIGN §四窄接口保持）：回信除文本外可带
+//! 本地媒体路径——(1) assistant content 块 `type=image|video|file` 且
+//! 含 `path`/`url` 指向本机文件；(2) 文本内标记
+//! `[[aginx-media:image|/abs/path]]`（video/file 同形）。桥侧上传 CDN
+//! 后发，标记从正文剥离。无媒体形状时行为与 v0.1.4 相同。
 
 use anyhow::{anyhow, Context, Result};
 use std::io::{BufRead, BufReader, Write};
@@ -25,9 +31,43 @@ pub struct AcpClient {
     pub timeout: Duration,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AcpMediaKind {
+    Image,
+    Video,
+    File,
+}
+
+impl AcpMediaKind {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Image => "image",
+            Self::Video => "video",
+            Self::File => "file",
+        }
+    }
+
+    pub fn parse(s: &str) -> Option<Self> {
+        match s {
+            "image" | "img" | "png" | "jpg" | "jpeg" => Some(Self::Image),
+            "video" | "mp4" => Some(Self::Video),
+            "file" | "attachment" => Some(Self::File),
+            _ => None,
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct AcpMedia {
+    pub kind: AcpMediaKind,
+    pub path: String,
+}
+
 pub struct AcpReply {
     pub text: String,
     pub session_id: Option<String>,
+    /// Local media paths declared by the engine (see module docs).
+    pub media: Vec<AcpMedia>,
 }
 
 /// chunk 方言归一（ACP.md §2.6/§2.8）：规约上 chunk 的 text 是纯文本
@@ -36,7 +76,10 @@ pub struct AcpReply {
 /// `{"message":{"content":[{"text":…}]}}`，尾行是 `{"type":"result",…}`
 /// （其 result 字段复述全文，拼上会翻倍）。两副面孔都认：
 /// 解析得 JSON 信封就取内文，纯文本原样入账；result 行只当回执不拼文。
-fn push_chunk_text(out: &mut String, raw: &str) {
+///
+/// 媒体：content 块 `type=image|video|file` 且 `path`/`url` 为本机路径时
+/// 记入 `media`；纯文本里的 `[[aginx-media:kind|/path]]` 亦然（稍后剥离）。
+fn push_chunk_text(out: &mut String, media: &mut Vec<AcpMedia>, raw: &str) {
     let Ok(v) = serde_json::from_str::<serde_json::Value>(raw) else {
         out.push_str(raw); // 规约主路：纯文本直通
         return;
@@ -48,6 +91,7 @@ fn push_chunk_text(out: &mut String, raw: &str) {
                     if let Some(t) = b.get("text").and_then(|t| t.as_str()) {
                         out.push_str(t);
                     }
+                    collect_content_media(media, b);
                 }
             }
         }
@@ -56,6 +100,73 @@ fn push_chunk_text(out: &mut String, raw: &str) {
         // 陌生 JSON 形状：原样保底，宁可难看不可丢话。
         _ => out.push_str(raw),
     }
+}
+
+fn collect_content_media(media: &mut Vec<AcpMedia>, block: &serde_json::Value) {
+    let ty = block.get("type").and_then(|t| t.as_str()).unwrap_or("");
+    let kind = match ty {
+        "image" | "image_url" | "input_image" => Some(AcpMediaKind::Image),
+        "video" | "input_video" => Some(AcpMediaKind::Video),
+        "file" | "input_file" | "attachment" => Some(AcpMediaKind::File),
+        _ => None,
+    };
+    let Some(kind) = kind else {
+        return;
+    };
+    let path = block
+        .get("path")
+        .or_else(|| block.get("url"))
+        .or_else(|| block.get("file"))
+        .and_then(|v| v.as_str())
+        .or_else(|| block.pointer("/source/path").and_then(|v| v.as_str()));
+    let Some(path) = path else {
+        return;
+    };
+    // Only local filesystem paths — remote http(s) left for a later hop.
+    if path.starts_with("http://") || path.starts_with("https://") || path.starts_with("data:") {
+        return;
+    }
+    if std::path::Path::new(path).is_file() {
+        media.push(AcpMedia {
+            kind,
+            path: path.to_string(),
+        });
+    }
+}
+
+/// Strip `[[aginx-media:kind|/abs/path]]` markers from text into media list.
+pub fn extract_media_markers(text: &str) -> (String, Vec<AcpMedia>) {
+    let mut media = Vec::new();
+    let mut out = String::with_capacity(text.len());
+    let bytes = text.as_bytes();
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i..].starts_with(b"[[aginx-media:") {
+            if let Some(end) = text[i..].find("]]") {
+                let inner = &text[i + "[[aginx-media:".len()..i + end];
+                let (kind_s, path) = if let Some((k, rest)) = inner.split_once('|') {
+                    (k.trim(), rest.trim())
+                } else if let Some((k, rest)) = inner.split_once(':') {
+                    (k.trim(), rest.trim())
+                } else {
+                    ("", "")
+                };
+                if let Some(kind) = AcpMediaKind::parse(kind_s) {
+                    if !path.is_empty() && std::path::Path::new(path).is_file() {
+                        media.push(AcpMedia {
+                            kind,
+                            path: path.to_string(),
+                        });
+                        i += end + 2;
+                        continue;
+                    }
+                }
+            }
+        }
+        out.push(bytes[i] as char);
+        i += 1;
+    }
+    (out, media)
 }
 
 impl AcpClient {
@@ -115,6 +226,7 @@ impl AcpClient {
 
         // 读到终帧：chunk 拼接，result 停
         let mut text = String::new();
+        let mut media: Vec<AcpMedia> = Vec::new();
         let mut session_id = resume_session.map(|s| s.to_string());
         let mut reader = BufReader::new(stream);
         loop {
@@ -146,7 +258,7 @@ impl AcpClient {
             }
             if frame.get("method").and_then(|m| m.as_str()) == Some("chunk") {
                 if let Some(t) = frame.pointer("/params/text").and_then(|t| t.as_str()) {
-                    push_chunk_text(&mut text, t);
+                    push_chunk_text(&mut text, &mut media, t);
                 }
                 continue;
             }
@@ -156,7 +268,13 @@ impl AcpClient {
                         session_id = Some(sid.to_string());
                     }
                 }
-                return Ok(AcpReply { text, session_id });
+                let (text, marker_media) = extract_media_markers(&text);
+                media.extend(marker_media);
+                return Ok(AcpReply {
+                    text,
+                    session_id,
+                    media,
+                });
             }
             // 其余通知（如日志类）——忽略
         }
@@ -207,6 +325,7 @@ impl AcpClient {
     }
 }
 
+
 impl Default for AcpClient {
     fn default() -> Self {
         Self::new()
@@ -215,15 +334,17 @@ impl Default for AcpClient {
 
 #[cfg(test)]
 mod tests {
-    use super::push_chunk_text;
+    use super::{extract_media_markers, push_chunk_text, AcpMediaKind};
 
     /// 规约主路（ACP.md §2.6）：纯文本 chunk 直通拼接。
     #[test]
     fn chunk_plain_text_concatenates() {
         let mut out = String::new();
-        push_chunk_text(&mut out, "在");
-        push_chunk_text(&mut out, "的");
+        let mut media = Vec::new();
+        push_chunk_text(&mut out, &mut media, "在");
+        push_chunk_text(&mut out, &mut media, "的");
         assert_eq!(out, "在的");
+        assert!(media.is_empty());
     }
 
     /// raw 方言（carrier 双模桥裸行模）：assistant 行取内文 text 块，
@@ -231,16 +352,20 @@ mod tests {
     #[test]
     fn chunk_raw_dialect_envelope_extracts_and_skips_result() {
         let mut out = String::new();
+        let mut media = Vec::new();
         push_chunk_text(
             &mut out,
+            &mut media,
             r#"{"message":{"content":[{"text":"在","type":"text"}]},"type":"assistant"}"#,
         );
         push_chunk_text(
             &mut out,
+            &mut media,
             r#"{"message":{"content":[{"text":"的","type":"text"}]},"type":"assistant"}"#,
         );
         push_chunk_text(
             &mut out,
+            &mut media,
             r#"{"duration_ms":4308,"is_error":false,"result":"在的","session_id":"s1","type":"result"}"#,
         );
         assert_eq!(out, "在的");
@@ -250,7 +375,20 @@ mod tests {
     #[test]
     fn chunk_unknown_json_falls_back_to_raw() {
         let mut out = String::new();
-        push_chunk_text(&mut out, r#"{"hello":"world"}"#);
+        let mut media = Vec::new();
+        push_chunk_text(&mut out, &mut media, r#"{"hello":"world"}"#);
         assert_eq!(out, r#"{"hello":"world"}"#);
+    }
+
+    #[test]
+    fn media_marker_strips_and_collects() {
+        let path = concat!(env!("CARGO_MANIFEST_DIR"), "/src/acp.rs");
+        assert!(std::path::Path::new(path).is_file(), "fixture path {path}");
+        let raw = format!("hello [[aginx-media:image|{path}]] world");
+        let (text, media) = extract_media_markers(&raw);
+        assert_eq!(text, "hello  world");
+        assert_eq!(media.len(), 1);
+        assert_eq!(media[0].kind, AcpMediaKind::Image);
+        assert_eq!(media[0].path, path);
     }
 }

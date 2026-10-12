@@ -27,6 +27,11 @@ weixin 是第一腿不是包名，新频道=crate 新模块、面不变。
   （gw.json 记 {agent, session_id}）。
 - `aginx-channels send weixin <uid> <text>` — 出站对测（iLink 出站是
   关系账本 best-effort，HTTP 200 ≠ 送达）。
+- `aginx-channels send weixin <uid> --image|--video|--file <path>` —
+  CDN 富媒体出站（AES-128-ECB → getuploadurl → novac2c → sendmessage
+  image_item/video_item/file_item）。需该 uid 有过入站（context_token）
+  或关系账本可达；小图 png 即可验。
+
 
 ## 频道目录
 
@@ -56,3 +61,15 @@ session.json（种子 `active=false`）会把「在轮询」谎报成 false。
 现：daemon 每 ~5s 写 `/run/aginx-channels/status.json`；`status` 优先
 读活文件（`active_source=daemon`）。无活文件/过期（>90s）则
 `active=null` + `active_source=disk-cold`。
+
+## 富媒体出站（v0.1.5）
+
+闭环：本地文件 → 随机 AES-128 key → PKCS7/ECB 加密 →
+`POST /ilink/bot/getuploadurl` → `POST` novac2c（`upload_full_url` 或
+`upload?encrypted_query_param=&filekey=`）→ 读响应头 `x-encrypted-param`
+→ `sendmessage` 的 `image_item.media` / `video_item.media`（`aes_key`=
+base64(hex ASCII)，`mid_size`/`video_size`=密文长）。
+
+ACP 回信媒体（窄扩展）：引擎可用 content 块 `{type:image,path:/…}` 或
+正文标记 `[[aginx-media:image|/abs/path]]`；桥剥离标记后 CDN 上传发送。
+无媒体形状时与 v0.1.4 相同（纯文本）。

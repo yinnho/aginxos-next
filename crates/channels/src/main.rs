@@ -9,7 +9,8 @@
 //! - `login <名> [--bind <agent>]`   扫码绑号（终端出二维码块）
 //! - `status [<名>]`                 频道/会话一览（缺省=全部频道）
 //! - `bind <名> <agent>` / `bind <名> <uid> <agent>`  换绑（改字段）
-//! - `send <名> <uid> <text>`        出站对测
+//! - `send <名> <uid> <text>`        出站对测（纯文本）
+//! - `send <名> <uid> --image|--video|--file <path>`  CDN 富媒体出站
 
 mod acp;
 mod config;
@@ -38,6 +39,7 @@ fn main() {
                        aginx-channels status [<名>]\n\
                        aginx-channels bind <名> <agent> | bind <名> <uid> <agent>\n\
                        aginx-channels send <名> <uid> <text>\n\
+                       aginx-channels send <名> <uid> --image|--video|--file <path>\n\
                  词表频道：weixin。数据家 /home/channels/<名>/（AGINX_HOME 下）。\n\
                  环境变量：AGINX_HOME（默认 /home）、AGINX_CHANNELS_ACP_ADDR（默认 {addr}）、AGINX_CHANNELS_ACP_TIMEOUT_SECS（默认 {tmo}）",
                  ver = env!("CARGO_PKG_VERSION"),
@@ -284,20 +286,48 @@ fn cmd_bind(args: &[String]) -> Result<()> {
     Ok(())
 }
 
-/// `send <名> <uid> <text>`：出站对测（weixin 走 get_session_for_send
-/// 三路解析；iLink 出站是关系账本 best-effort，HTTP 200 ≠ 送达）。
+/// `send <名> <uid> <text>` 或 `send <名> <uid> --image|--video|--file <path>`：
+/// 出站对测（weixin 走 get_session_for_send 三路解析；iLink 出站是关系
+/// 账本 best-effort，HTTP 200 ≠ 送达）。富媒体走 CDN 加密上传闭环。
 fn cmd_send(args: &[String]) -> Result<()> {
     if args.len() < 3 {
-        return Err(anyhow!("用法：send <名> <uid> <text>"));
+        return Err(anyhow!(
+            "用法：send <名> <uid> <text> | send <名> <uid> --image|--video|--file <path>"
+        ));
     }
-    let name = take_channel_name(args, "send <名> <uid> <text>")?;
+    let name = take_channel_name(
+        args,
+        "send <名> <uid> <text> | send <名> <uid> --image|--video|--file <path>",
+    )?;
     let uid = args[1].clone();
-    let text = args[2..].join(" ");
     let root = channel_root(&name);
     weixin::token::set_sessions_root(&root);
     let state = &weixin::token::WEIXIN_STATE;
     state.load_from_dir();
     let watcher = weixin::SessionWatcher::new();
+
+    // Media flags: --image PATH / --video PATH / --file PATH
+    let media_flag = ["--image", "--video", "--file"]
+        .iter()
+        .find(|f| args.iter().any(|a| a == *f))
+        .copied();
+    if let Some(flag) = media_flag {
+        let path = flag_value(args, flag).ok_or_else(|| {
+            anyhow!("用法：send <名> <uid> {flag} <path>")
+        })?;
+        let kind = flag.trim_start_matches("--");
+        let p = std::path::PathBuf::from(&path);
+        if !p.is_file() {
+            return Err(anyhow!("媒体文件不存在：{path}"));
+        }
+        watcher
+            .send_media("", &uid, &p, Some(kind))
+            .map_err(|e| anyhow!("send media: {e}"))?;
+        println!("sent {kind} {} → {uid}", p.display());
+        return Ok(());
+    }
+
+    let text = args[2..].join(" ");
     use crate::vocab::Channel;
     watcher
         .send("", &uid, &text)

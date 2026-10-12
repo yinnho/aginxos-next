@@ -239,27 +239,45 @@ fn bridge_one(
     }
 
     info!(sender = %msg.sender_id, agent = %agent, session = ?gw.session_id, "bridge turn");
-    let reply = match acp.prompt(&agent, &text, gw.session_id.as_deref()) {
+    let (reply_text, reply_media) = match acp.prompt(&agent, &text, gw.session_id.as_deref()) {
         Ok(r) => {
             gw.agent = agent;
             gw.session_id = r.session_id;
             write_gw(&gw_path, &gw);
-            r.text
+            (r.text, r.media)
         }
         Err(e) => {
             warn!(sender = %msg.sender_id, agent = %agent, error = %e, "ACP turn failed — replying honestly");
-            format!("（频道桥开小差：{e}）")
+            (format!("（频道桥开小差：{e}）"), Vec::new())
         }
     };
 
-    if reply.trim().is_empty() {
-        info!(sender = %msg.sender_id, "engine reply empty — nothing to send");
-        return Ok(());
-    }
     let watcher = crate::weixin::SessionWatcher::new();
-    watcher
-        .send(&msg.bot_id, &msg.sender_id, &reply)
-        .map_err(|e| anyhow::anyhow!("weixin send failed: {e}"))
+    if !reply_text.trim().is_empty() {
+        watcher
+            .send(&msg.bot_id, &msg.sender_id, &reply_text)
+            .map_err(|e| anyhow::anyhow!("weixin send failed: {e}"))?;
+    }
+    for m in &reply_media {
+        let path = std::path::Path::new(&m.path);
+        if !path.is_file() {
+            warn!(sender = %msg.sender_id, path = %m.path, "ACP media path missing — skip");
+            continue;
+        }
+        info!(
+            sender = %msg.sender_id,
+            kind = m.kind.as_str(),
+            path = %m.path,
+            "ACP media → CDN upload+send"
+        );
+        watcher
+            .send_media(&msg.bot_id, &msg.sender_id, path, Some(m.kind.as_str()))
+            .map_err(|e| anyhow::anyhow!("weixin send media failed: {e}"))?;
+    }
+    if reply_text.trim().is_empty() && reply_media.is_empty() {
+        info!(sender = %msg.sender_id, "engine reply empty — nothing to send");
+    }
+    Ok(())
 }
 
 fn gw_json_path(root: &Path, sender: &str) -> PathBuf {
