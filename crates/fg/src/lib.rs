@@ -88,6 +88,8 @@ pub const BATT_STATUS: &str = "/sys/class/power_supply/battery/status";
 pub const SOCO_FULL: u32 = 10_000;
 /// Soft floor — never stamp 0 into udata (10-10 weld).
 pub const SOCO_FLOOR: u32 = 1;
+/// Kernel `process_udata_work`: input present + (CC − FULL) > this → good_ocv.
+pub const MAX_CC_SOC_DELTA: i32 = 300;
 /// Pixel 5 design capacity (µAh); overridden by charge_full(_design) on device.
 pub const DEFAULT_FULL_UAH: u32 = 4_187_000;
 /// Measured ESR / rbat fallback (mΩ) when sysfs resistance_* is 0.
@@ -606,6 +608,66 @@ pub fn hold_udata(soco_raw: u32, ocv_uv: Option<u32>, rbat_mohm: Option<u32>) ->
     .build()
 }
 
+/// qpnp-qg `process_udata_work` (redfin kernel): when **no input present**,
+/// a CC_SOC write **above** the live kernel `cc_soc` is rejected
+/// (`cc_soc N is not monotonic`). SYS_SOC still applies. While charging,
+/// upward CC is allowed (unless CC ≫ FULL by [`MAX_CC_SOC_DELTA`]).
+///
+/// So on discharge we clamp the stamped CC to `min(soco, live_cc)`.
+pub fn hold_udata_monotonic(
+    soco_raw: u32,
+    ocv_uv: Option<u32>,
+    rbat_mohm: Option<u32>,
+    discharging: bool,
+    live_cc_soc: Option<u32>,
+) -> [u8; UDATA_SIZE] {
+    let soco = soco_raw.clamp(SOCO_FLOOR, SOCO_FULL);
+    let cc = if discharging {
+        match live_cc_soc {
+            Some(live) if live >= SOCO_FLOOR => soco.min(live),
+            _ => soco,
+        }
+    } else {
+        soco
+    };
+    UdataBuilder {
+        sys_soc: Some(soco),
+        cc_soc: Some(cc),
+        ocv_uv,
+        rbat_mohm,
+    }
+    .build()
+}
+
+/// Seed coulomb from live qg state, not bare `bms/capacity`.
+///
+/// Prefer `sys_soc` (soco_raw) when healthy; else `capacity×100`. If
+/// discharging and live `cc_soc` is below that seed, drop to `cc_soc` so the
+/// first stamp cannot trip the kernel non-monotonic gate (e.g. after a
+/// concurrent `run --once` lowered CC while the daemon still held a higher
+/// in-memory estimate).
+pub fn seed_soco_raw() -> Result<u32, FgError> {
+    let bms_pct = read_bms_capacity(BMS_CAPACITY).map_err(FgError::Io)?;
+    if bms_pct < 1 {
+        return Err(FgError::SocForbidden {
+            soco_raw: bms_pct as u32 * 100,
+        });
+    }
+    let from_bms = (bms_pct as u32).saturating_mul(100);
+    let from_sys = read_sysfs_u32(BMS_SYS_SOC)
+        .ok()
+        .filter(|&v| (SOCO_FLOOR..=SOCO_FULL).contains(&v));
+    let mut seed = from_sys.unwrap_or(from_bms).clamp(SOCO_FLOOR, SOCO_FULL);
+    if battery_is_discharging() {
+        if let Ok(live_cc) = read_sysfs_u32(BMS_CC_SOC) {
+            if (SOCO_FLOOR..=SOCO_FULL).contains(&live_cc) && live_cc < seed {
+                seed = live_cc;
+            }
+        }
+    }
+    Ok(seed)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -812,6 +874,27 @@ mod tests {
         let k = KernelData::parse(&[0u8; KDATA_SIZE]);
         assert_eq!(st.integrate(&k), 9900);
         assert_eq!(st.samples, 0);
+    }
+
+    #[test]
+    fn hold_monotonic_clamps_cc_on_discharge() {
+        // Live CC=9200, coulomb thinks 9230 → SYS=9230 CC=9200 (not 9230).
+        let blob = hold_udata_monotonic(9230, None, Some(84), true, Some(9200));
+        let (sys, sv) = get_param(&blob, QG_SYS_SOC);
+        let (cc, cv) = get_param(&blob, QG_CC_SOC);
+        assert!(sv && cv);
+        assert_eq!(sys, 9230);
+        assert_eq!(cc, 9200);
+        // Charging: upward CC allowed.
+        let blob2 = hold_udata_monotonic(9300, None, Some(84), false, Some(9200));
+        let (cc2, _) = get_param(&blob2, QG_CC_SOC);
+        assert_eq!(cc2, 9300);
+        // Discharge with soco below live: both follow soco.
+        let blob3 = hold_udata_monotonic(9100, None, Some(84), true, Some(9200));
+        let (sys3, _) = get_param(&blob3, QG_SYS_SOC);
+        let (cc3, _) = get_param(&blob3, QG_CC_SOC);
+        assert_eq!(sys3, 9100);
+        assert_eq!(cc3, 9100);
     }
 
     #[test]

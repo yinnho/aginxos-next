@@ -27,3 +27,9 @@ msoc 冻结在 PON；本包提供：
 - FIFO `i` 与 `battery/current_now` **符号相反**（放电 FIFO 为正）；`integrate` 用 `fifo_i_ua_coulomb = -fifo_i_ua`。
 - `fifo_length==0` 空帧跳过；Full nail 仅 `status==Full`，拔电后容量=100 不钉死。
 - OCV 每拍优先 `voltage_now`（避免 SDAM `voltage_ocv` 冻结）。
+
+## 内核 CC 单调（v0.1.1）
+
+未插电时 qpnp-qg 拒收高于 live `cc_soc` 的 CC 写入（`is not monotonic`）。
+`run` 种子优先 `sys_soc`/`cc_soc`；放电时 stamp 用 `hold_udata_monotonic`
+把 CC 钳到 `min(soco, live_cc)`。勿与常驻 daemon 并行 `run --once`。

@@ -18,11 +18,12 @@ use std::thread;
 use std::time::Duration;
 
 use aginx_fg::{
-    battery_is_discharging, battery_is_full, describe, fifo_i_ua, fifo_i_ua_coulomb, hold_udata,
-    md5_hex, open_qg, read_battery_status, read_bms_capacity, read_full_uah, read_ocv_rbat_care,
-    try_read_kdata, write_udata, write_udata_fd, CoulombState, KernelData, UdataBuilder,
-    BMS_CAPACITY, BMS_CC_SOC, BMS_SYS_SOC, CANONICAL_9900_MD5, DEFAULT_QG_DEV, KDATA_SIZE,
-    QG_CC_SOC, QG_SYS_SOC, SOCO_FLOOR, SOCO_FULL, UDATA_SIZE,
+    battery_is_discharging, battery_is_full, describe, fifo_i_ua, fifo_i_ua_coulomb, get_param,
+    hold_udata_monotonic, md5_hex, open_qg, read_battery_status, read_bms_capacity,
+    read_full_uah, read_ocv_rbat_care, read_sysfs_u32, seed_soco_raw, try_read_kdata, write_udata,
+    write_udata_fd, CoulombState, KernelData, UdataBuilder, BMS_CAPACITY, BMS_CC_SOC, BMS_SYS_SOC,
+    CANONICAL_9900_MD5, DEFAULT_QG_DEV, KDATA_SIZE, QG_CC_SOC, QG_SYS_SOC, SOCO_FLOOR, SOCO_FULL,
+    UDATA_SIZE,
 };
 
 fn usage() -> ExitCode {
@@ -288,20 +289,16 @@ fn cmd_run(args: &[String]) -> ExitCode {
         .dev
         .unwrap_or_else(|| PathBuf::from(DEFAULT_QG_DEV));
 
-    // Seed from live BMS (must be healthy). Never start at 0.
-    let seed_pct = match read_bms_capacity(BMS_CAPACITY) {
-        Ok(c) if c >= 1 => c as u32,
-        Ok(c) => {
-            eprintln!("aginx-fg run: refusing start, bms={c}");
-            return ExitCode::from(3);
-        }
+    // Seed from sys_soc / cc_soc / bms — never start at 0; respect CC monotonic.
+    let seed = match seed_soco_raw() {
+        Ok(s) => s,
         Err(e) => {
-            eprintln!("aginx-fg run: bms unreadable: {e}");
-            return ExitCode::FAILURE;
+            eprintln!("aginx-fg run: refusing start: {e}");
+            return ExitCode::from(3);
         }
     };
     let full_uah = read_full_uah();
-    let mut cc = CoulombState::new(seed_pct * 100, full_uah);
+    let mut cc = CoulombState::new(seed, full_uah);
     eprintln!(
         "aginx-fg run: coulomb seed soco_raw={} full_uah={full_uah} dev={} interval={}s",
         cc.soco_raw,
@@ -372,10 +369,14 @@ fn cmd_run(args: &[String]) -> ExitCode {
         }
 
         let (ocv, rbat) = read_ocv_rbat_care(ba.ocv_uv, ba.rbat_mohm);
-        let blob = hold_udata(cc.soco_raw, ocv, rbat);
+        let discharging = battery_is_discharging();
+        let live_cc = read_sysfs_u32(BMS_CC_SOC).ok();
+        let blob = hold_udata_monotonic(cc.soco_raw, ocv, rbat, discharging, live_cc);
+        let (stamp_sys, _) = get_param(&blob, QG_SYS_SOC);
+        let (stamp_cc, _) = get_param(&blob, QG_CC_SOC);
         match write_udata_fd(&mut qg, &blob) {
             Ok(()) => eprintln!(
-                "coulomb stamp status={status} soco_raw={} ocv={ocv:?} rbat={rbat:?} md5={}",
+                "coulomb stamp status={status} soco_raw={} sys={stamp_sys} cc={stamp_cc} live_cc={live_cc:?} ocv={ocv:?} rbat={rbat:?} md5={}",
                 cc.soco_raw,
                 md5_hex(&blob)
             ),
