@@ -205,6 +205,17 @@ pub fn scan_json_token_files() -> Vec<BotTokenFile> {
     }
 }
 
+/// Daemon-published live poll status (CLI `status` reads this).
+/// Override with `AGINX_CHANNELS_LIVE_STATUS` (tests / alternate run root).
+pub fn live_status_path() -> std::path::PathBuf {
+    std::env::var_os("AGINX_CHANNELS_LIVE_STATUS")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|| std::path::PathBuf::from("/run/aginx-channels/status.json"))
+}
+
+/// Max age (secs) for CLI to trust the live status file.
+pub const LIVE_STATUS_MAX_AGE_SECS: u64 = 90;
+
 /// Global state manager for all iLink bots.
 pub struct WeixinState {
     /// Per-bot state keyed by user_id (stable unique identifier for WeChat).
@@ -491,7 +502,7 @@ impl WeixinState {
         self.bots.contains_key(sender_id)
     }
 
-    /// Get status of all bots for the API.
+    /// Live in-daemon status (poll `active` is meaningful here).
     pub fn status_list(&self) -> Vec<serde_json::Value> {
         self.bots
             .iter()
@@ -505,11 +516,93 @@ impl WeixinState {
                     "remaining_secs": state.remaining_secs(),
                     "expired": state.is_expired(),
                     "active": state.active.load(Ordering::Relaxed),
+                    "active_source": "daemon",
                     "bind_agent": state.bind_agent,
                 })
             })
             .collect()
     }
+
+    /// Disk-cold status for CLI when no live file: never claim `active=false`
+    /// — that flag is only updated by the daemon poll loop. Reporting false
+    /// after `load_from_dir` (which seeds `active=false`) was a standing lie
+    /// (redfin 2026-10-12: send OK + Poll loop started, status still false).
+    pub fn status_list_disk_cold(&self) -> Vec<serde_json::Value> {
+        self.bots
+            .iter()
+            .map(|entry| {
+                let state = entry.value();
+                serde_json::json!({
+                    "bot_id": state.bot_id,
+                    "ilink_bot_id": state.ilink_bot_id,
+                    "user_id": state.user_id,
+                    "expires_at": state.expires_at.load(Ordering::Relaxed),
+                    "remaining_secs": state.remaining_secs(),
+                    "expired": state.is_expired(),
+                    "active": serde_json::Value::Null,
+                    "active_source": "disk-cold",
+                    "bind_agent": state.bind_agent,
+                })
+            })
+            .collect()
+    }
+
+    /// Atomically publish live status for CLI (`/run/aginx-channels/status.json`).
+    /// Best-effort — failures only warn (tmpfs full / early boot).
+    pub fn publish_live_status(&self) {
+        let path = live_status_path();
+        if let Some(parent) = path.parent() {
+            if let Err(e) = std::fs::create_dir_all(parent) {
+                warn!(path = %parent.display(), "live status mkdir: {e}");
+                return;
+            }
+        }
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs();
+        let body = serde_json::json!({
+            "published_at": now,
+            "sessions": self.status_list(),
+        });
+        let Ok(json) = serde_json::to_string_pretty(&body) else {
+            return;
+        };
+        let tmp = path.with_extension("json.tmp");
+        if let Err(e) = std::fs::write(&tmp, &json) {
+            warn!(path = %tmp.display(), "live status write: {e}");
+            return;
+        }
+        if let Err(e) = std::fs::rename(&tmp, &path) {
+            warn!(path = %path.display(), "live status rename: {e}");
+        }
+    }
+}
+
+/// Read daemon-published live status if fresh enough.
+pub fn read_live_status(max_age_secs: u64) -> Option<Vec<serde_json::Value>> {
+    let path = live_status_path();
+    let meta = std::fs::metadata(&path).ok()?;
+    let modified = meta.modified().ok()?;
+    let age = SystemTime::now().duration_since(modified).ok()?.as_secs();
+    if age > max_age_secs {
+        return None;
+    }
+    let text = std::fs::read_to_string(&path).ok()?;
+    let v: serde_json::Value = serde_json::from_str(&text).ok()?;
+    // Prefer published_at if present (clock skew resilient vs mtime alone).
+    if let Some(pub_at) = v.get("published_at").and_then(|x| x.as_u64()) {
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs();
+        if now.saturating_sub(pub_at) > max_age_secs {
+            return None;
+        }
+    }
+    v.get("sessions")
+        .and_then(|s| s.as_array())
+        .map(|a| a.clone())
 }
 
 /// Global singleton for iLink state management.

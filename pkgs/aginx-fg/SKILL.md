@@ -33,3 +33,15 @@ msoc 冻结在 PON；本包提供：
 未插电时 qpnp-qg 拒收高于 live `cc_soc` 的 CC 写入（`is not monotonic`）。
 `run` 种子优先 `sys_soc`/`cc_soc`；放电时 stamp 用 `hold_udata_monotonic`
 把 CC 钳到 `min(soco, live_cc)`。勿与常驻 daemon 并行 `run --once`。
+
+## 重启耐久（未做真 reboot）
+
+`process_udata_work` 在 SYS 有效时写 SDAM（SOC/OCV/RBAT/VALID）——运行期
+周期 stamp 即在喂下次 PON。非破坏核查（2026-10-12 夜，跳过真 reboot）：
+
+- `sys_soc == cc_soc` 齐跌、`soc_reporting_ready=1`
+- `check-canonical` OK；库仑符号与 CC 单调钳位在役（v0.1.1）
+- dmesg PON/SHUTDOWN_SOC 行可能已滚出缓冲——真考需 `aginx-reboot reboot`
+  后读「using SHUTDOWN_SOC / PON ocv」+ capacity≥解锁值
+
+夜半未主动 reboot（服务面恢复风险）；白天再跑重启考。

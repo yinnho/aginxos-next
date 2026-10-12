@@ -47,3 +47,12 @@ weixin 是第一腿不是包名，新频道=crate 新模块、面不变。
   续命，重扫即活。
 - env：`AGINX_CHANNELS_ACP_ADDR`（默认 127.0.0.1:8686）、
   `AGINX_CHANNELS_ACP_TIMEOUT_SECS`（默认 1200，须≥名册条目 timeout）。
+
+## status · active（v0.1.4）
+
+`active` 是 daemon 内存里的 poll 腿标志。CLI `status` 以前冷加载
+session.json（种子 `active=false`）会把「在轮询」谎报成 false。
+
+现：daemon 每 ~5s 写 `/run/aginx-channels/status.json`；`status` 优先
+读活文件（`active_source=daemon`）。无活文件/过期（>90s）则
+`active=null` + `active_source=disk-cold`。

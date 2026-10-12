@@ -176,9 +176,17 @@ fn cmd_status(args: &[String]) -> Result<()> {
         println!("[{name}] type={} default_agent={}", config.channel_type, config.default_agent);
         if config.channel_type == "weixin" {
             weixin::token::set_sessions_root(&root);
-            let state = &weixin::token::WEIXIN_STATE;
-            state.load_from_dir();
-            let list = state.status_list();
+            // Prefer daemon-published live status (real poll `active`). Cold
+            // load always seeds active=false — never report that as truth.
+            let list = if let Some(live) =
+                weixin::token::read_live_status(weixin::token::LIVE_STATUS_MAX_AGE_SECS)
+            {
+                live
+            } else {
+                let state = &weixin::token::WEIXIN_STATE;
+                state.load_from_dir();
+                state.status_list_disk_cold()
+            };
             if list.is_empty() {
                 println!("  （无会话——aginx-channels login {name} 扫码起号）");
             } else {

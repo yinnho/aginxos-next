@@ -194,6 +194,7 @@ async fn poll_loop_inner(
                         state.active.store(false, Ordering::Relaxed);
                         state.expires_at.store(0, Ordering::Relaxed);
                     }
+                    WEIXIN_STATE.publish_live_status();
                     continue;
                 }
 
@@ -650,6 +651,7 @@ fn spawn_all_bots(sender: &mpsc::Sender<PluginMessage>) {
             error!(user_id = %user_id, "Failed to spawn poll thread: {e}");
         }
     }
+    WEIXIN_STATE.publish_live_status();
 }
 
 /// Spawn a specific bot by user_id (if loaded and not yet active).
@@ -701,6 +703,8 @@ fn respawn_watcher_loop(sender: mpsc::Sender<PluginMessage>, shutdown: Arc<Atomi
                     }
                 }
             }
+
+            WEIXIN_STATE.publish_live_status();
 
             for _ in 0..10 {
                 if shutdown.load(Ordering::Relaxed) {
