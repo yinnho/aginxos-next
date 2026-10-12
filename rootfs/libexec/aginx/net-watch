@@ -169,10 +169,14 @@ batt_check() {
         batt_ext=0
       fi
       batt_stuck=0
-      # 迟滞：告警后回充到 CLEAR 以上才重新武装（中间带不重响）
-      if [ "$bp" -ge "$BATT_CLEAR" ] && [ "$batt_on" -gt 0 ]; then
-        batt_on=0
-        batt_write ''
+      # 迟滞：告警后回充到 CLEAR 以上才重新武装（中间带不重响）。
+      # 「充电无效」探针不置 batt_on——出 CLEAR 带也要撤注册表，否则文件过夜
+      # （redfin 10-12：05:54 写「充电无效 0%」，白天已 94% Discharging 仍挂着）。
+      if [ "$bp" -ge "$BATT_CLEAR" ]; then
+        if [ "$batt_on" -gt 0 ] || [ -f "$WARN_BATT" ]; then
+          batt_on=0
+          batt_write ''
+        fi
       fi
       if [ "$bp" -le "$BATT_WARN" ] && [ "$batt_on" -lt 1 ]; then
         batt_on=1
@@ -198,6 +202,10 @@ batt_check() {
       # 就重锚——慢充不是病；完全不动才是线材/头/口的病。
       if [ "$bp" -le "$BATT_WARN" ]; then
         if [ "$batt_stuck" -eq 0 ] || [ "$bp" -gt "$batt_anchor" ]; then
+          # 容量有涨 → 撤已落的「充电无效」（慢充不是病；原先只重锚计数）
+          if [ "$bp" -gt "$batt_anchor" ] && [ -f "$WARN_BATT" ]; then
+            batt_write ''
+          fi
           batt_stuck=1
           batt_anchor=$bp
         else
@@ -209,6 +217,8 @@ batt_check() {
         fi
       else
         batt_stuck=0
+        # 已出低电带：「充电无效」不走 batt_on，必须显式撤注册表
+        [ -f "$WARN_BATT" ] && batt_write ''
       fi
       ;;
   esac
