@@ -34,3 +34,9 @@
 ## 回滚
 
 `aginx-pkg rollback aginxresearch`；实例数据不受包装卸影响。
+
+## 扇出 priority（v0.1.5）
+
+子题 `INSERT` 继承父题 `priority`（主线多为 10）。禁止再写死 0。
+存量：`pending AND priority=0 AND parent.priority≥10` 可一次抬到 10
+（备份后 UPDATE；dead 不动）。
