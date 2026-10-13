@@ -122,9 +122,45 @@ google-bms → at24（**m24c08@50 @ i2c 98c000**，qg 探测要读 batt_eeprom�
 缺它 probe 永远 -517 defer）→ qpnp-qgauge → sm7250_bms → google-battery
 → google_charger（+qti_qmi_sensor）。
 
+## 6. SPMI 运输层（substrate 怎么写这些寄存器，lito.dtsi+spmi-pmic-arb.c）
+
+以上全部 SPMI 地址的真传法——裸 substrate 无 regmap，直踩 PMIC arbiter：
+
+**内存图**（lito.dtsi `qcom,spmi@c440000`，EE=0/channel=0）：
+
+| 区 | 基址 | 大小 | 用途 |
+|----|------|------|------|
+| core | 0x0c440000 | 0x1100 | 版本@+0、APID 表@+0x900+4N |
+| chnls(写) | 0x0c600000 | 0x2000000 | 每通道 0x10000 槽 |
+| obsrvr(读) | 0x0e600000 | 0x100000 | 每 APID 0x80 槽（v5, EE=0） |
+| intr | 0x0e700000 | 0xa0000 | 中断面（初期可不用） |
+| cnfg | 0x0c40a000 | 0x26000 | ownership 表@+0x0700+4N |
+
+**协议**（v5，core+0 ≥0x50000000 即 v5）：
+1. **寻址**：PPID = `sid<<8 | (periph>>8)`；充电链 PM7250B=**SID 2** →
+   充电器 ppid=0x210、qg 看自己外设基址。APID 发现=扫 core+0x900+4N
+   （到 core_size 止）：`ppid=(val>>8)&0xfff`，bit24=IRQ 主；
+   写权=cnfg+0x0700+4N `val&7 == 0`（APPS EE）。
+2. **窗口**：写=`chnls+0x10000×APID`（CMD@0x00、WDATA0@0x10、WDATA1@0x14）；
+   读=`obsrvr+0x80×APID`（CMD@0x00、RDATA0@0x18、RDATA1@0x1C）；
+   STATUS@0x08 轮询：**DONE=bit0、FAILURE=bit1、DENIED=bit2、DROPPED=bit3**。
+3. **命令字**：`cmd=(op<<27)|((addr&0xff)<<4)|(len-1)&7`；
+   op：**WRITE=14、READ=15**（EXT_READ=13、MSTR_RW=8/9）；**单事务 ≤8B**，
+   多字节顺序装 WDATA0/1。
+4. 中断面（可选）：acc_enable=wr+0x100+0x10000×N、irq_status=+0x104、
+   irq_clear=+0x108；主接收态 intr+0x10000×m+4n。
+
+附产：PON@pm7250b+0x800（开机原因，substrate 开机日志的根）。
+**待活体验证**（设备回网后）：`busybox devmem 0x0c440000 32`（≥0x50000000）
++ 扫 0x0c440904 起实读 APID 表，钉死充电链 APID 号。
+
+
+
 ## 未闭项
 
-晨间 SHUTDOWN_SOC=0 重放之谜（电量战役在案）。
-（10-13 已闭三批：qg alarm 熄火机制=四门判决+无 FG daemon 无人重入；
-MSOC 寄存器=base2+0xBF 1/255 刻度。二批：充电旋钮全表+编码律+挂起/
-覆盖腿+JEITA 三层。一批：看门狗全配方+0x1140/0x1153/0x1550 命名。）
+晨间 SHUTDOWN_SOC=0 重放之谜（电量战役在案）；SPMI APID 表活体实读
+（设备 wifi 打盹未应，devmem 命令在上节尾）。
+（10-13 已闭四批：SPMI 运输层全协议。三批：qg alarm 熄火机制=四门判决+
+无 FG daemon 无人重入；MSOC 寄存器=base2+0xBF 1/255 刻度。二批：充电
+旋钮全表+编码律+挂起/覆盖腿+JEITA 三层。一���：看门狗全配方+
+0x1140/0x1153/0x1550 命名。）
