@@ -137,8 +137,22 @@ google-bms → at24（**m24c08@50 @ i2c 98c000**，qg 探测要读 batt_eeprom�
 | cnfg | 0x0c40a000 | 0x26000 | ownership 表@+0x0700+4N |
 
 **协议**（v5，core+0 ≥0x50000000 即 v5）：
-1. **寻址**：PPID = `sid<<8 | (periph>>8)`；充电链 PM7250B=**SID 2** →
-   充电器 ppid=0x210、qg 看自己外设基址。APID 发现=扫 core+0x900+4N
+1. **寻址**：PPID = `sid<<8 | (periph>>8)`；充电链全家在 PM7250B（**SID 2**）：
+
+   | 外设 | 基址 | PPID | 内容 |
+   |------|------|------|------|
+   | CHGR(smb5) | 0x1000 | **0x210** | §1 全部旋钮/看门狗前的寄存器 |
+   | QG 表计 | 0x4800 | **0x248** | vbat@+0x80、MSOC@+0xBF |
+   | CHG SDAM | 0xB000 | 0x2B0 | 充电器粘滞旗 |
+   | QG SDAM | 0xB100 | **0x2B1** | §2 学习账本（发现=类型 0x2e） |
+   | VADC | 0x3100 | 0x231 | VPH/热读数 |
+   | ADC_TM | 0x3500 | 0x235 | 阈值迟滞监控（VPH 三带挂这） |
+   | PON | 0x800 | 0x208 | 开机原因 |
+   | revid | 0x100 | 0x201 | PMIC 身份 |
+
+   附产（DT 深放阈值，10-10 案硬件根源）：vbatt-empty=3000mV（cold 同）、
+   cutoff=3200、low=3300、low-cold=3700。
+   APID 发现=扫 core+0x900+4N
    （到 core_size 止）：`ppid=(val>>8)&0xfff`，bit24=IRQ 主；
    写权=cnfg+0x0700+4N `val&7 == 0`（APPS EE）。
 2. **窗口**：写=`chnls+0x10000×APID`（CMD@0x00、WDATA0@0x10、WDATA1@0x14）；
