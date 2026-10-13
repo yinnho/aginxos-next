@@ -98,6 +98,9 @@ VERSION 读 → FEATURES 读 → APID 表扫描 → owner 表逐 APID 读缓存�
 | B15 | owner-gated 单写（选 owner==0 副本发 0x1643←1） | **blink×3**（25s 回 adb） | owner-gated 写清白（且证 CHGR 有 APPS 副本） |
 | B16 | 全量 substrate v2（充电 RMW+5 喂狗+PON 装弹+PS_HOLD，全 owner-gated） | **blink×3**（25s 回 adb） | **substrate 完工** |
 | B17 | PON 所有权判别（找到→闪灭/没有→故意冻死） | **blink×3**（25s 回 adb） | PON 有 APPS 副本，复位动词两级（PON warm+PS_HOLD）皆可用 |
+| B18 | splash fb 双格式色带（0xA0000000+row500/700） | 无带，黑屏 | fb 判活路判死：面板=命令模式（cmdline `_1080p_cmd`），显存在面板 GRAM，host DRAM 不被扫描 |
+| B18b | 白带单格式判别（0xFFFFFFFF 全格式不透明） | 无带，黑屏 | 同上定谳；DSI 推帧=阶梯 3 挂账刀 |
+| ka | RUNG2 在役 substrate（充电 RMW+永续喂狗，不复位） | **静止 logo ≥10min+双逃生真考** | 阶梯 2 整机刷在役（§6） |
 
 ## 5. 裁决与下一阶梯
 
@@ -109,3 +112,21 @@ VERSION 读 → FEATURES 读 → APID 表扫描 → owner 表逐 APID 读缓存�
    已齐，阶梯 2（整机刷）解锁。
 3. B17 判 PON 归属：**blink=PON 有 APPS 副本**——复位动词两级皆可用，
    substrate 全保留（PON warm 为首选，PS_HOLD 为兜底）。
+
+## 6. 在役态（RUNG2，2026-10-14）
+
+redfin 运行面=裸 substrate（ka.S，slot a active），b 槽=L0 救生艇
+（`slot-successful:yes`，retry=7）。五项验收四闭一挂账（电流表无表）。
+
+- **稳态判据（二值）**：静止 Google logo=活；早期崩=blink×3→黑屏
+  （L0 自动回滚）；盲区（环死狗咬）=USB 电流表（72s 掐充电→电流掉）。
+  fb 判活路已判死（B18/B18b，命令模式面板）。
+- **逃生 A 机制真值**（fastboot getvar 实读）：每次开机经 ABL 烧一条
+  tries；烧尽后 ABL 把 a 标 `slot-unbootable:yes`（不只是换 active），
+  落 b。实测强关→开机 ×3–4 轮触发（刷装/set_active 重臂 tries=3 后，
+  第 4 次开机落 b）。回裸=fastboot `set_active a`（清 unbootable+
+  重臂 tries）。
+- **面切换环（全通，2026-10-14 闭）**：裸 →（12s 强关→开机 ×3–4）→
+  b 槽 L0（wifi ~580s 回归实测）→（ssh `/usr/bin/aginx-reboot
+  bootloader`）→ fastboot（闸门串号核对）→ `set_active a` → reboot →
+  裸（静止 logo 眼验）。

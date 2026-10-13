@@ -48,6 +48,9 @@ MODE="heartbeat"
 [ "${1:-}" = "--ow" ] && MODE="ow"
 [ "${1:-}" = "--pi2" ] && MODE="pi2"
 [ "${1:-}" = "--pon" ] && MODE="pon"
+[ "${1:-}" = "--fb" ] && MODE="fb"
+[ "${1:-}" = "--fb2" ] && MODE="fb2"
+[ "${1:-}" = "--ka" ] && MODE="ka"
 mkdir -p "${OUTDIR}"
 ELF="${OUTDIR}/heartbeat.elf"
 
@@ -118,6 +121,33 @@ SECTIONS { . = 0x0; .text : { KEEP(*(.text.boot)) *(.text*) }
 LD
   zig cc -target aarch64-freestanding-none ${CFLAGS} -Wl,-T,"${OUTDIR}/own.ld" -o "${ELF}" "${HERE}/own-probe.S"
   BIN="${OUTDIR}/own.bin"; IMG="${OUTDIR}/boot-own.img"
+elif [ "${MODE}" = "ka" ]; then
+  # RUNG2 在役裸 substrate：充电使能+永续喂狗环，不复位。
+  cat > "${OUTDIR}/ka.ld" <<'LD'
+ENTRY(_start)
+SECTIONS { . = 0x0; .text : { KEEP(*(.text.boot)) *(.text*) }
+  /DISCARD/ : { *(.eh_frame*) *(.eh_frame_hdr) *(.comment) *(.note*) } }
+LD
+  zig cc -target aarch64-freestanding-none ${CFLAGS} -Wl,-T,"${OUTDIR}/ka.ld" -o "${ELF}" "${HERE}/ka.S"
+  BIN="${OUTDIR}/ka.bin"; IMG="${OUTDIR}/boot-ka.img"
+elif [ "${MODE}" = "fb2" ]; then
+  # B18b 白带判别：0xFFFFFFFF 任何格式皆不透明白。
+  cat > "${OUTDIR}/fb2.ld" <<'LD'
+ENTRY(_start)
+SECTIONS { . = 0x0; .text : { KEEP(*(.text.boot)) *(.text*) }
+  /DISCARD/ : { *(.eh_frame*) *(.eh_frame_hdr) *(.comment) *(.note*) } }
+LD
+  zig cc -target aarch64-freestanding-none ${CFLAGS} -Wl,-T,"${OUTDIR}/fb2.ld" -o "${ELF}" "${HERE}/fb2-probe.S"
+  BIN="${OUTDIR}/fb2.bin"; IMG="${OUTDIR}/boot-fb2.img"
+elif [ "${MODE}" = "fb" ]; then
+  # B18 splash fb 判活通道探针：双格式判读带+展示窗+复位（RUNG2 D2）。
+  cat > "${OUTDIR}/fb.ld" <<'LD'
+ENTRY(_start)
+SECTIONS { . = 0x0; .text : { KEEP(*(.text.boot)) *(.text*) }
+  /DISCARD/ : { *(.eh_frame*) *(.eh_frame_hdr) *(.comment) *(.note*) } }
+LD
+  zig cc -target aarch64-freestanding-none ${CFLAGS} -Wl,-T,"${OUTDIR}/fb.ld" -o "${ELF}" "${HERE}/fb-probe.S"
+  BIN="${OUTDIR}/fb.bin"; IMG="${OUTDIR}/boot-fb.img"
 elif [ "${MODE}" = "pon" ]; then
   # B17 PON 所有权判别器：找到 owner==0 副本→闪灭；没有→故意冻死当信号。
   cat > "${OUTDIR}/pon.ld" <<'LD'
