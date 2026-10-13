@@ -135,6 +135,9 @@ fn collect_content_media(media: &mut Vec<AcpMedia>, block: &serde_json::Value) {
 }
 
 /// Strip `[[aginx-media:kind|/abs/path]]` markers from text into media list.
+///
+/// Walk by UTF-8 char, never by raw byte: `bytes[i] as char` would turn
+/// multi-byte Chinese into Latin-1 mojibake (v0.1.5 regression → WeChat 乱码).
 pub fn extract_media_markers(text: &str) -> (String, Vec<AcpMedia>) {
     let mut media = Vec::new();
     let mut out = String::with_capacity(text.len());
@@ -163,8 +166,10 @@ pub fn extract_media_markers(text: &str) -> (String, Vec<AcpMedia>) {
                 }
             }
         }
-        out.push(bytes[i] as char);
-        i += 1;
+        // One Unicode scalar, not one byte — preserves CJK / emoji intact.
+        let ch = text[i..].chars().next().expect("i on char boundary");
+        out.push(ch);
+        i += ch.len_utf8();
     }
     (out, media)
 }
@@ -390,5 +395,25 @@ mod tests {
         assert_eq!(media.len(), 1);
         assert_eq!(media[0].kind, AcpMediaKind::Image);
         assert_eq!(media[0].path, path);
+    }
+
+    /// v0.1.5 regression: byte-as-char walk turned UTF-8 CJK into Latin-1
+    /// mojibake on every ACP→WeChat reply (even with no media markers).
+    #[test]
+    fn media_marker_preserves_chinese_without_markers() {
+        let raw = "你好，白泽在研究。";
+        let (text, media) = extract_media_markers(raw);
+        assert_eq!(text, raw);
+        assert!(media.is_empty());
+    }
+
+    #[test]
+    fn media_marker_preserves_chinese_around_marker() {
+        let path = concat!(env!("CARGO_MANIFEST_DIR"), "/src/acp.rs");
+        let raw = format!("开头 [[aginx-media:file|{path}]] 结尾");
+        let (text, media) = extract_media_markers(&raw);
+        assert_eq!(text, "开头  结尾");
+        assert_eq!(media.len(), 1);
+        assert_eq!(media[0].kind, AcpMediaKind::File);
     }
 }
