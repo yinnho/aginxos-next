@@ -526,7 +526,7 @@ impl WeixinState {
     /// Disk-cold status for CLI when no live file: never claim `active=false`
     /// — that flag is only updated by the daemon poll loop. Reporting false
     /// after `load_from_dir` (which seeds `active=false`) was a standing lie
-    /// (redfin 2026-10-12: send OK + Poll loop started, status still false).
+    /// (redfin 2026-10-12: send OK + Poll loop started, status still false). // D14-exempt
     pub fn status_list_disk_cold(&self) -> Vec<serde_json::Value> {
         self.bots
             .iter()

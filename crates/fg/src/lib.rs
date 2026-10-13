@@ -1,6 +1,6 @@
 //! aginx-fg — qpnp-qg user-data pack + minimal FG surface.
 //!
-//! Kernel contract (`include/uapi/linux/qg.h`, stock redfin = Lineage redbull):
+//! Kernel contract (`include/uapi/linux/qg.h`, stock redfin = Lineage redbull): // D14-exempt
 //! ```text
 //! struct qg_param { u32 data; bool valid; };           /* 8B */
 //! struct qg_user_data { qg_param param[QG_MAX]; };     /* QG_MAX=18 → 144B */
@@ -293,7 +293,7 @@ pub fn read_sysfs_u32(path: impl AsRef<Path>) -> io::Result<u32> {
 
 /// FIFO `i` raw bits as signed µA (two's complement cast).
 ///
-/// **Sign vs Linux psy:** on redfin qpnp-qg, kdata FIFO `i` is empirically
+/// **Sign vs Linux psy:** on redfin qpnp-qg, kdata FIFO `i` is empirically // D14-exempt
 /// **opposite** `battery/current_now` — discharge shows **positive** FIFO
 /// (e.g. +100402…+365295) while psy is negative (−140k…−400k µA). Use
 /// [`fifo_i_ua_coulomb`] for ΣI×dt so discharge drains soco_raw.
@@ -509,7 +509,7 @@ fn libc_nonblock() -> i32 {
 
 /// Coulomb-integration state: Σ(I×dt) from kdata FIFO → soco_raw.
 ///
-/// Kernel / device contract (`qg_process_fifo` + redfin empirics 2026-10-12):
+/// Kernel / device contract (`qg_process_fifo` + redfin empirics 2026-10-12): // D14-exempt
 /// - `fifo.i` = signed µA in `u32` bits; **FIFO sign is opposite Linux psy**
 ///   on this SoC (discharge → positive FIFO, negative `current_now`)
 /// - coulomb uses [`fifo_i_ua_coulomb`] (= `-fifo_i_ua`) so discharge drains
@@ -608,7 +608,7 @@ pub fn hold_udata(soco_raw: u32, ocv_uv: Option<u32>, rbat_mohm: Option<u32>) ->
     .build()
 }
 
-/// qpnp-qg `process_udata_work` (redfin kernel): when **no input present**,
+/// qpnp-qg `process_udata_work` (redfin kernel): when **no input present**, // D14-exempt
 /// a CC_SOC write **above** the live kernel `cc_soc` is rejected
 /// (`cc_soc N is not monotonic`). SYS_SOC still applies. While charging,
 /// upward CC is allowed (unless CC ≫ FULL by [`MAX_CC_SOC_DELTA`]).
@@ -787,7 +787,7 @@ mod tests {
 
     #[test]
     fn coulomb_integrate_discharge_drops_soc() {
-        // FIFO stores discharge as **positive** on redfin; coulomb negates.
+        // FIFO stores discharge as **positive** on redfin; coulomb negates. // D14-exempt
         // +1A FIFO → −1A effective → 1_000_000 µAh drain over 1h
         // full=4_187_000 → Δsoco ≈ -10000*1e6/4.187e6 ≈ -2388
         let mut st = CoulombState::new(9900, 4_187_000);
@@ -825,7 +825,7 @@ mod tests {
         assert!(soc <= SOCO_FULL);
     }
 
-    /// Observed discharge sample (redfin 2026-10-12, STATUS=Discharging):
+    /// Observed discharge sample (redfin 2026-10-12, STATUS=Discharging): // D14-exempt
     /// fifo i_ua=+365295 raw, count=128, interval_ms=100 → dt=12800ms.
     /// psy current_now was negative at the same time.
     #[test]
