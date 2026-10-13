@@ -91,6 +91,16 @@ FCC 削减），使能位在 JEITA_EN_CFG=0x1090——**驱动在 SW JEITA 生�
   **`0xBC` PON_OCV(2B，写给 PBS 用)**。
 - **SDAM 发现**：扫 DT 子节点，SPMI 外设 `reg+4` 类型 = **0x2e** 即认，
   基址来自 pm7250b.dtsi（机况=DT，D14）。
+- **MSOC 硬件刻度**：force 路径 `qg_write(base2+0xBF, 1B)`，值=round(SOC×
+  2.55)——**1/255 单调 SOC 寄存器**（binary 直出魔数 0x51eb851f>>37=/100）。
+- **alarm 爬链熄火机制定谳**（悬案闭）：`is_scaling_required` 四道熄火门
+  （二进制内联于 `qg_scale_soc` 实核）：①profile 未载 ②|catch_up−msoc|<
+  delta 且非 0/100 边界 ③catch_up==msoc ④catch_up>msoc 而无输入或
+  **USB 在位但 charge_status≠CHARGING/FULL**（msoc≠0 时）。任一命中→
+  `alarm_cancel` 静默停爬。爬链自身无病——**病在无人再进**：`qg_scale_soc`
+  的常态重入者=process_udata_work（FG daemon 写 /dev/qg udata 触发），L0
+  无 FG daemon → 单步后熄火。substrate 解法=自己的 FG daemon 周期写 udata
+  （或 force 直写 MSOC 寄存器绕过爬链）。
 - **关机路径**：`qpnp_qg_shutdown` 只做 cycle_count 落账——**SHUTDOWN_SOC
   焊笔不在关机路径**（在 process_udata_work）；晨间 07:35 重放之谜维持悬案。
 
@@ -114,7 +124,7 @@ google-bms → at24（**m24c08@50 @ i2c 98c000**，qg 探测要读 batt_eeprom�
 
 ## 未闭项
 
-qg alarm 重排死亡路径（战役在案）、晨间 SHUTDOWN_SOC=0 重放之谜。
-（10-13 已闭二批：充电旋钮全表 FCC 0x1061/FV 0x1070/ICL 0x1341+编码律
-`(µ−min)/step`、挂起 0x1340 bit0、ICL 覆盖 0x1342、JEITA 三层 0x1090/
-0x1092-3/0x1094+4i。一批闭：看门狗全配方+0x1140/0x1153/0x1550 命名。）
+晨间 SHUTDOWN_SOC=0 重放之谜（电量战役在案）。
+（10-13 已闭三批：qg alarm 熄火机制=四门判决+无 FG daemon 无人重入；
+MSOC 寄存器=base2+0xBF 1/255 刻度。二批：充电旋钮全表+编码律+挂起/
+覆盖腿+JEITA 三层。一批：看门狗全配方+0x1140/0x1153/0x1550 命名。）
