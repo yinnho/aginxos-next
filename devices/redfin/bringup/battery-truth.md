@@ -170,11 +170,27 @@ google-bms → at24（**m24c08@50 @ i2c 98c000**，qg 探测要读 batt_eeprom�
 
 
 
+## 7. 重启/关机动词（msm-poweroff.c+qpnp-power-on.c+lito.dtsi，10-13）
+
+裸 substrate 的 reset 面，两段式=**先在 PON 装弹、再在 SoC 侧拉闸**：
+
+1. **PON 装弹**（SPMI，PON@0x800/PPID 0x208）：
+   `PS_HOLD_RST_CTL=base+0x5A`（类型域 mask 0xF）、
+   `PS_HOLD_RST_CTL2=base+0x5B`（RESET_EN=bit7）。
+   序列：清 0x5B bit7 → **等 500µs**（10 个睡眠钟+50% 容差）→ 0x5A 写
+   类型（**warm=0x01 / shutdown=0x04 / hard=0x07**）→ 0x5B bit7 置回。
+2. **SoC 拉闸**：写 0 到 **PS_HOLD=0x0c264000**（lito.dtsi `restart@c264000`）
+   → PMIC 执行已装弹动作。
+3. **铁律：拉闸前先静默 SPMI arbiter**——PS_HOLD 在 SPMI 事务中途拉低会
+   把某些 PMIC 锁死；Linux 走 TrustZone SCM（SCM_IO_DISABLE_PMIC_ARBITER），
+   裸 substrate 须同样 SMC（或确认事务空闲窗口后立即拉闸）。
+   重启前 PON 重启原因清 0（reason=UNKNOWN=0）。
+
+重启=装 warm(0x01)+拉闸；关机=装 shutdown(0x04)+拉闸（关机路径多一步
+dload 清零+SDI 关，裸机无此包袱）。
+
 ## 未闭项
 
 晨间 SHUTDOWN_SOC=0 重放之谜（电量战役在案）；SPMI APID 表活体实读
 （设备 wifi 打盹未应，devmem 命令在上节尾）。
-（10-13 已闭四批：SPMI 运输层全协议。三批：qg alarm 熄火机制=四门判决+
-无 FG daemon 无人重入；MSOC 寄存器=base2+0xBF 1/255 刻度。二批：充电
-旋钮全表+编码律+挂起/覆盖腿+JEITA 三层。一���：看门狗全配方+
-0x1140/0x1153/0x1550 命名。）
+（10-13 已闭六批：①看门狗全配方+0x1140/0x1153/0x1550 命名 ②充电旋钮全表+编码律+挂起/覆盖腿+JEITA 三层 ③qg alarm 熄火机制+MSOC 0xBF 1/255 刻度 ④SPMI 运输层全协议 ⑤电量链外设 PPID 全表+深放阈值 ⑥重启/关机动词=PON 装弹 0x5A/0x5B+PS_HOLD 0xc264000 拉闸+静默 arbiter 铁律。）
