@@ -35,6 +35,19 @@ command -v lz4 >/dev/null || { echo "lz4 not found (brew install lz4)" >&2; exit
 
 MODE="heartbeat"
 [ "${1:-}" = "--full" ] && MODE="full"
+[ "${1:-}" = "--probe" ] && MODE="probe"
+[ "${1:-}" = "--calib" ] && MODE="calib"
+[ "${1:-}" = "--sp" ] && MODE="sp"
+[ "${1:-}" = "--pi" ] && MODE="pi"
+[ "${1:-}" = "--spmiprobe" ] && MODE="spmiprobe"
+[ "${1:-}" = "--scan" ] && MODE="scan"
+[ "${1:-}" = "--rd" ] && MODE="rd"
+[ "${1:-}" = "--wr" ] && MODE="wr"
+[ "${1:-}" = "--vr" ] && MODE="vr"
+[ "${1:-}" = "--own" ] && MODE="own"
+[ "${1:-}" = "--ow" ] && MODE="ow"
+[ "${1:-}" = "--pi2" ] && MODE="pi2"
+[ "${1:-}" = "--pon" ] && MODE="pon"
 mkdir -p "${OUTDIR}"
 ELF="${OUTDIR}/heartbeat.elf"
 
@@ -53,6 +66,129 @@ LD
     -Wl,-T,"${OUTDIR}/heartbeat.ld" \
     -o "${ELF}" "${HERE}/heartbeat.S"
   BIN="${OUTDIR}/heartbeat.bin"; IMG="${OUTDIR}/boot-heartbeat.img"
+elif [ "${MODE}" = "calib" ]; then
+  # B5 时钟标定桩：L13 壳 + 1e8 纯立即数延时，秒表量周期定钟速。
+  cat > "${OUTDIR}/calib.ld" <<'LD'
+ENTRY(_start)
+SECTIONS { . = 0x0; .text : { KEEP(*(.text.boot)) *(.text*) }
+  /DISCARD/ : { *(.eh_frame*) *(.eh_frame_hdr) *(.comment) *(.note*) } }
+LD
+  zig cc -target aarch64-freestanding-none ${CFLAGS} \
+    -Wl,-T,"${OUTDIR}/calib.ld" \
+    -o "${ELF}" "${HERE}/calib.S"
+  BIN="${OUTDIR}/calib.bin"; IMG="${OUTDIR}/boot-calib.img"
+elif [ "${MODE}" = "sp" ]; then
+  # B6 栈写单变量实验：L13 壳+一条写 0x80018ff8（B4 同源地址）。
+  cat > "${OUTDIR}/sp.ld" <<'LD'
+ENTRY(_start)
+SECTIONS { . = 0x0; .text : { KEEP(*(.text.boot)) *(.text*) }
+  /DISCARD/ : { *(.eh_frame*) *(.eh_frame_hdr) *(.comment) *(.note*) } }
+LD
+  zig cc -target aarch64-freestanding-none ${CFLAGS} \
+    -Wl,-T,"${OUTDIR}/sp.ld" \
+    -o "${ELF}" "${HERE}/sp.S"
+  BIN="${OUTDIR}/sp.bin"; IMG="${OUTDIR}/boot-sp.img"
+elif [ "${MODE}" = "pi" ]; then
+  # B7 位置无关全量 substrate：main.c 纯寄存器翻译，零字面量零 DRAM 写
+  # （ABL 真落点=0xA7E80000，逆向收据见 boot-pi.S 头注）。
+  cat > "${OUTDIR}/pi.ld" <<'LD'
+ENTRY(_start)
+SECTIONS { . = 0x0; .text : { KEEP(*(.text.boot)) *(.text*) }
+  /DISCARD/ : { *(.eh_frame*) *(.eh_frame_hdr) *(.comment) *(.note*) } }
+LD
+  zig cc -target aarch64-freestanding-none ${CFLAGS} \
+    -Wl,-T,"${OUTDIR}/pi.ld" \
+    -o "${ELF}" "${HERE}/boot-pi.S"
+  BIN="${OUTDIR}/pi.bin"; IMG="${OUTDIR}/boot-pi.img"
+elif [ "${MODE}" = "vr" ]; then
+  # B13 合法读事务探针：首个掩码合法的 SPMI 读（0x1042→0x42），零后续事务。
+  cat > "${OUTDIR}/vr.ld" <<'LD'
+ENTRY(_start)
+SECTIONS { . = 0x0; .text : { KEEP(*(.text.boot)) *(.text*) }
+  /DISCARD/ : { *(.eh_frame*) *(.eh_frame_hdr) *(.comment) *(.note*) } }
+LD
+  zig cc -target aarch64-freestanding-none ${CFLAGS}     -Wl,-T,"${OUTDIR}/vr.ld"     -o "${ELF}" "${HERE}/vr-probe.S"
+  BIN="${OUTDIR}/vr.bin"; IMG="${OUTDIR}/boot-vr.img"
+elif [ "${MODE}" = "own" ]; then
+  # B14 cnfg/owner 窗读探针：owner 表（0x0c40a700+4N）零事务纯读。
+  cat > "${OUTDIR}/own.ld" <<'LD'
+ENTRY(_start)
+SECTIONS { . = 0x0; .text : { KEEP(*(.text.boot)) *(.text*) }
+  /DISCARD/ : { *(.eh_frame*) *(.eh_frame_hdr) *(.comment) *(.note*) } }
+LD
+  zig cc -target aarch64-freestanding-none ${CFLAGS} -Wl,-T,"${OUTDIR}/own.ld" -o "${ELF}" "${HERE}/own-probe.S"
+  BIN="${OUTDIR}/own.bin"; IMG="${OUTDIR}/boot-own.img"
+elif [ "${MODE}" = "pon" ]; then
+  # B17 PON 所有权判别器：找到 owner==0 副本→闪灭；没有→故意冻死当信号。
+  cat > "${OUTDIR}/pon.ld" <<'LD'
+ENTRY(_start)
+SECTIONS { . = 0x0; .text : { KEEP(*(.text.boot)) *(.text*) }
+  /DISCARD/ : { *(.eh_frame*) *(.eh_frame_hdr) *(.comment) *(.note*) } }
+LD
+  zig cc -target aarch64-freestanding-none ${CFLAGS} -Wl,-T,"${OUTDIR}/pon.ld" -o "${ELF}" "${HERE}/pon-probe.S"
+  BIN="${OUTDIR}/pon.bin"; IMG="${OUTDIR}/boot-pon.img"
+elif [ "${MODE}" = "pi2" ]; then
+  # B16 全量 substrate v2：owner-gated 选择（TRUTH.md §2 铁律正解姿势）。
+  cat > "${OUTDIR}/pi2.ld" <<'LD'
+ENTRY(_start)
+SECTIONS { . = 0x0; .text : { KEEP(*(.text.boot)) *(.text*) }
+  /DISCARD/ : { *(.eh_frame*) *(.eh_frame_hdr) *(.comment) *(.note*) } }
+LD
+  zig cc -target aarch64-freestanding-none ${CFLAGS} -Wl,-T,"${OUTDIR}/pi2.ld" -o "${ELF}" "${HERE}/pi2.S"
+  BIN="${OUTDIR}/pi2.bin"; IMG="${OUTDIR}/boot-pi2.img"
+elif [ "${MODE}" = "ow" ]; then
+  # B15 owner-gated 单写探针：选 owner==0 的 CHGR 副本发唯一合法写。
+  cat > "${OUTDIR}/ow.ld" <<'LD'
+ENTRY(_start)
+SECTIONS { . = 0x0; .text : { KEEP(*(.text.boot)) *(.text*) }
+  /DISCARD/ : { *(.eh_frame*) *(.eh_frame_hdr) *(.comment) *(.note*) } }
+LD
+  zig cc -target aarch64-freestanding-none ${CFLAGS} -Wl,-T,"${OUTDIR}/ow.ld" -o "${ELF}" "${HERE}/ow-probe.S"
+  BIN="${OUTDIR}/ow.bin"; IMG="${OUTDIR}/boot-ow.img"
+elif [ "${MODE}" = "wr" ]; then
+  # B11 写事务探针：B10 扫描+读活 + 唯一一个 CHNLS 写事务（喂狗同源）。
+  cat > "${OUTDIR}/wr.ld" <<'LD'
+ENTRY(_start)
+SECTIONS { . = 0x0; .text : { KEEP(*(.text.boot)) *(.text*) }
+  /DISCARD/ : { *(.eh_frame*) *(.eh_frame_hdr) *(.comment) *(.note*) } }
+LD
+  zig cc -target aarch64-freestanding-none ${CFLAGS}     -Wl,-T,"${OUTDIR}/wr.ld"     -o "${ELF}" "${HERE}/wr-probe.S"
+  BIN="${OUTDIR}/wr.bin"; IMG="${OUTDIR}/boot-wr.img"
+elif [ "${MODE}" = "rd" ]; then
+  # B10 读事务探针：B9 扫描+唯一一个 OBSRVR 读事务（B7 首事务同源）。
+  cat > "${OUTDIR}/rd.ld" <<'LD'
+ENTRY(_start)
+SECTIONS { . = 0x0; .text : { KEEP(*(.text.boot)) *(.text*) }
+  /DISCARD/ : { *(.eh_frame*) *(.eh_frame_hdr) *(.comment) *(.note*) } }
+LD
+  zig cc -target aarch64-freestanding-none ${CFLAGS}     -Wl,-T,"${OUTDIR}/rd.ld"     -o "${ELF}" "${HERE}/rd-probe.S"
+  BIN="${OUTDIR}/rd.bin"; IMG="${OUTDIR}/boot-rd.img"
+elif [ "${MODE}" = "scan" ]; then
+  # B9 纯扫描探针：512 项读表+复位，零事务零写（二分读空间/事务空间）。
+  cat > "${OUTDIR}/scan.ld" <<'LD'
+ENTRY(_start)
+SECTIONS { . = 0x0; .text : { KEEP(*(.text.boot)) *(.text*) }
+  /DISCARD/ : { *(.eh_frame*) *(.eh_frame_hdr) *(.comment) *(.note*) } }
+LD
+  zig cc -target aarch64-freestanding-none ${CFLAGS}     -Wl,-T,"${OUTDIR}/scan.ld"     -o "${ELF}" "${HERE}/scan-probe.S"
+  BIN="${OUTDIR}/scan.bin"; IMG="${OUTDIR}/boot-scan.img"
+elif [ "${MODE}" = "spmiprobe" ]; then
+  # B8 SPMI_CORE 读探针：B5 壳+一条 ldr 0x0c440900（单变量定位 B7 冻点）。
+  cat > "${OUTDIR}/spmiprobe.ld" <<'LD'
+ENTRY(_start)
+SECTIONS { . = 0x0; .text : { KEEP(*(.text.boot)) *(.text*) }
+  /DISCARD/ : { *(.eh_frame*) *(.eh_frame_hdr) *(.comment) *(.note*) } }
+LD
+  zig cc -target aarch64-freestanding-none ${CFLAGS}     -Wl,-T,"${OUTDIR}/spmiprobe.ld"     -o "${ELF}" "${HERE}/spmi-probe.S"
+  BIN="${OUTDIR}/spmiprobe.bin"; IMG="${OUTDIR}/boot-spmiprobe.img"
+elif [ "${MODE}" = "probe" ]; then
+  # B3 C 入口证：start.S(迁移+VBAR 网)+纯 C 延时+PS_HOLD，零 SPMI。
+  ELF="${OUTDIR}/probe.elf"
+  zig cc -target aarch64-freestanding-none ${CFLAGS} \
+    -ffunction-sections -fdata-sections -Wl,--gc-sections \
+    -Wl,-T,"${HERE}/linker.ld" \
+    -o "${ELF}" "${HERE}/start.S" "${HERE}/probe.c"
+  BIN="${OUTDIR}/probe.bin"; IMG="${OUTDIR}/boot-probe.img"
 else
   # 研究件：SPMI 全量 substrate。警告：start.S 迁移路径 2026-10-13 三验
   # （L10/L11/L12a）全部冻 logo（崩在 kmain 前）——修好前勿当心跳用。

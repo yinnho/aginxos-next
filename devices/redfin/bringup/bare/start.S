@@ -1,15 +1,15 @@
-/* redfin 裸 substrate 第一级（Stage 2 rung 1）。
+/* redfin 裸 substrate 第一级（Stage 2）。
  *
- * ABL 事实（stock 内核 blob 0 偏移即 A64 指令、无 arm64 Image 头）：
- * kernel blob 被当裸入口码跳，x0=dtb，MMU/中断已关。
- * 加载地址不确定（0x80000000 或 0x80008000 候选）——本头自迁移吸收：
- * 算 delta，整段搬到链接基址（0x80008000），再跳真身。
- * 链接点全在本文件：.text.boot 段必须在最前（见 linker.ld KEEP）。
+ * 【落点真相】ABL 按 arm64 协议装载：base=0x80008000（头里 text_offset
+ * =0x80000 是我们自己写的），入口=镜像偏移0 的 code_0 支到 +0x40 ⇒
+ * 代码实际从 0x80008040 起跑。linker.ld 直接链 0x80008040（=装载基
+ * +64B 头），零迁移——L10–L15 六代「自迁移」件全冻死的根因：actual
+ * (0x80008040) > linked(0x80008000) 走前向拷贝，把镜像拷到自己身上、
+ * 边执行边自毁。（旧记载「load base=0x80000000」是推想非测量；L13
+ * 位置无关小桩两种落点都活，证明不了落点。）
  *
- * 2026-10-13 实测（L13 无迁移件首证）：load base=0x80000000、入口=镜像
- * 偏移 0（经 code_0 支到 +0x40）⇒ delta=0x80000 远大于小镜像。旧后向
- * 拷贝下界误用链接地址 x10：循环一字节即退，br 落未拷贝区=L10/L11/
- * L12a 冻 logo 根因。已改存 actual 起点（x18）为下界。
+ * start.S 只剩：掩中断 → 栈 → 清 bss → 装 VBAR 自诊断网 → bl kmain。
+ * vectors 表在 .vectors 段（2KB 对齐，含在 _image_end 内）。
  */
 
 .section .text.boot
@@ -18,46 +18,6 @@ _start:
     /* 掩中断（防 ABL 残留定时器打进来，VBAR 不归我们管） */
     msr    daifset, #0xf
 
-1:  adr    x9, 1b                  /* 实际运行地址 */
-    ldr    x10, =1b                /* 链接地址 */
-    cmp    x9, x10
-    b.eq   3f                      /* 落点即链接点，免搬 */
-
-    /* delta = x12 = linked - actual；按方向选前/后向字节拷贝 */
-    ldr    x11, =_image_end        /* 链接尾 */
-    ldr    x13, =_start
-    sub    x14, x11, x13           /* size */
-    cmp    x9, x10
-    b.lt   2f                      /* actual < linked：dst>src → 后向 */
-
-    /* 前向（actual > linked，dst < src） */
-    add    x15, x9, x14            /* src end */
-    mov    x16, x13                /* dst = linked base */
-4:  ldrb   w17, [x9], #1
-    strb   w17, [x16], #1
-    cmp    x9, x15
-    b.lt   4b
-    b      3f
-
-2:  /* 后向（actual < linked，dst > src，重叠区安全） */
-    mov    x18, x9                 /* 下界=actual 起点（2026-10-13 修：
-                                       原误用链接地址 x10，delta>镜像时一字节即退） */
-    add    x9, x9, x14             /* src end */
-    add    x16, x11, #0            /* dst end = linked end */
-5:  subs   x9, x9, #1
-    ldrb   w17, [x9]
-    subs   x16, x16, #1
-    strb   w17, [x16]
-    cmp    x9, x18
-    b.ge   5b
-
-3:  /* 已在链接世界，跳链接地址的真身 */
-    ldr    x10, =_start2
-    br     x10
-
-.section .text
-.type _start2, %function
-_start2:
     /* 栈：镜像尾上方 64KB（避开 ABL 高区 ramdisk/dtb） */
     ldr    x10, =_image_end
     add    sp, x10, #0x10000
@@ -65,13 +25,34 @@ _start2:
     /* 清 bss */
     ldr    x11, =__bss_start
     ldr    x12, =__bss_end
-6:  cmp    x11, x12
-    b.hs   7f
+1:  cmp    x11, x12
+    b.hs   2f
     stp    xzr, xzr, [x11], #16
-    b      6b
+    b      1b
 
-7:  mov    x0, xzr
+2:  /* B2 自诊断向量网（16 槽全=PS_HOLD 复位）：异常→闪灭可判，
+       不再冻死无证。总线 stall（load 永不返回）仍兜不住——那不是异常 */
+    ldr    x10, =vectors
+    msr    vbar_el1, x10
+    isb
+
     bl     kmain
     /* kmain 不归；归了也只停尸 */
-8:  wfe
-    b      8b
+3:  wfe
+    b      3b
+
+/* 自诊断向量表（linker.ld 里 2KB 对齐，VBAR 硬要求）。
+ * 16 槽 ×128B，槽槽=PS_HOLD 温复位；位置无关构造地址，无字面池。
+ * 判读：闪灭+回滚后 dmesg 记 Hard/cold=异常真发生（看冻点在哪层）；
+ * 记 Warm Reset=PON 全链通（异常从未发生）。 */
+.section .vectors, "ax"
+.align 11
+.global vectors
+vectors:
+.rept 16
+    movz   x0, #0x0c26, lsl #16
+    movk   x0, #0x4000
+    str    wzr, [x0]
+4:  b      4b
+    .space 128 - 16
+.endr
