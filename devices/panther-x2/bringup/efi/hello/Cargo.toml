@@ -1,0 +1,20 @@
+[package]
+name = "aginx-efi-hello"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+# 独立小灶：nightly -Zbuild-std，不入主 workspace（check.sh 稳定链不背）。
+[workspace]
+
+# Stage 1 无 Linux 证明题第一级：UEFI app 在固件层活、能开口说话。
+# 目标板 panther-x2（u-boot EFI_LOADER 面），本地 qemu-aarch64 预验。
+# 构建见 ../README.md（nightly -Zbuild-std，产物 PE/COFF）。
+
+[dependencies]
+uefi = { version = "0.41", features = ["panic_handler"] }
+
+[profile.dev]
+panic = "abort"
+[profile.release]
+panic = "abort"
