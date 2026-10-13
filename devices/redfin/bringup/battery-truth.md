@@ -13,7 +13,7 @@ substrate 自养机电量的寄存器级蓝图；二进制与源码冲突时以�
 | 0x1310 bit4 | USBIN_RT_STS | **USB 在位**（ext-vbus 供电场景先查 0x1340 bit0=USBIN_CMD_IL 挂起位） |
 | 0x1410 bit4 | DCIN_RT_STS | 直流在位 |
 | 0x1341 | USBIN_CURRENT_LIMIT_CFG | **输入限流 ICL**（`smb5_usb_set_prop` 写） |
-| 0x1094 / 0x1096 | JEITA 阈值对 | bulk 2B 读（`jeita_update_work`），热限充门 |
+| 0x1094 / 0x1096 | JEITA 阈值槽 | `CHGR_JEITA_THRESHOLD_BASE(i)=0x1094+4i` 2B 字段，热/冷硬门（见 JEITA 层） |
 | 0x1140 bit0 | DCDC_CMD_OTG_REG | OTG_EN——VBUS 反向输出（OTG 面） |
 | 0x1153 bit1 | DCDC_OTG_CFG_REG | OTG_EN_SRC_CFG 清 0=VBUS 归软件控 |
 | 0x1550 | TYPE_C_EXIT_STATE_CFG_REG | EXIT_SNK_BASED_ON_CC（PD 硬复位退源行为） |
@@ -43,6 +43,32 @@ bit4）｜dc_present（0x1410 bit4）→ status。
 两条路任选：① 周期 <64s 写 1→0x1643（养机守人主循环顺手喂）；② 一次性
 拆狗：0x1651 mask 0xc2 写 0。警告：②与「挂死硬件仍狂充」互换风险，主循环
 活着时①更安全。
+
+### 充电旋钮全表 + 编码律（10-13 二补刀，源↔二进制对齐）
+
+**编码律**（`smblib_set_charge_param` 二进制定谳）：`raw字节 =
+clamp(µ值, min, max) 取 (µ值−min)/step`，单字节 regmap_write——全部
+旋钮同一形状，substrate 一把尺子全用。
+
+| 旋钮 | 寄存器 | 量程（µA/µV） | 步进 |
+|------|--------|---------------|------|
+| **FCC 快充电流** | **0x1061** | 0–8,000,000 | 50mA |
+| **FV 浮充电压** | **0x1070** | 3,600,000–4,790,000 | 10mV |
+| **USB ICL 入限流** | **0x1341** | 0–5,000,000 | 50mA |
+| OTG 电流限 | 0x1152 | 500,000–1,000,000 | 250mA |
+| ICL 现值/上限读 | 0x1107 / 0x1106 | 50mA 步同上 | — |
+| AICL ICL/状态读 | 0x1108 / 0x110A | — | — |
+
+配套腿：**挂起=0x1340 bit0 写 1**（USBIN_SUSPEND，恢复写 0）；
+**ICL 硬覆盖=0x1342 bit0**（绕过 APSD/AICL 协商，substrate 手动供电面）。
+
+**JEITA 三层**（热防护全貌）：
+① 硬比较门：0x1094+4i 阈值槽（2B），超热/超冷 PMIC 自主掐；
+② 硬降流：JEITA_CCCOMP_CFG_HOT=0x1092 / COLD=0x1093（25mA 步，0–1575mA
+FCC 削减），使能位在 JEITA_EN_CFG=0x1090——**驱动在 SW JEITA 生效时
+显式关掉硬斜率**（清 EN_*_SL_* 四位），redfin 走的是这条路；
+③ 软温区（warm/cool）：google 政策层 FCC/FV/ICL 投票降额——substrate
+自研温控时照抄层②③分工：硬门留 PMIC，软区自判。
 
 **votable 架构**：全部关键动作（CHG/ICL/FCC/ suspend）经 pmic-voter 仲裁，
 `vote(votable, VOTER名, en, val)`；无内核世界可整体换成单策略函数。
@@ -88,6 +114,7 @@ google-bms → at24（**m24c08@50 @ i2c 98c000**，qg 探测要读 batt_eeprom�
 
 ## 未闭项
 
-ICL/FCC/FV 完整写链、JEITA HW 配置细节、qg alarm 重排死亡路径（战役在案）、
-晨间 SHUTDOWN_SOC=0 重放之谜。（10-13 已闭：0x1140/0x1153/0x1550 命名、
-喂狗全配方=0x1643/0x1651←0x42/0x1653←0xFB，bark=64s DT 无覆写。）
+qg alarm 重排死亡路径（战役在案）、晨间 SHUTDOWN_SOC=0 重放之谜。
+（10-13 已闭二批：充电旋钮全表 FCC 0x1061/FV 0x1070/ICL 0x1341+编码律
+`(µ−min)/step`、挂起 0x1340 bit0、ICL 覆盖 0x1342、JEITA 三层 0x1090/
+0x1092-3/0x1094+4i。一批闭：看门狗全配方+0x1140/0x1153/0x1550 命名。）
