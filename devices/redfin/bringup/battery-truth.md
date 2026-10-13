@@ -165,8 +165,10 @@ google-bms → at24（**m24c08@50 @ i2c 98c000**，qg 探测要读 batt_eeprom�
    irq_clear=+0x108；主接收态 intr+0x10000×m+4n。
 
 附产：PON@pm7250b+0x800（开机原因，substrate 开机日志的根）。
-**待活体验证**（设备回网后）：`busybox devmem 0x0c440000 32`（≥0x50000000）
-+ 扫 0x0c440904 起实读 APID 表，钉死充电链 APID 号。
+**活体验证（10-13 relay 腿）**：dmesg `PMIC arbiter version v5 (0x50010000)`
+✓；/proc/iomem 五区+pshold-base 0c264000 逐字节全对 ✓。APID 号不预钉——
+substrate 运行时自发现（Linux 侧 STRICT_DEVMEM 拦死 /dev/mem，表读不到
+不阻碍裸机腿）。
 
 
 
