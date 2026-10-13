@@ -14,11 +14,35 @@ substrate 自养机电量的寄存器级蓝图；二进制与源码冲突时以�
 | 0x1410 bit4 | DCIN_RT_STS | 直流在位 |
 | 0x1341 | USBIN_CURRENT_LIMIT_CFG | **输入限流 ICL**（`smb5_usb_set_prop` 写） |
 | 0x1094 / 0x1096 | JEITA 阈值对 | bulk 2B 读（`jeita_update_work`），热限充门 |
-| 0x1140 / 0x1550 | （未命名） | `smb5_usb_set_prop` 写入面，用途待考 |
+| 0x1140 bit0 | DCDC_CMD_OTG_REG | OTG_EN——VBUS 反向输出（OTG 面） |
+| 0x1153 bit1 | DCDC_OTG_CFG_REG | OTG_EN_SRC_CFG 清 0=VBUS 归软件控 |
+| 0x1550 | TYPE_C_EXIT_STATE_CFG_REG | EXIT_SNK_BASED_ON_CC（PD 硬复位退源行为） |
+| **0x1643 bit0** | BARK_BITE_WDOG_PET | **喂狗=写 1**（见下节） |
+| 0x1651 | WD_CFG | 看门狗总闸（活值 0x42：bark IRQ+plugin 启动） |
+| 0x1653 | SNARL_BARK_BITE_WD_CFG | snarl/bark/bite 时长+咬后禁充（活值 0xFB） |
 
 充电状态合成（`smblib_get_prop_batt_status`）：health 门 → usb_present（0x1310
-bit4）｜dc_present（0x1410 bit4）→ status。看门狗：snarl IRQ 不写寄存器，走
-`SW_THERM_REGULATION_VOTER` 投票+延迟工作（喂狗寄存器待挖）。
+bit4）｜dc_present（0x1410 bit4）→ status。
+
+### 看门狗全配方（源↔二进制↔活体 DT 三对齐，10-13 补刀）
+
+驱动 `smb5_init_hw`（二进制内联进 `smb5_probe`）开狗三写：
+
+- **0x1653 ← 0xFB**（mask 0xff）：snarl=8s(field7=0x70)｜bark=64s(field2=0x08)｜
+  bite=8s+**咬后禁充**（0x83=BITE_WDOG_DISABLE_CHARGING|BITE_TIMEOUT_8S）。
+  bark 时长 DT 键 `qcom,wd-bark-time-secs`，**redfin DT 无此键**（活体
+  /proc/device-tree 验证 10-13）→ 64s 默认生效；snarl 走
+  SW_THERM_REGULATION_WA（google,wdog_snarl_disable 同样无键=在役）。
+- **0x1651 ← 0x42**（mask 0xc2）：BARK_WDOG_INT_EN(bit6)+WDOG_TIMER_EN_ON_
+  PLUGIN(bit1)，AFP 触发(bit7)关。
+- **喂狗=`regmap_write(0x1643, 1)`**（二进制 `wdog_bark_irq_handler` 直出；
+  probe 里再喂一次）。**中断驱动非定时器驱动**：64s bark IRQ → handler 喂。
+
+**substrate 推论**：狗只在**插充电器**时走（EN_ON_PLUGIN）；裸机不插电无狗。
+插电态下无内核=bark 无人喂 → 64s 后 bark、再 8s bite → **充电被 PMIC 硬掐**。
+两条路任选：① 周期 <64s 写 1→0x1643（养机守人主循环顺手喂）；② 一次性
+拆狗：0x1651 mask 0xc2 写 0。警告：②与「挂死硬件仍狂充」互换风险，主循环
+活着时①更安全。
 
 **votable 架构**：全部关键动作（CHG/ICL/FCC/ suspend）经 pmic-voter 仲裁，
 `vote(votable, VOTER名, en, val)`；无内核世界可整体换成单策略函数。
@@ -64,5 +88,6 @@ google-bms → at24（**m24c08@50 @ i2c 98c000**，qg 探测要读 batt_eeprom�
 
 ## 未闭项
 
-0x1140/0x1550 命名、看门狗喂狗寄存器、ICL/FCC/FV 完整写链、JEITA HW
-配置细节、qg alarm 重排死亡路径（战役在案）、晨间 SHUTDOWN_SOC=0 重放之谜。
+ICL/FCC/FV 完整写链、JEITA HW 配置细节、qg alarm 重排死亡路径（战役在案）、
+晨间 SHUTDOWN_SOC=0 重放之谜。（10-13 已闭：0x1140/0x1153/0x1550 命名、
+喂狗全配方=0x1643/0x1651←0x42/0x1653←0xFB，bark=64s DT 无覆写。）
