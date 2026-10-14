@@ -320,3 +320,8 @@ U1 MMIO 探针（读 CAP+VER，VER 合法→blink；冻死=时钟没开）→ U2
   CDB 1B…[4]=0x10、无数据）→ READ（DW0 0x14000000、DW7 0x01000001、头 01 40 00
   tag、exp_len rev(字节数)、CDB 28 [2..5]=LBA BE [7..8]=块数 BE、PRDT size=字节-1）；
   每发 tag++、门铃 1s 超时、OCS→响应 0x21→Response→sense 逐层判。收据 #492。
+- **u4g 判（10-14 22:35 刷）**：adb 649s → 182s 类=门铃 1s 超时（CPU 未死、
+  非 OCS）。SSU/读 #1 字节级同 u4f（皆过），新者=读 #2（LBA2→0xB0010000）。
+  嫌疑=DMA 目的地址出 UEFI 的 UFS SMMU 域可达范围（成功 DMA 皆落 0xB0000000
+  首 12KB）。u4h=读 #2 缓冲改 0xB0003000 单变量 + 分命令超时码（SSU 182/
+  读#1 302/读#2 332）。
