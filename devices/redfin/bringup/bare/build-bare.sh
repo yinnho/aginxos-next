@@ -79,6 +79,7 @@ MODE="heartbeat"
 [ "${1:-}" = "--u4d" ] && MODE="u4d"
 [ "${1:-}" = "--u4e" ] && MODE="u4e"
 [ "${1:-}" = "--u3d" ] && MODE="u3d"
+[ "${1:-}" = "--u3e" ] && MODE="u3e"
 mkdir -p "${OUTDIR}"
 ELF="${OUTDIR}/heartbeat.elf"
 
@@ -446,6 +447,15 @@ SECTIONS { . = 0x0; .text : { KEEP(*(.text.boot)) *(.text*) }
 LD
   zig cc -target aarch64-freestanding-none ${CFLAGS} -Wl,-T,"${OUTDIR}/u3d.ld" -o "${ELF}" "${HERE}/u3d-probe.S"
   BIN="${OUTDIR}/u3d.bin"; IMG="${OUTDIR}/boot-u3d.img"
+elif [ "${MODE}" = "u3e" ]; then
+  # 阶梯3 刀3-e：u3d 单变量——UTRLBA 64 位写→32 位写（UFSDxe 全 32 位访问）。
+  cat > "${OUTDIR}/u3e.ld" <<'LD'
+ENTRY(_start)
+SECTIONS { . = 0x0; .text : { KEEP(*(.text.boot)) *(.text*) }
+  /DISCARD/ : { *(.eh_frame*) *(.eh_frame_hdr) *(.comment) *(.note*) } }
+LD
+  zig cc -target aarch64-freestanding-none ${CFLAGS} -Wl,-T,"${OUTDIR}/u3e.ld" -o "${ELF}" "${HERE}/u3e-probe.S"
+  BIN="${OUTDIR}/u3e.bin"; IMG="${OUTDIR}/boot-u3e.img"
 elif [ "${MODE}" = "fb2" ]; then
   # B18b 白带判别：0xFFFFFFFF 任何格式皆不透明白。
   cat > "${OUTDIR}/fb2.ld" <<'LD'

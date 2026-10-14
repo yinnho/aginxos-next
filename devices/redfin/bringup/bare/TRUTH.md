@@ -262,3 +262,21 @@ U1 MMIO 探针（读 CAP+VER，VER 合法→blink；冻死=时钟没开）→ U2
   其「空心绿」另有因（DW0 代际/exp_len 形/tag 三者之一或合力）；
   u4d/u4e 双冻再添一重不干净（DW7 也错）。②DW1 归零（DUNL 保留）。
   重烤 u3d 反汇编：+0x48 DW1=wzr、+0x74/78 DW7=0x01000001，余常数不变。
+- **10-14 夜 UFSDxe 逆向（Qualcomm 本机 UEFI UFS 驱动=最近参照实现）**：
+  factory bootloader FBPK→xbl 段 0x9fc00000 FV→gzip 包内 FV→UFSDxe.efi
+  （508K，Ghidra 全反编译）。定谳：①UTRD 组装 FUN_d2c0：DW0=type<<28|
+  dir<<25|int<<24、DW1=0、DW2=0xF、DW6/7=(off_bytes&0x3fffc)<<14|len——
+  DW7 翻案独立证实；②**SCSI 读 type=0+INT=1 → DW0=0x05000000**（u3 旧值，
+  非 Linux 的 0x14000000——「代际律」只是 Linux 习惯，不是本控制器
+  刚见过的形）；③**tag=递增计数器（ctx+0x3c++），与槽位无关**——
+  「tag=槽位律」撤销；④门铃前写 IS(0x4020)=5 清中断、查 RSR(0x4060)，
+  完成判=IS bit0 且 DBR 位清；⑤**全部 HCI 访问 32 位**。
+  UFS MMIO 基 0x1d80000、HCI=+0x4000；UEFI 跑 cacheable+显式 cache 维护
+  （FUN_133dc）。uefiplat.cfg：0xB0000000 ∈ "Kernel Expanded"
+  0xAFE00000–0xB7E00000 SYS_MEM（普通 DDR，非 carveout）。
+- **64 位写嫌疑（全冻共因）**：u3 是唯一 `str w10,[x3,#0x50]`（UTRLBA
+  32 位写）且唯一过门；u3b/u4/u4b/u4c/u4d/u4e/u3d 七件全 `str x10`
+  （64 位写 32 位外设寄存器）全冻。另：u3 头 LE 0x01400001 落盘 01 00 40 01
+  =flags0/LUN0x40——「空心绿」真因是坏 LUN（OCS 只管传输层）。
+  **律：MMIO 一律 32 位 `str wN`**。u3e=u3d 单变量换回 32 位写，出炉
+  机器码对 u3d 仅 +0xb8 一条差（f900286a→b900506a）。
