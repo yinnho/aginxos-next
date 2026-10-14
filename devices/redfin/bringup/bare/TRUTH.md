@@ -130,3 +130,123 @@ redfin 运行面=裸 substrate（ka.S，slot a active），b 槽=L0 救生艇
   b 槽 L0（wifi ~580s 回归实测）→（ssh `/usr/bin/aginx-reboot
   bootloader`）→ fastboot（闸门串号核对）→ `set_active a` → reboot →
   裸（静止 logo 眼验）。
+
+## 7. UFS 存储契约（阶梯 3 研读，2026-10-14）[DRV][DT]
+
+源：`/tmp/redfin-kernel/drivers/scsi/ufs/`（ufshcd.c/ufshci.h/ufs.h，
+JEDEC UFSHCI 标准寄存器）+ 活体 DT。盘=128GB SK Hynix，bootdevice。
+
+### 硬件事实
+
+- **UFSHCI @ 0x1d84000**（窗 0x3000）；ICE @ 0x1d90000（加密面，裸件跳
+  过）；PHY @ 0x1d87000（qmp-v4-lito）；IRQ 265；双 lane；ref clk
+  19.2MHz；core reset 走 GCC（resets 0x4f 0x0c）。
+- XBL/ABL 刚用 UFS 读过 boot.img——控制器大概率仍在活态（U1/U2 定谳）。
+
+### 寄存器图（JEDEC 标准，ufs.h/ufshci.h 偏移枚举）
+
+| 偏移 | 名 | 用 |
+|---|---|---|
+| 0x00 | CAP | NUTRS/NUTMRS 槽数（byte0=NUTRS-1? 读出即真相） |
+| 0x08 | VER | 版本（0x201/0x210/0x300/0x310 合法域） |
+| 0x20/0x24 | IS/IE | 中断状态/使能（裸件纯轮询） |
+| 0x30 | CS | UCRDY 等 |
+| 0x34 | **HCE** | bit0=host enable（装弹=写1轮询1） |
+| 0x50/0x54 | UTRLBA/H | UTR 列表基址（1KB 对齐） |
+| 0x58 | **DBR** | 门铃：写 1<<tag 发单；完成=位自清 |
+| 0x5C | CLEAR | 完成位清除 |
+| 0x60 | **RSR** | bit0=UTR 列表跑/停 |
+| 0x90–0x9C | UICCMD/ARG1-3 | UIC（LINKSTARTUP 等，全 init 才用） |
+
+### 最小读路径（若 ABL 留活——U2 判）
+
+DRAM 布阵（MMU/cache 关=DMA 天然一致）：UTRDL @0xB0000000（1KB 对齐、
+32B）、UCD @0xB0001000（512B 对齐：命令 UPIU[512]+响应 UPIU[512]+PRDT）、
+数据 @0xB0002000。
+
+- **UTRD**：DW0=0x05000000（DD=device→host 0x04000000｜INT 0x01000000
+  ｜SCSI 0）；DW1=数据字节数；DW2 预填 0x0F（invalid OCS，完成后硬件
+  写真值，mask 0x0F）；DW3=0；DW4/5=UCD 地址 LE64；DW6=响应 UPIU
+  off=0x200/len；DW7=PRDT off=0x400/len=1。
+- **命令 UPIU（BE32 打包，宏 `UPIU_HEADER_DWORD`）**：[0]=0x01
+  COMMAND；[1]=0x40 READ；[2]=LUN；[3]=tag；[4..7]=0（SCSI 命令集）；
+  [12..15]=exp_len **BE32**；[16..31]=CDB。响应 UPIU trans=0x21。
+- **READ(10) CDB**：[0]=0x28；[2..5]=LBA BE32；[7..8]=块数 BE16；其余 0。
+- **PRDT 条目**：数据地址 LE64 + reserved + 字节数 LE32（≤256KB）。
+- 发单：UTRLBA←列表址 → RSR←1（若停）→ DBR←1 → 轮询 DBR bit0→0 →
+  OCS==0（OCS 表：0 成功/3 尺寸不匹配/5 通信失败…）→ 数据判读。
+- **判据刀**：读 LBA1 首 8 字节 = `EFI PART`（GPT 头）——块尺寸
+  512/4096 两世界同形（4096×1 块 vs 512×8 扇区，buffer 首都指 GPT 头）。
+
+### 刀序（单变量，blink/freeze 二值）
+
+U1 MMIO 探针（读 CAP+VER，VER 合法→blink；冻死=时钟没开）→ U2 活态
+（HCE==1&&RSR==1→blink；否则全 init 路径：HCE 装弹+UIC LINKSTARTUP）
+→ U3 UTR 往返（READ CAPACITY(10) 8B，OCS==0→blink）→ U4 首块读
+（READ(10) LBA1，`EFI PART`→blink=**无内核读盘首证**）→ U5+ 写路径
+（boot_a 尾部 scratch 写 pattern→强关回 L0 dd 对账=全带宽读出通道）。
+
+### 风险
+
+- ABL 可能关时钟离开（U1 冻死即知；GCC 时钟使能=备用大刀）；
+- 全 init 路径（HCE+LINKSTARTUP+PHY 校准）深=能免则免；
+- ICE/inline 加密不碰（裸件走非加密路径，CRYPTO_ENABLE 位=0）。
+
+### 编码律（2026-10-14 三常数案后立，源码=ufshcd.c:5048/ufshci.h:42,514-563）
+
+- **UTRD DW6/7 = length<<16 | offset，offset 单位是 dword（字节>>2）**。
+  DW6=RUL 0x80 | RUO 0x80（响应在字节 +0x200）；DW7=PRL **1（PRDT 条目
+  数，非字节）** | PRO 0x100（PRDT 在字节 +0x400）。字节粒度是
+  UFSHCD_QUIRK_PRDT_BYTE_GRAN 的旁路，本机不适用。
+- **UCD 布局**：命令 UPIU[0x200] + 响应 UPIU[0x200] + PRDT@+0x400
+  （ALIGNED_UPIU_SIZE=512）。响应 UPIU trans=0x21、byte4=UTP 响应码、
+  byte5=SCSI 状态（0=GOOD）、byte16+ sense。
+- **BE 字段双字节序律**：UPIU 是字节序列——头四字节 [0]=transcode
+  [1]=flags(0x40 读) [2]=LUN [3]=tag → LE dword 0x01004001；exp_len/
+  LBA/块数同理「BE 目标字节 → 反排 LE 装载」。与 PS_HOLD 地址并列的
+  三大常数坑：LBA `0x0100<<16`（非 0x0001<<16）、头 `movk #0x4001`、
+  DW7 `movz #1<<16 + movk #0x100`。
+- **BE32 落盘通式=rev（第四案后立律，2026-10-14 晚）**：`movz #0xNNNN,
+  lsl #16` 只对 0x000000NN 形状对；512 的 BE 字节是 00 00 02 00 →
+  落盘 LE 应为 0x00020000，`0x0200<<16`=0x02000000 落成 BE32=**2**。
+  u4d/u4e 的 exp_len 就这样发了 16/2 字节（非 4096/512）——两冻判词
+  作废，试验不干净。**凡 BE32 一律 `mov w10,#原生值` + `rev w10,w10`
+  再 str**，不再手算移位。
+- **DW0 代际律（源码 ufshcd.c:3778 / ufshci.h:449-464）**：DW0 =
+  type<<28 | DD<<26 | INT<<24；UFSHCI≥2.0（本机 sm7250）SCSI 读 type=
+  UTP_CMD_TYPE_UFS_STORAGE(1) → **0x14000000**。旧探针 0x05000000 =
+  type0（1.x 代际 SCSI 型）+INT 位，代际错（OCS 仍 0=控制器宽容）。
+  INT 位仅 intr_cmd（设备管理命令）置位，SCSI I/O 不置。
+- **tag=门铃槽位律**：内核 task_tag==slot，DBR bit0 → UPIU 头 tag
+  字节=0（旧探针=1 不符）。
+- **缓存世界**：ka.S/pi2.S 零 sctlr 写 → ABL 交接即 AArch64 启动协议
+  态（MMU off、D-cache off）非缓存世界，DMA 写即所见，无需 cache
+  维护；dc cvac/ivac 全免。
+
+### 刀账（2026-10-14 实测）
+
+- **仪器**：blink=fail-pass 唯一通道不变；判冻=12min adb 看门狗静默
+  +tries:a 计数（冻=2/1，blink×3 走完=0 并自落 b 槽 L0 adb 回归）；
+  mDNS 对本 L0 全盲。adb 回归时刻（80–100s）分辨不了小延迟，EL 判定弃。
+- **刀0 翻案（PS_HOLD 半字节案）**：u1aa 首版 `movz #0xc264,lsl#16`
+  =0xC2640000 写歪→外部中止→logo 冻；正解 `movz #0x0c26,lsl#16`+
+  `movk #0x4000`。19 件 u 系同雷全翻案（u1a/u2/u3 修后皆逃）。
+  mrs CurrentEL 无罪（u1ab 单变量证）。
+- **绿**：u1a CAP 读返回；u2 HCE==1&&UTRLRSR==1（免全 init）；u3
+  UTR 往返（门铃清+OCS==0）——**但数据空心**（见下）。
+- **冻族与三常数案**：u4/u4b（LBA 256 雷字节序→修 0x0100<<16 仍冻）；
+  u4 头修 0x01004001（LUN0/flags40）仍冻；u3b（头+PRDT「搬 +0x100」
+  +非零门）冻——搬错了（那是 dword 单位不是字节）。**根因=DW7 两半
+  装反 0x01000001（len256/off1），控制器在字节+4=命令 UPIU 肚子里读
+  PRDT，DMA 从未发生**：u3 空心绿、u4 族 magic 对零、一案全解。
+- **u3c**（响应门 +0x80 版）出炉即废（门错位，未刷）；**u4d**（源码
+  全契约版：DW7=0x00010100+PRDT 归位+0x400）判读挂账。
+- **u4d/u4e 双冻、判词作废（10-14 晚定谳）**：4096/512 两世界都冻，
+  但当晚源码复核抓出 exp_len 落盘常数形错（上条 rev 律）——发的是
+  16/2 字节，不是干净的契约试验。「双世界排除」不成立。
+- **u3d（READ CAPACITY 分诊刀）出炉待刷**：CDB[0]=0x25、8 字节、
+  DW0=0x14000000（代际修）、tag=0（槽位修）、exp_len 走 rev、数据
+  缓冲先清零再非零门（防陈旧假阳）。反汇编验尸全绿。判读：blink=
+  命令被收且数据到门（数据路全通→转 READ(10) 首证）；冻=转 u3e
+  响应门（+0x200 transcode 0x21+status GOOD）分层。
+

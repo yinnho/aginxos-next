@@ -51,6 +51,34 @@ MODE="heartbeat"
 [ "${1:-}" = "--fb" ] && MODE="fb"
 [ "${1:-}" = "--fb2" ] && MODE="fb2"
 [ "${1:-}" = "--ka" ] && MODE="ka"
+[ "${1:-}" = "--u1" ] && MODE="u1"
+[ "${1:-}" = "--u1a" ] && MODE="u1a"
+[ "${1:-}" = "--u1c" ] && MODE="u1c"
+[ "${1:-}" = "--u1d" ] && MODE="u1d"
+[ "${1:-}" = "--u1e" ] && MODE="u1e"
+[ "${1:-}" = "--u1f" ] && MODE="u1f"
+[ "${1:-}" = "--u1m" ] && MODE="u1m"
+[ "${1:-}" = "--u1n" ] && MODE="u1n"
+[ "${1:-}" = "--u1g" ] && MODE="u1g"
+[ "${1:-}" = "--u1s" ] && MODE="u1s"
+[ "${1:-}" = "--u1t" ] && MODE="u1t"
+[ "${1:-}" = "--u1u" ] && MODE="u1u"
+[ "${1:-}" = "--u1v" ] && MODE="u1v"
+[ "${1:-}" = "--u1w" ] && MODE="u1w"
+[ "${1:-}" = "--u1x" ] && MODE="u1x"
+[ "${1:-}" = "--u1y" ] && MODE="u1y"
+[ "${1:-}" = "--u1aa" ] && MODE="u1aa"
+[ "${1:-}" = "--u1ab" ] && MODE="u1ab"
+[ "${1:-}" = "--u2" ] && MODE="u2"
+[ "${1:-}" = "--u3" ] && MODE="u3"
+[ "${1:-}" = "--u4" ] && MODE="u4"
+[ "${1:-}" = "--u4b" ] && MODE="u4b"
+[ "${1:-}" = "--u3b" ] && MODE="u3b"
+[ "${1:-}" = "--u4c" ] && MODE="u4c"
+[ "${1:-}" = "--u3c" ] && MODE="u3c"
+[ "${1:-}" = "--u4d" ] && MODE="u4d"
+[ "${1:-}" = "--u4e" ] && MODE="u4e"
+[ "${1:-}" = "--u3d" ] && MODE="u3d"
 mkdir -p "${OUTDIR}"
 ELF="${OUTDIR}/heartbeat.elf"
 
@@ -130,6 +158,294 @@ SECTIONS { . = 0x0; .text : { KEEP(*(.text.boot)) *(.text*) }
 LD
   zig cc -target aarch64-freestanding-none ${CFLAGS} -Wl,-T,"${OUTDIR}/ka.ld" -o "${ELF}" "${HERE}/ka.S"
   BIN="${OUTDIR}/ka.bin"; IMG="${OUTDIR}/boot-ka.img"
+elif [ "${MODE}" = "u1" ]; then
+  # 阶梯3 刀1 v2：UFS MMIO 探针（CAP NUTRS 位权；VER 寄存器 qcom 坏已弃用）。
+  cat > "${OUTDIR}/u1.ld" <<'LD'
+ENTRY(_start)
+SECTIONS { . = 0x0; .text : { KEEP(*(.text.boot)) *(.text*) }
+  /DISCARD/ : { *(.eh_frame*) *(.eh_frame_hdr) *(.comment) *(.note*) } }
+LD
+  zig cc -target aarch64-freestanding-none ${CFLAGS} -Wl,-T,"${OUTDIR}/u1.ld" -o "${ELF}" "${HERE}/u1-probe.S"
+  BIN="${OUTDIR}/u1.bin"; IMG="${OUTDIR}/boot-u1.img"
+elif [ "${MODE}" = "u1a" ]; then
+  # 阶梯3 刀1b：MMIO 读可行性判别器（读完即闪，拆「读挂」与「值不符」）。
+  cat > "${OUTDIR}/u1a.ld" <<'LD'
+ENTRY(_start)
+SECTIONS { . = 0x0; .text : { KEEP(*(.text.boot)) *(.text*) }
+  /DISCARD/ : { *(.eh_frame*) *(.eh_frame_hdr) *(.comment) *(.note*) } }
+LD
+  zig cc -target aarch64-freestanding-none ${CFLAGS} -Wl,-T,"${OUTDIR}/u1a.ld" -o "${ELF}" "${HERE}/u1a-probe.S"
+  BIN="${OUTDIR}/u1a.bin"; IMG="${OUTDIR}/boot-u1a.img"
+elif [ "${MODE}" = "u1c" ]; then
+  # 阶梯3 刀1c：AHB 门钟开+读（U1a 冻死→时钟关，先开 iface 门再读）。
+  cat > "${OUTDIR}/u1c.ld" <<'LD'
+ENTRY(_start)
+SECTIONS { . = 0x0; .text : { KEEP(*(.text.boot)) *(.text*) }
+  /DISCARD/ : { *(.eh_frame*) *(.eh_frame_hdr) *(.comment) *(.note*) } }
+LD
+  zig cc -target aarch64-freestanding-none ${CFLAGS} -Wl,-T,"${OUTDIR}/u1c.ld" -o "${ELF}" "${HERE}/u1c-probe.S"
+  BIN="${OUTDIR}/u1c.bin"; IMG="${OUTDIR}/boot-u1c.img"
+elif [ "${MODE}" = "u1d" ]; then
+  # 阶梯3 刀1d：GCC 自检（读/RMW/回读粘住——证常开域 config 总线活）。
+  cat > "${OUTDIR}/u1d.ld" <<'LD'
+ENTRY(_start)
+SECTIONS { . = 0x0; .text : { KEEP(*(.text.boot)) *(.text*) }
+  /DISCARD/ : { *(.eh_frame*) *(.eh_frame_hdr) *(.comment) *(.note*) } }
+LD
+  zig cc -target aarch64-freestanding-none ${CFLAGS} -Wl,-T,"${OUTDIR}/u1d.ld" -o "${ELF}" "${HERE}/u1d-probe.S"
+  BIN="${OUTDIR}/u1d.bin"; IMG="${OUTDIR}/boot-u1d.img"
+elif [ "${MODE}" = "u1e" ]; then
+  cat > "${OUTDIR}/u1e.ld" <<'LD'
+ENTRY(_start)
+SECTIONS { . = 0x0; .text : { KEEP(*(.text.boot)) *(.text*) }
+  /DISCARD/ : { *(.eh_frame*) *(.eh_frame_hdr) *(.comment) *(.note*) } }
+LD
+  zig cc -target aarch64-freestanding-none ${CFLAGS} -Wl,-T,"${OUTDIR}/u1e.ld" -o "${ELF}" "${HERE}/u1e-probe.S"
+  BIN="${OUTDIR}/u1e.bin"; IMG="${OUTDIR}/boot-u1e.img"
+elif [ "${MODE}" = "u1f" ]; then
+  # 阶梯3 刀1f：VBAR 网+SError 解掩（读挂三解判别：stall/abort/干净）。
+  # 链基 0（落点无关）；vectors 定 flat 0x7C0=运行时基+0x800（2KB 对齐律）。
+  cat > "${OUTDIR}/u1f.ld" <<'LD'
+ENTRY(_start)
+SECTIONS { . = 0x0;
+  .text : { KEEP(*(.text.boot)) *(.text*) *(.rodata*) }
+  .vectors 0x7C0 : { KEEP(*(.vectors)) }
+  /DISCARD/ : { *(.eh_frame*) *(.eh_frame_hdr) *(.comment) *(.note*) } }
+LD
+  zig cc -target aarch64-freestanding-none ${CFLAGS} -Wl,-T,"${OUTDIR}/u1f.ld" -o "${ELF}" "${HERE}/u1f-probe.S"
+  BIN="${OUTDIR}/u1f.bin"; IMG="${OUTDIR}/boot-u1f.img"
+elif [ "${MODE}" = "u1m" ]; then
+  # 阶梯3 刀1m：恒等映射 MMU-on（真 stall 后的制度刀，U1f 全套+页表）。
+  # vectors 定 flat 0x7C0=运行时基+0x800（2KB 对齐律）。
+  cat > "${OUTDIR}/u1m.ld" <<'LD'
+ENTRY(_start)
+SECTIONS { . = 0x0;
+  .text : { KEEP(*(.text.boot)) *(.text*) *(.rodata*) }
+  .vectors 0x7C0 : { KEEP(*(.vectors)) }
+  /DISCARD/ : { *(.eh_frame*) *(.eh_frame_hdr) *(.comment) *(.note*) } }
+LD
+  zig cc -target aarch64-freestanding-none ${CFLAGS} -Wl,-T,"${OUTDIR}/u1m.ld" -o "${ELF}" "${HERE}/u1m-probe.S"
+  BIN="${OUTDIR}/u1m.bin"; IMG="${OUTDIR}/boot-u1m.img"
+elif [ "${MODE}" = "u1n" ]; then
+  # 阶梯3 刀1n：网正向标定（U1m 骨架+udf，长闪=仪器证毕）。
+  cat > "${OUTDIR}/u1n.ld" <<'LD'
+ENTRY(_start)
+SECTIONS { . = 0x0;
+  .text : { KEEP(*(.text.boot)) *(.text*) *(.rodata*) }
+  .vectors 0x7C0 : { KEEP(*(.vectors)) }
+  /DISCARD/ : { *(.eh_frame*) *(.eh_frame_hdr) *(.comment) *(.note*) } }
+LD
+  zig cc -target aarch64-freestanding-none ${CFLAGS} -Wl,-T,"${OUTDIR}/u1n.ld" -o "${ELF}" "${HERE}/u1n-probe.S"
+  BIN="${OUTDIR}/u1n.bin"; IMG="${OUTDIR}/boot-u1n.img"
+elif [ "${MODE}" = "u1g" ]; then
+  # 阶梯3 刀1g：GICD 读（MMU-on，均匀死 vs config-NoC 死分刀）。
+  cat > "${OUTDIR}/u1g.ld" <<'LD'
+ENTRY(_start)
+SECTIONS { . = 0x0;
+  .text : { KEEP(*(.text.boot)) *(.text*) *(.rodata*) }
+  .vectors 0x7C0 : { KEEP(*(.vectors)) }
+  /DISCARD/ : { *(.eh_frame*) *(.eh_frame_hdr) *(.comment) *(.note*) } }
+LD
+  zig cc -target aarch64-freestanding-none ${CFLAGS} -Wl,-T,"${OUTDIR}/u1g.ld" -o "${ELF}" "${HERE}/u1g-probe.S"
+  BIN="${OUTDIR}/u1g.bin"; IMG="${OUTDIR}/boot-u1g.img"
+elif [ "${MODE}" = "u1s" ]; then
+  # 阶梯3 刀1s：网最小自检（MMU-off 零页表零外域；scratch 全在镜像内）。
+  cat > "${OUTDIR}/u1s.ld" <<'LD'
+ENTRY(_start)
+SECTIONS { . = 0x0;
+  .text : { KEEP(*(.text.boot)) *(.text*) *(.rodata*) }
+  .vectors 0x7C0 : { KEEP(*(.vectors)) }
+  .scratch 0x1FC0 : { KEEP(*(.scratch)) }
+  /DISCARD/ : { *(.eh_frame*) *(.eh_frame_hdr) *(.comment) *(.note*) } }
+LD
+  zig cc -target aarch64-freestanding-none ${CFLAGS} -Wl,-T,"${OUTDIR}/u1s.ld" -o "${ELF}" "${HERE}/u1s-probe.S"
+  BIN="${OUTDIR}/u1s.bin"; IMG="${OUTDIR}/boot-u1s.img"
+elif [ "${MODE}" = "u1t" ]; then
+  # 阶梯3 刀1t：对齐触发网自检（SCTLR.A+未对齐读，零总线零 MMU）。
+  cat > "${OUTDIR}/u1t.ld" <<'LD'
+ENTRY(_start)
+SECTIONS { . = 0x0;
+  .text : { KEEP(*(.text.boot)) *(.text*) *(.rodata*) }
+  .vectors 0x7C0 : { KEEP(*(.vectors)) }
+  .scratch 0x1FC0 : { KEEP(*(.scratch)) }
+  /DISCARD/ : { *(.eh_frame*) *(.eh_frame_hdr) *(.comment) *(.note*) } }
+LD
+  zig cc -target aarch64-freestanding-none ${CFLAGS} -Wl,-T,"${OUTDIR}/u1t.ld" -o "${ELF}" "${HERE}/u1t-probe.S"
+  BIN="${OUTDIR}/u1t.bin"; IMG="${OUTDIR}/boot-u1t.img"
+elif [ "${MODE}" = "u1u" ]; then
+  # 阶梯3 刀1u：无触发判别件（u1t 去 SCTLR.A 触发，判异常进入 vs 触发前毒性）。
+  cat > "${OUTDIR}/u1u.ld" <<'LD'
+ENTRY(_start)
+SECTIONS { . = 0x0;
+  .text : { KEEP(*(.text.boot)) *(.text*) *(.rodata*) }
+  .vectors 0x7C0 : { KEEP(*(.vectors)) }
+  .scratch 0x1FC0 : { KEEP(*(.scratch)) }
+  /DISCARD/ : { *(.eh_frame*) *(.eh_frame_hdr) *(.comment) *(.note*) } }
+LD
+  zig cc -target aarch64-freestanding-none ${CFLAGS} -Wl,-T,"${OUTDIR}/u1u.ld" -o "${ELF}" "${HERE}/u1u-probe.S"
+  BIN="${OUTDIR}/u1u.bin"; IMG="${OUTDIR}/boot-u1u.img"
+elif [ "${MODE}" = "u1v" ]; then
+  # 阶梯3 刀1v：物理层判别件（砍全部系统寄存器块，布局+scratch 原样）。
+  cat > "${OUTDIR}/u1v.ld" <<'LD'
+ENTRY(_start)
+SECTIONS { . = 0x0;
+  .text : { KEEP(*(.text.boot)) *(.text*) *(.rodata*) }
+  .vectors 0x7C0 : { KEEP(*(.vectors)) }
+  .scratch 0x1FC0 : { KEEP(*(.scratch)) }
+  /DISCARD/ : { *(.eh_frame*) *(.eh_frame_hdr) *(.comment) *(.note*) } }
+LD
+  zig cc -target aarch64-freestanding-none ${CFLAGS} -Wl,-T,"${OUTDIR}/u1v.ld" -o "${ELF}" "${HERE}/u1v-probe.S"
+  BIN="${OUTDIR}/u1v.bin"; IMG="${OUTDIR}/boot-u1v.img"
+
+elif [ "${MODE}" = "u1w" ]; then
+  # 阶梯3 刀1w：零 DRAM 写网标定（寄存器旗标，udf 触发，纯取指向量表）。
+  cat > "${OUTDIR}/u1w.ld" <<'LD'
+ENTRY(_start)
+SECTIONS { . = 0x0;
+  .text : { KEEP(*(.text.boot)) *(.text*) *(.rodata*) }
+  .vectors 0x7C0 : { KEEP(*(.vectors)) }
+  /DISCARD/ : { *(.eh_frame*) *(.eh_frame_hdr) *(.comment) *(.note*) } }
+LD
+  zig cc -target aarch64-freestanding-none ${CFLAGS} -Wl,-T,"${OUTDIR}/u1w.ld" -o "${ELF}" "${HERE}/u1w-probe.S"
+  BIN="${OUTDIR}/u1w.bin"; IMG="${OUTDIR}/boot-u1w.img"
+elif [ "${MODE}" = "u1x" ]; then
+  # 阶梯3 刀1x：烤表 MMU 刀（页表=镜像常量，零运行时写；DRAM 往返同址对照 u1v）。
+  # 段窗恰好铺满：.vectors [0x7C0,0xFC0) | .pgtable [0xFC0,0x1FC0) | .scratch [0x1FC0,0x1FC4)。
+  cat > "${OUTDIR}/u1x.ld" <<'LD'
+ENTRY(_start)
+SECTIONS { . = 0x0;
+  .text : { KEEP(*(.text.boot)) *(.text*) *(.rodata*) }
+  .vectors 0x7C0 : { KEEP(*(.vectors)) }
+  .pgtable 0xFC0 : { KEEP(*(.pgtable)) }
+  .scratch 0x1FC0 : { KEEP(*(.scratch)) }
+  /DISCARD/ : { *(.eh_frame*) *(.eh_frame_hdr) *(.comment) *(.note*) } }
+LD
+  zig cc -target aarch64-freestanding-none ${CFLAGS} -Wl,-T,"${OUTDIR}/u1x.ld" -o "${ELF}" "${HERE}/u1x-probe.S"
+  BIN="${OUTDIR}/u1x.bin"; IMG="${OUTDIR}/boot-u1x.img"
+elif [ "${MODE}" = "u1y" ]; then
+  # 阶梯3 刀1y：sysreg 块判别（矩阵缺格：CurrentEL+VBAR、无触发、无 DRAM 写；
+  # 闪长=EL 编码 1s/2s/3s）。
+  cat > "${OUTDIR}/u1y.ld" <<'LD'
+ENTRY(_start)
+SECTIONS { . = 0x0;
+  .text : { KEEP(*(.text.boot)) *(.text*) *(.rodata*) }
+  .vectors 0x7C0 : { KEEP(*(.vectors)) }
+  /DISCARD/ : { *(.eh_frame*) *(.eh_frame_hdr) *(.comment) *(.note*) } }
+LD
+  zig cc -target aarch64-freestanding-none ${CFLAGS} -Wl,-T,"${OUTDIR}/u1y.ld" -o "${ELF}" "${HERE}/u1y-probe.S"
+  BIN="${OUTDIR}/u1y.bin"; IMG="${OUTDIR}/boot-u1y.img"
+elif [ "${MODE}" = "u1aa" ]; then
+  # 阶梯3 刀1-aa：mrs CurrentEL 单件（calib 骨架+唯一增量 mrs，闪长=EL
+  # 编码 1s/2s/3s；刀0 对照后 sysreg 增量二分的第一步）。
+  cat > "${OUTDIR}/u1aa.ld" <<'LD'
+ENTRY(_start)
+SECTIONS { . = 0x0;
+  .text : { KEEP(*(.text.boot)) *(.text*) *(.rodata*) }
+  /DISCARD/ : { *(.eh_frame*) *(.eh_frame_hdr) *(.comment) *(.note*) } }
+LD
+  zig cc -target aarch64-freestanding-none ${CFLAGS} -Wl,-T,"${OUTDIR}/u1aa.ld" -o "${ELF}" "${HERE}/u1aa-probe.S"
+  BIN="${OUTDIR}/u1aa.bin"; IMG="${OUTDIR}/boot-u1aa.img"
+elif [ "${MODE}" = "u1ab" ]; then
+  # 阶梯3 刀1-ab：mrs 隔离审（calib 原文+唯一增量 mrs CurrentEL 读而
+  # 不用；u1aa 冻死后拆增量集二分的头号嫌疑单审）。
+  cat > "${OUTDIR}/u1ab.ld" <<'LD'
+ENTRY(_start)
+SECTIONS { . = 0x0;
+  .text : { KEEP(*(.text.boot)) *(.text*) *(.rodata*) }
+  /DISCARD/ : { *(.eh_frame*) *(.eh_frame_hdr) *(.comment) *(.note*) } }
+LD
+  zig cc -target aarch64-freestanding-none ${CFLAGS} -Wl,-T,"${OUTDIR}/u1ab.ld" -o "${ELF}" "${HERE}/u1ab-probe.S"
+  BIN="${OUTDIR}/u1ab.bin"; IMG="${OUTDIR}/boot-u1ab.img"
+elif [ "${MODE}" = "u2" ]; then
+  # 阶梯3 刀2：UFS 控制器活态（HCE/RSR 判 ABL 留态）。
+  cat > "${OUTDIR}/u2.ld" <<'LD'
+ENTRY(_start)
+SECTIONS { . = 0x0; .text : { KEEP(*(.text.boot)) *(.text*) }
+  /DISCARD/ : { *(.eh_frame*) *(.eh_frame_hdr) *(.comment) *(.note*) } }
+LD
+  zig cc -target aarch64-freestanding-none ${CFLAGS} -Wl,-T,"${OUTDIR}/u2.ld" -o "${ELF}" "${HERE}/u2-probe.S"
+  BIN="${OUTDIR}/u2.bin"; IMG="${OUTDIR}/boot-u2.img"
+elif [ "${MODE}" = "u3" ]; then
+  # 阶梯3 刀3：UTR 往返（READ CAPACITY，OCS==0 判全链路通）。
+  cat > "${OUTDIR}/u3.ld" <<'LD'
+ENTRY(_start)
+SECTIONS { . = 0x0; .text : { KEEP(*(.text.boot)) *(.text*) }
+  /DISCARD/ : { *(.eh_frame*) *(.eh_frame_hdr) *(.comment) *(.note*) } }
+LD
+  zig cc -target aarch64-freestanding-none ${CFLAGS} -Wl,-T,"${OUTDIR}/u3.ld" -o "${ELF}" "${HERE}/u3-probe.S"
+  BIN="${OUTDIR}/u3.bin"; IMG="${OUTDIR}/boot-u3.img"
+elif [ "${MODE}" = "u4" ]; then
+  # 阶梯3 刀4：首块读（READ(10) LBA1 == "EFI PART" 判无内核读盘）。
+  cat > "${OUTDIR}/u4.ld" <<'LD'
+ENTRY(_start)
+SECTIONS { . = 0x0; .text : { KEEP(*(.text.boot)) *(.text*) }
+  /DISCARD/ : { *(.eh_frame*) *(.eh_frame_hdr) *(.comment) *(.note*) } }
+LD
+  zig cc -target aarch64-freestanding-none ${CFLAGS} -Wl,-T,"${OUTDIR}/u4.ld" -o "${ELF}" "${HERE}/u4-probe.S"
+  BIN="${OUTDIR}/u4.bin"; IMG="${OUTDIR}/boot-u4.img"
+elif [ "${MODE}" = "u4b" ]; then
+  # 阶梯3 刀4-b：512 字节世界问法（u4 唯改 DW1/exp_len/PRDT 三处尺寸）。
+  cat > "${OUTDIR}/u4b.ld" <<'LD'
+ENTRY(_start)
+SECTIONS { . = 0x0; .text : { KEEP(*(.text.boot)) *(.text*) }
+  /DISCARD/ : { *(.eh_frame*) *(.eh_frame_hdr) *(.comment) *(.note*) } }
+LD
+  zig cc -target aarch64-freestanding-none ${CFLAGS} -Wl,-T,"${OUTDIR}/u4b.ld" -o "${ELF}" "${HERE}/u4b-probe.S"
+  BIN="${OUTDIR}/u4b.bin"; IMG="${OUTDIR}/boot-u4b.img"
+elif [ "${MODE}" = "u3b" ]; then
+  # 阶梯3 刀3-b：READ CAPACITY 送达审（头字节序+PRDT@+0x100 对账修 + 非零门）。
+  cat > "${OUTDIR}/u3b.ld" <<'LD'
+ENTRY(_start)
+SECTIONS { . = 0x0; .text : { KEEP(*(.text.boot)) *(.text*) }
+  /DISCARD/ : { *(.eh_frame*) *(.eh_frame_hdr) *(.comment) *(.note*) } }
+LD
+  zig cc -target aarch64-freestanding-none ${CFLAGS} -Wl,-T,"${OUTDIR}/u3b.ld" -o "${ELF}" "${HERE}/u3b-probe.S"
+  BIN="${OUTDIR}/u3b.bin"; IMG="${OUTDIR}/boot-u3b.img"
+elif [ "${MODE}" = "u4c" ]; then
+  # 阶梯3 刀4-c：READ(10) 首证冲线（u4 + PRDT@+0x100 对账修）。
+  cat > "${OUTDIR}/u4c.ld" <<'LD'
+ENTRY(_start)
+SECTIONS { . = 0x0; .text : { KEEP(*(.text.boot)) *(.text*) }
+  /DISCARD/ : { *(.eh_frame*) *(.eh_frame_hdr) *(.comment) *(.note*) } }
+LD
+  zig cc -target aarch64-freestanding-none ${CFLAGS} -Wl,-T,"${OUTDIR}/u4c.ld" -o "${ELF}" "${HERE}/u4c-probe.S"
+  BIN="${OUTDIR}/u4c.bin"; IMG="${OUTDIR}/boot-u4c.img"
+elif [ "${MODE}" = "u3c" ]; then
+  # 阶梯3 刀3-c：响应 UPIU 审（resp@+0x80 transcode+SCSI 状态双门）。
+  cat > "${OUTDIR}/u3c.ld" <<'LD'
+ENTRY(_start)
+SECTIONS { . = 0x0; .text : { KEEP(*(.text.boot)) *(.text*) }
+  /DISCARD/ : { *(.eh_frame*) *(.eh_frame_hdr) *(.comment) *(.note*) } }
+LD
+  zig cc -target aarch64-freestanding-none ${CFLAGS} -Wl,-T,"${OUTDIR}/u3c.ld" -o "${ELF}" "${HERE}/u3c-probe.S"
+  BIN="${OUTDIR}/u3c.bin"; IMG="${OUTDIR}/boot-u3c.img"
+elif [ "${MODE}" = "u4d" ]; then
+  # 阶梯3 刀4-d：全契约源码版（DW7 半修 0x00010100 + PRDT 归位 +0x400）。
+  cat > "${OUTDIR}/u4d.ld" <<'LD'
+ENTRY(_start)
+SECTIONS { . = 0x0; .text : { KEEP(*(.text.boot)) *(.text*) }
+  /DISCARD/ : { *(.eh_frame*) *(.eh_frame_hdr) *(.comment) *(.note*) } }
+LD
+  zig cc -target aarch64-freestanding-none ${CFLAGS} -Wl,-T,"${OUTDIR}/u4d.ld" -o "${ELF}" "${HERE}/u4d-probe.S"
+  BIN="${OUTDIR}/u4d.bin"; IMG="${OUTDIR}/boot-u4d.img"
+elif [ "${MODE}" = "u4e" ]; then
+  # 阶梯3 刀4-e：512 世界版（u4d 唯改 DW1/exp_len/PRDT 三处尺寸）。
+  cat > "${OUTDIR}/u4e.ld" <<'LD'
+ENTRY(_start)
+SECTIONS { . = 0x0; .text : { KEEP(*(.text.boot)) *(.text*) }
+  /DISCARD/ : { *(.eh_frame*) *(.eh_frame_hdr) *(.comment) *(.note*) } }
+LD
+  zig cc -target aarch64-freestanding-none ${CFLAGS} -Wl,-T,"${OUTDIR}/u4e.ld" -o "${ELF}" "${HERE}/u4e-probe.S"
+  BIN="${OUTDIR}/u4e.bin"; IMG="${OUTDIR}/boot-u4e.img"
+elif [ "${MODE}" = "u3d" ]; then
+  # 阶梯3 刀3-d：READ CAPACITY 分诊（DW0 代际修 0x14000000 + exp_len rev 通式 + tag=槽位）。
+  cat > "${OUTDIR}/u3d.ld" <<'LD'
+ENTRY(_start)
+SECTIONS { . = 0x0; .text : { KEEP(*(.text.boot)) *(.text*) }
+  /DISCARD/ : { *(.eh_frame*) *(.eh_frame_hdr) *(.comment) *(.note*) } }
+LD
+  zig cc -target aarch64-freestanding-none ${CFLAGS} -Wl,-T,"${OUTDIR}/u3d.ld" -o "${ELF}" "${HERE}/u3d-probe.S"
+  BIN="${OUTDIR}/u3d.bin"; IMG="${OUTDIR}/boot-u3d.img"
 elif [ "${MODE}" = "fb2" ]; then
   # B18b 白带判别：0xFFFFFFFF 任何格式皆不透明白。
   cat > "${OUTDIR}/fb2.ld" <<'LD'
