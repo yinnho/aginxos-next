@@ -288,3 +288,9 @@ U1 MMIO 探针（读 CAP+VER，VER 合法→blink；冻死=时钟没开）→ U2
   都重试）。**u3g=时延编码仪器**：命令体=u3e、任何结局都复位、阶段编码进
   复位前等待 2+30×stage 秒（CNTVCT）：0 过/1 门铃 1s 超时/2 OCS≠0/3 trans
   或 response 坏/4 status≠GOOD/5 数据零；仍冻=CPU 中止（或 CNTVCT 被陷）。
+- **u3g 首判（10-14 21:48 刷）**：adb 354s 回归、slot_b、串号 redfin——
+  三轮全复位（非冻）。按基线 40–100s + 3×30×stage 判 **stage3**
+  （310–370s 窗；stage2 窗 220–280、stage4 窗 400–460）：门铃清+OCS=0，
+  但响应 UPIU byte0≠0x21 或 byte6(response)≠0。首次把失败钉到阶段：
+  CPU 中止/总线挂死/门铃超时全排除。旁证：L0 内核 DEVMEM 关且
+  0xA0000000–0xB7E00FFF 为 System RAM——复位后读 DDR 残留路不通。
