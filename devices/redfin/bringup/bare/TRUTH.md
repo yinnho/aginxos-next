@@ -342,3 +342,12 @@ U1 MMIO 探针（读 CAP+VER，VER 合法→blink；冻死=时钟没开）→ U2
   128/N 19/ELBA 2 健全）→**头 CRC32 中**→按头读 LBA2 条目数组 2432B→
   **数组 CRC32 中**：LUN0 19 条分区（ssd…super/userdata）逐字节读对。CRC 在
   设备上算（反射 0xEDB88320），自校验无需宿主比对。收据 #493。
+- **ka.S v2 在役验收（10-14 23:21 刷 slot a）**：开机先跑 u4j 存储自检（SSU
+  唤醒+GPT 双 CRC），过→v1 常驻 substrate（充电使能+永续喂狗），败→时延复位
+  自报。判据三证：①logo 静止 ≥10min、用户眼验全程无一次黑屏（任一失败档单轮
+  ≤332s 即复位黑屏）；②21min adb 静默（失败档全部超窗）；③**fastboot
+  `slot-retry-count:a=2`**——刷写重臂 3、整段只开机一次耗一命，从未复位
+  （失败路径每轮烧一命、3 轮落 b）。=存储自检过、常驻不复位。逃生 B 收尾：
+  VolDown→fastboot（闸门过）→`set_active b`→reboot→L0 adb 37s。v2 修 v1
+  潜伏 bug：无 CHGR APPS 副本时 x7 未初始化即进喂狗环（ka_main 先 x7=-1）。
+  盲区承 v1：「跑几分钟后死」与常驻同形——电流表挂账。
