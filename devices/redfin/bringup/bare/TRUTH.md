@@ -306,3 +306,10 @@ U1 MMIO 探针（读 CAP+VER，VER 合法→blink；冻死=时钟没开）→ U2
   **sense key 2 NOT READY**（非 UA，重试支未走）。对上 UFSDxe：Reset=PON
   （SSU POWERDOWN→W-LUN 0xD0），开 W-LUN 先 SSU ACTIVE。u3j 照 Qualcomm 序：
   SSU ACTIVE→W-LUN 0xD0（UA 重试 1）再 READ CAPACITY→LUN0（UA 重试 ≤2）。
+- **u3j 过（10-14 22:21 刷）**：adb **103s** 回归 slot_b、串号 redfin——落
+  2s 过窗（84–105s；次档 32s 类≥174s）。**无 Linux 内核下 UFS 数据路首通**：
+  SSU ACTIVE→W-LUN 0xD0 后 READ CAPACITY→LUN0 回 GOOD 且 DMA 落盘 8 字节
+  非零。**根因定谳**：交接前 bootloader 栈把 UFS 设备留在 PowerDown（UFSDxe
+  BlockIo->Reset=PON），普通 LU 一律 NOT READY；须先 SSU ACTIVE 唤醒 W-LUN。
+  控制器/SMMU/UTRD/UCD/PRDT/UPIU/数据 DMA 全链在役。下一刀 u4f=READ(10)
+  LBA1→「EFI PART」magic 门（读盘首证）。
