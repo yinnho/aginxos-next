@@ -280,3 +280,11 @@ U1 MMIO 探针（读 CAP+VER，VER 合法→blink；冻死=时钟没开）→ U2
   =flags0/LUN0x40——「空心绿」真因是坏 LUN（OCS 只管传输层）。
   **律：MMIO 一律 32 位 `str wN`**。u3e=u3d 单变量换回 32 位写，出炉
   机器码对 u3d 仅 +0xb8 一条差（f900286a→b900506a）。
+- **u3e 冻（10-14 夜）**：64 位写单独不是真凶。证据形=唯一过门的 u3 是坏
+  命令（LUN0x40/flags0，无数据），凡有效读+要数据者七件全冻——一比特仪器
+  混五种结局。**响应 UPIU 偏移律**：byte6=response、byte7=SCSI status
+  （Linux be32(dword_1)&0xFFFF；UFSDxe FUN_d1c4），旧档 +0x205 错位。
+  嫌疑新增 UNIT ATTENTION（上电后首条有效命令常回 CHECK CONDITION，真驱动
+  都重试）。**u3g=时延编码仪器**：命令体=u3e、任何结局都复位、阶段编码进
+  复位前等待 2+30×stage 秒（CNTVCT）：0 过/1 门铃 1s 超时/2 OCS≠0/3 trans
+  或 response 坏/4 status≠GOOD/5 数据零；仍冻=CPU 中止（或 CNTVCT 被陷）。

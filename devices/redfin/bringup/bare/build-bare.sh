@@ -80,6 +80,7 @@ MODE="heartbeat"
 [ "${1:-}" = "--u4e" ] && MODE="u4e"
 [ "${1:-}" = "--u3d" ] && MODE="u3d"
 [ "${1:-}" = "--u3e" ] && MODE="u3e"
+[ "${1:-}" = "--u3g" ] && MODE="u3g"
 mkdir -p "${OUTDIR}"
 ELF="${OUTDIR}/heartbeat.elf"
 
@@ -456,6 +457,15 @@ SECTIONS { . = 0x0; .text : { KEEP(*(.text.boot)) *(.text*) }
 LD
   zig cc -target aarch64-freestanding-none ${CFLAGS} -Wl,-T,"${OUTDIR}/u3e.ld" -o "${ELF}" "${HERE}/u3e-probe.S"
   BIN="${OUTDIR}/u3e.bin"; IMG="${OUTDIR}/boot-u3e.img"
+elif [ "${MODE}" = "u3g" ]; then
+  # 阶梯3 刀3-g：时延编码仪器——任何结局复位，阶段编码进等待秒数（CNTVCT）。
+  cat > "${OUTDIR}/u3g.ld" <<'LD'
+ENTRY(_start)
+SECTIONS { . = 0x0; .text : { KEEP(*(.text.boot)) *(.text*) }
+  /DISCARD/ : { *(.eh_frame*) *(.eh_frame_hdr) *(.comment) *(.note*) } }
+LD
+  zig cc -target aarch64-freestanding-none ${CFLAGS} -Wl,-T,"${OUTDIR}/u3g.ld" -o "${ELF}" "${HERE}/u3g-probe.S"
+  BIN="${OUTDIR}/u3g.bin"; IMG="${OUTDIR}/boot-u3g.img"
 elif [ "${MODE}" = "fb2" ]; then
   # B18b 白带判别：0xFFFFFFFF 任何格式皆不透明白。
   cat > "${OUTDIR}/fb2.ld" <<'LD'
