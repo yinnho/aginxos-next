@@ -84,6 +84,7 @@ MODE="heartbeat"
 [ "${1:-}" = "--u3h" ] && MODE="u3h"
 [ "${1:-}" = "--u3i" ] && MODE="u3i"
 [ "${1:-}" = "--u3j" ] && MODE="u3j"
+[ "${1:-}" = "--u4f" ] && MODE="u4f"
 mkdir -p "${OUTDIR}"
 ELF="${OUTDIR}/heartbeat.elf"
 
@@ -496,6 +497,15 @@ SECTIONS { . = 0x0; .text : { KEEP(*(.text.boot)) *(.text*) }
 LD
   zig cc -target aarch64-freestanding-none ${CFLAGS} -Wl,-T,"${OUTDIR}/u3j.ld" -o "${ELF}" "${HERE}/u3j-probe.S"
   BIN="${OUTDIR}/u3j.bin"; IMG="${OUTDIR}/boot-u3j.img"
+elif [ "${MODE}" = "u4f" ]; then
+  # 阶梯3 刀4-f：SSU 唤醒后 READ(10) LUN0 LBA1 → "EFI PART" magic 门（读盘首证）。
+  cat > "${OUTDIR}/u4f.ld" <<'LD'
+ENTRY(_start)
+SECTIONS { . = 0x0; .text : { KEEP(*(.text.boot)) *(.text*) }
+  /DISCARD/ : { *(.eh_frame*) *(.eh_frame_hdr) *(.comment) *(.note*) } }
+LD
+  zig cc -target aarch64-freestanding-none ${CFLAGS} -Wl,-T,"${OUTDIR}/u4f.ld" -o "${ELF}" "${HERE}/u4f-probe.S"
+  BIN="${OUTDIR}/u4f.bin"; IMG="${OUTDIR}/boot-u4f.img"
 elif [ "${MODE}" = "fb2" ]; then
   # B18b 白带判别：0xFFFFFFFF 任何格式皆不透明白。
   cat > "${OUTDIR}/fb2.ld" <<'LD'
