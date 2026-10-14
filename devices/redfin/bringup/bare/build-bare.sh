@@ -85,6 +85,7 @@ MODE="heartbeat"
 [ "${1:-}" = "--u3i" ] && MODE="u3i"
 [ "${1:-}" = "--u3j" ] && MODE="u3j"
 [ "${1:-}" = "--u4f" ] && MODE="u4f"
+[ "${1:-}" = "--u4g" ] && MODE="u4g"
 mkdir -p "${OUTDIR}"
 ELF="${OUTDIR}/heartbeat.elf"
 
@@ -506,6 +507,15 @@ SECTIONS { . = 0x0; .text : { KEEP(*(.text.boot)) *(.text*) }
 LD
   zig cc -target aarch64-freestanding-none ${CFLAGS} -Wl,-T,"${OUTDIR}/u4f.ld" -o "${ELF}" "${HERE}/u4f-probe.S"
   BIN="${OUTDIR}/u4f.bin"; IMG="${OUTDIR}/boot-u4f.img"
+elif [ "${MODE}" = "u4g" ]; then
+  # 阶梯3 刀4-g：GPT 分区表自校验读——头 CRC32+条目数组多块读 CRC32。
+  cat > "${OUTDIR}/u4g.ld" <<'LD'
+ENTRY(_start)
+SECTIONS { . = 0x0; .text : { KEEP(*(.text.boot)) *(.text*) }
+  /DISCARD/ : { *(.eh_frame*) *(.eh_frame_hdr) *(.comment) *(.note*) } }
+LD
+  zig cc -target aarch64-freestanding-none ${CFLAGS} -Wl,-T,"${OUTDIR}/u4g.ld" -o "${ELF}" "${HERE}/u4g-probe.S"
+  BIN="${OUTDIR}/u4g.bin"; IMG="${OUTDIR}/boot-u4g.img"
 elif [ "${MODE}" = "fb2" ]; then
   # B18b 白带判别：0xFFFFFFFF 任何格式皆不透明白。
   cat > "${OUTDIR}/fb2.ld" <<'LD'
