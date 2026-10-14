@@ -377,3 +377,8 @@ U1 MMIO 探针（读 CAP+VER，VER 合法→blink；冻死=时钟没开）→ U2
   的 owner-gated APID**。修法（待做 v3）：apid_misc=own(0x216) 喂 0x1643；chgr
   写 0x1043←0 解暂停；运行态读 0x1006/0x1042/0x1043/0x1651 落盘状态块
   （LBA 25096）验证。收据 #497。
+- **ka.S v2.1 短验过（10-15 05:49 刷 slot a）**：v2 + GPT 名查找（双 CRC 后按名找
+  boot_b、首块验 ANDROID!，过才进 ka_main）。判据：用户眼验 05:56 前无一次黑屏
+  （最慢失败档 392s 单轮必复位）；816s adb 全程静默至用户进 fastboot；
+  `slot-retry-count:a=2`（只开机一次、从未复位）。短验后 `set_active b`→L0 adb
+  37s 回归（v2.1 SPMI 段仍带 #497 缺陷，不久留）。收据 #498。
