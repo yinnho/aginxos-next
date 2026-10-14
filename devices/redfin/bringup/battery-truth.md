@@ -196,3 +196,19 @@ dload 清零+SDI 关，裸机无此包袱）。
 晨间 SHUTDOWN_SOC=0 重放之谜（电量战役在案）；SPMI APID 表活体实读
 （设备 wifi 打盹未应，devmem 命令在上节尾）。
 （10-13 已闭六批：①看门狗全配方+0x1140/0x1153/0x1550 命名 ②充电旋钮全表+编码律+挂起/覆盖腿+JEITA 三层 ③qg alarm 熄火机制+MSOC 0xBF 1/255 刻度 ④SPMI 运输层全协议 ⑤电量链外设 PPID 全表+深放阈值 ⑥重启/关机动词=PON 装弹 0x5A/0x5B+PS_HOLD 0xc264000 拉闸+静默 arbiter 铁律。）
+
+## ka v3 验收基线（2026-10-15，L0 只读取证）
+
+- **L0 无 debugfs**（/proc/filesystems 无 debugfs、/sys/kernel/debug 不存在）+
+  DEVMEM 关 → L0 侧**读不到 PMIC 原始寄存器**；v3 状态块须由裸件自读自落盘。
+- **MISC（PPID 0x216）APPS 有 owner 副本**（源码推断）：qpnp-smb5.c smb5_init_hw
+  写 SNARL_BARK_BITE_WD_CFG_REG(0x1653)+WD_CFG_REG(0x1651)，失败即
+  `pr_err("Couldn't configue WD config")`；L0 dmesg 无此行、亦无 SPMI 权限类报错
+  →APPS 能写 MISC→v3 `own(0x216)` 应有解。smb5-lib.c:7766 喂狗=
+  `smblib_write(BARK_BITE_WDOG_PET_REG=0x1643, BIT0)`（bark IRQ 内）。
+- **L0 充电态基线**（电池近满）：battery/status=Charging、charge_type=**Taper**、
+  current_now≈3mA、VBAT 4.455V、USB_PD 5.17V；google_charger dmesg 每 2s 记
+  usbv/usbc（mV/mA）≈5.2V/12–280mA=L0 软电流表。→ v3 状态块 0x1006 bits[2:0]
+  健康预期=4 TAPER/5 TERMINATE（近满时）；**=6 PAUSE 即证 #497**。
+- 旁记：L0 dmesg 37.148s 一条 WARNING（kthread.c:906 __kthread_queue_delayed_work，
+  显示/触控激活路径），与充电/SPMI 无关，未追。
