@@ -44,8 +44,7 @@ _start:
     /* UTRD：DW0=0x14000000（type1|DD读）；DW1=8B；DW2 预填 OCS=0x0F */
     movz   x10, #0x1400, lsl #16   /* DW0 = 0x14000000 修① */
     str    x10, [x8]
-    mov    w10, #8                 /* DW1 = 8 字节 */
-    str    w10, [x8, #4]
+    str    wzr, [x8, #4]           /* DW1 = DUNL（crypto 关=保留 0，ufshcd.c:3631；非数据长度） */
     mov    w10, #0x0F              /* DW2 = invalid OCS 预填 */
     str    w10, [x8, #8]
     str    wzr, [x8, #12]
@@ -56,8 +55,8 @@ _start:
     movz   x10, #0x0080, lsl #16
     movk   x10, #0x0080            /* DW6 = RUL 0x80 | RUO 0x80（0x200>>2） */
     str    x10, [x8, #24]
-    movz   x10, #0x0001, lsl #16
-    movk   x10, #0x0100            /* DW7 = PRL 1 | PRO 0x100（0x400>>2） */
+    movz   x10, #0x0100, lsl #16   /* DW7 高半 = PRDT offset 0x100（0x400>>2） */
+    movk   x10, #0x0001            /* DW7 低半 = PRDT length 1（ufshci.h:560 length 在 +28） */
     str    w10, [x8, #28]
 
     /* 命令 UPIU：头=01 40 00 00（trans/读flags/LUN0/tag0 修③）*/

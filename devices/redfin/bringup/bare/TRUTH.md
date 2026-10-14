@@ -164,8 +164,8 @@ DRAM 布阵（MMU/cache 关=DMA 天然一致）：UTRDL @0xB0000000（1KB 对齐
 32B）、UCD @0xB0001000（512B 对齐：命令 UPIU[512]+响应 UPIU[512]+PRDT）、
 数据 @0xB0002000。
 
-- **UTRD**：DW0=0x05000000（DD=device→host 0x04000000｜INT 0x01000000
-  ｜SCSI 0）；DW1=数据字节数；DW2 预填 0x0F（invalid OCS，完成后硬件
+- **UTRD**：DW0=0x14000000（见下代际律；旧 0x05000000 已废）；DW1=0
+  （DUNL，见下）；DW2 预填 0x0F（invalid OCS，完成后硬件
   写真值，mask 0x0F）；DW3=0；DW4/5=UCD 地址 LE64；DW6=响应 UPIU
   off=0x200/len；DW7=PRDT off=0x400/len=1。
 - **命令 UPIU（BE32 打包，宏 `UPIU_HEADER_DWORD`）**：[0]=0x01
@@ -194,10 +194,16 @@ U1 MMIO 探针（读 CAP+VER，VER 合法→blink；冻死=时钟没开）→ U2
 
 ### 编码律（2026-10-14 三常数案后立，源码=ufshcd.c:5048/ufshci.h:42,514-563）
 
-- **UTRD DW6/7 = length<<16 | offset，offset 单位是 dword（字节>>2）**。
-  DW6=RUL 0x80 | RUO 0x80（响应在字节 +0x200）；DW7=PRL **1（PRDT 条目
-  数，非字节）** | PRO 0x100（PRDT 在字节 +0x400）。字节粒度是
-  UFSHCD_QUIRK_PRDT_BYTE_GRAN 的旁路，本机不适用。
+- **UTRD DW6/7 = offset<<16 | length（ufshci.h:556-562：`__le16 length`
+  在低址 +24/+28、`__le16 offset` 在 +26/+30），offset 单位 dword（字节
+  >>2）**。DW6=0x00800080（RUO 0x80 | RUL 0x80，对称）；**DW7=0x01000001**
+  （PRO 0x100=PRDT 在字节 +0x400 | PRL **1 条目**）。字节粒度是
+  UFSHCD_QUIRK_PRDT_BYTE_GRAN 的旁路，本机不适用。**10-14 夜翻案**：
+  下文「DW7 两半装反」定谳本身是反的——u3 原值 0x01000001 才对，
+  u4d/u4e/u3d 首版的 0x00010100 = 256 条目 @UCD+4，才是 DMA 不发生的形。
+- **UTRD DW1 = DUNL（crypto 数据单元号低 32 位）**，crypto 关时保留=0
+  （ufshcd.c:3631）——不是数据长度；DW3=DUNU 同理 0。旧探针 DW1=字节数
+  属误读（CE=0 下大概率无害，但不合契约）。
 - **UCD 布局**：命令 UPIU[0x200] + 响应 UPIU[0x200] + PRDT@+0x400
   （ALIGNED_UPIU_SIZE=512）。响应 UPIU trans=0x21、byte4=UTP 响应码、
   byte5=SCSI 状态（0=GOOD）、byte16+ sense。
@@ -205,7 +211,7 @@ U1 MMIO 探针（读 CAP+VER，VER 合法→blink；冻死=时钟没开）→ U2
   [1]=flags(0x40 读) [2]=LUN [3]=tag → LE dword 0x01004001；exp_len/
   LBA/块数同理「BE 目标字节 → 反排 LE 装载」。与 PS_HOLD 地址并列的
   三大常数坑：LBA `0x0100<<16`（非 0x0001<<16）、头 `movk #0x4001`、
-  DW7 `movz #1<<16 + movk #0x100`。
+  DW7 `movz #0x0100,lsl#16 + movk #1`（=0x01000001，10-14 夜翻案后）。
 - **BE32 落盘通式=rev（第四案后立律，2026-10-14 晚）**：`movz #0xNNNN,
   lsl #16` 只对 0x000000NN 形状对；512 的 BE 字节是 00 00 02 00 →
   落盘 LE 应为 0x00020000，`0x0200<<16`=0x02000000 落成 BE32=**2**。
@@ -250,3 +256,9 @@ U1 MMIO 探针（读 CAP+VER，VER 合法→blink；冻死=时钟没开）→ U2
   命令被收且数据到门（数据路全通→转 READ(10) 首证）；冻=转 u3e
   响应门（+0x200 transcode 0x21+status GOOD）分层。
 
+- **10-14 夜复核两修（u3d 刷前）**：①DW7 翻案——ufshci.h:560-562
+  `prd_table_length` 在 +28（低半）、`prd_table_offset` 在 +30（高半），
+  正值 0x01000001；u3d 首版 0x00010100 未刷即重烤。u3 原值本就对，
+  其「空心绿」另有因（DW0 代际/exp_len 形/tag 三者之一或合力）；
+  u4d/u4e 双冻再添一重不干净（DW7 也错）。②DW1 归零（DUNL 保留）。
+  重烤 u3d 反汇编：+0x48 DW1=wzr、+0x74/78 DW7=0x01000001，余常数不变。
