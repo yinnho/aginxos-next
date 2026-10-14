@@ -356,3 +356,11 @@ U1 MMIO 探针（读 CAP+VER，VER 合法→blink；冻死=时钟没开）→ U2
   ＋ +64 u64 0x62005F，含 \0 终止符防前缀误中；8 对齐整字比）→ 取 +32
   StartingLBA → READ(10) 1 块 → 首 8 字节 "ANDROID!"。期望由 L0 只读 dd 定：
   条目 6、LBA 33288、boot header v3。**名→LBA→数据** 全链在裸件上闭合。收据 #495。
+- **u5a 过——写路径首证，双边验收（10-15 05:24 刷）**：裸件 adb **100s**（过窗：
+  WRITE(10) FUA + 回读 512 字逐字中）。L0 侧 dd LBA 25095–25097 宿主核：25096
+  w0="AGXWRT01"、戳 0xEC7492F（CNTVCT≈12.9s，三轮末轮所写）、w2..511 依戳复算
+  **0 差**；邻块 25095/25097 仍全零（只写一块）；boot_b 首 16 块 md5 49aa9390…
+  与刷前基线同（救生艇无损）。**写契约**：DW0 0x12000000（CT1、DD host→device）、
+  UPIU 头 01 20 00 tag（flags W）、CDB 2A 08(FUA) LBA BE … 块数 BE、exp_len=字节、
+  PRDT 指源缓冲。目标地址=校验后 GPT 名查 boot_a start+16384 且 ≤ end（不硬编码）。
+  boot_a 未见 PON/LBA 写保护（无 DATA PROTECT）。收据 #496。
