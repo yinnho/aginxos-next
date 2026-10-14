@@ -4,10 +4,10 @@
 # 常驻 hold/run（库仑积分未完成前 = 周期复戳 SYS/CC，防掉电后无写者）。
 # 二进制真源 crates/fg；产品面只 Rust。
 name = "aginx-fg"
-version = "0.1.1"
+version = "0.1.2"
 summary = "qpnp-qg 用户态 FG：144B udata unlock + hold/run daemon（redfin 可选）"
 group = "power"
-url = "https://pkgs.aginx.net/aginx-fg/v0.1.1/aginx-fg-v0.1.1-4pc.tar"
+url = "https://pkgs.aginx.net/aginx-fg/v0.1.2/aginx-fg-v0.1.2-4pc.tar"
 exec = "bin/aginx-fg"
 
 [service]

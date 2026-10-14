@@ -83,6 +83,14 @@ pub const BMS_VOLTAGE_NOW: &str = "/sys/class/power_supply/bms/voltage_now";
 pub const BMS_RESISTANCE_NOW: &str = "/sys/class/power_supply/bms/resistance_now";
 pub const BMS_RESISTANCE: &str = "/sys/class/power_supply/bms/resistance";
 pub const BATT_STATUS: &str = "/sys/class/power_supply/battery/status";
+pub const BATT_CHARGE_TYPE: &str = "/sys/class/power_supply/battery/charge_type";
+
+/// Zero-recovery voltage floor: live VBAT must be at least this (µV).
+pub const RECOVER_MIN_UV: u32 = 4_350_000;
+/// SOC stamped by zero-recovery — the canonical 10-12 unlock value.
+pub const RECOVER_SOCO: u32 = 9900;
+/// `qg_reset` polls QG_OK up to 20×200ms; wait this long before the udata write.
+pub const RECOVER_RESET_WAIT_SECS: u64 = 5;
 
 /// soco_raw at 100.00%.
 pub const SOCO_FULL: u32 = 10_000;
@@ -242,6 +250,12 @@ pub enum FgError {
     BmsUnsafe { capacity: i32 },
     BmsUnreadable,
     SocForbidden { soco_raw: u32 },
+    RecoverRefused {
+        capacity: i32,
+        voltage_uv: u32,
+        status: String,
+        charge_type: String,
+    },
     Msg(String),
 }
 
@@ -262,6 +276,17 @@ impl std::fmt::Display for FgError {
             FgError::SocForbidden { soco_raw } => {
                 write!(f, "refusing write: soco_raw={soco_raw} (never stamp 0)")
             }
+            FgError::RecoverRefused {
+                capacity,
+                voltage_uv,
+                status,
+                charge_type,
+            } => write!(
+                f,
+                "refusing zero-recovery: bms={capacity} vbat={voltage_uv}uV status={status} \
+                 charge_type={charge_type} (need bms<1, vbat>={RECOVER_MIN_UV}uV, \
+                 status Full or charge_type Taper)"
+            ),
             FgError::Msg(s) => write!(f, "{s}"),
         }
     }
@@ -377,6 +402,68 @@ pub fn battery_is_full() -> bool {
     read_battery_status()
         .map(|s| s.eq_ignore_ascii_case("Full"))
         .unwrap_or(false)
+}
+
+/// Read `battery/charge_type` trimmed, if present.
+pub fn read_charge_type() -> Option<String> {
+    std::fs::read_to_string(BATT_CHARGE_TYPE)
+        .ok()
+        .map(|s| s.trim().to_string())
+}
+
+/// Pure gate for pulling a welded-0 qg back to [`RECOVER_SOCO`].
+///
+/// The ordinary bms<1 gate can never open on its own after a deep discharge:
+/// msoc only moves when userspace writes udata, and writes are refused while
+/// bms<1. Open the side door only on live evidence that the cell is near
+/// full: VBAT ≥ [`RECOVER_MIN_UV`] **and** (status Full **or** charge_type
+/// Taper — constant-voltage phase).
+pub fn zero_recovery_allowed(
+    bms_capacity: i32,
+    voltage_uv: u32,
+    status: &str,
+    charge_type: &str,
+) -> bool {
+    bms_capacity < 1
+        && voltage_uv >= RECOVER_MIN_UV
+        && (status.eq_ignore_ascii_case("Full") || charge_type.eq_ignore_ascii_case("Taper"))
+}
+
+/// Recover a welded-0 qg (10-10 / 10-15 deep-discharge deadlock).
+///
+/// Checks [`zero_recovery_allowed`] on live sysfs, kicks `fg_reset` first
+/// (S7 OCV resample + `force_soc`), waits [`RECOVER_RESET_WAIT_SECS`], then
+/// writes the md5-gated canonical [`RECOVER_SOCO`] blob so the forced
+/// `process_udata_work` consumes it. Returns the VBAT evidence used.
+pub fn recover_from_zero(dev: impl AsRef<Path>) -> Result<u32, FgError> {
+    let capacity = read_bms_capacity(BMS_CAPACITY).map_err(|_| FgError::BmsUnreadable)?;
+    let voltage_uv = read_sysfs_u32(BMS_VOLTAGE_NOW)?;
+    let status = read_battery_status().unwrap_or_default();
+    let charge_type = read_charge_type().unwrap_or_default();
+    if !zero_recovery_allowed(capacity, voltage_uv, &status, &charge_type) {
+        return Err(FgError::RecoverRefused {
+            capacity,
+            voltage_uv,
+            status,
+            charge_type,
+        });
+    }
+    let blob = UdataBuilder::unlock_raw(RECOVER_SOCO).build();
+    let got = md5_hex(&blob);
+    if got != CANONICAL_9900_MD5 {
+        return Err(FgError::Md5Gate {
+            got,
+            expect: CANONICAL_9900_MD5.to_string(),
+        });
+    }
+    if Path::new(BMS_FG_RESET).exists() {
+        let mut rf = OpenOptions::new().write(true).open(BMS_FG_RESET)?;
+        rf.write_all(b"1\n")?;
+        std::thread::sleep(std::time::Duration::from_secs(RECOVER_RESET_WAIT_SECS));
+    }
+    let mut f = OpenOptions::new().write(true).open(dev.as_ref())?;
+    write_udata_fd(&mut f, &blob)?;
+    Ok(voltage_uv)
 }
 
 /// True when status is Discharging (unplugged / unloading).
@@ -679,6 +766,30 @@ mod tests {
         assert_eq!(QG_ENUM.len(), QG_MAX);
         assert_eq!(QG_CC_SOC * PARAM_SIZE, 72);
         assert_eq!(QG_SYS_SOC * PARAM_SIZE, 128);
+    }
+
+    #[test]
+    fn zero_recovery_gate() {
+        // 10-15 live scene: bms welded 0, VBAT 4.456V, Charging/Taper → allowed.
+        assert!(zero_recovery_allowed(0, 4_456_214, "Charging", "Taper"));
+        // Full status alone is enough evidence (charge_type may read None/Fast).
+        assert!(zero_recovery_allowed(0, 4_400_000, "Full", "N/A"));
+        // Boundary: exactly the floor passes, one µV below refuses.
+        assert!(zero_recovery_allowed(0, RECOVER_MIN_UV, "Charging", "Taper"));
+        assert!(!zero_recovery_allowed(0, RECOVER_MIN_UV - 1, "Charging", "Taper"));
+        // Healthy bms → not a recovery case (normal unlock path owns it).
+        assert!(!zero_recovery_allowed(1, 4_456_000, "Charging", "Taper"));
+        // Charging but still constant-current (Fast) → refuse: high terminal V under load.
+        assert!(!zero_recovery_allowed(0, 4_400_000, "Charging", "Fast"));
+        // Discharging deep cell (10-15 last stamp 2.766V) → refuse.
+        assert!(!zero_recovery_allowed(0, 2_765_791, "Discharging", "N/A"));
+        // Unreadable status/type default to empty → refuse.
+        assert!(!zero_recovery_allowed(0, 4_456_000, "", ""));
+        assert_eq!(RECOVER_SOCO, 9900);
+        assert_eq!(
+            md5_hex(&UdataBuilder::unlock_raw(RECOVER_SOCO).build()),
+            CANONICAL_9900_MD5
+        );
     }
 
     #[test]

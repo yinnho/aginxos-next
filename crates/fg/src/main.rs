@@ -20,9 +20,10 @@ use std::time::Duration;
 use aginx_fg::{
     battery_is_discharging, battery_is_full, describe, fifo_i_ua, fifo_i_ua_coulomb, get_param,
     hold_udata_monotonic, md5_hex, open_qg, read_battery_status, read_bms_capacity,
-    read_full_uah, read_ocv_rbat_care, read_sysfs_u32, seed_soco_raw, try_read_kdata, write_udata,
-    write_udata_fd, CoulombState, KernelData, UdataBuilder, BMS_CAPACITY, BMS_CC_SOC, BMS_SYS_SOC,
-    CANONICAL_9900_MD5, DEFAULT_QG_DEV, KDATA_SIZE, QG_CC_SOC, QG_SYS_SOC, SOCO_FLOOR, SOCO_FULL,
+    read_full_uah, read_ocv_rbat_care, read_sysfs_u32, recover_from_zero, seed_soco_raw,
+    try_read_kdata, write_udata, write_udata_fd, CoulombState, FgError, KernelData, UdataBuilder,
+    BMS_CAPACITY, BMS_CC_SOC, BMS_SYS_SOC, CANONICAL_9900_MD5, DEFAULT_QG_DEV, KDATA_SIZE,
+    QG_CC_SOC, QG_SYS_SOC, RECOVER_RESET_WAIT_SECS, RECOVER_SOCO, SOCO_FLOOR, SOCO_FULL,
     UDATA_SIZE,
 };
 
@@ -33,10 +34,13 @@ fn usage() -> ExitCode {
   check-canonical
   unlock [--soc N] [--sys N] [--cc N] [--ocv-uv N] [--rbat-mohm N]
          [--dev PATH] [--expect-md5 HEX] [--fg-reset] [--bin PATH]
+  unlock --recover-from-zero [--dev PATH]
   run [--dev PATH] [--interval-secs N] [--once]
   read-kdata [--dev PATH]
 
 SOC is soco_raw = percent×100 (9900 = 99%). unlock refuses SOC=0 and bms<1.
+--recover-from-zero pulls a welded-0 qg back to 9900 only on live evidence:
+bms<1, VBAT>=4.35V, status Full or charge_type Taper (run does this at start).
 Canonical 9900 md5: {CANONICAL_9900_MD5}"
     );
     ExitCode::from(2)
@@ -72,6 +76,7 @@ struct BuildArgs {
     dev: Option<PathBuf>,
     expect_md5: Option<String>,
     fg_reset: bool,
+    recover_from_zero: bool,
     bin: Option<PathBuf>,
     interval_secs: u64,
     once: bool,
@@ -113,6 +118,7 @@ fn parse_build(args: &[String]) -> Result<BuildArgs, String> {
                 ba.bin = Some(PathBuf::from(next(args, &mut i, "--bin")?));
             }
             "--fg-reset" => ba.fg_reset = true,
+            "--recover-from-zero" => ba.recover_from_zero = true,
             "--once" => ba.once = true,
             "--interval-secs" => {
                 ba.interval_secs = parse_u32(next(args, &mut i, "--interval-secs")?)? as u64;
@@ -192,6 +198,26 @@ fn cmd_unlock(args: &[String]) -> ExitCode {
             return usage();
         }
     };
+    if ba.recover_from_zero {
+        let dev = ba.dev.clone().unwrap_or_else(|| PathBuf::from(DEFAULT_QG_DEV));
+        if let Ok(c) = read_bms_capacity(BMS_CAPACITY) {
+            eprintln!("pre BMS={c}");
+        }
+        return match recover_from_zero(&dev) {
+            Ok(vbat) => {
+                eprintln!(
+                    "zero-recovery: fg_reset + wrote canonical {RECOVER_SOCO} to {} (vbat={vbat}uV)",
+                    dev.display()
+                );
+                let _ = print_bms_snapshot("post");
+                ExitCode::SUCCESS
+            }
+            Err(e) => {
+                eprintln!("aginx-fg unlock: {e}");
+                ExitCode::FAILURE
+            }
+        };
+    }
     let blob = if let Some(bin) = &ba.bin {
         match std::fs::read(bin) {
             Ok(b) if b.len() == UDATA_SIZE => {
@@ -216,7 +242,10 @@ fn cmd_unlock(args: &[String]) -> ExitCode {
         let default_soc = match read_bms_capacity(BMS_CAPACITY) {
             Ok(c) if c >= 1 => (c as u32) * 100,
             Ok(c) => {
-                eprintln!("aginx-fg unlock: bms capacity={c}; pass --soc explicitly if intentional");
+                eprintln!(
+                    "aginx-fg unlock: bms capacity={c}; for a welded-0 qg use --recover-from-zero \
+                     (needs VBAT>=4.35V and status Full or charge_type Taper)"
+                );
                 return ExitCode::from(3);
             }
             Err(_) => ba.soc.unwrap_or(9900),
@@ -292,6 +321,28 @@ fn cmd_run(args: &[String]) -> ExitCode {
     // Seed from sys_soc / cc_soc / bms — never start at 0; respect CC monotonic.
     let seed = match seed_soco_raw() {
         Ok(s) => s,
+        Err(FgError::SocForbidden { .. }) => {
+            // Welded-0 qg: self-heal on live evidence, else refuse as before.
+            match recover_from_zero(&dev_path) {
+                Ok(vbat) => {
+                    eprintln!(
+                        "aginx-fg run: zero-recovery: fg_reset + wrote canonical {RECOVER_SOCO} (vbat={vbat}uV)"
+                    );
+                    thread::sleep(Duration::from_secs(RECOVER_RESET_WAIT_SECS));
+                    match seed_soco_raw() {
+                        Ok(s) => s,
+                        Err(e) => {
+                            eprintln!("aginx-fg run: refusing start after zero-recovery: {e}");
+                            return ExitCode::from(3);
+                        }
+                    }
+                }
+                Err(e) => {
+                    eprintln!("aginx-fg run: refusing start: {e}");
+                    return ExitCode::from(3);
+                }
+            }
+        }
         Err(e) => {
             eprintln!("aginx-fg run: refusing start: {e}");
             return ExitCode::from(3);

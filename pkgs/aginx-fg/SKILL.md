@@ -47,3 +47,19 @@ msoc 冻结在 PON；本包提供：
 
 **结案**：SDAM 重放正确，**未复零**；`aginx-fg` v0.1.1 周期 stamp 足以喂 PON。
 全 unit ready（含 channels/research/browser/net-watch）；channels `active:true`。
+
+## 从 0 恢复（v0.1.2，2026-10-15）
+
+深放后 qg 会焊在 0（`qg_vbat_empty_handler` 盖 SDAM SOC=0；L0 无 stock FG，
+msoc 冻在 PON 值）。而 udata 写入要求 bms≥1、bms 又只靠 udata 写入抬升
+——**死锁**（10-15 实发：aginx-fg 拒启 `soco_raw=0`，`fg_reset` 单做无人回写）。
+
+- 侧门条件（`zero_recovery_allowed`，单测覆盖）：bms<1 **且** VBAT≥4.35V
+  **且**（status Full 或 charge_type Taper）——恒压段=近满真证据；Fast/放电一律拒。
+- 动作（`recover_from_zero`）：先 `fg_reset`（S7 OCV 重采+force_soc）→ 等 5s →
+  写 md5 门规范 9900 blob（「永不写 0」门不变）。
+- 入口：`aginx-fg unlock --recover-from-zero`（手动）；`run` 启动遇 bms=0 自动
+  尝试，条件不足照旧拒启。
+- 实证（redfin 10-15）：VBAT 4.456V/Charging/Taper → 自动恢复，日志
+  `zero-recovery: fg_reset + wrote canonical 9900`；post BMS=99 SYS=CC=9900、
+  voltage_ocv 2.766V→4.456V；battery rl 1 分钟 0→4% 爬升（预期）。
