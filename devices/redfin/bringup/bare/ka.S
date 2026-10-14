@@ -1,4 +1,9 @@
-/* ka.S —— 阶梯 2 在役裸 substrate v2：+ 阶梯 3 存储自检常驻（2026-10-14 深夜）
+/* ka.S —— 阶梯 2 在役裸 substrate v2.1：+ 存储自检 + GPT 名查找常驻（2026-10-15）
+ *
+ * v2.1 = v2 + u4k 名查找：双 CRC 过后在已校验条目数组按 UTF-16LE 名找 "boot_b"，
+ * 读其首块验 "ANDROID!"，过才进 ka_main；败码 272 找不到/362 读超时/392 非 magic。
+ * 注意：② 段 SPMI 仍是 v1 原样——收据 #497 读码定谳的「喂狗实写 0x1043 暂停充电」
+ * 缺陷在本版未修（待 v3）。
  *
  * redfin 整机在役态正身：无 Linux 内核。v2 开机序：
  *   ① UFS 存储自检（u4j 契约，TRUTH §7 末条）：UTRLBA/RSR → SSU ACTIVE →
@@ -129,7 +134,46 @@ _start:
     mov    x21, #62                /* 数组 CRC 不中 */
     cmp    w2, w26
     b.ne   8f
-    b      ka_main                 /* 存储自检过 → 常驻 substrate */
+    /* ⑤ 按名找 boot_b（x6=已校验条目数组 0xB0003000） */
+    ldr    w1, [x25, #80]          /* N（crc 踩了 w17，从头缓冲重取） */
+    mov    x0, x6
+    movz   x27, #0x0062
+    movk   x27, #0x006F, lsl #16
+    movk   x27, #0x006F, lsl #32
+    movk   x27, #0x0074, lsl #48   /* "boot" UTF-16LE */
+    movz   x28, #0x005F
+    movk   x28, #0x0062, lsl #16   /* "_b\0\0" UTF-16LE */
+22: ldr    x10, [x0, #56]
+    cmp    x10, x27
+    b.ne   23f
+    ldr    x10, [x0, #64]
+    cmp    x10, x28
+    b.eq   24f
+23: add    x0, x0, #128
+    subs   w1, w1, #1
+    b.ne   22b
+    mov    x21, #272               /* 找不到 boot_b */
+    b      8f
+24: ldr    x10, [x0, #32]          /* StartingLBA */
+    lsr    x11, x10, #32
+    mov    x21, #92
+    cbnz   x11, 8f                 /* LBA 越 32 位 */
+    mov    w4, w10
+    mov    w5, #1
+    movz   x6, #0xB000, lsl #16
+    movk   x6, #0x4000             /* 读 #3 缓冲 0xB0004000 */
+    mov    x29, #362               /* 读 #3 超时码 */
+    bl     ufs_read
+    ldr    x10, [x6]
+    movz   x11, #0x4E41
+    movk   x11, #0x5244, lsl #16
+    movk   x11, #0x494F, lsl #32
+    movk   x11, #0x2144, lsl #48   /* "ANDROID!" */
+    mov    x21, #392               /* 首块非 ANDROID! */
+    cmp    x10, x11
+    b.ne   8f
+    b      ka_main                 /* 名查+首块 magic 过 → 常驻 */
+
 
     /* 等 x21 秒 → PS_HOLD ← 0 */
 8:  mul    x11, x21, x20
