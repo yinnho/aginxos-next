@@ -337,3 +337,8 @@ U1 MMIO 探针（读 CAP+VER，VER 合法→blink；冻死=时钟没开）→ U2
   **全局寄存器律**：x3 HCI 基/x8 UTRD/x9 UCD/x20 CNTFRQ/x23 tag/x25 缓冲/x29
   码/x24 返址——子程序禁写；反汇编验尸加「全局寄存器写入审计」一项。
   u4j=u4h+crc 多项式改 w13。
+- **u4j 过——GPT 分区表无内核自校验读通（10-14 23:16 刷）**：adb **103s**
+  （过窗 84–109s）。SSU 唤醒→读 LBA1 GPT 头（magic+HeaderSize 92/SizeOfEntry
+  128/N 19/ELBA 2 健全）→**头 CRC32 中**→按头读 LBA2 条目数组 2432B→
+  **数组 CRC32 中**：LUN0 19 条分区（ssd…super/userdata）逐字节读对。CRC 在
+  设备上算（反射 0xEDB88320），自校验无需宿主比对。收据 #493。
