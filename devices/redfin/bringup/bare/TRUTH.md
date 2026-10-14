@@ -351,3 +351,8 @@ U1 MMIO 探针（读 CAP+VER，VER 合法→blink；冻死=时钟没开）→ U2
   VolDown→fastboot（闸门过）→`set_active b`→reboot→L0 adb 37s。v2 修 v1
   潜伏 bug：无 CHGR APPS 副本时 x7 未初始化即进喂狗环（ka_main 先 x7=-1）。
   盲区承 v1：「跑几分钟后死」与常驻同形——电流表挂账。
+- **u4k 过——按 GPT 名找分区读通（10-15 00:30 刷）**：adb **97s**（过窗）。
+  u4j 双 CRC 校验后的条目数组里按 UTF-16LE 名找 "boot_b"（+56 u64 0x0074006F006F0062
+  ＋ +64 u64 0x62005F，含 \0 终止符防前缀误中；8 对齐整字比）→ 取 +32
+  StartingLBA → READ(10) 1 块 → 首 8 字节 "ANDROID!"。期望由 L0 只读 dd 定：
+  条目 6、LBA 33288、boot header v3。**名→LBA→数据** 全链在裸件上闭合。收据 #495。
