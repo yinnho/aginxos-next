@@ -313,3 +313,10 @@ U1 MMIO 探针（读 CAP+VER，VER 合法→blink；冻死=时钟没开）→ U2
   BlockIo->Reset=PON），普通 LU 一律 NOT READY；须先 SSU ACTIVE 唤醒 W-LUN。
   控制器/SMMU/UTRD/UCD/PRDT/UPIU/数据 DMA 全链在役。下一刀 u4f=READ(10)
   LBA1→「EFI PART」magic 门（读盘首证）。
+- **u4f 过——RUNG3 读盘首证（10-14 22:26 刷）**：adb **106s** 回归 slot_b、
+  串号 redfin（过窗 84–109s）。SSU ACTIVE→W-LUN 0xD0 唤醒后 READ(10) LUN0
+  LBA1 1 块 4096B，缓冲首 8 字节 == "EFI PART"。**无内核读盘契约（定稿）**：
+  UTRLBA/RSR 32 位写 → SSU（DW0 0x10000000、DW7 0x01000000、头 01 00 D0 tag、
+  CDB 1B…[4]=0x10、无数据）→ READ（DW0 0x14000000、DW7 0x01000001、头 01 40 00
+  tag、exp_len rev(字节数)、CDB 28 [2..5]=LBA BE [7..8]=块数 BE、PRDT size=字节-1）；
+  每发 tag++、门铃 1s 超时、OCS→响应 0x21→Response→sense 逐层判。收据 #492。
