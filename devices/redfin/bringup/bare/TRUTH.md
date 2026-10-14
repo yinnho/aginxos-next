@@ -302,3 +302,7 @@ U1 MMIO 探针（读 CAP+VER，VER 合法→blink；冻死=时钟没开）→ U2
   向 W-LUN 0xD0 发 START STOP UNIT POWERDOWN（"PON"）；pre-EBS 事件组
   b1eb3d10-… 的 UFSDxe 处理只置标志、不下电。L0 侧 LUN0 在
   （SKhynix H9HQ16AFAMMDAR，sda 4096B 块）。u3i=读 sense key+UA 重试一次。
+- **u3i 判（10-14 22:10 刷）**：adb 285s 回归 slot_b（同 u3h 数）→ 62s 类=
+  **sense key 2 NOT READY**（非 UA，重试支未走）。对上 UFSDxe：Reset=PON
+  （SSU POWERDOWN→W-LUN 0xD0），开 W-LUN 先 SSU ACTIVE。u3j 照 Qualcomm 序：
+  SSU ACTIVE→W-LUN 0xD0（UA 重试 1）再 READ CAPACITY→LUN0（UA 重试 ≤2）。
