@@ -90,6 +90,7 @@ MODE="heartbeat"
 [ "${1:-}" = "--u4i" ] && MODE="u4i"
 [ "${1:-}" = "--u4j" ] && MODE="u4j"
 [ "${1:-}" = "--u4k" ] && MODE="u4k"
+[ "${1:-}" = "--u5a" ] && MODE="u5a"
 mkdir -p "${OUTDIR}"
 ELF="${OUTDIR}/heartbeat.elf"
 
@@ -556,6 +557,15 @@ SECTIONS { . = 0x0; .text : { KEEP(*(.text.boot)) *(.text*) }
 LD
   zig cc -target aarch64-freestanding-none ${CFLAGS} -Wl,-T,"${OUTDIR}/u4k.ld" -o "${ELF}" "${HERE}/u4k-probe.S"
   BIN="${OUTDIR}/u4k.bin"; IMG="${OUTDIR}/boot-u4k.img"
+elif [ "${MODE}" = "u5a" ]; then
+  # 阶梯5 刀5-a：写路径首证——boot_a 尾 scratch 块（名查+界检）WRITE(10) FUA + 回读逐字比。
+  cat > "${OUTDIR}/u5a.ld" <<'LD'
+ENTRY(_start)
+SECTIONS { . = 0x0; .text : { KEEP(*(.text.boot)) *(.text*) }
+  /DISCARD/ : { *(.eh_frame*) *(.eh_frame_hdr) *(.comment) *(.note*) } }
+LD
+  zig cc -target aarch64-freestanding-none ${CFLAGS} -Wl,-T,"${OUTDIR}/u5a.ld" -o "${ELF}" "${HERE}/u5a-probe.S"
+  BIN="${OUTDIR}/u5a.bin"; IMG="${OUTDIR}/boot-u5a.img"
 elif [ "${MODE}" = "fb2" ]; then
   # B18b 白带判别：0xFFFFFFFF 任何格式皆不透明白。
   cat > "${OUTDIR}/fb2.ld" <<'LD'
