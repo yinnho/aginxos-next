@@ -294,3 +294,11 @@ U1 MMIO 探针（读 CAP+VER，VER 合法→blink；冻死=时钟没开）→ U2
   但响应 UPIU byte0≠0x21 或 byte6(response)≠0。首次把失败钉到阶段：
   CPU 中止/总线挂死/门铃超时全排除。旁证：L0 内核 DEVMEM 关且
   0xA0000000–0xB7E00FFF 为 System RAM——复位后读 DDR 残留路不通。
+- **u3h 判（10-14 21:57 刷）**：adb 285s 回归 slot_b；以 u3g 校准基线≈78s →
+  d≈69s → 62s 类：响应 0x21 但 Response(byte6)≠0。**UFSDxe 响应律**：成功=
+  Response==0；CHECK CONDITION=Response≠0&&Status==2&&sense 长≠0（本机非
+  GOOD 必伴 Target Failure）；FUN_91a0 解 sense（+0x20 长 BE16、+0x22=0x70、
+  +0x24 key），**key 6 UNIT ATTENTION 视为无害**。BlockIo->Reset=FUN_14dc=
+  向 W-LUN 0xD0 发 START STOP UNIT POWERDOWN（"PON"）；pre-EBS 事件组
+  b1eb3d10-… 的 UFSDxe 处理只置标志、不下电。L0 侧 LUN0 在
+  （SKhynix H9HQ16AFAMMDAR，sda 4096B 块）。u3i=读 sense key+UA 重试一次。
