@@ -330,3 +330,10 @@ U1 MMIO 探针（读 CAP+VER，VER 合法→blink；冻死=时钟没开）→ U2
   对+设备上 CRC 例程对）。读 #2=同槽第三条命令；过关者皆只两条。UFSDxe 每发：
   敲铃前 IS=5+查 RSR==1、等待中盯 IS 0x31804、出错 UTRLCLR、完成写 IS=1——
   我方全无。u4i=SSU→读 LBA2→读 LBA1 + 敲铃前旁读 RSR/IS。
+- **u4i 过（10-14 23:12 刷）**：adb 100s——SSU→读 LBA2(第2条)→读 LBA1(第3条)
+  皆 GOOD，敲铃前 RSR/IS 皆净。**u4g/u4h「读 #2 超时」翻案=我方 bug**：crc
+  例程以 w3 装多项式 0xEDB88320 踩了全局 HCI 基址 x3，读 #2 门铃写进 DDR
+  0xEDB88378、轮询读回自写的 1→假超时。DMA 地址/SMMU/第三条命令三嫌疑全撤。
+  **全局寄存器律**：x3 HCI 基/x8 UTRD/x9 UCD/x20 CNTFRQ/x23 tag/x25 缓冲/x29
+  码/x24 返址——子程序禁写；反汇编验尸加「全局寄存器写入审计」一项。
+  u4j=u4h+crc 多项式改 w13。

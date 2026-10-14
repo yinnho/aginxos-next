@@ -88,6 +88,7 @@ MODE="heartbeat"
 [ "${1:-}" = "--u4g" ] && MODE="u4g"
 [ "${1:-}" = "--u4h" ] && MODE="u4h"
 [ "${1:-}" = "--u4i" ] && MODE="u4i"
+[ "${1:-}" = "--u4j" ] && MODE="u4j"
 mkdir -p "${OUTDIR}"
 ELF="${OUTDIR}/heartbeat.elf"
 
@@ -536,6 +537,15 @@ SECTIONS { . = 0x0; .text : { KEEP(*(.text.boot)) *(.text*) }
 LD
   zig cc -target aarch64-freestanding-none ${CFLAGS} -Wl,-T,"${OUTDIR}/u4i.ld" -o "${ELF}" "${HERE}/u4i-probe.S"
   BIN="${OUTDIR}/u4i.bin"; IMG="${OUTDIR}/boot-u4i.img"
+elif [ "${MODE}" = "u4j" ]; then
+  # 阶梯3 刀4-j：u4h 流程 + crc 多项式改 w13（修踩 x3 HCI 基址）。
+  cat > "${OUTDIR}/u4j.ld" <<'LD'
+ENTRY(_start)
+SECTIONS { . = 0x0; .text : { KEEP(*(.text.boot)) *(.text*) }
+  /DISCARD/ : { *(.eh_frame*) *(.eh_frame_hdr) *(.comment) *(.note*) } }
+LD
+  zig cc -target aarch64-freestanding-none ${CFLAGS} -Wl,-T,"${OUTDIR}/u4j.ld" -o "${ELF}" "${HERE}/u4j-probe.S"
+  BIN="${OUTDIR}/u4j.bin"; IMG="${OUTDIR}/boot-u4j.img"
 elif [ "${MODE}" = "fb2" ]; then
   # B18b 白带判别：0xFFFFFFFF 任何格式皆不透明白。
   cat > "${OUTDIR}/fb2.ld" <<'LD'
