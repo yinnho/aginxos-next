@@ -364,3 +364,16 @@ U1 MMIO 探针（读 CAP+VER，VER 合法→blink；冻死=时钟没开）→ U2
   UPIU 头 01 20 00 tag（flags W）、CDB 2A 08(FUA) LBA BE … 块数 BE、exp_len=字节、
   PRDT 指源缓冲。目标地址=校验后 GPT 名查 boot_a start+16384 且 ≤ end（不硬编码）。
   boot_a 未见 PON/LBA 写保护（无 DATA PROTECT）。收据 #496。
+- **喂狗落错寄存器——ka v1/v2 实为每轮暂停充电（10-15 读码定谳，未上机验）**：
+  SPMI 命令只带 `addr&0xff`，外设由 APID 定（PPID=sid<<8|addr>>8）。v1/v2（及
+  B15/B16）用 CHGR 的 APID（PPID 0x210）发「0x1643←1」，实落 **CHGR+0x43=0x1043
+  CHARGING_PAUSE_CMD_REG**；真看门狗 BARK_BITE_WDOG_PET_REG=**MISC_BASE(0x1600)
+  +0x43**（PPID 0x216）从未被喂（smb5-reg.h：CHGR_BASE 0x1000、MISC_BASE 0x1600、
+  CHARGING_ENABLE_CMD 0x1042、CHARGING_PAUSE_CMD 0x1043、BARK_BITE_WDOG_PET
+  0x1643、BATTERY_CHARGER_STATUS_1 0x1006 bits[2:0] 0 INHIBIT…3 FULLON 4 TAPER
+  6 PAUSE 7 DISABLE）。推论：ka 使能充电一次后每轮写暂停；插电 72s 看门狗咬→
+  禁充——**在役 substrate 极可能从未充电**。B15/B16 的「喂狗 DONE」只证事务完成，
+  不证写到对的寄存器。**SPMI 律：每个寄存器先按 addr>>8 定外设 PPID，再取该 PPID
+  的 owner-gated APID**。修法（待做 v3）：apid_misc=own(0x216) 喂 0x1643；chgr
+  写 0x1043←0 解暂停；运行态读 0x1006/0x1042/0x1043/0x1651 落盘状态块
+  （LBA 25096）验证。收据 #497。
