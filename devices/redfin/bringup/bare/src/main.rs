@@ -1,22 +1,22 @@
-//! S0-4 — MMU 恒等映射 + cache 使能（NOLINUX-PLAN S0 第四刀）。
+//! S0-5 — GICv3 + 通用定时器中断：忙等→WFI（NOLINUX-PLAN S0 第五刀）。
 //!
-//! u1x 机器已验形状上（T0SZ=25 单 L1 表、MAIR 0x44FF04）开真 cache
-//! （SCTLR M|C|I）：e0/e1/e3=Device-nGnRE 1GB 块、e2 拆 L2 2MB 粒
-//! （WB，DMA 窗 0xB0000000–0xB0200000 8 项 NC）——代码区 WB、UFS
-//! MMIO/DMA 各归其属性，ufs.rs 零维护点。
+//! S0-4 的 MMU/cache 链路原样保留；新增中断面：本核 RD 唤醒、dist
+//! 使能（ARE_NS|G1A|G1）、CPU 接口 SRE/PMR/IGRPEN1、虚拟定时器
+//! （INTID 19——bengal PPI3，活内核 /proc/interrupts 定谳）武装 1 秒
+//! → daifclr 解掩 → WFI。IRQ 落槽 5（current EL SPx），入口记
+//! id/dt/ctl 进环后复位。GIC MMIO 在 L1 e0 Device 段——表无需改。
 //!
-//! 验收（规格原文）：开 cache 后 GPT 双 CRC 仍中；日志记录读盘耗时
-//! 对比（cache-off/on 各计时一遍 + 256 块扫描计时）。S0-3 异常遗言
-//! 机制保留——建表错即 fault 落 EXC 自报。
+//! 验收（规格原文）：日志心跳按定时器节拍——IRQ 记录 id=19、dt≈武装
+//! 时长（CNTVCT 对拍）、零 EXC，连刷三轮一致。
 
 #![no_std]
 #![no_main]
-// 环游标/页表是 static mut（exc_entry 与主流程共用）——单核裸件、
-// DAIF 全掩，无竞争；引用式访问只为省 addr_of 样板。
+// 环游标/页表/武装时刻是 static mut（exc_entry/irq_entry 与主流程共用）
+// ——单核裸件、DAIF 全掩起步，无竞争；引用式访问只为省 addr_of 样板。
 #![allow(static_mut_refs)]
 
 use bare::ufs::{Fail, Ufs};
-use bare::{exc, gpt, instrument, logring, mmu, time};
+use bare::{exc, gic, gpt, instrument, logring, mmu, time};
 
 include!(concat!(env!("OUT_DIR"), "/facts.rs"));
 
@@ -42,34 +42,35 @@ core::arch::global_asm!(
     stack_top = const STACK_TOP,
 );
 
-// 异常向量表（16 槽×128B，2KB 对齐进 .vectors；桩把槽号装 x0 跳
-// exc_entry——不返回）。槽号 = 象限×4 + kind（sync0/irq1/fiq2/serror3）。
+// 异常向量表（16 槽×128B，2KB 对齐进 .vectors；桩把槽号装 x0 跳目标
+// 入口——不返回）。槽号 = 象限×4 + kind（sync0/irq1/fiq2/serror3）；
+// 槽 5 = current EL SPx 的 IRQ——S0-5 本刀的目标槽。
 core::arch::global_asm!(
     ".section .vectors, \"ax\"",
     ".align 11",
     ".globl __vectors",
     "__vectors:",
-    ".macro VEC idx",
+    ".macro VEC idx, tgt",
     "    mov x0, \\idx",
-    "    b exc_entry",
+    "    b \\tgt",
     "    .space 0x78",
     ".endm",
-    "    VEC 0",
-    "    VEC 1",
-    "    VEC 2",
-    "    VEC 3",
-    "    VEC 4",
-    "    VEC 5",
-    "    VEC 6",
-    "    VEC 7",
-    "    VEC 8",
-    "    VEC 9",
-    "    VEC 10",
-    "    VEC 11",
-    "    VEC 12",
-    "    VEC 13",
-    "    VEC 14",
-    "    VEC 15",
+    "    VEC 0, exc_entry",
+    "    VEC 1, exc_entry",
+    "    VEC 2, exc_entry",
+    "    VEC 3, exc_entry",
+    "    VEC 4, exc_entry",
+    "    VEC 5, irq_entry",
+    "    VEC 6, exc_entry",
+    "    VEC 7, exc_entry",
+    "    VEC 8, exc_entry",
+    "    VEC 9, exc_entry",
+    "    VEC 10, exc_entry",
+    "    VEC 11, exc_entry",
+    "    VEC 12, exc_entry",
+    "    VEC 13, exc_entry",
+    "    VEC 14, exc_entry",
+    "    VEC 15, exc_entry",
     ".previous",
 );
 
@@ -91,13 +92,16 @@ static mut L2: Table = Table([0; 512]);
 const DMA_L2_FIRST: usize = 384;
 const DMA_L2_COUNT: usize = 8;
 
-/// 环游标（主流程推进；exc_entry 读——单核裸件无竞争）。
+/// 环游标（主流程推进；exc_entry/irq_entry 读——单核裸件无竞争）。
 struct Ring {
     base: u32,
     seq: u64,
     slot: u32,
 }
 static mut RING: Ring = Ring { base: 0, seq: 0, slot: 0 };
+
+/// 武装时刻（CNTVCT）——irq_entry 对拍 dt 用；0 = 尚未武装。
+static mut ARMED_AT: u64 = 0;
 
 /// 读失败 → 仪器码（分命令超时；OCS/byte0/READ CHECK 恒码）。
 fn read_code(r: Fail, timeout_code: u32) -> u32 {
@@ -145,6 +149,25 @@ fn push_u64(buf: &mut [u8], n: &mut usize, mut v: u64) {
     }
 }
 
+fn push_hex(buf: &mut [u8], n: &mut usize, mut v: u64) {
+    const HEX: &[u8; 16] = b"0123456789abcdef";
+    let mut tmp = [0u8; 16];
+    let mut k = 0;
+    loop {
+        tmp[k] = HEX[(v & 0xF) as usize];
+        k += 1;
+        v >>= 4;
+        if v == 0 {
+            break;
+        }
+    }
+    while k > 0 {
+        k -= 1;
+        buf[*n] = tmp[k];
+        *n += 1;
+    }
+}
+
 /// 组文本（#seq 前缀——L0 解析直读十进制序号，od 按 BE 进位读不了 LE u64）。
 /// part 后跟 nums 对应位（无则裸标签——S0-3 首刷 trigger 标签即栽在
 /// zip 长度失配上：nums 只剩 seq 时循环体整段不跑）。
@@ -179,23 +202,18 @@ fn exc_text<'a>(buf: &'a mut [u8; 96], seq: u64, slot: usize, esr: u64, elr: u64
     core::str::from_utf8(&buf[..n]).unwrap_or("")
 }
 
-fn push_hex(buf: &mut [u8], n: &mut usize, mut v: u64) {
-    const HEX: &[u8; 16] = b"0123456789abcdef";
-    let mut tmp = [0u8; 16];
-    let mut k = 0;
-    loop {
-        tmp[k] = HEX[(v & 0xF) as usize];
-        k += 1;
-        v >>= 4;
-        if v == 0 {
-            break;
-        }
-    }
-    while k > 0 {
-        k -= 1;
-        buf[*n] = tmp[k];
-        *n += 1;
-    }
+/// GIC 状态记录文本（ctdr/waker 十六进制 + RD 帧序十进制）。
+fn gic_text<'a>(buf: &'a mut [u8; 96], seq: u64, ctlr: u32, waker: u32, rd_idx: u64) -> &'a str {
+    let mut n = 0;
+    push_str(buf, &mut n, "#");
+    push_u64(buf, &mut n, seq);
+    push_str(buf, &mut n, " gic ctlr=0x");
+    push_hex(buf, &mut n, ctlr as u64);
+    push_str(buf, &mut n, " waker=0x");
+    push_hex(buf, &mut n, waker as u64);
+    push_str(buf, &mut n, " rd=");
+    push_u64(buf, &mut n, rd_idx);
+    core::str::from_utf8(&buf[..n]).unwrap_or("")
 }
 
 /// 写一条环记录（组包 → WRITE(10) FUA → 回读验 seq），游标自增。
@@ -235,6 +253,32 @@ extern "C" fn exc_entry(slot: usize) -> ! {
     let txt = exc_text(&mut t, seq, slot, esr, elr, far, el);
     ring_put(&mut ufs, freq, logring::LVL_ERR, txt);
     // 遗言已落盘（FUA）→ 立即复位
+    unsafe { (PS_HOLD as *mut u32).write_volatile(0) };
+    loop {
+        core::hint::spin_loop();
+    }
+}
+
+/// IRQ 入口（槽 5 桩跳入，不返回）：先掩中断（EOI 降优先级后杂响会
+/// 重入本入口——首步断根）→ IAR 认领 → EOI 结案 → 撤定时器 → 环记录
+/// （id/dt/ctl；dt=CNTVCT 对拍武装时刻）→ 复位。
+#[no_mangle]
+extern "C" fn irq_entry(_slot: usize) -> ! {
+    gic::irq_mask();
+    let id = gic::icc_iar1();
+    let now = time::cntvct();
+    let ctl = time::vtimer_ctl();
+    if id != 0x3FF {
+        gic::icc_eoir1(id);
+    }
+    time::vtimer_disarm();
+    let freq = time::freq_or(FREQ_FALLBACK as u32);
+    let mut ufs = Ufs::new(HCI, UTRD, UCD, freq);
+    ufs.init();
+    let dt = now.wrapping_sub(unsafe { ARMED_AT });
+    let mut t = [0u8; 96];
+    let txt = text(&mut t, &[" IRQ id=", " dt=", " ctl="], &[unsafe { RING.seq }, id as u64, dt, ctl as u64]);
+    ring_put(&mut ufs, freq, logring::LVL_INFO, txt);
     unsafe { (PS_HOLD as *mut u32).write_volatile(0) };
     loop {
         core::hint::spin_loop();
@@ -297,7 +341,7 @@ extern "C" fn rust_main() -> ! {
     let mut ufs = Ufs::new(HCI, UTRD, UCD, freq);
     ufs.init();
 
-    // ⓪ 向量装订（任何后续异常都有桩——先于一切外设动作）
+    // ⓪ 向量装订（任何后续异常/中断都有桩——先于一切外设动作）
     exc::set_vbar(unsafe { &__vectors as *const u8 as usize });
 
     // ① SSU ACTIVE → W-LUN 0xD0（bootloader 留 PowerDown 的解药；呼叫点
@@ -343,7 +387,7 @@ extern "C" fn rust_main() -> ! {
         instrument::report_reset(PS_HOLD, 92, freq);
     }
 
-    // ⑥ 扫环找 max seq（cache-on 计时=判据②对比读）
+    // ⑥ 扫环找 max seq（cache-on 计时=S0-4 对照读，本刀顺带留痕）
     let t0 = time::cntvct();
     let mut max_seq = 0u64;
     let mut max_slot = RING_BLOCKS - 1;
@@ -363,8 +407,7 @@ extern "C" fn rust_main() -> ! {
     }
     let t_scan = time::cntvct() - t0;
 
-    // ⑦ 游标落位 + 四连记录：boot / pre / mmu / scan（耗时 cycles
-    //    @freq；L0 侧 ms=cycles/19.2k）
+    // ⑦ 游标落位 + 四连记录：boot / pre / mmu / scan
     unsafe {
         RING.base = ring_base;
         RING.seq = max_seq + 1;
@@ -381,11 +424,38 @@ extern "C" fn rust_main() -> ! {
     let txt = text(&mut t, &[" scan t="], &[unsafe { RING.seq }, t_scan]);
     ring_put(&mut ufs, freq, logring::LVL_INFO, txt);
 
-    // ⑧ 成功即复位（S0-2 形状；watchdog ≥130s 不咬本流）
-    unsafe { (PS_HOLD as *mut u32).write_volatile(0) };
-    loop {
-        core::hint::spin_loop();
+    // ⑧ GIC 面：本核 RD（TYPER 匹配）→ dist 使能 → RD 唤醒（次序反着
+    //    内核无妨——wake 只动本核 WAKER，dist 门最后开也兜得住）
+    let mpidr = gic::mpidr();
+    let rd = match gic::find_rd(GICR, RD_COUNT as u32, RD_STRIDE as u32, mpidr) {
+        None => instrument::report_reset(PS_HOLD, 612, freq),
+        Some(rd) => rd,
+    };
+    let waker = gic::wake_rd(rd, 100_000);
+    let ctlr = gic::dist_init(GICD, 100_000);
+    let rd_idx = ((rd - GICR) / RD_STRIDE) as u64;
+    let txt = gic_text(&mut t, unsafe { RING.seq }, ctlr, waker, rd_idx);
+    ring_put(&mut ufs, freq, logring::LVL_INFO, txt);
+
+    // ⑨ CPU 接口三连（SRE 失败=内存映射面，本线不支持，证据码 642）
+    if !gic::icc_sre_enable() {
+        instrument::report_reset(PS_HOLD, 642, freq);
     }
+    gic::icc_pmr_0xf0();
+    gic::icc_igrpen1(true);
+    gic::enable_ppi(rd, TIMER_INTID as u32, 0xa0);
+
+    // ⑩ 武装 1 秒 → 记录 → 解掩 → WFI（IRQ 应落槽 5，入口接管收尾）
+    let delay = freq as u64;
+    let armed_at = time::vtimer_arm(time::cntvct() + delay);
+    unsafe { ARMED_AT = armed_at; }
+    let txt = text(&mut t, &[" arm id=", " dt="], &[unsafe { RING.seq }, TIMER_INTID as u64, delay]);
+    ring_put(&mut ufs, freq, logring::LVL_INFO, txt);
+    gic::irq_unmask();
+    unsafe { core::arch::asm!("wfi", options(nomem, nostack)) };
+
+    // WFI 却无 trap 返回（杂醒）——证据码 652 复位
+    instrument::report_reset(PS_HOLD, 652, freq)
 }
 
 #[panic_handler]

@@ -19,3 +19,14 @@ ps_hold = 0x0C264000      # PS_HOLD 复位门（写 0 冷重启）
 
 [time]
 freq_fallback = 19200000  # CNTFRQ 读 0 时的兜底 Hz
+
+[gic]
+# GICv3 基址（bengal.dtsi:461——redbull 树：0x0F200000+0x10000 GICD、
+# 0x0F300000+0x100000 8×RD）。INTID=19：虚拟定时器 PPI3（活内核
+# /proc/interrupts arch_timer = GICv3 19 Level 定谳；bengal PPI 排布
+# 1/2/3/0 非上游 13/14/11/10，勿按惯例写）。
+gicd = 0x0F200000
+gicr = 0x0F300000
+rd_stride = 0x20000       # redistributor-stride（bengal.dtsi 同源）
+rd_count = 8              # 8 核 8 帧
+timer_intid = 19          # CNTVIRQ 的 GIC INTID（16+PPI3）

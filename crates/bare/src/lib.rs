@@ -9,6 +9,7 @@
 
 pub mod crc32;
 pub mod exc;
+pub mod gic;
 pub mod gpt;
 pub mod instrument;
 pub mod logring;
