@@ -470,3 +470,34 @@ U1 MMIO 探针（读 CAP+VER，VER 合法→blink；冻死=时钟没开）→ U2
 - **WFI 被 vtimer IRQ 唤醒入槽 5**（IRQ current-EL SPx 象限，紧挨
   S0-3 的 sync 槽 4）；入口掩中断→IAR1→记环→PS_HOLD 复位。三命
   烧完 ABL 自动回滚 b 槽 L0。零 EXC。
+
+## 11. PSCI CPU_ON 契约（S0-6 实测，2026-10-15）[DT]
+
+- **PSCI 面以活 DT psci 节为准**：`/sys/firmware/devicetree/base/psci`
+  compatible="arm,psci-1.0"、method="smc"、无 legacy fn-id 属性——
+  用标准编号、arm64 走 SMC64 变体。EL1 发 `smc #0` 同步入 EL3，TZ
+  固件受理（ABL 交接后世界与 L0 内核拉副核同路径）。
+- **PSCI_VERSION(0x84000000) 回 0x10001 = PSCI 1.1**（唯一不回错误码
+  的调用）。**CPU_ON = 0xC4000003** = `PSCI_FN_NATIVE(0_2, CPU_ON)`
+  （内核 psci.c:605 同值）。fn 编号非直觉：0=VERSION 1=SUSPEND
+  2=OFF **3=CPU_ON** 4=MIGRATE；SMC64 位即 0xC4 前缀。返回码 0=
+  SUCCESS / -1=ALREADY_ON / -6=NOT_PRESENT（int32 负值）。
+- **SMCCC 参数位铁律（S0-6 首刷实证）**：x1-x3 传入参数位，TZ 返回
+  时**允许置未定义**——asm 若声明 `in("x1")`，编译器可把调用侧活值
+  缓存该寄存器跨 smc 复用，读回 0（`on aff=` 打 0 即此）。断根 =
+  参数位一律 `inout(...) => _`；x4-x7 调用者保存须 lateout 声明。
+- **入口态实测**：目标核从 entry_pa 以 EL1、MMU off、x0=context_id
+  启动（ctx 如数送达——7 槽互异就是证据）；DAIF 掩。**VBAR_EL1
+  per-core**——副核必须自装向量表再开中断；栈各核自立（本件
+  4KB×7）。secondary_entry 全 asm：掩 DAIF→装 VBAR→立栈→跳 Rust。
+- **副核真 MPIDR 自报 = 0x81040000 + 0x100*n**：U(bit31)|MT(bit24)|
+  Aff2=4 恒|Aff1=0..6|Aff0=0——真身布局 = 一大 cluster（Aff2=4）
+  内 8 core。与 DT reg=0x100*i 的 target **差一**：TZ 把 0x100*i
+  宽松映射到自报 Aff1=i-1 的核（含 Aff1=0——与主核 RD 帧 0 匹配
+  Aff1=0 悖论）。7 核互异、rc=0 无重复唤醒成立；**帧↔真 aff↔
+  target 三角之谜立案，下刀读 GICR 8 帧 RD_TYPER 全表定谳**。
+- **mailbox/栈放 NC DMA 窗内免维护**：sec_mailbox 0xB0010000
+  （7×32B：magic/mpidr/seq/cnt）+ sec_stack 0xB0011000（7×4KB）
+  都在 [0xB0000000,0xB0200000)——主核 NC 映射访问 ↔ 副核 MMU-off
+  物理访问（Device 型）双侧非缓存，零一致性维护。心跳节流 1M 拍
+  @19.2MHz ≈ 52ms/拍。
