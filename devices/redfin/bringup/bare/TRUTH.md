@@ -507,28 +507,36 @@ U1 MMIO 探针（读 CAP+VER，VER 合法→blink；冻死=时钟没开）→ U2
   物理访问（Device 型）双侧非缓存，零一致性维护。心跳节流 1M 拍
   @19.2MHz ≈ 52ms/拍。
 
-## 12. SPMI v5 Rust 线与裸启动 USBIN 缺口（S1-1 实测，2026-10-15）[DRV][DT]
+## 12. SPMI v5 Rust 线与电源面真相（S1-1/S1-2/S1-2b 实测，2026-10-15）[DRV][DT]
 
 - **运输层（crates/bare spmi，内核逐函数对账）三轮逐字一致**：
   `spmi v=0x50010000`（v5 窗判定过，与 L0 dmesg 同值）、
   `feat=0x80050200`→apid_count=**0x200=512**（正好铺满表窗）。
   obsrvr+0x80×apid 读通道/RDATA0@+0x18/STATUS 轮询序（DONE→DENIED
   →FAILURE→DROPPED）反汇编审计与内核 wait_for_done 同序。
+- **【寻址律，S1-2b 立法】smb5-reg.h flat 地址高字节=外设号**：
+  CHGR@0x1000=**PPID 0x210**、DCDC@0x1100=0x211、BATIF@0x1200=0x212、
+  USBIN@0x1300=**0x213**、DCIN@0x1400=0x214、TYPEC@0x1500=**0x215**、
+  MISC@0x1600=**0x216**（PPID=sid2<<8|外设号；证据=pm7250b.dtsi 中断
+  说明符 `<0x2 0x10 …>` 逐外设递增）。SPMI 访问=每 PPID 独立查 apid
+  后带 8 位偏移。**S1-1/S1-2 曾把 0x1310 当 PPID 0x210+0x10（实读
+  CHGR INT_RT_STS），「USBIN 缺口」定谳因此作废**（两次写皆恒等写
+  零伤害；写路径证明不受影响）。
 - **owner 表上机实测（B 系推断升格为显值）**：CHGR 0x210 单副本
-  **apid=0xe2 owner=0**；MISC 0x216 单副本 **apid=0xe8 owner=0**——
-  battery-truth「MISC 有 APPS 副本（源码推断）」上机实证；ka v3 喂狗
-  走 0xe8 合法（写路径 Rust 线未行使，留 S1-2）。
-- **充电状态三寄存器解码基准**（smb5-reg.h 原值）：0x1006
-  bits[2:0]=INHIBIT0/TRICKLE1/PRE2/**FULLON3**/TAPER4/**TERMINATE5**/
-  PAUSE6/DISABLE7；0x1042 bit0=充电使能命令；0x1310=USBIN_BASE
-  0x1300+INT_RT_STS_OFFSET 0x10，bit4=USBIN_PLUGIN。
-- **裸启动 USBIN 缺口（本刀最大发现）**：裸轮内 5 采样恒
-  `chg=0x145`——st=TERMINATE(5)+bit6、en=1、**usb=0x00（PLUGIN=0）**；
-  而 L0 内核稳态（同一批寄存器经 power_supply 面）usb present=**1**、
-  status=**Charging**、capacity=100。裁决：**裸启动世界没有 Type-C/
-  TCPM 策略引擎，充电器视角 USBIN 不在位，裸轮靠电池跑**。推论：
-  ①「狗只在插电时走」→裸世界狗从未武装——ka 线 130s 无咬的根因
-  补全；②S1「常驻充电」的**真前置=Type-C 口控制器（或证 XBL 能
-  留通路）**，喂狗/解暂停都在其后；③S1-2 须先读 0x1340
-  （USBIN_CMD_IL 挂起位）+0x1310，再试解挂/使能看 PLUGIN 能否无
-  TCPM 抬起。
+  **apid=0xe2 owner=0**；USBIN 0x213 单副本 **apid=0xe5 owner=0**；
+  TYPEC 0x215 单副本 **apid=0xe7 owner=0**；MISC 0x216 单副本
+  **apid=0xe8 owner=0**——电量链四外设全 APPS 可写。
+- **【写路径 Rust 线首证】**解挂 RMW（PPID 0x213+0x40 bit0←0，实值
+  已 0=恒等写）读回一致、无 DENIED/636——B15/B16 asm 写配方移植成立。
+  实测 `uw=0x0`（cur=0 back=0）。
+- **【裸世界电源面真相，S1-2b 三轮实测——S1-1 缺口叙事撤案】**
+  `u0=0x2a94510` 恒定：**USBIN 0x1310=0x10 → PLUGIN=1（输入在！）**、
+  0x1006=0x45（bits[2:0]=5 TERMINATE——电池 100% 满的正当态）、
+  **Type-C 0x150B=0xa9 → CC_ATTACHED=1**、debounce 完、SNK 模式、
+  VBUS_ERROR=0；0x1544=0x02（EN_SNK_ONLY）；0x1506=0x02 **Rp 3.0A
+  检出**（供电器拉值）。裁决：**Type-C 状态机是 PMIC 内自主硬件，
+  裸世界活着且已 attach；充电器看得见 USBIN；不存在 TCPM 前置**。
+  与 L0 稳态（present=1/Charging/100）完全一致。推论撤回：①「狗
+  未武装因不充电」解释作废——ka 线 130s 无咬另有根因（疑狗从未被
+  任何人武装；S1 下一刀先读狗状态再喂）；②S1 常驻充电的前置消失，
+  ka v3 喂狗（MISC 0xe8 apid→0x1643）直接可做。
