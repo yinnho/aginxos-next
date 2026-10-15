@@ -507,7 +507,7 @@ U1 MMIO 探针（读 CAP+VER，VER 合法→blink；冻死=时钟没开）→ U2
   物理访问（Device 型）双侧非缓存，零一致性维护。心跳节流 1M 拍
   @19.2MHz ≈ 52ms/拍。
 
-## 12. SPMI v5 Rust 线与电源面真相（S1-1–S1-5 实测，2026-10-15）[DRV][DT]
+## 12. SPMI v5 Rust 线与电源面真相（S1-1–S1-6 实测，2026-10-15）[DRV][DT]
 
 - **运输层（crates/bare spmi，内核逐函数对账）三轮逐字一致**：
   `spmi v=0x50010000`（v5 窗判定过，与 L0 dmesg 同值）、
@@ -652,3 +652,23 @@ U1 MMIO 探针（读 CAP+VER，VER 合法→blink；冻死=时钟没开）→ U2
   MSOC=255 精确对齐、电流两侧皆个位 mA。**裁决：无内核世界的电量
   观测=三件套 V/I/SoC 全量可得且与内核世一致**，S1-5 收讫。ICL
   挂账（s14）与 TAPER 行为证词（中段电量日）另案。
+- **【S1-6 温控读刀收讫——VADC 裸转换全通+锚点校准实证】**s16 首发射
+  一坑：**die 通道误用 0x02 读成浮脚 1.874V**——dtsi 节名 die_temp@2
+  是旧 VADC 编号残影，**通道号真源=qcom,spmi-vadc.h ADC_* 枚举**
+  （ADC_DIE_TEMP=0x06；VADC_DIE_TEMP=0x08 是另一套）。s16b 修正一发
+  收讫（三轮全同，20:43 发射）：协议=adc_configure 同序（DIG_PARAM
+  0x42 absolute=0x28/ratiometric=0x18→FAST_AVG 0x43=0→CH_SEL 0x44
+  →DELAY 0x45→EN_CTL1 0x46|=0x80→CONV_REQ 0x47=0x80→STATUS1 0x08
+  EOC 轮询→DATA0/1 0x50/0x51）。**r01 vref_1p25=1.2499V——锚点精确
+  命中 1.25V，full_scale=0x70e4 刻度数学实证**；r00 ref_gnd=0xffff
+  （驱动同名 Invalid data 标记）。读集：**die 0x06=9472→33.9°C**、
+  vph 0x83=4.554V、**vbat 0x84=4.441V（与 QG 0xC0/内核世三方互证）**、
+  chg 0x09=33.4°C、bat_therm 0x4a R=84.0kΩ≈28.5°C、smb1390 0x0e=0V
+  （redfin Qi=p9382 无此芯片，脚接地非病）。w4 窗 die 9472±3raw=
+  33.9±0.02°C 稳；rs 基线六寄存器逐位还原（L0 内核留的 bat_therm
+  ratiometric 配置完整归还）。**内核世对证**：iio device1（pm7250b
+  vadc）同刻 raw die 9434/chg 21291/bat 13128/vbat 22894——差全在
+  时 separated 漂移量级（1.1°C/13mV）。**裁决：无内核世界温度+电压
+  观测全量可得且刻度自证**（VADC APID=0xef APPS），S1-6 收讫。
+  附产：VADC 基线 0x42-0x47=0x14a8018——L0 内核最后一次转换留的
+  是 bat_therm ratiometric 配置（温监控的笔迹）。
