@@ -537,16 +537,18 @@ extern "C" fn rust_main() -> ! {
     gic::icc_igrpen1(true);
     gic::enable_ppi(rd, TIMER_INTID as u32, 0xa0);
 
-    // ⑩ SPMI 面（S1-3d 备用位判别刀）：S1-3c 定谳——EXT-LONG（op0/op1，
-    //     与内核 fmt_cmd_v2/write_data 逐位逐序全同，窗口 RW=chnls+
-    //     0x10000×apid 亦核）写仍不驻：c42/m53/aw2 三试验逐字复刻 s13b
-    //     的「DONE 不驻」。而 L0 活体 bark 中断在涨（狗在内核世真武装）
-    //     → 差别在世界不在命令。本刀判别：**sp54=CHGR 0x1054 官方
-    //     CHARGER_SPARE 翻位读回**——sp54 落=裸世写本通（前面死的全是
-    //     「安全寄存器」个案）；sp54 平=充电页写整死（TZ/AOP 世界门）。
-    //     随后武装梯 aw3 + 喂一记定 t0 + 150s 停喂观察（POR SBB BARK=
-    //     128s 档 < 窗，bark=misc_rt bit1 升起即截环落 bk）+ 收尾解除
-    //     武装（护回滚链）。m53 撤（sp54 在位后 SBB 写无信息量）。
+    // ⑩ SPMI 面（S1-4 充电控制刀）：S1-3d 定谳——三档写全活（先前
+    //     「死写」全是病态 PMIC 的 ACK-DONE-丢弃态读数，PMIC 硬复位
+    //     冷启治愈），写驻不再是问题。本刀验**旋钮写了充电行为真变**：
+    //     电池近满挂 USB（TAPER 4.45V 档），FV 压 −100mV → VBAT 越顶 →
+    //     0x1006 bits[2:0] 预期 4 TAPER→5 TERMINATE；还原 → 预期回 4。
+    //     ��码律（battery-truth §1）：raw 字节=(µ值−min)/step，三旋钮
+    //     全单字节同形——FCC 0x1061（0–8A/50mA）、FV 0x1070
+    //     （3.6–4.79V/10mV）、ICL 0x1341（0–5A/50mA）。ICL/FCC 只做
+    //     写驻旋钮证（behavior 靠 FV 挑大头）。附 QG（PPID 0x248）
+    //     VBAT 读 @+0x80 2B（µV=raw×194.637）——无 owner 副本则跳过
+    //     不致命（QG 可能归 TZ）。狗不碰：裸世入刀 WD_CFG 实证 POR=0
+    //     （s13d w0），本刀不武装。
     //    证据码：632=非 v5、633=PPID 无副本、634=读事务失败、636=写事务失败。
     let arb = spmi::Arb {
         core: CORE,
@@ -564,13 +566,13 @@ extern "C" fn rust_main() -> ! {
         instrument::report_reset(PS_HOLD, 632, freq);
     }
     let n_apid = spmi::apid_count(feat);
-    // 三 PPID 各找 owner==0 副本：oXXX=ppid<<16|apid<<8|owner。
-    let picks: [(u32, &str); 3] = [
+    // 两 PPID 各找 owner==0 副本（s14 只用充电对；QG 另走可选腿）：
+    // oXXX=ppid<<16|apid<<8|owner。
+    let picks: [(u32, &str); 2] = [
         (PPID_CHGR as u32, " o210=0x"),
         (PPID_USBIN as u32, " o213=0x"),
-        (PPID_MISC as u32, " o216=0x"),
     ];
-    let mut apids = [0u32; 3];
+    let mut apids = [0u32; 2];
     for (i, (ppid, label)) in picks.iter().enumerate() {
         let a = match arb.find_apid_owner(*ppid, 0, n_apid) {
             Some(a) => a,
@@ -581,7 +583,7 @@ extern "C" fn rust_main() -> ! {
         let txt = hex_text(&mut t, unsafe { RING.seq }, label, v);
         ring_put(&mut ufs, freq, logring::LVL_INFO, txt);
     }
-    let (chgr, usbin, misc) = (apids[0], apids[1], apids[2]);
+    let (chgr, usbin) = (apids[0], apids[1]);
     // 跨外设单字节读助手：失败即 634 落环复位。
     let rd = |ap: u32, off: u8| -> u8 {
         let mut b = [0u8; 1];
@@ -595,72 +597,96 @@ extern "C" fn rust_main() -> ! {
             instrument::report_reset(PS_HOLD, 636, freq);
         }
     };
-    // 真基线：wd_cfg|sbb_cfg<<8|misc_rt<<16|usbin_rt<<24（EXT 后才是真值）。
-    let v0 = rd(misc, 0x51) as u64
-        | (rd(misc, 0x53) as u64) << 8
-        | (rd(misc, 0x10) as u64) << 16
-        | (rd(usbin, 0x10) as u64) << 24;
+    // 真基线：st06|fcc61<<8|fv70<<16|en42<<24|icl41<<32|plugin10<<40|susp40<<48。
+    let v0 = rd(chgr, 0x06) as u64
+        | (rd(chgr, 0x61) as u64) << 8
+        | (rd(chgr, 0x70) as u64) << 16
+        | (rd(chgr, 0x42) as u64) << 24
+        | (rd(usbin, 0x41) as u64) << 32
+        | (rd(usbin, 0x10) as u64) << 40
+        | (rd(usbin, 0x40) as u64) << 48;
     let txt = hex_text(&mut t, unsafe { RING.seq }, " w0=0x", v0);
     ring_put(&mut ufs, freq, logring::LVL_INFO, txt);
-    // 写驻试验〇 sp54：CHGR 0x1054 官方 CHARGER_SPARE（bits[5:0] 备用，
-    // 内核仅作调试痕）——cur→cur^0x3F 翻满 6 位→回读→还原→终读。
-    let cur = rd(chgr, 0x54);
-    wr(chgr, 0x54, cur ^ 0x3f);
-    let back = rd(chgr, 0x54);
-    wr(chgr, 0x54, cur);
-    let fin = rd(chgr, 0x54);
-    let v = (cur as u64) | (back as u64) << 8 | (fin as u64) << 16;
-    let txt = hex_text(&mut t, unsafe { RING.seq }, " sp54=0x", v);
-    ring_put(&mut ufs, freq, logring::LVL_INFO, txt);
-    // 写驻对照 c42：CHGR 0x1042 充电使能（功能性 RW 寄存器，内核同写；
-    // 满电 TERMINATE 态下瞬时关断无碍）——cur→0→回读→还原→终读。
-    let cur = rd(chgr, 0x42);
-    wr(chgr, 0x42, 0);
-    let back = rd(chgr, 0x42);
-    wr(chgr, 0x42, cur);
-    let fin = rd(chgr, 0x42);
-    let v = (cur as u64) | (back as u64) << 8 | (fin as u64) << 16;
-    let txt = hex_text(&mut t, unsafe { RING.seq }, " c42=0x", v);
-    ring_put(&mut ufs, freq, logring::LVL_INFO, txt);
-    // 武装梯 aw3：WD_CFG←cur|0x42（bit6 bark IRQ 使能|bit1 PLUGIN 启动
-    // 计时；PLUGIN 在位=计时即启），+0ms 回读（armed 落地即此可见）。
-    let cur = rd(misc, 0x51);
-    wr(misc, 0x51, cur | 0x42);
-    let a0 = rd(misc, 0x51);
-    let v = (cur as u64) | (a0 as u64) << 8;
-    let txt = hex_text(&mut t, unsafe { RING.seq }, " aw3=0x", v);
-    ring_put(&mut ufs, freq, logring::LVL_INFO, txt);
-    // 喂狗一记定 t0（POR SBB=0x0c：BARK=128s 档、BITE=0 无咬）。
-    wr(misc, 0x43, 1);
-    let txt = hex_text(&mut t, unsafe { RING.seq }, " pf=0x", 1);
-    ring_put(&mut ufs, freq, logring::LVL_INFO, txt);
-    // 停喂观察 30×5s=150s：w4=wd_cfg|misc_rt<<8|usbin_rt<<16；bark
-    // （misc_rt bit1）升起即截环落 bk=样本号——武装落地+bark 走表=
-    // 全链答案；全程平=武装未落（或读幻象，sp54 已分案）。
-    for s in 0..30u64 {
-        let v4 = rd(misc, 0x51) as u64
-            | (rd(misc, 0x10) as u64) << 8
-            | (rd(usbin, 0x10) as u64) << 16;
-        let txt = hex_text(&mut t, unsafe { RING.seq }, " w4=0x", v4);
-        ring_put(&mut ufs, freq, logring::LVL_INFO, txt);
-        if v4 & 0x100 != 0 {
-            let txt = hex_text(&mut t, unsafe { RING.seq }, " bk=0x", s);
-            ring_put(&mut ufs, freq, logring::LVL_INFO, txt);
-            break;
+    // QG VBAT（可选腿）：有 owner 副本才读，无则记 0 跳过（不致命）。
+    let qg = arb.find_apid_owner(PPID_QG as u32, 0, n_apid);
+    let mut vbat0 = 0u64;
+    if let Some(qap) = qg {
+        let mut b2 = [0u8; 2];
+        if arb.read(qap, 0x80, &mut b2).is_ok() {
+            vbat0 = b2[0] as u64 | (b2[1] as u64) << 8;
         }
-        if s < 29 {
-            let end = time::cntvct() + freq as u64 * 5;
+    }
+    let v = ((qg.unwrap_or(0) as u64) << 16) | vbat0;
+    let txt = hex_text(&mut t, unsafe { RING.seq }, " qv=0x", v);
+    ring_put(&mut ufs, freq, logring::LVL_INFO, txt);
+    // 主戏 Test A——FV 压浮充 −100mV（raw−10）：近满电池 VBAT 越顶 →
+    // 预期 0x1006 4 TAPER→5 TERMINATE。2s×15=30s 观察窗，每采一落环。
+    let fv0 = rd(chgr, 0x70);
+    let fvl = fv0.saturating_sub(10);
+    wr(chgr, 0x70, fvl);
+    let fva = (fv0 as u64) | (rd(chgr, 0x70) as u64) << 8;
+    let txt = hex_text(&mut t, unsafe { RING.seq }, " fva=0x", fva);
+    ring_put(&mut ufs, freq, logring::LVL_INFO, txt);
+    for s in 0..15u64 {
+        let st = rd(chgr, 0x06) as u64;
+        let txt = hex_text(&mut t, unsafe { RING.seq }, " a1=0x", st);
+        ring_put(&mut ufs, freq, logring::LVL_INFO, txt);
+        if s < 14 {
+            let end = time::cntvct() + freq as u64 * 2;
             while time::cntvct() < end {}
         }
     }
-    // 收尾：补喂一记再解除武装（WD_CFG←0，护回滚后的 XBL/L0 链），
-    // 读回落环。
-    wr(misc, 0x43, 1);
-    let cur = rd(misc, 0x51);
-    wr(misc, 0x51, 0);
-    let back = rd(misc, 0x51);
-    let v = (cur as u64) | (back as u64) << 8;
-    let txt = hex_text(&mut t, unsafe { RING.seq }, " dw=0x", v);
+    // FV 还原 + 回读 + 复观 2s×10：预期状态回 TAPER（TERMINATE 若闩锁
+    // 则记录在案——闩锁本身也是充电行为的真变）。
+    wr(chgr, 0x70, fv0);
+    let fr = (fvl as u64) | (rd(chgr, 0x70) as u64) << 8;
+    let txt = hex_text(&mut t, unsafe { RING.seq }, " fr=0x", fr);
+    ring_put(&mut ufs, freq, logring::LVL_INFO, txt);
+    for s in 0..10u64 {
+        let st = rd(chgr, 0x06) as u64;
+        let txt = hex_text(&mut t, unsafe { RING.seq }, " a2=0x", st);
+        ring_put(&mut ufs, freq, logring::LVL_INFO, txt);
+        if s < 9 {
+            let end = time::cntvct() + freq as u64 * 2;
+            while time::cntvct() < end {}
+        }
+    }
+    // QG VBAT 终读（刀尾对照：FV 窗内 VBAT 应有所回落/持平）。
+    if let Some(qap) = qg {
+        let mut b2 = [0u8; 2];
+        if arb.read(qap, 0x80, &mut b2).is_ok() {
+            vbat0 = b2[0] as u64 | (b2[1] as u64) << 8;
+        }
+    }
+    let txt = hex_text(&mut t, unsafe { RING.seq }, " qe=0x", vbat0);
+    ring_put(&mut ufs, freq, logring::LVL_INFO, txt);
+    // Test B——ICL 旋钮写驻：cur→500mA(raw10)→回读→还原→回读。
+    let icl0 = rd(usbin, 0x41);
+    wr(usbin, 0x41, 10);
+    let iclb = rd(usbin, 0x41);
+    wr(usbin, 0x41, icl0);
+    let iclf = rd(usbin, 0x41);
+    let v = (icl0 as u64) | (iclb as u64) << 8 | (iclf as u64) << 16;
+    let txt = hex_text(&mut t, unsafe { RING.seq }, " ib=0x", v);
+    ring_put(&mut ufs, freq, logring::LVL_INFO, txt);
+    // Test C——FCC 旋钮写驻：同形。
+    let fcc0 = rd(chgr, 0x61);
+    wr(chgr, 0x61, 10);
+    let fccb = rd(chgr, 0x61);
+    wr(chgr, 0x61, fcc0);
+    let fccf = rd(chgr, 0x61);
+    let v = (fcc0 as u64) | (fccb as u64) << 8 | (fccf as u64) << 16;
+    let txt = hex_text(&mut t, unsafe { RING.seq }, " fc=0x", v);
+    ring_put(&mut ufs, freq, logring::LVL_INFO, txt);
+    // 终读（同 w0 形状）：全部应回基线值。
+    let v9 = rd(chgr, 0x06) as u64
+        | (rd(chgr, 0x61) as u64) << 8
+        | (rd(chgr, 0x70) as u64) << 16
+        | (rd(chgr, 0x42) as u64) << 24
+        | (rd(usbin, 0x41) as u64) << 32
+        | (rd(usbin, 0x10) as u64) << 40
+        | (rd(usbin, 0x40) as u64) << 48;
+    let txt = hex_text(&mut t, unsafe { RING.seq }, " w9=0x", v9);
     ring_put(&mut ufs, freq, logring::LVL_INFO, txt);
 
     // ⑪ PSCI 面（S0-6）：version 落环 → 清 mailbox → 7 副核 CPU_ON

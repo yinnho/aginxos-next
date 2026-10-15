@@ -106,6 +106,7 @@ MODE="heartbeat"
 [ "${1:-}" = "--s13b" ] && MODE="s13b"
 [ "${1:-}" = "--s13c" ] && MODE="s13c"
 [ "${1:-}" = "--s13d" ] && MODE="s13d"
+[ "${1:-}" = "--s14" ] && MODE="s14"
 mkdir -p "${OUTDIR}"
 ELF="${OUTDIR}/heartbeat.elf"
 
@@ -794,6 +795,15 @@ elif [ "${MODE}" = "s13d" ]; then
   ELF="${OUTDIR}/s13d.elf"
   cp "${HERE}/target/aarch64-unknown-none-softfloat/release/redfin-bare" "${ELF}"
   BIN="${OUTDIR}/s13d.bin"; IMG="${OUTDIR}/boot-s13d.img"
+elif [ "${MODE}" = "s14" ]; then
+  # NOLINUX-PLAN S1-4：充电控制刀（S1-3d 定谳后写已可信）：FV 0x1070 压
+  # −100mV 观察 0x1006 bits[2:0] 行为变（近满预期 4 TAPER→5 TERMINATE、
+  # 还原回 4）+ ICL 0x1341/FCC 0x1061 旋钮写驻 + QG VBAT 对照读。
+  # 编码律=battery-truth §1 单字节 (µ值−min)/step。复现 s13d checkout 1c36568。
+  (cd "${HERE}" && cargo build --release --target aarch64-unknown-none-softfloat)
+  ELF="${OUTDIR}/s14.elf"
+  cp "${HERE}/target/aarch64-unknown-none-softfloat/release/redfin-bare" "${ELF}"
+  BIN="${OUTDIR}/s14.bin"; IMG="${OUTDIR}/boot-s14.img"
 else
   # 研究件：SPMI 全量 substrate。警告：start.S 迁移路径 2026-10-13 三验
   # （L10/L11/L12a）全部冻 logo（崩在 kmain 前）——修好前勿当心跳用。

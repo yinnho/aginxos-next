@@ -57,3 +57,4 @@ ppid_chgr = 0x210         # 充电器（0x1006 状态/0x1042 使能）
 ppid_usbin = 0x213        # USB 输入（0x1310 PLUGIN/0x1340 SUSPEND）
 ppid_typec = 0x215        # Type-C 状态机（0x150B CC_ATTACHED/0x1544 MODE_CFG）
 ppid_misc = 0x216         # 看门狗 BARK_BITE 0x1643 所在（ka v3 喂狗正身）
+ppid_qg = 0x248           # QG 电量计（VBAT @+0x80 2B、MSOC @+0xBF；s14 可选腿，可能归 TZ）
