@@ -1,23 +1,24 @@
-//! S0-2 — UFS 日志环（NOLINUX-PLAN S0 第二刀）。
+//! S0-3 — 异常向量 + EL 定谳（NOLINUX-PLAN S0 第三刀）。
 //!
-//! S0-1 自检链（SSU 唤醒 → GPT 双 CRC）原样保留为前置；通过后：
-//! 在校验后 GPT 里按名查 boot_a（u5a §⑤ 契约），scratch 区
-//! （start+16384 起 256 块 = 1MB）铺环形日志——boot 记录 + 12 条心跳
-//! （每 10s，写盘限速合规）+ 终记录，WRITE(10) FUA 落盘、每条回读验。
-//! 写完 PS_HOLD 立即复位（成功路径时延仪器退役；早期失败仍走码表）。
+//! VBAR_EL1 装订 16 槽标准向量表（同步/IRQ/FIQ/SError × 四象限），
+//! 桩跳 exc_entry：现场（ESR/ELR/FAR/CurrentEL）记进日志环 LVL_ERR
+//! 记录后 PS_HOLD 复位——异常留遗言。
 //!
-//! 验收：多轮复位后环内序号跨启动连续增长（L0 侧 ring-parse.sh 解析
-//! 出文本）；一轮 ≈ boot→14 条记录→自复位，tries 3→0 自动回滚 L0。
-//!
-//! 仪器码表（真源 crates/bare/src/instrument.rs 头注）沿用 + S0-2 增量：
-//! 272 找不到 boot_a / 92 界检 / 472 环扫描读 / 362 写超时 / 422 写保护
-//! (DATA PROTECT) / 122 写 CHECK / 392 写后回读不中。
+//! 验收（规格原文）：故意触发非对齐访问 → L0 读出 ESR=对齐错误
+//! （期望 EC=0x25 Data Abort current EL + DFSC=0x21 Alignment fault ≈
+//! ESR 0x94000021）；boot 记录带 el=N（挂账「EL 判定」闭案）。
+//! MMU-off 世界全内存按 Device 属性（对齐检查硬开）——非对齐 ldr
+//! 必炸，无需先动 SCTLR。若意外不炸：落「no-fault」记录走 S0-2
+//! 心跳兜底（下一刀改 undef 指令触发）。
 
 #![no_std]
 #![no_main]
+// 环游标是 static mut（exc_entry 与主流程共用）——单核裸件、DAIF 全掩，
+// 无竞争；引用式访问只为省 addr_of 样板。
+#![allow(static_mut_refs)]
 
 use bare::ufs::{Fail, Ufs};
-use bare::{gpt, instrument, logring, time};
+use bare::{exc, gpt, instrument, logring, time};
 
 include!(concat!(env!("OUT_DIR"), "/facts.rs"));
 
@@ -43,11 +44,52 @@ core::arch::global_asm!(
     stack_top = const STACK_TOP,
 );
 
+// 异常向量表（16 槽×128B，2KB 对齐进 .vectors；桩把槽号装 x0 跳
+// exc_entry——不返回）。槽号 = 象限×4 + kind（sync0/irq1/fiq2/serror3）。
+core::arch::global_asm!(
+    ".section .vectors, \"ax\"",
+    ".align 11",
+    ".globl __vectors",
+    "__vectors:",
+    ".macro VEC idx",
+    "    mov x0, \\idx",
+    "    b exc_entry",
+    "    .space 0x78",
+    ".endm",
+    "    VEC 0",
+    "    VEC 1",
+    "    VEC 2",
+    "    VEC 3",
+    "    VEC 4",
+    "    VEC 5",
+    "    VEC 6",
+    "    VEC 7",
+    "    VEC 8",
+    "    VEC 9",
+    "    VEC 10",
+    "    VEC 11",
+    "    VEC 12",
+    "    VEC 13",
+    "    VEC 14",
+    "    VEC 15",
+    ".previous",
+);
+
+extern "C" {
+    static __vectors: u8;
+}
+
 /// 裸件线约定（非机器事实）：boot_a 内 64MB 处 scratch 区（u5a 实证位）。
 const RING_OFF: u32 = 16384;
 const RING_BLOCKS: u32 = 256;
-const HEARTBEATS: u32 = 12;
-const HEARTBEAT_SECS: u32 = 10;
+
+/// 环游标（主流程推进；exc_entry 读——单核裸件无竞争）。
+struct Ring {
+    base: u32,
+    seq: u64,
+    slot: u32,
+}
+static mut RING: Ring = Ring { base: 0, seq: 0, slot: 0 };
 
 /// 读失败 → 仪器码（分命令超时；OCS/byte0/READ CHECK 恒码）。
 fn read_code(r: Fail, timeout_code: u32) -> u32 {
@@ -95,6 +137,26 @@ fn push_u64(buf: &mut [u8], n: &mut usize, mut v: u64) {
     }
 }
 
+fn push_hex(buf: &mut [u8], n: &mut usize, mut v: u64) {
+    const HEX: &[u8; 16] = b"0123456789abcdef";
+    push_str(buf, n, "0x");
+    let mut tmp = [0u8; 16];
+    let mut k = 0;
+    loop {
+        tmp[k] = HEX[(v & 0xF) as usize];
+        k += 1;
+        v >>= 4;
+        if v == 0 {
+            break;
+        }
+    }
+    while k > 0 {
+        k -= 1;
+        buf[*n] = tmp[k];
+        *n += 1;
+    }
+}
+
 /// 组文本（#seq 前缀——L0 解析直读十进制序号，od 按 BE 进位读不了 LE u64）。
 fn text<'a>(buf: &'a mut [u8; 96], parts: &[&str], nums: &[u64]) -> &'a str {
     let mut n = 0;
@@ -107,11 +169,30 @@ fn text<'a>(buf: &'a mut [u8; 96], parts: &[&str], nums: &[u64]) -> &'a str {
     core::str::from_utf8(&buf[..n]).unwrap_or("")
 }
 
-/// 写一条环记录（组包 → WRITE(10) FUA → 回读验 seq）。
-fn ring_put(ufs: &mut Ufs, ring_base: u32, slot: u32, seq: u64, level: u32, txt: &str, freq: u32) {
+/// 异常现场记录文本（十/十六进制混排，专用组装）。
+fn exc_text<'a>(buf: &'a mut [u8; 96], seq: u64, slot: usize, esr: u64, elr: u64, far: u64, el: u8) -> &'a str {
+    let mut n = 0;
+    push_str(buf, &mut n, "#");
+    push_u64(buf, &mut n, seq);
+    push_str(buf, &mut n, " EXC s=");
+    push_u64(buf, &mut n, slot as u64);
+    push_str(buf, &mut n, " esr=");
+    push_hex(buf, &mut n, esr);
+    push_str(buf, &mut n, " elr=");
+    push_hex(buf, &mut n, elr);
+    push_str(buf, &mut n, " far=");
+    push_hex(buf, &mut n, far);
+    push_str(buf, &mut n, " el=");
+    push_u64(buf, &mut n, el as u64);
+    core::str::from_utf8(&buf[..n]).unwrap_or("")
+}
+
+/// 写一条环记录（组包 → WRITE(10) FUA → 回读验 seq），游标自增。
+fn ring_put(ufs: &mut Ufs, freq: u32, level: u32, txt: &str) {
+    let ring = unsafe { &mut RING };
     let buf = unsafe { core::slice::from_raw_parts_mut(STAGING as *mut u8, 4096) };
-    logring::write_record(buf, seq, time::cntvct(), level, txt);
-    let lba = ring_base + slot;
+    logring::write_record(buf, ring.seq, time::cntvct(), level, txt);
+    let lba = ring.base + ring.slot;
     if let Err(e) = ufs.write10(lba, 1, STAGING) {
         instrument::report_reset(PS_HOLD, write_code(e), freq);
     }
@@ -120,10 +201,32 @@ fn ring_put(ufs: &mut Ufs, ring_base: u32, slot: u32, seq: u64, level: u32, txt:
         Ok(()) => {
             let blk = unsafe { core::slice::from_raw_parts(DATA as *const u8, 4096) };
             match logring::parse(blk) {
-                Some((s, _, _)) if s == seq => {}
+                Some((s, _, _)) if s == ring.seq => {}
                 _ => instrument::report_reset(PS_HOLD, 392, freq),
             }
         }
+    }
+    ring.seq += 1;
+    ring.slot = (ring.slot + 1) % RING_BLOCKS;
+}
+
+/// 异常入口（向量桩跳入，不返回）：现场记进环 → 复位。
+/// UFS 事务重铺（prep 幂等）；SSU 不重发——主流程已 ACTIVE，若 trap
+/// 早于 SSU（设备 PowerDown）写会失败，走仪器码复位保 tries 轮回。
+#[no_mangle]
+extern "C" fn exc_entry(slot: usize) -> ! {
+    let freq = time::freq_or(FREQ_FALLBACK as u32);
+    let (esr, elr, far, el) = (exc::esr_el1(), exc::elr_el1(), exc::far_el1(), exc::current_el());
+    let mut ufs = Ufs::new(HCI, UTRD, UCD, freq);
+    ufs.init();
+    let seq = unsafe { RING.seq };
+    let mut t = [0u8; 96];
+    let txt = exc_text(&mut t, seq, slot, esr, elr, far, el);
+    ring_put(&mut ufs, freq, logring::LVL_ERR, txt);
+    // 遗言已落盘（FUA）→ 立即复位
+    unsafe { (PS_HOLD as *mut u32).write_volatile(0) };
+    loop {
+        core::hint::spin_loop();
     }
 }
 
@@ -132,6 +235,9 @@ extern "C" fn rust_main() -> ! {
     let freq = time::freq_or(FREQ_FALLBACK as u32);
     let mut ufs = Ufs::new(HCI, UTRD, UCD, freq);
     ufs.init();
+
+    // ⓪ 向量装订（任何后续异常都有桩——先于一切外设动作）
+    exc::set_vbar(unsafe { &__vectors as *const u8 as usize });
 
     // ① SSU ACTIVE → W-LUN 0xD0（bootloader 留 PowerDown 的解药；呼叫点
     //    UA 重试 1 次，u4j §20 同款）
@@ -175,7 +281,7 @@ extern "C" fn rust_main() -> ! {
         }
     };
 
-    // ⑤ 名查 boot_a（u5a §⑤：找不到 272；越 32 位/越界 92）
+    // ⑤ 名查 boot_a + 界检（u5a §⑤ 契约）
     let array = unsafe { core::slice::from_raw_parts(ARRAY as *const u8, 4096) };
     let part = match gpt::find(array, entries, "boot_a") {
         None => instrument::report_reset(PS_HOLD, 272, freq),
@@ -189,7 +295,7 @@ extern "C" fn rust_main() -> ! {
         instrument::report_reset(PS_HOLD, 92, freq);
     }
 
-    // ⑥ 扫环找 max seq（逐块——单块已证路径；u5a 图样 AGXWRT01 非法魔数不扰）
+    // ⑥ 扫环找 max seq
     let mut max_seq = 0u64;
     let mut max_slot = RING_BLOCKS - 1;
     for i in 0..RING_BLOCKS {
@@ -207,27 +313,31 @@ extern "C" fn rust_main() -> ! {
         }
     }
 
-    // ⑦ boot 记录 + 心跳 + 终记录（seq 接续 = max+1，slot = max_slot+1）
-    let boot0 = time::cntvct();
-    let mut seq = max_seq + 1;
-    let mut slot = (max_slot + 1) % RING_BLOCKS;
-    let mut t = [0u8; 96];
-    let txt = text(&mut t, &[" boot resume=", " freq="], &[seq, max_seq, freq as u64]);
-    ring_put(&mut ufs, ring_base, slot, seq, logring::LVL_BOOT, txt, freq);
-    for i in 1..=HEARTBEATS {
-        time::spin_secs(HEARTBEAT_SECS, freq);
-        seq += 1;
-        slot = (slot + 1) % RING_BLOCKS;
-        let elapsed = (time::cntvct() - boot0) / freq as u64;
-        let txt = text(&mut t, &[" heartbeat ", " elapsed="], &[seq, i as u64, elapsed]);
-        ring_put(&mut ufs, ring_base, slot, seq, logring::LVL_INFO, txt, freq);
+    // ⑦ 游标落位 + boot 记录（el=N = 挂账「EL 判定」闭案数据）
+    unsafe {
+        RING.base = ring_base;
+        RING.seq = max_seq + 1;
+        RING.slot = (max_slot + 1) % RING_BLOCKS;
     }
-    seq += 1;
-    slot = (slot + 1) % RING_BLOCKS;
-    let txt = text(&mut t, &[" cycle done reset"], &[seq]);
-    ring_put(&mut ufs, ring_base, slot, seq, logring::LVL_INFO, txt, freq);
+    let el = exc::current_el() as u64;
+    let mut t = [0u8; 96];
+    let txt = text(&mut t, &[" boot el=", " resume=", " freq="], &[unsafe { RING.seq }, el, max_seq, freq as u64]);
+    ring_put(&mut ufs, freq, logring::LVL_BOOT, txt);
 
-    // ⑧ 写尽落盘（FUA）→ 立即复位（成功路径仪器退役），三轮烧 tries 回滚 L0
+    // ⑧ 故意触发：非对齐 ldr（MMU-off 全 Device 属性 → 必 Alignment fault）
+    let txt = text(&mut t, &[" trigger unaligned"], &[unsafe { RING.seq }]);
+    ring_put(&mut ufs, freq, logring::LVL_WARN, txt);
+    let bad = DATA + 1;
+    unsafe { core::arch::asm!("ldr w6, [x7]", in("x7") bad, out("w6") _, options(readonly, nostack)) };
+
+    // ⑨ 意外未触发兜底：落证据 + S0-2 心跳 + 正常复位
+    let txt = text(&mut t, &[" no-fault"], &[unsafe { RING.seq }]);
+    ring_put(&mut ufs, freq, logring::LVL_WARN, txt);
+    for i in 1..=3 {
+        time::spin_secs(10, freq);
+        let txt = text(&mut t, &[" heartbeat ", " elapsed="], &[unsafe { RING.seq }, i as u64, i as u64 * 10]);
+        ring_put(&mut ufs, freq, logring::LVL_INFO, txt);
+    }
     unsafe { (PS_HOLD as *mut u32).write_volatile(0) };
     loop {
         core::hint::spin_loop();

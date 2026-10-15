@@ -8,6 +8,9 @@ SECTIONS {
     KEEP(*(.text.boot))
     *(.text .text.*)
   }
+  /* S0-3 异常向量表：16 槽×128B，VBAR 须 2KB 对齐 */
+  . = ALIGN(0x800);
+  .vectors : { KEEP(*(.vectors)) }
   .rodata ALIGN(8) : { *(.rodata .rodata.*) }
   .data ALIGN(8) : { *(.data .data.*) }
   . = ALIGN(16);
