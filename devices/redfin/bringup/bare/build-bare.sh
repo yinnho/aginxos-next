@@ -102,6 +102,7 @@ MODE="heartbeat"
 [ "${1:-}" = "--s11" ] && MODE="s11"
 [ "${1:-}" = "--s12" ] && MODE="s12"
 [ "${1:-}" = "--s12b" ] && MODE="s12b"
+[ "${1:-}" = "--s13" ] && MODE="s13"
 mkdir -p "${OUTDIR}"
 ELF="${OUTDIR}/heartbeat.elf"
 
@@ -748,10 +749,18 @@ elif [ "${MODE}" = "s12b" ]; then
   # NOLINUX-PLAN S1-2b：USBIN 判别修正刀（flat 高字节=外设号纠错：
   # USBIN=PPID 0x213、TYPEC=PPID 0x215；真 0x1310 PLUGIN + Type-C
   # 0x1506/09/0B/0D/0F/0x1544 面 + 解挂写真身 0x213+0x40）。
+  # 复现 S1-2b 行为 checkout 6d3c98c。
   (cd "${HERE}" && cargo build --release --target aarch64-unknown-none-softfloat)
   ELF="${OUTDIR}/s12b.elf"
   cp "${HERE}/target/aarch64-unknown-none-softfloat/release/redfin-bare" "${ELF}"
   BIN="${OUTDIR}/s12b.bin"; IMG="${OUTDIR}/boot-s12b.img"
+elif [ "${MODE}" = "s13" ]; then
+  # NOLINUX-PLAN S1-3：ka v3 狗面刀（WD_CFG 0x1651 基线→武装 RMW→
+  # 喂 0x1643×5@4s→停喂观察 12×5s 判 bark/bite→幸存解除武装）。
+  (cd "${HERE}" && cargo build --release --target aarch64-unknown-none-softfloat)
+  ELF="${OUTDIR}/s13.elf"
+  cp "${HERE}/target/aarch64-unknown-none-softfloat/release/redfin-bare" "${ELF}"
+  BIN="${OUTDIR}/s13.bin"; IMG="${OUTDIR}/boot-s13.img"
 else
   # 研究件：SPMI 全量 substrate。警告：start.S 迁移路径 2026-10-13 三验
   # （L10/L11/L12a）全部冻 logo（崩在 kmain 前）——修好前勿当心跳用。

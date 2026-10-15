@@ -1,14 +1,13 @@
-//! S1-2b — USBIN 判别修正刀（S1-2 寻址纠错重判）。
+//! S1-3 — ka v3 狗面刀：BARK_BITE 看门狗武装判定+武装/喂/停喂实验。
 //!
-//! S1-2 抓到自家寻址错：smb5 flat 地址**高字节=外设号**（DT 中断说明符
-//! `<sid2 外设N>` 实锤），CHGR@0x1000=PPID 0x210、USBIN@0x1300=PPID
-//! 0x213、TYPEC@0x1500=PPID 0x215——S1-1/2 的「0x1310 PLUGIN」实读
-//! 0x210+0x10=CHGR INT_RT_STS，「裸世界 USBIN 不在位」定谳证据无效
-//! （幸而两次写皆恒等写零伤害；Rust 写路径首证仍成立）。
-//! 本刀重判：三 PPID 各找 owner 副本落环 → 真 0x1310 PLUGIN + 0x1006
-//! 状态 + Type-C 面（0x1506 Rp 检测/0x1509 attach/0x150B CC_ATTACHED
-//! /0x150D legacy/0x150F u-usb/0x1544 MODE_CFG）→ 解挂写真身 PPID 0x213
-//! +0x40 → 后采样 5×4s。判读：CC attach 与 USBIN VBUS 谁断。
+//! S1-2b 撤「不充电所以狗未武装」解释后，ka 线 130s 无咬疑**狗从未被
+//! 武装**（武装者=L0 qpnp-smb5 探针 WD_CFG(0x1651)←bit1|bit6；XBL/
+//! fastboot 链无人武装）。本刀：基线读 WD_CFG/SNARL_BARK_BITE(0x1653)/
+//! MISC RT_STS(0x1610 bit1=bark)/USBIN RT——判裸世界武装态 → 自行武装
+//! RMW → 喂 0x1643←1 ×5@4s → **停喂观察 12×5s**：bark 位升起+环截断
+//! =咬死判决（量出 bark→bite 时延）；幸存 60s 则解除武装（护回滚 L0）
+//! 走 ⑪。全程数据说话：武装边沿（arm 即计时 vs 须 plugin 事件）也
+//! 由幸存/咬死二值自证。
 //!
 //! 副核入口 = secondary_entry（裸 asm）：掩 DAIF、装 VBAR（向量表
 //! per-core！副核不复位态默认）、立独立栈，跳 Rust secondary_main
@@ -538,10 +537,11 @@ extern "C" fn rust_main() -> ! {
     gic::icc_igrpen1(true);
     gic::enable_ppi(rd, TIMER_INTID as u32, 0xa0);
 
-    // ⑩ SPMI 面（S1-2b 修正刀）：v5 判定 → CHGR/USBIN/TYPEC 三 PPID
-    //    owner 副本各落环 → 基线读（真 0x1310=PPID 0x213+0x10、0x1006=
-    //    PPID 0x210+0x06、Type-C 0x150B/0x1544=PPID 0x215+0x0B/0x44）→
-    //    解挂 RMW 真身（PPID 0x213+0x40 bit0←0）+读回 → 后采样 5×4s。
+    // ⑩ SPMI 面（S1-3 ka v3 狗面刀）：v5 判定 → CHGR/USBIN/MISC 三 PPID
+    //    owner 副本落环 → 狗基线（WD_CFG 0x1651 | SNARL_BARK_BITE 0x1653
+    //    <<8 | MISC RT 0x1610<<16 | USBIN RT 0x1310<<24）→ 武装 RMW
+    //    （0x1651←|bit6|bit1）→ 喂 0x1643←1 ×5@4s → 停喂观察 12×5s
+    //    （w3=wd_cfg|misc_rt<<8，bark=0x1610 bit1）→ 幸存则解除武装。
     //    证据码：632=非 v5、633=PPID 无副本、634=读事务失败、636=写事务失败。
     let arb = spmi::Arb {
         core: CORE,
@@ -563,7 +563,7 @@ extern "C" fn rust_main() -> ! {
     let picks: [(u32, &str); 3] = [
         (PPID_CHGR as u32, " o210=0x"),
         (PPID_USBIN as u32, " o213=0x"),
-        (PPID_TYPEC as u32, " o215=0x"),
+        (PPID_MISC as u32, " o216=0x"),
     ];
     let mut apids = [0u32; 3];
     for (i, (ppid, label)) in picks.iter().enumerate() {
@@ -576,7 +576,7 @@ extern "C" fn rust_main() -> ! {
         let txt = hex_text(&mut t, unsafe { RING.seq }, label, v);
         ring_put(&mut ufs, freq, logring::LVL_INFO, txt);
     }
-    let (chgr, usbin, typec) = (apids[0], apids[1], apids[2]);
+    let (usbin, misc) = (apids[1], apids[2]);
     // 跨外设单字节读助手：失败即 634 落环复位。
     let rd = |ap: u32, off: u8| -> u8 {
         let mut b = [0u8; 1];
@@ -590,49 +590,47 @@ extern "C" fn rust_main() -> ! {
             instrument::report_reset(PS_HOLD, 636, freq);
         }
     };
-    // 基线一：USBIN PLUGIN(0x1310)|CHGR 状态(0x1006)|Type-C MISC(0x150B)
-    // |Type-C MODE_CFG(0x1544)——u0 四字节打包。
-    let v0 = rd(usbin, 0x10) as u64
-        | (rd(chgr, 0x06) as u64) << 8
-        | (rd(typec, 0x0B) as u64) << 16
-        | (rd(typec, 0x44) as u64) << 24;
-    let txt = hex_text(&mut t, unsafe { RING.seq }, " u0=0x", v0);
+    // 狗基线：wd_cfg|sbb_cfg<<8|misc_rt<<16|usbin_rt<<24。
+    let v0 = rd(misc, 0x51) as u64
+        | (rd(misc, 0x53) as u64) << 8
+        | (rd(misc, 0x10) as u64) << 16
+        | (rd(usbin, 0x10) as u64) << 24;
+    let txt = hex_text(&mut t, unsafe { RING.seq }, " w0=0x", v0);
     ring_put(&mut ufs, freq, logring::LVL_INFO, txt);
-    // 基线二：Type-C 细面——SNK Rp(0x1506)|attach 状态机(0x1509)|legacy
-    // (0x150D)|u-usb(0x150F)——t0 四字节打包。
-    let t0 = rd(typec, 0x06) as u64
-        | (rd(typec, 0x09) as u64) << 8
-        | (rd(typec, 0x0D) as u64) << 16
-        | (rd(typec, 0x0F) as u64) << 24;
-    let txt = hex_text(&mut t, unsafe { RING.seq }, " t0=0x", t0);
-    ring_put(&mut ufs, freq, logring::LVL_INFO, txt);
-    // 解挂 RMW 真身：USBIN_CMD_IL（PPID 0x213+0x40）bit0←0。
-    let cur = rd(usbin, 0x40);
-    wr(usbin, 0x40, cur & !1);
-    let back = rd(usbin, 0x40);
+    // 武装 RMW：WD_CFG bit6（BARK IRQ 使能）|bit1（PLUGIN 启动计时）。
+    let cur = rd(misc, 0x51);
+    wr(misc, 0x51, cur | 0x42);
+    let back = rd(misc, 0x51);
     let v = (cur as u64) | (back as u64) << 8;
-    let txt = hex_text(&mut t, unsafe { RING.seq }, " uw=0x", v);
+    let txt = hex_text(&mut t, unsafe { RING.seq }, " aw=0x", v);
     ring_put(&mut ufs, freq, logring::LVL_INFO, txt);
-    let end = time::cntvct() + freq as u64;
-    while time::cntvct() < end {}
-    let v1 = rd(usbin, 0x10) as u64
-        | (rd(chgr, 0x06) as u64) << 8
-        | (rd(typec, 0x0B) as u64) << 16;
-    let txt = hex_text(&mut t, unsafe { RING.seq }, " u1=0x", v1);
-    ring_put(&mut ufs, freq, logring::LVL_INFO, txt);
-    // 后采样 5×4s：u3 同 u0 四字节打包。
-    for s in 0..5u64 {
-        let v3 = rd(usbin, 0x10) as u64
-            | (rd(chgr, 0x06) as u64) << 8
-            | (rd(typec, 0x0B) as u64) << 16
-            | (rd(typec, 0x44) as u64) << 24;
-        let txt = hex_text(&mut t, unsafe { RING.seq }, " u3=0x", v3);
+    // 喂狗 ×5@4s：PET 位写 1。
+    for i in 1..=5u64 {
+        wr(misc, 0x43, 1);
+        let txt = hex_text(&mut t, unsafe { RING.seq }, " pf=0x", i);
         ring_put(&mut ufs, freq, logring::LVL_INFO, txt);
-        if s < 4 {
+        if i < 5 {
             let end = time::cntvct() + freq as u64 * 4;
             while time::cntvct() < end {}
         }
     }
+    // 停喂观察 12×5s：w3=wd_cfg|misc_rt<<8（bark=bit1 升起→bite 截环）。
+    for s in 0..12u64 {
+        let v3 = rd(misc, 0x51) as u64 | (rd(misc, 0x10) as u64) << 8;
+        let txt = hex_text(&mut t, unsafe { RING.seq }, " w3=0x", v3);
+        ring_put(&mut ufs, freq, logring::LVL_INFO, txt);
+        if s < 11 {
+            let end = time::cntvct() + freq as u64 * 5;
+            while time::cntvct() < end {}
+        }
+    }
+    // 幸存 60s：解除武装（bit1←0，护回滚后的 XBL/L0 链），读回落环。
+    let cur = rd(misc, 0x51);
+    wr(misc, 0x51, cur & !0x02);
+    let back = rd(misc, 0x51);
+    let v = (cur as u64) | (back as u64) << 8;
+    let txt = hex_text(&mut t, unsafe { RING.seq }, " dw=0x", v);
+    ring_put(&mut ufs, freq, logring::LVL_INFO, txt);
 
     // ⑪ PSCI 面（S0-6）：version 落环 → 清 mailbox → 7 副核 CPU_ON
     //    （rc 各落环；SMC 从 EL1 陷 EL3 由 TZ 受理——L0 内核拉副核
