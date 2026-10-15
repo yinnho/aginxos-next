@@ -432,3 +432,41 @@ U1 MMIO 探针（读 CAP+VER，VER 合法→blink；冻死=时钟没开）→ U2
   形状）是唯一逮法——类型/测试全过也拦不住。
 - **开闸后 sysreg 读不炸**：CurrentEL 在 MMU-on 世界照读（boot 记录
   el=1 维持）。
+
+## 10. GICv3 与通用定时器中断契约（S0-5 实测，2026-10-15）[DT]
+
+- **机器地址以活内核 boot DT 为准，dtsi 只当线索**：本机实跑
+  `/sys/firmware/devicetree/base/soc/interrupt-controller@17a00000/reg`
+  = GICD **0x17A00000**(+0x10000)、GICR **0x17A60000**(+0x100000,
+  8 帧 × stride 0x20000)。vendor 树 bengal.dtsi 的 0x0F200000/
+  0x0F300000 是同名变体的布局：0x0F2 区读回恒 0（无停摆、假静默），
+  0x0F3 区总线停摆（挂死无 EXC）——S0-5 前两刷的根因。
+- **GICD_TYPER 活读 = 0x201143b**（ESPI+LPI 在位，ITLinesNumber 0x3b
+  → 1920 线）。内核 gic_init_bases 的第一次 GIC MMIO 就是读它——
+  先读 TYPER 再动 dist，且每步落环步进记录（停摆不产 EXC 也不产
+  仪器码，只有步进记录能定位）。
+- **初始化序照内核**（gic_init_bases→gic_smp_init→gic_dist_init→
+  gic_cpu_init 蒸馏）：TYPER 读 → dist 0→RWP→0x13→RWP → find_rd →
+  RD 唤醒 → CPU 接口（SRE=7 回读 bit0→PMR 0xf0→IGRPEN1）→ SGI/PPI
+  配置。dist CTLR 写 0x13 读回 **0x12**（ARE|G1A；非安全态 G1 位
+  读 0）——照常递送，IAR1 确认即证。
+- **RD 匹配式 = `(typer>>32) == Aff3<<24|Aff2<<16|Aff1<<8|Aff0`**
+  （内核 __gic_populate_rdist 原式；MPIDR 分字段提取，不能裸
+  `&0xFFFFFFFF`——MT 位 24/U 位 31 会混入）。本核（redfin CPU0）
+  匹配 **帧 0**。RD 唤醒 = WAKER 清 ProcessorSleep(bit1) 轮询
+  ChildrenAsleep(bit2) 清零，终读 0x0。
+- **SGI/PPI 配置面在 RD+0x10000 第二帧**：IGROUPR0（+0x080）置
+  Group1-NS、ISENABLER0（+0x100）写 1 set、IPRIORITYR（+0x400 起
+  一字节一 INTID）给 0xa0（须 < PMR 0xf0）。
+- **DAIF 立即数 = F|I|A|D 4 位域的掩码**（bit0=F bit1=I bit2=A
+  bit3=D，max 0xf）：解 IRQ 掩 = `msr daifclr, #2`（内核
+  arch_local_irq_enable 原文）；`#1` 只清 FIQ 位、`#0x80` 直接汇编
+  错。掩 = `daifset, #2`（IRQ 入口首步，EOI 降优先级后防杂响重入）。
+- **vtimer INTID=19**（PPI3；活内核 /proc/interrupts arch_timer =
+  GICv3 19 Level 定谳——PPI 排布非上游惯例 13/14/11/10）。arm =
+  disarm→CNTV_CVAL=cntvct+δ→CNTV_CTL=1；δ=19200000（1s）实测
+  **dt=19200039/40/21 进槽**（误差 ≤40 拍=2µs，三轮一致）；入口
+  读 CNTV_CTL=5（ENABLE|ISTATUS）。IAR1 回 19、EOI 后 disarm。
+- **WFI 被 vtimer IRQ 唤醒入槽 5**（IRQ current-EL SPx 象限，紧挨
+  S0-3 的 sync 槽 4）；入口掩中断→IAR1→记环→PS_HOLD 复位。三命
+  烧完 ABL 自动回滚 b 槽 L0。零 EXC。
