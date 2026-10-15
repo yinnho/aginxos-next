@@ -110,6 +110,7 @@ MODE="heartbeat"
 [ "${1:-}" = "--s15" ] && MODE="s15"
 [ "${1:-}" = "--s16" ] && MODE="s16"
 [ "${1:-}" = "--s16b" ] && MODE="s16b"
+[ "${1:-}" = "--s17" ] && MODE="s17"
 mkdir -p "${OUTDIR}"
 ELF="${OUTDIR}/heartbeat.elf"
 
@@ -838,6 +839,16 @@ elif [ "${MODE}" = "s16b" ]; then
   ELF="${OUTDIR}/s16b.elf"
   cp "${HERE}/target/aarch64-unknown-none-softfloat/release/redfin-bare" "${ELF}"
   BIN="${OUTDIR}/s16b.bin"; IMG="${OUTDIR}/boot-s16b.img"
+elif [ "${MODE}" = "s17" ]; then
+  # NOLINUX-PLAN S1-7 常驻 soak 刀：不再三轮自毁——ka.S 同法喂狗（MISC
+  # 0x1643←1 每 30s）+ 每 10min 采一包两字落环（QG V/I/MSOC + CHGR
+  # 0x1006/0x1042 + VADC die/chg/bat_therm/vbat），永续 loop 不复位。
+  # S1「常驻≥1 天电量不降」真考体；环 256 块 ≈ 1.7 天滚动历史；病发
+  # PMIC 硬复位烧一命、3 发自动回 b 槽自愈。复现 s16b checkout 20eb767。
+  (cd "${HERE}" && cargo build --release --target aarch64-unknown-none-softfloat)
+  ELF="${OUTDIR}/s17.elf"
+  cp "${HERE}/target/aarch64-unknown-none-softfloat/release/redfin-bare" "${ELF}"
+  BIN="${OUTDIR}/s17.bin"; IMG="${OUTDIR}/boot-s17.img"
 else
   # 研究件：SPMI 全量 substrate。警告：start.S 迁移路径 2026-10-13 三验
   # （L10/L11/L12a）全部冻 logo（崩在 kmain 前）——修好前勿当心跳用。

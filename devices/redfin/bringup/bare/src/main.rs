@@ -1,26 +1,27 @@
-//! S1-3 — ka v3 狗面刀：BARK_BITE 看门狗武装判定+武装/喂/停喂实验。
+//! S1-7 — 常驻 soak 刀：S1 验收「常驻≥1 天电量不降」的真考体。
 //!
-//! S1-2b 撤「不充电所以狗未武装」解释后，ka 线 130s 无咬疑**狗从未被
-//! 武装**（武装者=L0 qpnp-smb5 探针 WD_CFG(0x1651)←bit1|bit6；XBL/
-//! fastboot 链无人武装）。本刀：基线读 WD_CFG/SNARL_BARK_BITE(0x1653)/
-//! MISC RT_STS(0x1610 bit1=bark)/USBIN RT——判裸世界武装态 → 自行武装
-//! RMW → 喂 0x1643←1 ×5@4s → **停喂观察 12×5s**：bark 位升起+环截断
-//! =咬死判决（量出 bark→bite 时延）；幸存 60s 则解除武装（护回滚 L0）
-//! 走 ⑪。全程数据说话：武装边沿（arm 即计时 vs 须 plugin 事件）也
-//! 由幸存/咬死二值自证。
+//! S1 四刀已收（喂狗/充电/电量计/温控，见 TRUTH §12）；本刀不再三轮
+//! 自毁，而是**无限常驻**：ka.S 同法喂狗（MISC 0x1643←1，每 30s 一喂，
+//! bark 窗 64s 的一半），每 20 喂（10 分钟）采一包两字落环——
+//! f = QG V(0xC0)<<48|I(0xC2)<<32|MSOC(0xBF)<<24|CHGR 0x1006<<16|
+//! 0x1042<<8|0x17 标记；t = VADC die(0x06)<<48|chg(0x09)<<32|
+//! bat_therm(0x4a)<<16|vbat(0x84)。环 256 块 → 10min/包 ≈ 1.7 天滚动
+//! 历史。开机段沿用 S1-6 面（SPMI init+VADC 八通道+w4 活性窗+基线
+//! 还原），随后进环不复位。
+//!
+//! 生存性：裸件永不标记 boot successful——常驻期间 tries 不烧（无复
+//! 位即无烧命）；病发（PMIC 硬复位）则烧一命，3 发后自动回 b 槽
+//! L0（自愈），环里留着死前最后样本=病发取证副产。验收线=次日电
+//! 量不降（MSOC 恒 100/V 不落）+ 温度平稳；0x1006=TAPER/FULLON 证
+//! 词需半电充电日（本刀满电=TERMINATE 恒态也是有效材料）。
 //!
 //! 副核入口 = secondary_entry（裸 asm）：掩 DAIF、装 VBAR（向量表
 //! per-core！副核不复位态默认）、立独立栈，跳 Rust secondary_main
 //! ——纯忙等心跳写 NC mailbox（32B 槽×7 @0xB0010000：magic/mpidr/
-//! seq/cnt），**不碰 UFS/GIC**（单控制器/未初始化面）。主核武装
-//! 3 秒 WFI，IRQ 醒来收割 7 槽落环后复位。
+//! seq/cnt），**不碰 UFS/GIC**（单控制器/未初始化面）。
 //!
-//! 一致性：主核 NC 映射 ↔ 副核 MMU-off 物理访问（Device 直达），
-//! 两侧皆非缓存免维护；副核栈 4KB×7 @0xB0011000 同窗。副核 PSCI
-//! 入口态=EL1、MMU off、x0=context_id（=槽号）。
-//!
-//! 验收（规格原文）：7 个副核各写心跳进日志——每槽 magic 对、
-//! mpidr 对号、seq>0，三轮一致，零 EXC。
+//! 验收（规格原文）：采样包连续 ≥1 天，f 字 MSOC 不降、V 漂 <50mV，
+//! t 字 die 温不越 60°C，环零 634/636 事务败证。
 
 #![no_std]
 #![no_main]
@@ -29,7 +30,7 @@
 #![allow(static_mut_refs)]
 
 use bare::ufs::{Fail, Ufs};
-use bare::{exc, gic, gpt, instrument, logring, mmu, psci, spmi, time};
+use bare::{exc, gic, gpt, instrument, logring, mmu, spmi, time};
 
 include!(concat!(env!("OUT_DIR"), "/facts.rs"));
 
@@ -683,35 +684,75 @@ extern "C" fn rust_main() -> ! {
     let txt = hex_text(&mut t, unsafe { RING.seq }, " rs=0x", rs);
     ring_put(&mut ufs, freq, logring::LVL_INFO, txt);
 
-    // ⑪ PSCI 面（S0-6）：version 落环 → 清 mailbox → 7 副核 CPU_ON
-    //    （rc 各落环；SMC 从 EL1 陷 EL3 由 TZ 受理——L0 内核拉副核
-    //    同路径）→ 武装 3 秒 → 解掩 → WFI（IRQ 入口收割落环）。
-    let pv = psci::version();
-    let txt = hex_text(&mut t, unsafe { RING.seq }, " psci v=0x", pv as u64);
+    // ⑪ 常驻 soak 环（S1-7）：三 pick（MISC 0x216 喂狗面/CHGR 0x210
+    //     充电态/QG 0x248 电量计——QG/CHGR 证据码续 63x：638=QG 无副本、
+    //     637=CHGR 无副本；MISC 非致命——无副本则不喂（64s 内 bark 自
+    //     复位=自愈路径），o216 仍落环记账）。主环 20×(喂+30s 忙等) 一
+    //     采包；#N f=0x.. t=0x.. 双字一记录（换算同 S1-5/S1-6：VµV=
+    //     raw×194637/1000（QG 10A 档）、IµA=raw×305176/1000、die m°C=
+    //     raw×64880/1000−273150、vbat µV=raw×194637×3/1000）。
+    //     终态=永续 loop（kmain 尾即环），无复位无 PSCI 面。
+    let misc = match arb.find_apid_owner(PPID_MISC as u32, 0, n_apid) {
+        Some(a) => a,
+        None => 0,
+    };
+    let v = ((PPID_MISC as u64) << 16) | ((misc as u64) << 8) | if misc != 0 {
+        arb.owner(misc) as u64
+    } else {
+        0
+    };
+    let txt = hex_text(&mut t, unsafe { RING.seq }, " o216=0x", v);
     ring_put(&mut ufs, freq, logring::LVL_INFO, txt);
-    for i in 1..=SEC_COUNT {
-        let slot = (SEC_MAILBOX + i * 32) as *mut u64;
-        for w in 0..4 {
-            unsafe { slot.add(w).write_volatile(0) };
+    let chg = match arb.find_apid_owner(PPID_CHGR as u32, 0, n_apid) {
+        Some(a) => a,
+        None => instrument::report_reset(PS_HOLD, 637, freq),
+    };
+    let v = ((PPID_CHGR as u64) << 16) | ((chg as u64) << 8) | arb.owner(chg) as u64;
+    let txt = hex_text(&mut t, unsafe { RING.seq }, " o210=0x", v);
+    ring_put(&mut ufs, freq, logring::LVL_INFO, txt);
+    let qg = match arb.find_apid_owner(PPID_QG as u32, 0, n_apid) {
+        Some(a) => a,
+        None => instrument::report_reset(PS_HOLD, 638, freq),
+    };
+    let v = ((PPID_QG as u64) << 16) | ((qg as u64) << 8) | arb.owner(qg) as u64;
+    let txt = hex_text(&mut t, unsafe { RING.seq }, " o248=0x", v);
+    ring_put(&mut ufs, freq, logring::LVL_INFO, txt);
+    // soak 主环：cyc=0 即采首包（开机基线后第一点），此后每 20 喂一包。
+    // 采包耗 SPMI ~12 读+8 写（四 conv 全协议）≪30s，喂狗间隔不破。
+    let mut cyc = 0u64;
+    loop {
+        if misc != 0 {
+            // 喂狗（0x1643←1）：平地址高字节 0x16=MISC 外设号由 APID
+            // 承载，cmd 收低字节 0x43（s14 同律，ka.S 同式）。
+            wr(misc, 0x43, 1);
         }
+        if cyc % 20 == 0 {
+            let v_raw = (rd(qg, 0xC0) as u64) | (rd(qg, 0xC1) as u64) << 8;
+            let i_raw = (rd(qg, 0xC2) as u64) | (rd(qg, 0xC3) as u64) << 8;
+            let f = (v_raw << 48)
+                | (i_raw << 32)
+                | ((rd(qg, 0xBF) as u64) << 24)
+                | ((rd(chg, 0x06) as u64) << 16)
+                | ((rd(chg, 0x42) as u64) << 8)
+                | 0x17;
+            let tp = ((conv(0x06, 0x28, 0x00) & 0xffff) << 48)
+                | ((conv(0x09, 0x28, 0x00) & 0xffff) << 32)
+                | ((conv(0x4a, 0x18, 0x02) & 0xffff) << 16)
+                | (conv(0x84, 0x28, 0x00) & 0xffff);
+            let mut n = 0usize;
+            push_str(&mut t, &mut n, "#");
+            push_u64(&mut t, &mut n, unsafe { RING.seq });
+            push_str(&mut t, &mut n, " f=0x");
+            push_hex(&mut t, &mut n, f);
+            push_str(&mut t, &mut n, " t=0x");
+            push_hex(&mut t, &mut n, tp);
+            let txt = core::str::from_utf8(&t[..n]).unwrap_or("");
+            ring_put(&mut ufs, freq, logring::LVL_INFO, txt);
+        }
+        cyc += 1;
+        let end = time::cntvct() + freq as u64 * 30;
+        while time::cntvct() < end {}
     }
-    let entry = core::ptr::addr_of!(secondary_entry) as u64;
-    for i in 1..=SEC_COUNT {
-        let target = 0x100 * i as u64;
-        let rc = psci::cpu_on(target, entry, i as u64);
-        let txt = text(&mut t, &[" on aff=", " rc="], &[unsafe { RING.seq }, target, rc as u64]);
-        ring_put(&mut ufs, freq, logring::LVL_INFO, txt);
-    }
-    let delay = freq as u64 * 3;
-    let armed_at = time::vtimer_arm(time::cntvct() + delay);
-    unsafe { ARMED_AT = armed_at; }
-    let txt = text(&mut t, &[" arm id=", " dt="], &[unsafe { RING.seq }, TIMER_INTID as u64, delay]);
-    ring_put(&mut ufs, freq, logring::LVL_INFO, txt);
-    gic::irq_unmask();
-    unsafe { core::arch::asm!("wfi", options(nomem, nostack)) };
-
-    // WFI 却无 trap 返回（杂醒）——证据码 652 复位
-    instrument::report_reset(PS_HOLD, 652, freq)
 }
 
 #[panic_handler]
