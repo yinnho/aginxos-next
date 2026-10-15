@@ -402,3 +402,33 @@ U1 MMIO 探针（读 CAP+VER，VER 合法→blink；冻死=时钟没开）→ U2
 - **ELR = 触发指令自身地址**（非下一条）；FAR = 非对齐地址原样。
 - **trap 后 UFS 事务可重铺**：`Ufs::new`+`init()` 即可继续读写，无需
   重发 SSU（设备仍 ACTIVE）——异常遗言落盘复用主流程契约。
+
+## 9. MMU 与 cache 契约（S0-4 实测，2026-10-15）[DT]
+
+- **单 L1 表形状在 Rust 线复证**（u1x-probe.S 2026-10-13 首证）：
+  T0SZ=25 使 TTBR0_EL1 直指一张 L1（1GB 块、512 项×8B），无需 L0。
+  TCR=`0x2_0000_3019`（T0SZ=25|SH0=inner|TG0=4KB|IPS=40bit）。
+- **L1+L2 混合布阵活**：e0/e1/e3=Device 1GB 块（MMIO 全居此），e2=
+  表描述符→L2（512×2MB WB）；L2 局部覆 NC（attr idx2）即 DMA 窗。
+  `.bss` 里 `#[repr(align(4096))]` static mut 双表即可满足 TTBR 对齐
+  律——无需改 rust.ld。
+- **MAIR 三属性**=`0x00_44_FF_04`（idx0=0x04 nGnRE、idx1=0xFF WB、
+  idx2=0x44 NC）；描述符低位 Device=0x401 / WB=0x405 / NC=0x409
+  （attrindx=bits[4:2]）。
+- **DMA 区 NC 布阵下 ufs.rs 零维护点**：UTRD/UCD/DATA/ARRAY/STAGING/
+  栈全落 [0xB0000000,0xB0200000) 16MB 窗（L2 项 384..391），read10/
+  write10 无需任何 cache 清洗——cache-on 后 GPT 双 CRC 与日志环读写
+  三轮全对。
+- **SCTLR M|C|I（0x1005）可开**，序列=tlbi vmalle1→dsb→isb→配
+  TTBR/TCR/MAIR→isb→tlbi→dsb→isb→SCTLR orr→isb。开闸后取指不断流
+  （代码区 WB），零 EXC。
+- **cache 收益实测**：GPT 双 CRC 链（2×4KB 读+2×CRC32+解析）cache-off
+  ≈24,200 cycles → cache-on ≈10,870 cycles @19.2MHz（1.26ms→0.57ms，
+  **2.2×**，含翻译开销；主要来自 I-cache 对 CRC 循环）。256 块扫环
+  ≈462k cycles（≈24ms，≈96µs/块，DMA NC 窗读）。
+- **Rust 优先级雷在案**：`0x8000_0000 + i << 21` 解析成
+  `(0x8000_0000+i)<<21`——描述符 PA 错+踩 bit52（Contiguous 位），
+  开闸即 fault。**填表算式必须显式括号**；反汇编审计（看 movk 立即数
+  形状）是唯一逮法——类型/测试全过也拦不住。
+- **开闸后 sysreg 读不炸**：CurrentEL 在 MMU-on 世界照读（boot 记录
+  el=1 维持）。
