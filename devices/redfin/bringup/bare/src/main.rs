@@ -1,12 +1,11 @@
-//! S0-6b — GICR RD_TYPER 全表探针：帧↔真 MPIDR↔DT target 三角定谳
-//! （NOLINUX-PLAN S0 第六刀补刀）。
+//! S1-1 — SPMI v5 运输层只读探针（NOLINUX-PLAN S1 第一刀）。
 //!
-//! S0-6 链路原样保留（PSCI CPU_ON 7 副核心跳 + WFI 收割）；本刀只加
-//! 读探针：主核裸 MPIDR + 8 帧 GICR RD_TYPER 全表落环——S0-6 实测
-//! 副核自报 MPIDR=U|MT|Aff2=4|Aff1=0..6，与 DT target 0x100*i 差一
-//! 且含主核位 Aff1=0，三角悬案本刀定谳（TYPER 高 32=帧 aff、低 32
-//! 的 ProcessorNumber=硬件自己的线性编号）。顺带实改验显：inout
-//! 补修后 `on aff=` 应打真 target 0x100..0x700。
+//! S0 链路原样保留（自检→环→MMU→GIC→PSCI 7 副心→WFI 收割）；本刀
+//! 插入 ⑩ SPMI 面：arbiter 版本/特性落环 → CHGR 0x210 与 MISC 0x216
+//! **全副本 (apid,owner) 逐条落环**（B7/B12 冻死案的 owner 表真值）→
+//! 充电状态三寄存器（0x1006 状态/0x1042 使能/0x1310 USB 在位）5 采样
+//! ×4s 落环——**全部只读**，单变量=运输层本身。喂狗/解暂停写路径与
+//! ka v3（#497 修正）=下一刀 S1-2。
 //!
 //! 副核入口 = secondary_entry（裸 asm）：掩 DAIF、装 VBAR（向量表
 //! per-core！副核不复位态默认）、立独立栈，跳 Rust secondary_main
@@ -28,7 +27,7 @@
 #![allow(static_mut_refs)]
 
 use bare::ufs::{Fail, Ufs};
-use bare::{exc, gic, gpt, instrument, logring, mmu, psci, time};
+use bare::{exc, gic, gpt, instrument, logring, mmu, psci, spmi, time};
 
 include!(concat!(env!("OUT_DIR"), "/facts.rs"));
 
@@ -535,6 +534,60 @@ extern "C" fn rust_main() -> ! {
     gic::icc_pmr_0xf0();
     gic::icc_igrpen1(true);
     gic::enable_ppi(rd, TIMER_INTID as u32, 0xa0);
+
+    // ⑩ SPMI 面（S1-1 只读探针）：v5 判定 → CHGR/MISC 全副本 owner 落环
+    //    → 充电状态三寄存器 5 采样×4s。寄存器寻址=PPID 内 8 位偏移
+    //    （0x1006→0x06、0x1042→0x42、0x1310→0x10——高字节由 PPID 承载）。
+    //    证据码：632=非 v5、633=CHGR 无副本、634=读事务失败。
+    let arb = spmi::Arb {
+        core: CORE,
+        chnls: CHNLS,
+        obsrvr: OBSRVR,
+        cnfg: CNFG,
+    };
+    let ver = arb.version();
+    let txt = hex_text(&mut t, unsafe { RING.seq }, " spmi v=0x", ver as u64);
+    ring_put(&mut ufs, freq, logring::LVL_INFO, txt);
+    let feat = arb.features();
+    let txt = hex_text(&mut t, unsafe { RING.seq }, " feat=0x", feat as u64);
+    ring_put(&mut ufs, freq, logring::LVL_INFO, txt);
+    if !spmi::is_v5(ver) {
+        instrument::report_reset(PS_HOLD, 632, freq);
+    }
+    let n_apid = spmi::apid_count(feat);
+    let (chgr_ppid, misc_ppid) = (PPID_CHGR as u32, PPID_MISC as u32);
+    for apid in 0..n_apid {
+        if let Some((p, _)) = arb.map_at(apid) {
+            if p == chgr_ppid || p == misc_ppid {
+                let v = ((apid as u64) << 8) | arb.owner(apid) as u64;
+                let label = if p == chgr_ppid { " p210=0x" } else { " p216=0x" };
+                let txt = hex_text(&mut t, unsafe { RING.seq }, label, v);
+                ring_put(&mut ufs, freq, logring::LVL_INFO, txt);
+            }
+        }
+    }
+    let chgr = match arb.find_apid_read(chgr_ppid, n_apid) {
+        Some(a) => a,
+        None => instrument::report_reset(PS_HOLD, 633, freq),
+    };
+    for s in 0..5u64 {
+        let (mut st, mut en, mut usb) = ([0u8; 1], [0u8; 1], [0u8; 1]);
+        if arb.read(chgr, 0x06, &mut st).is_err()
+            || arb.read(chgr, 0x42, &mut en).is_err()
+            || arb.read(chgr, 0x10, &mut usb).is_err()
+        {
+            let txt = text(&mut t, &[" s1 rderr=", " s="], &[unsafe { RING.seq }, s]);
+            ring_put(&mut ufs, freq, logring::LVL_ERR, txt);
+            instrument::report_reset(PS_HOLD, 634, freq);
+        }
+        let v = st[0] as u64 | (en[0] as u64) << 8 | (usb[0] as u64) << 16;
+        let txt = hex_text(&mut t, unsafe { RING.seq }, " chg=0x", v);
+        ring_put(&mut ufs, freq, logring::LVL_INFO, txt);
+        if s < 4 {
+            let end = time::cntvct() + freq as u64 * 4;
+            while time::cntvct() < end {}
+        }
+    }
 
     // ⑪ PSCI 面（S0-6）：version 落环 → 清 mailbox → 7 副核 CPU_ON
     //    （rc 各落环；SMC 从 EL1 陷 EL3 由 TZ 受理——L0 内核拉副核

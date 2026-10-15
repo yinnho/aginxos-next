@@ -41,3 +41,15 @@ gicr = 0x17A60000
 rd_stride = 0x20000       # redistributor-stride（活 DT 同值）
 rd_count = 8              # 0x100000/0x20000 = 8 核 8 帧
 timer_intid = 19          # CNTVIRQ 的 GIC INTID（16+PPI3）
+
+[spmi]
+# SPMI PMIC arbiter v5 五区窗（真源=活内核 DT qcom,spmi@c440000 reg +
+# TRUTH.md §2 B 系上机实测；ee=0/APPS、channel=0）。第四区 intr
+# （0x0E700000）中断面 S1 不用不列。
+core = 0x0C440000         # VERSION@0x0 FEATURES@0x4 APID 表@0x900+4N
+chnls = 0x0C600000        # 写通道窗 0x10000×APID
+obsrvr = 0x0E600000       # 读观察窗 0x80×APID（ee=0 无附加项）
+cnfg = 0x0C40A000         # owner 表@0x700+4N（val&7=write EE）
+# 电量链 PPID（battery-truth.md「电量链 PPID 全表」；S1 消费两件）：
+ppid_chgr = 0x210         # PM7250B 充电器（0x1006 状态/0x1042 使能）
+ppid_misc = 0x216         # 看门狗 BARK_BITE 0x1643 所在（ka v3 喂狗正身）

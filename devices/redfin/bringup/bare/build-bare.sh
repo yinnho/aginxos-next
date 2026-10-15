@@ -99,6 +99,7 @@ MODE="heartbeat"
 [ "${1:-}" = "--s05" ] && MODE="s05"
 [ "${1:-}" = "--s06" ] && MODE="s06"
 [ "${1:-}" = "--s06b" ] && MODE="s06b"
+[ "${1:-}" = "--s11" ] && MODE="s11"
 mkdir -p "${OUTDIR}"
 ELF="${OUTDIR}/heartbeat.elf"
 
@@ -719,10 +720,19 @@ elif [ "${MODE}" = "s06" ]; then
 elif [ "${MODE}" = "s06b" ]; then
   # NOLINUX-PLAN S0-6b：RD_TYPER 全表探针（S0-6 链路 + 主核裸 MPIDR
   # 落环 + 8 帧 RD_TYPER 逐帧落环——帧↔真 MPIDR↔DT target 三角定谳）。
+  # 复现 S0-6b 行为 checkout d0dcc91。
   (cd "${HERE}" && cargo build --release --target aarch64-unknown-none-softfloat)
   ELF="${OUTDIR}/s06b.elf"
   cp "${HERE}/target/aarch64-unknown-none-softfloat/release/redfin-bare" "${ELF}"
   BIN="${OUTDIR}/s06b.bin"; IMG="${OUTDIR}/boot-s06b.img"
+elif [ "${MODE}" = "s11" ]; then
+  # NOLINUX-PLAN S1-1：SPMI v5 运输层只读探针（S0 链路 + ⑩ v5 判定/
+  # CHGR+MISC 全副本 owner 落环/充电状态三寄存器 5 采样×4s——喂狗写
+  # 路径留 S1-2）。
+  (cd "${HERE}" && cargo build --release --target aarch64-unknown-none-softfloat)
+  ELF="${OUTDIR}/s11.elf"
+  cp "${HERE}/target/aarch64-unknown-none-softfloat/release/redfin-bare" "${ELF}"
+  BIN="${OUTDIR}/s11.bin"; IMG="${OUTDIR}/boot-s11.img"
 else
   # 研究件：SPMI 全量 substrate。警告：start.S 迁移路径 2026-10-13 三验
   # （L10/L11/L12a）全部冻 logo（崩在 kmain 前）——修好前勿当心跳用。
