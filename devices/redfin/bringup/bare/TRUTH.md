@@ -471,7 +471,7 @@ U1 MMIO 探针（读 CAP+VER，VER 合法→blink；冻死=时钟没开）→ U2
   S0-3 的 sync 槽 4）；入口掩中断→IAR1→记环→PS_HOLD 复位。三命
   烧完 ABL 自动回滚 b 槽 L0。零 EXC。
 
-## 11. PSCI CPU_ON 契约（S0-6 实测，2026-10-15）[DT]
+## 11. PSCI CPU_ON 契约（S0-6/S0-6b 实测，2026-10-15）[DT]
 
 - **PSCI 面以活 DT psci 节为准**：`/sys/firmware/devicetree/base/psci`
   compatible="arm,psci-1.0"、method="smc"、无 legacy fn-id 属性——
@@ -490,12 +490,17 @@ U1 MMIO 探针（读 CAP+VER，VER 合法→blink；冻死=时钟没开）→ U2
   启动（ctx 如数送达——7 槽互异就是证据）；DAIF 掩。**VBAR_EL1
   per-core**——副核必须自装向量表再开中断；栈各核自立（本件
   4KB×7）。secondary_entry 全 asm：掩 DAIF→装 VBAR→立栈→跳 Rust。
-- **副核真 MPIDR 自报 = 0x81040000 + 0x100*n**：U(bit31)|MT(bit24)|
-  Aff2=4 恒|Aff1=0..6|Aff0=0——真身布局 = 一大 cluster（Aff2=4）
-  内 8 core。与 DT reg=0x100*i 的 target **差一**：TZ 把 0x100*i
-  宽松映射到自报 Aff1=i-1 的核（含 Aff1=0——与主核 RD 帧 0 匹配
-  Aff1=0 悖论）。7 核互异、rc=0 无重复唤醒成立；**帧↔真 aff↔
-  target 三角之谜立案，下刀读 GICR 8 帧 RD_TYPER 全表定谳**。
+- **多核拓扑 = 恒等映射（S0-6b RD_TYPER 全表定谳）**：主核裸
+  MPIDR=**0x81000000**（U 位 1、MT 位 0、Aff2=0、Aff1=0）；副核
+  自报 = **0x81000100..0x81000700**（U=1、MT=0、Aff2=0、Aff1=1..7）。
+  GICR 8 帧 RD_TYPER 全表：帧 N 的 affinity 高 32 = 0x0N00、
+  **ProcessorNumber[23:8]=N**、帧 7 独有 LAST(bit4)——帧号=PN=Aff1。
+  三角（帧↔真 MPIDR↔DT target）= **恒等**：target 0x100*i 唤醒的核
+  自报 Aff1=i、对应帧 i、PN=i，主核 Aff1=0=帧 0。无差一、无宽松
+  映射。**初读「U|MT|Aff2=4|差一」是宿主侧十进制误换**（2164261120
+  误读 0x81040000，实为 0x81000100）——教训：心跳收割的 u64 落环
+  应以十六进制记录（hex_text），十进制人读必换算验证。inout 补修
+  同刷实证：`on aff=` 打 0x100..0x700 真值。
 - **mailbox/栈放 NC DMA 窗内免维护**：sec_mailbox 0xB0010000
   （7×32B：magic/mpidr/seq/cnt）+ sec_stack 0xB0011000（7×4KB）
   都在 [0xB0000000,0xB0200000)——主核 NC 映射访问 ↔ 副核 MMU-off
