@@ -604,8 +604,15 @@ U1 MMIO 探针（读 CAP+VER，VER 合法→blink；冻死=时钟没开）→ U2
   **取证在役**：disease-tick（cron 每分钟 uptime/mem/bark/进程数/
   dmesg 尾三行→/var/log/disease.log，跨死存活）+Mac 侧 20s 收割档；
   下一轮病发读 disease.log 死前最后帧定 i2c/RPMh 先后与肇事件。
-- **【wifi「死」分案——非病，选错 AP】**当晚华为 AP 与 ZTE-mahu
-  同场在空；wifi.conf 主槽=华为（老场地）→手机反复落 192.168.3.x，
-  Mac 在 5.x 够不着=「wifi 死」。已对调槽位（mahu 升主/华为降
-  alt1，/etc/wifi.conf.bak 留底）+net-watch 重联。教训：**多场地
-  双 AP 同场时主槽决定落点，「失联」先查子网再查病**。
+- **【wifi「死」分案——非病，换网（10-15 晚定谳修正）】**用户当晚
+  换 wifi：ZTE-mahu AP 下线、全场只剩华为。手机落 192.168.3.x 是
+  正确行为（主槽本就是华为）；期间 net-rejoin 对 mahu 的 join
+  rc=2 也是扫描过滤的正确形状（`aginx-net-join` 5s 定向扫不见
+  SSID 即弃，wifi-join.c scan_and_find）。次日 nlscan 探针（zig cc
+  现编推机）实况：10 个 BSS 里零 ZTE、华为 -65dBm，Mac 也已
+  落 3.x——「双 AP 同场、选错 AP」的早先框定作废。**曾手动对调
+  槽位（mahu 升主）已被 net-watch 的 promote-on-lease 自动改回
+  ——该逻辑实际救了场**（死 AP 挂 alt 槽、活 AP 回主槽，正是
+  #64 fallback walk 的设计意图）。教训：**「失联」先查场子变没变
+  （AP 换没换）再查子网再查病；判 AP 在不在用扫描探针，别用
+  Mac 的连接状态推断**。
