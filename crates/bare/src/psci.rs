@@ -41,9 +41,13 @@ fn smc(fnid: u64, a1: u64, a2: u64, a3: u64) -> i64 {
         core::arch::asm!(
             "smc #0",
             inout("x0") fnid as i64 => ret,
-            in("x1") a1 as i64,
-            in("x2") a2 as i64,
-            in("x3") a3 as i64,
+            // x1-x3 参数位是 in 而非 inout 时，编译器可把调用侧活值
+            // 缓存在这些寄存器跨 smc 复用——TZ 会踩参数位（SMCCC 允许
+            // 返回未定义）。S0-6 首刷实证：`on aff=` 打出 0 即 target
+            // 活值被踩。一律 inout=>_ 断根。
+            inout("x1") a1 as i64 => _,
+            inout("x2") a2 as i64 => _,
+            inout("x3") a3 as i64 => _,
             lateout("x4") _,
             lateout("x5") _,
             lateout("x6") _,
