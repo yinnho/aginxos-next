@@ -1,11 +1,14 @@
-//! S1-2 — USBIN 判别刀：SPMI 写路径首上 Rust 线（NOLINUX-PLAN S1 第二刀）。
+//! S1-2b — USBIN 判别修正刀（S1-2 寻址纠错重判）。
 //!
-//! S1-1 定谳裸世界 USBIN PLUGIN=0（无 Type-C/TCPM 策略引擎，充电器
-//! 视角无输入）。本刀单变量实验：owner-gated 写路径（B15/B16 asm 已
-//! 证，Rust 线初行使）→ **解挂 0x1340 bit0（USBIN_SUSPEND）+ 充电
-//! 使能 0x1042 bit0**，读回+采样判 PLUGIN（0x1310 bit4）能否无 TCPM
-//! 抬起——能则 ka v3 直进，不能则 S1 转 Type-C 口控制器（tcpci/I2C）。
-//! 全程写前读基线、写后读回，三段判读数据驱动。
+//! S1-2 抓到自家寻址错：smb5 flat 地址**高字节=外设号**（DT 中断说明符
+//! `<sid2 外设N>` 实锤），CHGR@0x1000=PPID 0x210、USBIN@0x1300=PPID
+//! 0x213、TYPEC@0x1500=PPID 0x215——S1-1/2 的「0x1310 PLUGIN」实读
+//! 0x210+0x10=CHGR INT_RT_STS，「裸世界 USBIN 不在位」定谳证据无效
+//! （幸而两次写皆恒等写零伤害；Rust 写路径首证仍成立）。
+//! 本刀重判：三 PPID 各找 owner 副本落环 → 真 0x1310 PLUGIN + 0x1006
+//! 状态 + Type-C 面（0x1506 Rp 检测/0x1509 attach/0x150B CC_ATTACHED
+//! /0x150D legacy/0x150F u-usb/0x1544 MODE_CFG）→ 解挂写真身 PPID 0x213
+//! +0x40 → 后采样 5×4s。判读：CC attach 与 USBIN VBUS 谁断。
 //!
 //! 副核入口 = secondary_entry（裸 asm）：掩 DAIF、装 VBAR（向量表
 //! per-core！副核不复位态默认）、立独立栈，跳 Rust secondary_main
@@ -535,14 +538,11 @@ extern "C" fn rust_main() -> ! {
     gic::icc_igrpen1(true);
     gic::enable_ppi(rd, TIMER_INTID as u32, 0xa0);
 
-    // ⑩ SPMI 面（S1-2 USBIN 判别刀）：v5 判定 → CHGR owner 副本落环 →
-    //    【写路径首上 Rust 线】基线读 → 解挂 RMW(0x1340 bit0←0)+读回 →
-    //    使能 RMW(0x1042 bit0←1)+读回 → 后采样 5×4s。单变量=解挂/使能
-    //    两个写；判读=PLUGIN(0x1310 bit4) 能否无 TCPM 抬起。
-    //    寄存器寻址=PPID 内 8 位偏移（0x1340→0x40、0x1310→0x10、
-    //    0x1006→0x06、0x1042→0x42）。
-    //    证据码：632=非 v5、633=CHGR 无 APPS owner 副本、634=读事务失败、
-    //    636=写事务失败（DENIED/FAILURE/DROPPED/超时统一）。
+    // ⑩ SPMI 面（S1-2b 修正刀）：v5 判定 → CHGR/USBIN/TYPEC 三 PPID
+    //    owner 副本各落环 → 基线读（真 0x1310=PPID 0x213+0x10、0x1006=
+    //    PPID 0x210+0x06、Type-C 0x150B/0x1544=PPID 0x215+0x0B/0x44）→
+    //    解挂 RMW 真身（PPID 0x213+0x40 bit0←0）+读回 → 后采样 5×4s。
+    //    证据码：632=非 v5、633=PPID 无副本、634=读事务失败、636=写事务失败。
     let arb = spmi::Arb {
         core: CORE,
         chnls: CHNLS,
@@ -559,64 +559,73 @@ extern "C" fn rust_main() -> ! {
         instrument::report_reset(PS_HOLD, 632, freq);
     }
     let n_apid = spmi::apid_count(feat);
-    let chgr_ppid = PPID_CHGR as u32;
-    let chgr = match arb.find_apid_owner(chgr_ppid, 0, n_apid) {
-        Some(a) => a,
-        None => instrument::report_reset(PS_HOLD, 633, freq),
-    };
-    let v = ((chgr as u64) << 8) | arb.owner(chgr) as u64;
-    let txt = hex_text(&mut t, unsafe { RING.seq }, " ow=0x", v);
-    ring_put(&mut ufs, freq, logring::LVL_INFO, txt);
-    // 单字节读写助手：失败即证据码落环复位（读 634 / 写 636）。
-    let rd = |off: u8| -> u8 {
+    // 三 PPID 各找 owner==0 副本：oXXX=ppid<<16|apid<<8|owner。
+    let picks: [(u32, &str); 3] = [
+        (PPID_CHGR as u32, " o210=0x"),
+        (PPID_USBIN as u32, " o213=0x"),
+        (PPID_TYPEC as u32, " o215=0x"),
+    ];
+    let mut apids = [0u32; 3];
+    for (i, (ppid, label)) in picks.iter().enumerate() {
+        let a = match arb.find_apid_owner(*ppid, 0, n_apid) {
+            Some(a) => a,
+            None => instrument::report_reset(PS_HOLD, 633, freq),
+        };
+        apids[i] = a;
+        let v = ((*ppid as u64) << 16) | ((a as u64) << 8) | arb.owner(a) as u64;
+        let txt = hex_text(&mut t, unsafe { RING.seq }, label, v);
+        ring_put(&mut ufs, freq, logring::LVL_INFO, txt);
+    }
+    let (chgr, usbin, typec) = (apids[0], apids[1], apids[2]);
+    // 跨外设单字节读助手：失败即 634 落环复位。
+    let rd = |ap: u32, off: u8| -> u8 {
         let mut b = [0u8; 1];
-        match arb.read(chgr, off, &mut b) {
+        match arb.read(ap, off, &mut b) {
             Ok(()) => b[0],
             Err(_) => instrument::report_reset(PS_HOLD, 634, freq),
         }
     };
-    let wr = |off: u8, val: u8| {
-        if arb.write(chgr, off, &[val]).is_err() {
+    let wr = |ap: u32, off: u8, val: u8| {
+        if arb.write(ap, off, &[val]).is_err() {
             instrument::report_reset(PS_HOLD, 636, freq);
         }
     };
-    // 基线：sus(0x40)|plg(0x10)<<8|st(0x06)<<16|en(0x42)<<24。
-    let v0 = rd(0x40) as u64
-        | (rd(0x10) as u64) << 8
-        | (rd(0x06) as u64) << 16
-        | (rd(0x42) as u64) << 24;
+    // 基线一：USBIN PLUGIN(0x1310)|CHGR 状态(0x1006)|Type-C MISC(0x150B)
+    // |Type-C MODE_CFG(0x1544)——u0 四字节打包。
+    let v0 = rd(usbin, 0x10) as u64
+        | (rd(chgr, 0x06) as u64) << 8
+        | (rd(typec, 0x0B) as u64) << 16
+        | (rd(typec, 0x44) as u64) << 24;
     let txt = hex_text(&mut t, unsafe { RING.seq }, " u0=0x", v0);
     ring_put(&mut ufs, freq, logring::LVL_INFO, txt);
-    // 解挂 RMW：读→清 bit0→写→读回（uw=cur|back<<8）。
-    let cur = rd(0x40);
-    wr(0x40, cur & !1);
-    let back = rd(0x40);
+    // 基线二：Type-C 细面——SNK Rp(0x1506)|attach 状态机(0x1509)|legacy
+    // (0x150D)|u-usb(0x150F)——t0 四字节打包。
+    let t0 = rd(typec, 0x06) as u64
+        | (rd(typec, 0x09) as u64) << 8
+        | (rd(typec, 0x0D) as u64) << 16
+        | (rd(typec, 0x0F) as u64) << 24;
+    let txt = hex_text(&mut t, unsafe { RING.seq }, " t0=0x", t0);
+    ring_put(&mut ufs, freq, logring::LVL_INFO, txt);
+    // 解挂 RMW 真身：USBIN_CMD_IL（PPID 0x213+0x40）bit0←0。
+    let cur = rd(usbin, 0x40);
+    wr(usbin, 0x40, cur & !1);
+    let back = rd(usbin, 0x40);
     let v = (cur as u64) | (back as u64) << 8;
     let txt = hex_text(&mut t, unsafe { RING.seq }, " uw=0x", v);
     ring_put(&mut ufs, freq, logring::LVL_INFO, txt);
     let end = time::cntvct() + freq as u64;
     while time::cntvct() < end {}
-    let v1 = rd(0x10) as u64 | (rd(0x06) as u64) << 8;
+    let v1 = rd(usbin, 0x10) as u64
+        | (rd(chgr, 0x06) as u64) << 8
+        | (rd(typec, 0x0B) as u64) << 16;
     let txt = hex_text(&mut t, unsafe { RING.seq }, " u1=0x", v1);
     ring_put(&mut ufs, freq, logring::LVL_INFO, txt);
-    // 充电使能 RMW：读→置 bit0→写→读回（cw=cur|back<<8）。
-    let cur = rd(0x42);
-    wr(0x42, cur | 1);
-    let back = rd(0x42);
-    let v = (cur as u64) | (back as u64) << 8;
-    let txt = hex_text(&mut t, unsafe { RING.seq }, " cw=0x", v);
-    ring_put(&mut ufs, freq, logring::LVL_INFO, txt);
-    let end = time::cntvct() + freq as u64;
-    while time::cntvct() < end {}
-    let v2 = rd(0x10) as u64 | (rd(0x06) as u64) << 8;
-    let txt = hex_text(&mut t, unsafe { RING.seq }, " u2=0x", v2);
-    ring_put(&mut ufs, freq, logring::LVL_INFO, txt);
-    // 后采样 5×4s：四寄存器打包（u3=sus|plg<<8|st<<16|en<<24）。
+    // 后采样 5×4s：u3 同 u0 四字节打包。
     for s in 0..5u64 {
-        let v3 = rd(0x40) as u64
-            | (rd(0x10) as u64) << 8
-            | (rd(0x06) as u64) << 16
-            | (rd(0x42) as u64) << 24;
+        let v3 = rd(usbin, 0x10) as u64
+            | (rd(chgr, 0x06) as u64) << 8
+            | (rd(typec, 0x0B) as u64) << 16
+            | (rd(typec, 0x44) as u64) << 24;
         let txt = hex_text(&mut t, unsafe { RING.seq }, " u3=0x", v3);
         ring_put(&mut ufs, freq, logring::LVL_INFO, txt);
         if s < 4 {

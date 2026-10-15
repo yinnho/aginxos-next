@@ -101,6 +101,7 @@ MODE="heartbeat"
 [ "${1:-}" = "--s06b" ] && MODE="s06b"
 [ "${1:-}" = "--s11" ] && MODE="s11"
 [ "${1:-}" = "--s12" ] && MODE="s12"
+[ "${1:-}" = "--s12b" ] && MODE="s12b"
 mkdir -p "${OUTDIR}"
 ELF="${OUTDIR}/heartbeat.elf"
 
@@ -737,11 +738,20 @@ elif [ "${MODE}" = "s11" ]; then
 elif [ "${MODE}" = "s12" ]; then
   # NOLINUX-PLAN S1-2：USBIN 判别刀（S1-1 链路 + ⑩ 写路径首上 Rust 线：
   # 基线读→解挂 RMW 0x1340 bit0←0+读回→使能 RMW 0x1042 bit0←1+读回→
-  # 后采样 5×4s——判 PLUGIN 能否无 TCPM 抬起）。
+  # 后采样 5×4s——判 PLUGIN 能否无 TCPM 抬起）。复现 S1-2 行为 checkout 62d7f71。
+  # 注：S1-2 自身寻址错（flat 高字节=外设号），判读无效——S1-2b 为修正刀。
   (cd "${HERE}" && cargo build --release --target aarch64-unknown-none-softfloat)
   ELF="${OUTDIR}/s12.elf"
   cp "${HERE}/target/aarch64-unknown-none-softfloat/release/redfin-bare" "${ELF}"
   BIN="${OUTDIR}/s12.bin"; IMG="${OUTDIR}/boot-s12.img"
+elif [ "${MODE}" = "s12b" ]; then
+  # NOLINUX-PLAN S1-2b：USBIN 判别修正刀（flat 高字节=外设号纠错：
+  # USBIN=PPID 0x213、TYPEC=PPID 0x215；真 0x1310 PLUGIN + Type-C
+  # 0x1506/09/0B/0D/0F/0x1544 面 + 解挂写真身 0x213+0x40）。
+  (cd "${HERE}" && cargo build --release --target aarch64-unknown-none-softfloat)
+  ELF="${OUTDIR}/s12b.elf"
+  cp "${HERE}/target/aarch64-unknown-none-softfloat/release/redfin-bare" "${ELF}"
+  BIN="${OUTDIR}/s12b.bin"; IMG="${OUTDIR}/boot-s12b.img"
 else
   # 研究件：SPMI 全量 substrate。警告：start.S 迁移路径 2026-10-13 三验
   # （L10/L11/L12a）全部冻 logo（崩在 kmain 前）——修好前勿当心跳用。

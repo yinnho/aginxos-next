@@ -50,6 +50,10 @@ core = 0x0C440000         # VERSION@0x0 FEATURES@0x4 APID 表@0x900+4N
 chnls = 0x0C600000        # 写通道窗 0x10000×APID
 obsrvr = 0x0E600000       # 读观察窗 0x80×APID（ee=0 无附加项）
 cnfg = 0x0C40A000         # owner 表@0x700+4N（val&7=write EE）
-# 电量链 PPID（battery-truth.md「电量链 PPID 全表」；S1 消费两件）：
-ppid_chgr = 0x210         # PM7250B 充电器（0x1006 状态/0x1042 使能）
+# 电量链 PPID（battery-truth.md「电量链 PPID 全表」）。flat 地址高字节=外设号
+# （DT 中断说明符 <sid2 外设N> 实锤，S1-2b 立律）：CHGR@0x1000=0x210、
+# USBIN@0x1300=0x213、TYPEC@0x1500=0x215、MISC@0x1600=0x216。
+ppid_chgr = 0x210         # 充电器（0x1006 状态/0x1042 使能）
+ppid_usbin = 0x213        # USB 输入（0x1310 PLUGIN/0x1340 SUSPEND）
+ppid_typec = 0x215        # Type-C 状态机（0x150B CC_ATTACHED/0x1544 MODE_CFG）
 ppid_misc = 0x216         # 看门狗 BARK_BITE 0x1643 所在（ka v3 喂狗正身）
