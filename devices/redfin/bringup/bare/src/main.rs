@@ -6,6 +6,11 @@
 //! → daifclr 解掩 → WFI。IRQ 落槽 5（current EL SPx），入口记
 //! id/dt/ctl 进环后复位。GIC MMIO 在 L1 e0 Device 段——表无需改。
 //!
+//! 首刷两雷（已修）：① GIC 初始化次序必须照内核（GICD TYPER 读 →
+//! dist 0→0x13 → RD 扫描 → RD 唤醒）——先碰 RD 帧总线直接停摆，
+//! 且停摆无 EXC 无仪器码，只有步进环记录能定位；② daifclr 立即数
+//! 是 DAIF 域掩码（F=bit0 I=bit1），解 IRQ 掩= `#2` 非 `#1`。
+//!
 //! 验收（规格原文）：日志心跳按定时器节拍——IRQ 记录 id=19、dt≈武装
 //! 时长（CNTVCT 对拍）、零 EXC，连刷三轮一致。
 
@@ -202,17 +207,13 @@ fn exc_text<'a>(buf: &'a mut [u8; 96], seq: u64, slot: usize, esr: u64, elr: u64
     core::str::from_utf8(&buf[..n]).unwrap_or("")
 }
 
-/// GIC 状态记录文本（ctdr/waker 十六进制 + RD 帧序十进制）。
-fn gic_text<'a>(buf: &'a mut [u8; 96], seq: u64, ctlr: u32, waker: u32, rd_idx: u64) -> &'a str {
+/// 单值十六进制记录（GIC 步进遗言）：#seq label0x<hex>。
+fn hex_text<'a>(buf: &'a mut [u8; 96], seq: u64, label: &str, v: u64) -> &'a str {
     let mut n = 0;
     push_str(buf, &mut n, "#");
     push_u64(buf, &mut n, seq);
-    push_str(buf, &mut n, " gic ctlr=0x");
-    push_hex(buf, &mut n, ctlr as u64);
-    push_str(buf, &mut n, " waker=0x");
-    push_hex(buf, &mut n, waker as u64);
-    push_str(buf, &mut n, " rd=");
-    push_u64(buf, &mut n, rd_idx);
+    push_str(buf, &mut n, label);
+    push_hex(buf, &mut n, v);
     core::str::from_utf8(&buf[..n]).unwrap_or("")
 }
 
@@ -424,17 +425,26 @@ extern "C" fn rust_main() -> ! {
     let txt = text(&mut t, &[" scan t="], &[unsafe { RING.seq }, t_scan]);
     ring_put(&mut ufs, freq, logring::LVL_INFO, txt);
 
-    // ⑧ GIC 面：本核 RD（TYPER 匹配）→ dist 使能 → RD 唤醒（次序反着
-    //    内核无妨——wake 只动本核 WAKER，dist 门最后开也兜得住）
+    // ⑧ GIC 面——严格内核次序（gic_init_bases：GICD TYPER 读 → gic_dist_init
+    //    → gic_cpu_init=populate+wake），每步落环。首刷反着写（先碰 RD），
+    //    首条 GIC MMIO（RD0 TYPER 读）即总线停摆——遗言止于 scan、烧了
+    //    一整轮才定位；次序+步进记录都是本刷的学费。
+    let typer = gic::rd32(GICD, gic::DIST_TYPER);
+    let txt = hex_text(&mut t, unsafe { RING.seq }, " gicd typer=0x", typer as u64);
+    ring_put(&mut ufs, freq, logring::LVL_INFO, txt);
+    let ctlr = gic::dist_init(GICD, 100_000);
+    let txt = hex_text(&mut t, unsafe { RING.seq }, " dist ctlr=0x", ctlr as u64);
+    ring_put(&mut ufs, freq, logring::LVL_INFO, txt);
     let mpidr = gic::mpidr();
     let rd = match gic::find_rd(GICR, RD_COUNT as u32, RD_STRIDE as u32, mpidr) {
         None => instrument::report_reset(PS_HOLD, 612, freq),
         Some(rd) => rd,
     };
-    let waker = gic::wake_rd(rd, 100_000);
-    let ctlr = gic::dist_init(GICD, 100_000);
     let rd_idx = ((rd - GICR) / RD_STRIDE) as u64;
-    let txt = gic_text(&mut t, unsafe { RING.seq }, ctlr, waker, rd_idx);
+    let txt = text(&mut t, &[" rd="], &[unsafe { RING.seq }, rd_idx]);
+    ring_put(&mut ufs, freq, logring::LVL_INFO, txt);
+    let waker = gic::wake_rd(rd, 100_000);
+    let txt = hex_text(&mut t, unsafe { RING.seq }, " waker=0x", waker as u64);
     ring_put(&mut ufs, freq, logring::LVL_INFO, txt);
 
     // ⑨ CPU 接口三连（SRE 失败=内存映射面，本线不支持，证据码 642）

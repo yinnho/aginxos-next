@@ -12,6 +12,8 @@
 
 /// GICD_CTLR： distributor 控制（RWP=bit31，ARE_NS=bit4，G1A=bit1，G1=bit0）。
 pub const DIST_CTLR: u32 = 0x000;
+/// GICD_TYPER： 中断容量/特性（内核 gic_init_bases 的第一次 GIC MMIO）。
+pub const DIST_TYPER: u32 = 0x008;
 /// GICR_TYPER： RD 身份（[63:32]=affinity，Last/ProcessorNumber 在低位）。
 pub const RD_TYPER: u32 = 0x008;
 /// GICR_WAKER： ProcessorSleep=bit1，ChildrenAsleep=bit2。
@@ -179,17 +181,17 @@ pub fn icc_eoir1(id: u32) {
     unsafe { core::arch::asm!("msr icc_eoir1_el1, {:x}", "isb", in(reg) id as u64, options(nostack)) };
 }
 
-/// DAIF 清 I 位——解中断掩。注意 daifclr 的立即数是 DAIF 域内位序号
-/// （0–15），不是掩码：I 位=域位 1 → `#1`（写 `#0x80` 会汇编报错——
-/// 位宽越界）。放在本模块：与中断面同属一闸。
+/// DAIF 清 I 位——解中断掩。立即数是 DAIF 4 位域（F|I|A|D，bit0=F
+/// bit1=I）的**掩码**（内核 arch_local_irq_enable 原文 `daifclr, #2`），
+/// 首刷曾写 `#1`——只清了 F 位，I 恒掩、IRQ 永不进槽。
 pub fn irq_unmask() {
-    unsafe { core::arch::asm!("msr daifclr, #1", "isb") };
+    unsafe { core::arch::asm!("msr daifclr, #2", "isb") };
 }
 
 /// DAIF 置 I 位——掩中断（IRQ 入口首步：EOI 降优先级后杂响会重入，
-/// 先断根再动状态）。立即数=域内位序号，同上 `#1`。
+/// 先断根再动状态）。立即数=域掩码，I=bit1 → `#2`。
 pub fn irq_mask() {
-    unsafe { core::arch::asm!("msr daifset, #1", "isb") };
+    unsafe { core::arch::asm!("msr daifset, #2", "isb") };
 }
 
 #[cfg(test)]

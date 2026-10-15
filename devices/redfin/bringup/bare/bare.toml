@@ -21,12 +21,17 @@ ps_hold = 0x0C264000      # PS_HOLD 复位门（写 0 冷重启）
 freq_fallback = 19200000  # CNTFRQ 读 0 时的兜底 Hz
 
 [gic]
-# GICv3 基址（bengal.dtsi:461——redbull 树：0x0F200000+0x10000 GICD、
-# 0x0F300000+0x100000 8×RD）。INTID=19：虚拟定时器 PPI3（活内核
-# /proc/interrupts arch_timer = GICv3 19 Level 定谳；bengal PPI 排布
-# 1/2/3/0 非上游 13/14/11/10，勿按惯例写）。
-gicd = 0x0F200000
-gicr = 0x0F300000
-rd_stride = 0x20000       # redistributor-stride（bengal.dtsi 同源）
-rd_count = 8              # 8 核 8 帧
+# GICv3 基址（真源=活内核 boot DT /sys/firmware/devicetree/base/soc/
+# interrupt-controller@17a00000/reg：GICD 0x17A00000+0x10000、
+# GICR 0x17A60000+0x100000×8帧；stride=0x20000）。
+# 【错档教训】vendor 树 bengal.dtsi 写 0x0F200000/0x0F300000——那是
+# bengal 名下另一变体的布局，redfin 实跑 DT 不认：0x0F2 区读回恒 0、
+# 0x0F3 区总线停摆（S0-5 前两刷挂死根因）。机器地址一律以活内核
+# boot DT 为准，dtsi 只当线索。
+# INTID=19：虚拟定时器 PPI3（活内核 /proc/interrupts arch_timer =
+# GICv3 19 Level 定谳；PPI 排布非上游 13/14/11/10，勿按惯例写）。
+gicd = 0x17A00000
+gicr = 0x17A60000
+rd_stride = 0x20000       # redistributor-stride（活 DT 同值）
+rd_count = 8              # 0x100000/0x20000 = 8 核 8 帧
 timer_intid = 19          # CNTVIRQ 的 GIC INTID（16+PPI3）
