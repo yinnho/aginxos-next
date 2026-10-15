@@ -626,7 +626,21 @@ U1 MMIO 探针（读 CAP+VER，VER 合法→blink；冻死=时钟没开）→ U2
   写 10 回读仍 0**（基线本 0）：疑写-only 命令锁存（真值读在
   0x1106/0x1107 另页，PPID 未明），下刀判别；②**qv/qe=0x8000 恒值
   ——QG apid=0xf1 APPS 有 owner 副本**（好消息：QG 页可及），但
-  VBAT @+0x80 裸读是哨兵——QG 是 ADC，需测量触发协议（fg 刀正题）。
+  VBAT @+0x80 裸读是哨兵——QG 是 ADC，需测量触发协议（fg 刀正题，
+  S1-5 已闭）。
+- **【ICL 挂账源码定谳（S1-4b 案头，2026-10-15 夜）】**对账
+  LineageOS redbull（qpnp-smb5.c ioctl 表 + smb5-reg.h + pm7250b.dtsi）
+  定谳：**ICL 写旋钮=USBIN_CURRENT_LIMIT_CFG=0x1370**（`.usb_icl`
+  表：0~3A、50mA 步）——s14 写的 **0x1341 实为 CMD_APSD**
+  （适配器检测触发），写 10 回读 0 之谜=写错寄存器非写-only；
+  **ICL 读真值=DCDC 外设（PPID 0x211）0x06/0x07/0x08**
+  （ICL_MAX_STATUS/ICL_STATUS/AICL_ICL_STATUS，50mA 步）——
+  0x1106/0x1107 不是「CHGR 另页」而是**隔壁外设**：SMB5 是 SID 2
+  下七外设一家（chgr/dcdc/batif/usbin/dcin/typec/misc @0x1000..
+  0x1600 = PPID 0x210..0x216，pm7250b.dtsi reg+interrupts 实锤）。
+  battery-truth.md 主档已修（旧记 0x1341 系 REA 时代误记）。上机
+  验证刀（写 0x1370→读 DCDC 0x1106/0x1107 对账）并入 s18 充电观察
+  日（与 TAPER 证词同日，需半电电池）。
 - **【满电 TERMINATE=闩锁非活比较器（S1-4 附产）】**FV 压到 4.35V、
   VBAT 4.448V 在其上、USB 在位输入可用——0x1006 全程 0x45（5
   TERMINATE）不复活、还原后亦不复活：**再充门是闩锁/政策层**（需

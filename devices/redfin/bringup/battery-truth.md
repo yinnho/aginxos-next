@@ -12,7 +12,7 @@ substrate 自养机电量的寄存器级蓝图；二进制与源码冲突时以�
 | 0x1006 bits[2:0] | BATTERY_CHARGER_STATUS_1 | **充电类型**（1–2 段=快充/taper…） |
 | 0x1310 bit4 | USBIN_RT_STS | **USB 在位**（ext-vbus 供电场景先查 0x1340 bit0=USBIN_CMD_IL 挂起位） |
 | 0x1410 bit4 | DCIN_RT_STS | 直流在位 |
-| 0x1341 | USBIN_CURRENT_LIMIT_CFG | **输入限流 ICL**（`smb5_usb_set_prop` 写） |
+| 0x1370 | USBIN_CURRENT_LIMIT_CFG | **输入限流 ICL 写旋钮**（qpnp-smb5.c `.usb_icl` 表：0~3A、50mA 步；10-15 LineageOS 源码对账定谳——旧记 0x1341 系误记，0x1341 实为 CMD_APSD） |
 | 0x1094 / 0x1096 | JEITA 阈值槽 | `CHGR_JEITA_THRESHOLD_BASE(i)=0x1094+4i` 2B 字段，热/冷硬门（见 JEITA 层） |
 | 0x1140 bit0 | DCDC_CMD_OTG_REG | OTG_EN——VBUS 反向输出（OTG 面） |
 | 0x1153 bit1 | DCDC_OTG_CFG_REG | OTG_EN_SRC_CFG 清 0=VBUS 归软件控 |
@@ -54,13 +54,16 @@ clamp(µ值, min, max) 取 (µ值−min)/step`，单字节 regmap_write——全
 |------|--------|---------------|------|
 | **FCC 快充电流** | **0x1061** | 0–8,000,000 | 50mA |
 | **FV 浮充电压** | **0x1070** | 3,600,000–4,790,000 | 10mV |
-| **USB ICL 入限流** | **0x1341** | 0–5,000,000 | 50mA |
+| **USB ICL 入限流** | **0x1370**（qpnp-smb5.c 表：0–3,000,000；旧记 0x1341 误） | 0–3,000,000 | 50mA |
 | OTG 电流限 | 0x1152 | 500,000–1,000,000 | 250mA |
 | ICL 现值/上限读 | 0x1107 / 0x1106 | 50mA 步同上 | — |
 | AICL ICL/状态读 | 0x1108 / 0x110A | — | — |
 
 配套腿：**挂起=0x1340 bit0 写 1**（USBIN_SUSPEND，恢复写 0）；
-**ICL 硬覆盖=0x1342 bit0**（绕过 APSD/AICL 协商，substrate 手动供电面）。
+**ICL 硬覆盖=0x1342 bit0**（绕过 APSD/AICL 协商，substrate 手动供电面）；
+**0x1341 真身=CMD_APSD**（适配器检测触发，非 ICL）。七外设一家：chgr/dcdc/
+batif/usbin/dcin/typec/misc @0x1000..0x1600 = PPID 0x210..0x216（SID 2），
+ICL 读面在 DCDC（0x1106/0x1107）、写面在 USBIN（0x1370）——跨外设非跨页。
 
 **JEITA 三层**（热防护全貌）：
 ① 硬比较门：0x1094+4i 阈值槽（2B），超热/超冷 PMIC 自主掐；
