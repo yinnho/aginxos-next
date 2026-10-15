@@ -105,6 +105,7 @@ MODE="heartbeat"
 [ "${1:-}" = "--s13" ] && MODE="s13"
 [ "${1:-}" = "--s13b" ] && MODE="s13b"
 [ "${1:-}" = "--s13c" ] && MODE="s13c"
+[ "${1:-}" = "--s13d" ] && MODE="s13d"
 mkdir -p "${OUTDIR}"
 ELF="${OUTDIR}/heartbeat.elf"
 
@@ -783,6 +784,16 @@ elif [ "${MODE}" = "s13c" ]; then
   ELF="${OUTDIR}/s13c.elf"
   cp "${HERE}/target/aarch64-unknown-none-softfloat/release/redfin-bare" "${ELF}"
   BIN="${OUTDIR}/s13c.bin"; IMG="${OUTDIR}/boot-s13c.img"
+elif [ "${MODE}" = "s13d" ]; then
+  # NOLINUX-PLAN S1-3d：备用位判别刀（S1-3c 定谳——EXT-LONG 写与内核
+  # fmt_cmd_v2/write_data 逐位同仍不驻；差别在世界不在命令）：sp54=
+  # CHGR 0x1054 官方 CHARGER_SPARE 翻位读回判「页死 vs 寄存器个案」；
+  # 对照 c42 + 武装梯 aw3 + 喂一记 + 150s 停喂观察（POR BARK=128s 档，
+  # bark 升起截环落 bk）+ 解除武装。复现 S1-3c 行为 checkout 472b071。
+  (cd "${HERE}" && cargo build --release --target aarch64-unknown-none-softfloat)
+  ELF="${OUTDIR}/s13d.elf"
+  cp "${HERE}/target/aarch64-unknown-none-softfloat/release/redfin-bare" "${ELF}"
+  BIN="${OUTDIR}/s13d.bin"; IMG="${OUTDIR}/boot-s13d.img"
 else
   # 研究件：SPMI 全量 substrate。警告：start.S 迁移路径 2026-10-13 三验
   # （L10/L11/L12a）全部冻 logo（崩在 kmain 前）——修好前勿当心跳用。

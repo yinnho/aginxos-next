@@ -507,36 +507,80 @@ U1 MMIO 探针（读 CAP+VER，VER 合法→blink；冻死=时钟没开）→ U2
   物理访问（Device 型）双侧非缓存，零一致性维护。心跳节流 1M 拍
   @19.2MHz ≈ 52ms/拍。
 
-## 12. SPMI v5 Rust 线与电源面真相（S1-1/S1-2/S1-2b 实测，2026-10-15）[DRV][DT]
+## 12. SPMI v5 Rust 线与电源面真相（S1-1–S1-3c 实测，2026-10-15）[DRV][DT]
 
 - **运输层（crates/bare spmi，内核逐函数对账）三轮逐字一致**：
   `spmi v=0x50010000`（v5 窗判定过，与 L0 dmesg 同值）、
   `feat=0x80050200`→apid_count=**0x200=512**（正好铺满表窗）。
   obsrvr+0x80×apid 读通道/RDATA0@+0x18/STATUS 轮询序（DONE→DENIED
-  →FAILURE→DROPPED）反汇编审计与内核 wait_for_done 同序。
-- **【寻址律，S1-2b 立法】smb5-reg.h flat 地址高字节=外设号**：
-  CHGR@0x1000=**PPID 0x210**、DCDC@0x1100=0x211、BATIF@0x1200=0x212、
-  USBIN@0x1300=**0x213**、DCIN@0x1400=0x214、TYPEC@0x1500=**0x215**、
-  MISC@0x1600=**0x216**（PPID=sid2<<8|外设号；证据=pm7250b.dtsi 中断
-  说明符 `<0x2 0x10 …>` 逐外设递增）。SPMI 访问=每 PPID 独立查 apid
-  后带 8 位偏移。**S1-1/S1-2 曾把 0x1310 当 PPID 0x210+0x10（实读
-  CHGR INT_RT_STS），「USBIN 缺口」定谳因此作废**（两次写皆恒等写
-  零伤害；写路径证明不受影响）。
+  →FAILURE→DROPPED）反汇编审计与内核 wait_for_done 同序；写路径
+  WDATA0@+0x10 先落再写 CMD@+0x0，与内核 pmic_arb_write_data 同序；
+  命令字编码 fmt_cmd 与内核 fmt_cmd_v2 逐位一致。
+- **flat 地址高字节=外设号（S1-2b 立法）**：CHGR@0x1000=**PPID 0x210**、
+  DCDC@0x1100=0x211、BATIF@0x1200=0x212、USBIN@0x1300=**0x213**、
+  DCIN@0x1400=0x214、TYPEC@0x1500=**0x215**、MISC@0x1600=**0x216**
+  （PPID=sid2<<8|外设号；证据=pm7250b.dtsi 中断说明符 `<0x2 0x10 …>`
+  逐外设递增）。SPMI 访问=每 PPID 独立查 apid。**S1-1/S1-2 曾把
+  0x1310 当 PPID 0x210+0x10（实读 CHGR INT_RT_STS），「USBIN 缺口」
+  定谳因此作废**。
+- **【寻址律三档——S1-3b 环证立法，S1-3c 补证】**同一 PMIC 寄存器
+  依地址档位走三条完全不同的总线命令，档位选错=事务 DONE 但落点
+  错/不落：
+  1. **短命令**（arb READ=15/WRITE=14）：总线只带 **5 位**寄存器地址
+    （内核 spmi.h 明文 "5-bit address"）——偏移 ≥0x20 一律静默截断
+    成 addr&0x1F。**<0x20 的读全真**（S1-2b 电源面叙事幸存），
+    ≥0x20 的短命令读=读到偏移低 5 位的别名，写=写到别处。
+  2. **8 位 EXT**（arb EXT_READ=13/EXT_WRITE=2，总线 op 0x20-0x2F
+    读/≤0x0F 写）：地址位够 8 位，s13b 环证事务 DONE 但写不驻
+    （三寄存器两外设全不驻、13min 观察窗 misc_rt 平 0）——当时判
+    「EXT 死区」，S1-3c 证明 LONG 同死，死的不止这一档（见第 3 档
+    与世界门悬案）。
+  3. **16 位 EXT-LONG**（arb **EXT_WRITEL=op 0/EXT_READL=op 1**，
+    总线 op 0x30-0x37 写/0x38-0x3F 读）：内核充电页的唯一走法——
+    PMIC regmap `.reg_bits=16`（qcom-spmi-pmic.c:112）且 regmap-spmi
+    以 `addr <= 0xFF` 分界（regmap-spmi.c:130/145/170/185），充电
+    寄存器 flat 全 >0xFF → 内核一律走 LONG。外设字节走 APID 寻由，
+    CMD 字只带 8 位偏移。**S1-3c 环定谳（ring md5 017a5018…cad8）：
+    LONG 写也不驻**——c42/m53/aw2 三试验逐字复刻 s13b 形状，且与
+    内核侧逐位逐序对账全同（fmt_cmd_v2 无 sid 位、WDATA 先落、
+    RW=chnls+0x10000×apid、wait_for_done 同窗同序），即命令形状
+    无懈可击。**结论升格：三档写全 ACK-DONE-不驻，读三档全真**
+    （跨档交叉一致+物理合理）。
+- **【回溯失效，S1-3b 改判】**①S1-2「写路径 Rust 首证」**撤**——
+  那次写走的短命令，0x40 截成 0x00+恒等写，空洞；②S1-2b 的
+  `0x1544=0x02（EN_SNK_ONLY）`条目**死**（短命令实读 0x1504）；
+  ③B15/B16 asm 写配方降级为「事务级成立」（DONE 无 DENIED 真，
+  落点驻留从未验过）。电源面叙事本身（PLUGIN=1/TERMINATE=满电/
+  CC_ATTACHED=1）全用 <0x20 读，**不受损**。
 - **owner 表上机实测（B 系推断升格为显值）**：CHGR 0x210 单副本
   **apid=0xe2 owner=0**；USBIN 0x213 单副本 **apid=0xe5 owner=0**；
   TYPEC 0x215 单副本 **apid=0xe7 owner=0**；MISC 0x216 单副本
   **apid=0xe8 owner=0**——电量链四外设全 APPS 可写。
-- **【写路径 Rust 线首证】**解挂 RMW（PPID 0x213+0x40 bit0←0，实值
-  已 0=恒等写）读回一致、无 DENIED/636——B15/B16 asm 写配方移植成立。
-  实测 `uw=0x0`（cur=0 back=0）。
 - **【裸世界电源面真相，S1-2b 三轮实测——S1-1 缺口叙事撤案】**
   `u0=0x2a94510` 恒定：**USBIN 0x1310=0x10 → PLUGIN=1（输入在！）**、
   0x1006=0x45（bits[2:0]=5 TERMINATE——电池 100% 满的正当态）、
   **Type-C 0x150B=0xa9 → CC_ATTACHED=1**、debounce 完、SNK 模式、
-  VBUS_ERROR=0；0x1544=0x02（EN_SNK_ONLY）；0x1506=0x02 **Rp 3.0A
-  检出**（供电器拉值）。裁决：**Type-C 状态机是 PMIC 内自主硬件，
-  裸世界活着且已 attach；充电器看得见 USBIN；不存在 TCPM 前置**。
-  与 L0 稳态（present=1/Charging/100）完全一致。推论撤回：①「狗
-  未武装因不充电」解释作废——ka 线 130s 无咬另有根因（疑狗从未被
-  任何人武装；S1 下一刀先读狗状态再喂）；②S1 常驻充电的前置消失，
-  ka v3 喂狗（MISC 0xe8 apid→0x1643）直接可做。
+  VBUS_ERROR=0；0x1506=0x02 **Rp 3.0A 检出**（供电器拉值）。裁决：
+  **Type-C 状态机是 PMIC 内自主硬件，裸世界活着且已 attach；充电器
+  看得见 USBIN；不存在 TCPM 前置**。与 L0 稳态（present=1/Charging/
+  100）完全一致。
+- **【狗面真相，s13b/s13c 环读——ka 130s 无咬闭案】**裸世界 POR 默认
+  `WD_CFG(0x1651)=0x00`（谁也没武装过狗）、
+  `SBB(0x1653)=0x0c`（SNARL=62.5ms 档/BARK=**128s 档**/BITE=0）。
+  内核 probe 写的是另一形状（SBB←SNARL 8s|BARK=64s 档|BITE 8s|
+  bit7 咬后禁充、WD_CFG←0x42）。ka 线 130s 无咬根因=**狗从未被
+  装配**（WD_CFG=0），非时序差一秒。BITE=0 档=裸世界即使装配也
+  只有 bark 中断无 bite，无禁充/复位风险。
+- **【世界门悬案，S1-3c 开案】**L0 活体对证（2026-10-15 18:36）：
+  `wdog-bark` 中断计数在涨（3→5，~60s 节奏）=狗在内核世真武装真叫；
+  而裸世界 13min 零 bark+aw 全不驻。内核 arb 写路径与我 Rust 逐位
+  逐序全同（fmt_cmd_v2/write_data/wait_for_done 三对账），充电驱动
+  无 SEC/secure 门（源码级无据）→ 差别只能来自世界：内核世带着
+  TZ/SCM/AOP 全套启动（msm_scm 驱动在 dmesg 名册），裸世界没有。
+  两种待判解释：①TZ 在内核启动时解锁充电页（或 PMIC 安全寄存器
+  ACK-drop 仅对未解锁 master）；②内核自己的写其实也没落，狗是
+  TZ/AOP 装的（bark 节奏 64s vs 128s 可判：S1-3d 回网后先测）。
+  **S1-3d 判别刀已备**：sp54=CHGR 0x1054 官方 CHARGER_SPARE（6 位
+  备用，内核仅调试痕）翻位读回——落=裸世写本通（死者皆安全寄存器
+  个案）；平=充电页写整死（世界门实锤）→S1 充电控制改走 RPMh/AOP
+  路线立项。
