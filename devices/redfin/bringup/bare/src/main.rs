@@ -23,6 +23,16 @@
 //! ext4 解析器与增量 crc32 全在 crates/bare（19+1 测绿，真镜像
 //! md5 对账含多 extent 大件）。
 //!
+//! S3 首刀同刀（s19 段，⑩-3）：USB HS-only 设备面上电（配方真源
+//! S3-USB.md——本地内核树拆账）。A=交接残态四读（GPLL0/GDSC+GSNPSID/
+//! GCTL+GUSB2PHYCFG/QUSB2——顺序从安全到险，QUSB2 垫底：若 LDO 未上
+//! 读死即同步异常落环复位，前面读数已 FUA 保住）；B=上电正典（GDSC
+//! →USB30 BCR→五时钟腿→QUSB2 BCR→十六步 PHY write-readback）；
+//! C=dwc3 上线（软复位→GCTL 设备向→HS-only QSCRATCH 三步→事件缓冲
+//! @NC 窗 0xB0005000→DCTL 清 SFTDISCONNECT→2s 后读 DSTS/GEVTCOUNT/
+//! 首事件字）。全程零错误复位：超时/失配只记账（e 字位掩码），刀的
+//! 诊断输出=读数本身。
+//!
 //! 副核入口 = secondary_entry（裸 asm）：掩 DAIF、装 VBAR（向量表
 //! per-core！副核不复位态默认）、立独立栈，跳 Rust secondary_main
 //! ——纯忙等心跳写 NC mailbox（32B 槽×7 @0xB0010000：magic/mpidr/
@@ -202,6 +212,21 @@ fn write_code(r: Fail) -> u32 {
         Fail::Check(7) => 422,
         Fail::Check(_) => 122,
     }
+}
+
+/// MMIO 32 位读写（s19 起）：首 1GB Device 直映射，PA=VA。
+fn rd32(a: usize) -> u32 {
+    unsafe { (a as *const u32).read_volatile() }
+}
+
+fn wr32(a: usize, v: u32) {
+    unsafe { (a as *mut u32).write_volatile(v) }
+}
+
+/// 位域改写（读-改-写）：mask 清位后 or val。
+fn rmw32(a: usize, mask: u32, val: u32) {
+    let v = rd32(a);
+    wr32(a, (v & !mask) | val);
 }
 
 fn push_str(buf: &mut [u8], n: &mut usize, s: &str) {
@@ -803,6 +828,171 @@ extern "C" fn rust_main() -> ! {
         }
     }
     let txt = hex_text(&mut t, unsafe { RING.seq }, " s18 t=0x", t_e2);
+    ring_put(&mut ufs, freq, logring::LVL_INFO, txt);
+
+    // ⑩-3 S3 首刀（s19 段）：USB HS-only 设备面上电。分段全落环、
+    //     零错误复位（探针诊断=读数本身；超时/失配记 e 位掩码）。
+    //     e 位图：bit0=GDSC PWR_ON 超时 bit1=USB30 BCR 后无时钟位
+    //     bit2=master UPDATE 悬 bit3=utmi UPDATE 悬 bits4..19=PHY
+    //     十六步失配 bit20=GSNPSID 非 5533 bit21=DCTL 软复位悬。
+    let t_s19 = time::cntvct();
+
+    // A 交接残态四读（顺序=安全→险：QUSB2 垫底，读死则前读已落环）。
+    let gpll0 = ((rd32(USB_GCC + 0x30) as u64) << 32) | rd32(USB_GCC) as u64;
+    let txt = hex_text(&mut t, unsafe { RING.seq }, " s19 a0=0x", gpll0);
+    ring_put(&mut ufs, freq, logring::LVL_INFO, txt);
+    let a1 = ((rd32(USB_GDSC) as u64) << 32) | rd32(USB_DWC3 + 0xc120) as u64;
+    let txt = hex_text(&mut t, unsafe { RING.seq }, " s19 a1=0x", a1);
+    ring_put(&mut ufs, freq, logring::LVL_INFO, txt);
+    let a2 = ((rd32(USB_DWC3 + 0xc110) as u64) << 32) | rd32(USB_DWC3 + 0xc200) as u64;
+    let txt = hex_text(&mut t, unsafe { RING.seq }, " s19 a2=0x", a2);
+    ring_put(&mut ufs, freq, logring::LVL_INFO, txt);
+    let a3 = ((rd32(USB_HSPHY + 0x94) as u64) << 32) | rd32(USB_HSPHY + 0x50) as u64;
+    let txt = hex_text(&mut t, unsafe { RING.seq }, " s19 a3=0x", a3);
+    ring_put(&mut ufs, freq, logring::LVL_INFO, txt);
+
+    // B 上电正典（dwc3_msm_resume 序）：GDSC on→USB30 BCR→五时钟腿
+    // →QUSB2 BCR→十六步 PHY。
+    let mut e: u64 = 0;
+    // ① GDSC：bit0 SW_COLLAPSE←0，poll bit31 PWR_ON（≤100ms）。
+    rmw32(USB_GDSC, 1, 0);
+    let end = time::cntvct() + freq as u64 / 10;
+    while rd32(USB_GDSC) & 0x8000_0000 == 0 {
+        if time::cntvct() > end {
+            e |= 1;
+            break;
+        }
+    }
+    // ② USB30_PRIM_BCR（GCC+0xf000）：assert→100µs→deassert。
+    wr32(USB_GCC + 0xf000, 1);
+    let end = time::cntvct() + freq as u64 / 10_000;
+    while time::cntvct() < end {}
+    wr32(USB_GCC + 0xf000, 0);
+    // ③ 五时钟腿。master RCG（0xf020）：CFG=GPLL0_MAIN(sel 1)/4.5
+    //    （SRC_DIV=2h−1=8）→UPDATE poll 清；utmi RCG（0xf038）：
+    //    XO(sel 0)/1（SRC_DIV=1）→UPDATE。CBCR=bit0←1、poll bit31
+    //    CLK_OFF 清（≤1ms，超时记位不阻路——残态读数照落）。
+    let mut rcg = |base: usize, cfg: u32, bit: u64| {
+        wr32(base + 4, cfg);
+        wr32(base, 1);
+        let end = time::cntvct() + freq as u64 / 100;
+        while rd32(base) & 1 != 0 {
+            if time::cntvct() > end {
+                e |= bit;
+                break;
+            }
+        }
+    };
+    rcg(USB_GCC + 0xf020, (1 << 8) | 8, 2);
+    rcg(USB_GCC + 0xf038, 1, 3);
+    let cbcr = |base: usize| {
+        wr32(base, 1);
+        let end = time::cntvct() + freq as u64 / 1000;
+        while rd32(base) & 0x8000_0000 != 0 {
+            if time::cntvct() > end {
+                break;
+            }
+        }
+    };
+    cbcr(USB_GCC + 0xf010); // master
+    cbcr(USB_GCC + 0xf07c); // iface（cfg_noc axi）
+    cbcr(USB_GCC + 0xf01c); // mock_utmi
+    cbcr(USB_GCC + 0xf080); // bus_aggr
+    cbcr(USB_GCC + 0xf018); // sleep
+    let b0 = ((rd32(USB_GCC + 0xf010) as u64) << 32)
+        | ((rd32(USB_GCC + 0xf01c) as u64) << 16)
+        | rd32(USB_GCC + 0xf07c) as u64;
+    let txt = hex_text(&mut t, unsafe { RING.seq }, " s19 b0=0x", b0);
+    ring_put(&mut ufs, freq, logring::LVL_INFO, txt);
+    // ④ QUSB2 BCR（GCC+0x12000）：assert→100µs→deassert。
+    wr32(USB_GCC + 0x12000, 1);
+    let end = time::cntvct() + freq as u64 / 10_000;
+    while time::cntvct() < end {}
+    wr32(USB_GCC + 0x12000, 0);
+    // ⑤ 十六步 write-readback（S3-USB.md 表；mask=0 整写整比）。
+    //    (offset, mask, val)——序号即 e 位（bit4 起）。
+    const PHY: [(u32, u32, u32); 16] = [
+        (0x94, 1 << 1, 1 << 1),                                 // ① CMN_OVERRIDE_EN
+        (0x50, 1 << 1, 1 << 1),                                 // ② POR
+        (0x54, 0x7 << 4, 0),                                    // ③ FSEL←0
+        (0x58, 1 << 5, 1 << 5),                                 // ④ PLLBTUNE
+        (0xa0, 0x3, 0x2),                                       // ⑤ REFCLK_SEL
+        (0x58, 1 << 4, 1 << 4),                                 // ⑥ VBUSVLDEXTSEL0
+        (0x60, 1 << 0, 1 << 0),                                 // ⑦ VBUSVLDEXT0
+        (0x6c, 0, 0x63),                                        // ⑧ X0 覆盖（dtsi）
+        (0x70, 0, 0x85),                                        // ⑨ X1 覆盖（dtsi）
+        (0x74, 0, 0x17),                                        // ⑩ X2 覆盖（dtsi）
+        (0x5c, 1 << 0, 1 << 0),                                 // ⑪ VREGBYPASS
+        (0x64, (1 << 2) | (1 << 3), (1 << 2) | (1 << 3)),       // ⑫ SUSPEND_N|SEL
+        (0x3c, 1 << 0, 1 << 0),                                 // ⑬ SLEEPM
+        (0x50, 1 << 1, 0),                                      // ⑭ POR←0（出复位）
+        (0x64, 1 << 3, 0),                                      // ⑮ SUSPEND_N_SEL←0
+        (0x94, 1 << 1, 0),                                      // ⑯ OVERRIDE_EN←0
+    ];
+    let mut b1: u64 = 0;
+    for (i, &(off, mask, val)) in PHY.iter().enumerate() {
+        let a = USB_HSPHY + off as usize;
+        if mask == 0 {
+            wr32(a, val);
+        } else {
+            rmw32(a, mask, val);
+        }
+        let rb = rd32(a);
+        let ok = if mask == 0 { rb == val } else { rb & mask == val };
+        if !ok {
+            e |= 1 << (4 + i);
+            b1 = (b1 << 4) | (i as u64 + 1);
+        }
+    }
+    let txt = hex_text(&mut t, unsafe { RING.seq }, " s19 b1=0x", b1);
+    ring_put(&mut ufs, freq, logring::LVL_INFO, txt);
+
+    // C dwc3 上线：软复位→GCTL 设备向→HS-only QSCRATCH 三步→事件
+    // 缓冲→DCFG HS→DCTL 清 SFTDISCONNECT→2s 枚举窗→三读。
+    let snps = rd32(USB_DWC3 + 0xc120);
+    if snps >> 16 != 0x5533 {
+        e |= 1 << 20;
+    }
+    rmw32(USB_DWC3 + 0xc704, 1 << 11, 1 << 11); // DCTL CORESOFTRESET
+    let end = time::cntvct() + freq as u64 / 100;
+    while rd32(USB_DWC3 + 0xc704) & (1 << 11) != 0 {
+        if time::cntvct() > end {
+            e |= 1 << 21;
+            break;
+        }
+    }
+    rmw32(USB_DWC3 + 0xc110, 3 << 12, 2 << 12); // GCTL PRTCAP=DEVICE
+    // HS-only QSCRATCH 三步（dwc3-msm POST_RESET 正牌）。
+    let qs = USB_DWC3 + 0xf8800 + 8;
+    rmw32(qs, 1 << 8, 1 << 8); // PIPE_UTMI_CLK_DIS
+    let end = time::cntvct() + freq as u64 / 300_000;
+    while time::cntvct() < end {}
+    rmw32(qs, (1 << 0) | (1 << 3), (1 << 0) | (1 << 3)); // CLK_SEL|PHYSTATUS_SW
+    let end = time::cntvct() + freq as u64 / 300_000;
+    while time::cntvct() < end {}
+    rmw32(qs, 1 << 8, 0);
+    // 事件缓冲 4KB @0xB0005000（NC 窗空闲槽；先清零再挂）。
+    for i in 0..1024usize {
+        wr32(USB_EVBUF + i * 4, 0);
+    }
+    wr32(USB_DWC3 + 0xc400, USB_EVBUF as u32); // GEVNTADRLO(0)
+    wr32(USB_DWC3 + 0xc404, (USB_EVBUF >> 32) as u32); // HI
+    wr32(USB_DWC3 + 0xc408, 4096); // GEVNTSIZ(0)
+    wr32(USB_DWC3 + 0xc40c, rd32(USB_DWC3 + 0xc40c)); // count 清零
+    rmw32(USB_DWC3 + 0xc700, 7, 0); // DCFG DEVSPD=HS
+    rmw32(USB_DWC3 + 0xc704, 1 << 1, 0); // DCTL 清 SFTDISCONNECT=上线
+    let end = time::cntvct() + freq as u64 * 2;
+    while time::cntvct() < end {}
+    let c1 = ((rd32(USB_DWC3 + 0xc70c) as u64) << 32) | rd32(USB_DWC3 + 0xc40c) as u64;
+    let txt = hex_text(&mut t, unsafe { RING.seq }, " s19 c1=0x", c1);
+    ring_put(&mut ufs, freq, logring::LVL_INFO, txt);
+    let c2 = unsafe { core::ptr::read_volatile(USB_EVBUF as *const u64) };
+    let txt = hex_text(&mut t, unsafe { RING.seq }, " s19 c2=0x", c2);
+    ring_put(&mut ufs, freq, logring::LVL_INFO, txt);
+    let t_s19 = time::cntvct() - t_s19;
+    let txt = hex_text(&mut t, unsafe { RING.seq }, " s19 e=0x", e);
+    ring_put(&mut ufs, freq, logring::LVL_INFO, txt);
+    let txt = hex_text(&mut t, unsafe { RING.seq }, " s19 t=0x", t_s19);
     ring_put(&mut ufs, freq, logring::LVL_INFO, txt);
 
     // ⑪ 常驻 soak 环（S1-7）：三 pick（MISC 0x216 喂狗面/CHGR 0x210

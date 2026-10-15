@@ -60,3 +60,14 @@ ppid_misc = 0x216         # 看门狗 BARK_BITE 0x1643 所在（ka v3 喂狗正�
 ppid_qg = 0x248           # QG 电量计（LAST_ADC_V @+0xC0、MSOC @+0xBF；s15 已收）
 ppid_qgsdam = 0x2B1       # QG SDAM 学习账本（VALID 0x46/SOC 0x47/MAGIC 0x80；s15 已收）
 ppid_vadc = 0x231         # VADC 温控/电压 ADC（外设 0x3100，spmi-adc5；s16 主角）
+
+[usb]
+# S3 USB 面（S3-USB.md 案头账；真源=本地 redbull 内核树 lito-usb.dtsi +
+# dwc3-msm.c + gcc-lito.c + lito-gdsc.dtsi + clk-rcg2.c）。首 1GB Device
+# 直映射已覆盖全部 USB MMIO（L1 项 0），无需扩页表。键带 usb_ 前缀
+# （build.rs 不加 section 名）。
+usb_dwc3 = 0x0A600000     # dwc3 core（QSCRATCH=dwc3+0xF8800；core 0xc1xx/dcfg 0xc7xx）
+usb_hsphy = 0x088E3000    # QUSB2 femto HS PHY（十四步上电序在 S3-USB.md）
+usb_gcc = 0x00100000      # GCC 基址（USB30 BCR 0xf000/QUSB2 BCR 0x12000/CBCR 0xf0xx/GPLL0 LUCID MODE@+0 STATUS@+0x30）
+usb_gdsc = 0x10F004       # usb30_prim GDSC（bit0 SW_COLLAPSE←0 开、poll bit31 PWR_ON）
+usb_evbuf = 0xB0005000    # dwc3 事件缓冲 4KB（NC DMA 窗空闲槽：staging 0xB0004000 与栈 0xB0008000 之间）

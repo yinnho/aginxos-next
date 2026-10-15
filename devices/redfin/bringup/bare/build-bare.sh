@@ -112,6 +112,7 @@ MODE="heartbeat"
 [ "${1:-}" = "--s16b" ] && MODE="s16b"
 [ "${1:-}" = "--s17" ] && MODE="s17"
 [ "${1:-}" = "--s18" ] && MODE="s18"
+[ "${1:-}" = "--s19" ] && MODE="s19"
 mkdir -p "${OUTDIR}"
 ELF="${OUTDIR}/heartbeat.elf"
 
@@ -859,6 +860,17 @@ elif [ "${MODE}" = "s18" ]; then
   ELF="${OUTDIR}/s18.elf"
   cp "${HERE}/target/aarch64-unknown-none-softfloat/release/redfin-bare" "${ELF}"
   BIN="${OUTDIR}/s18.bin"; IMG="${OUTDIR}/boot-s18.img"
+elif [ "${MODE}" = "s19" ]; then
+  # NOLINUX-PLAN S3 首刀：s18 全部面（soak 环+ext4）不变，⑩-3 加 USB
+  # HS-only 设备面上电（配方真源 S3-USB.md）——交接残态四读 → GDSC/
+  # BCR/五时钟腿/QUSB2 十六步 PHY → dwc3 软复位+GCTL 设备向+HS-only
+  # QSCRATCH 三步+事件缓冲+DCTL 上线 → 2s 枚举窗后 DSTS/GEVTCOUNT/首
+  # 事件字落环。验收=Mac 端 system_profiler 见新高速设备 + 环读数互证。
+  # 复现 s18 checkout 217612b。宿主先 check.sh（crates/bare 平台面）。
+  (cd "${HERE}" && cargo build --release --target aarch64-unknown-none-softfloat)
+  ELF="${OUTDIR}/s19.elf"
+  cp "${HERE}/target/aarch64-unknown-none-softfloat/release/redfin-bare" "${ELF}"
+  BIN="${OUTDIR}/s19.bin"; IMG="${OUTDIR}/boot-s19.img"
 else
   # 研究件：SPMI 全量 substrate。警告：start.S 迁移路径 2026-10-13 三验
   # （L10/L11/L12a）全部冻 logo（崩在 kmain 前）——修好前勿当心跳用。
