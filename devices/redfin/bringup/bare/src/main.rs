@@ -537,16 +537,17 @@ extern "C" fn rust_main() -> ! {
     gic::icc_igrpen1(true);
     gic::enable_ppi(rd, TIMER_INTID as u32, 0xa0);
 
-    // ⑩ SPMI 面（S1-3b 狗面刀·EXT 重制）：S1-3 悬案定谳——arb 短命令
-    //    总线只带 5 位寄存器地址，≥0x20 偏移全被悄悄截断（0x51→0x11），
-    //    本刀运输层全换 EXT_READ=13/EXT_WRITE=2（内核 regmap_ext 同路，
-    //    通道机制同构）。梯子：真基线 w0（WD_CFG 0x1651 | SBB 0x1653
-    //    <<8 | MISC_RT 0x1610<<16 | USBIN_RT 0x1310<<24）→ 双写驻试验
-    //    c42（CHGR 0x1042 充电使能：cur→0→回读→还原→终读）/m53（MISC
-    //    0x1653 SBB：cur→cur^0x10→回读→还原，狗未武装改值惰性）→
-    //    武装梯 aw2（0x1651←|0x42，+0ms/+1s/+5s 三次回读）→ 喂 0x1643←1
-    //    ×2@4s → 停喂观察 8×5s（w3=wd_cfg|misc_rt<<8|usbin_rt<<16，
-    //    bark=0x1610 bit1 升起→bite 截环）→ 幸存则解除武装。
+    // ⑩ SPMI 面（S1-3c 狗面刀·EXT-LONG 重制）：S1-3b 定谳——8 位 EXT
+    //    空间（op13/op2）在 PM7250B 是死区（写 ACK 全弃/读疑似低页
+    //    别名），内核 charger regmap flat 16 位地址>0xFF 全走 EXT-LONG
+    //    （WRITEL=op0/READL=op1，periph 由 APID 承载）。运输层已换 LONG，
+    //    梯子不变复跑：真基线 w0（WD_CFG 0x1651 | SBB 0x1653<<8 |
+    //    MISC_RT 0x1610<<16 | USBIN_RT 0x1310<<24）→ 写驻双试验 c42
+    //    （CHGR 0x1042：cur→0→回读→还原→终读）/m53（SBB：cur→cur^0x10
+    //    →回读→还原，狗未武装改值惰性）→ 武装梯 aw2（0x1651←|0x42，
+    //    +0ms/+1s/+5s 三次回读）→ 喂 0x1643←1 ×2@4s → 停喂观察 12×5s
+    //    （w3=wd_cfg|misc_rt<<8|usbin_rt<<16，bark=0x1610 bit1 升起→
+    //    bite 截环）→ 幸存则补喂+解除武装。
     //    证据码：632=非 v5、633=PPID 无副本、634=读事务失败、636=写事务失败。
     let arb = spmi::Arb {
         core: CORE,
@@ -650,20 +651,22 @@ extern "C" fn rust_main() -> ! {
             while time::cntvct() < end {}
         }
     }
-    // 停喂观察 8×5s：w3=wd_cfg|misc_rt<<8|usbin_rt<<16（bark=bit1 升起
-    // →bite 截环即答案；全程平=狗没咬）。
-    for s in 0..8u64 {
+    // 停喂观察 12×5s：w3=wd_cfg|misc_rt<<8|usbin_rt<<16（bark=bit1 升起
+    // →bite 截环即答案；全程平=狗没咬；12 样本盖 64s bark 档）。
+    for s in 0..12u64 {
         let v3 = rd(misc, 0x51) as u64
             | (rd(misc, 0x10) as u64) << 8
             | (rd(usbin, 0x10) as u64) << 16;
         let txt = hex_text(&mut t, unsafe { RING.seq }, " w3=0x", v3);
         ring_put(&mut ufs, freq, logring::LVL_INFO, txt);
-        if s < 7 {
+        if s < 11 {
             let end = time::cntvct() + freq as u64 * 5;
             while time::cntvct() < end {}
         }
     }
-    // 幸存 40s：解除武装（bit1←0，护回滚后的 XBL/L0 链），读回落环。
+    // 幸存 60s：补喂一记再解除武装（bit1←0，护回滚后的 XBL/L0 链），
+    // 读回落环。
+    wr(misc, 0x43, 1);
     let cur = rd(misc, 0x51);
     wr(misc, 0x51, cur & !0x02);
     let back = rd(misc, 0x51);

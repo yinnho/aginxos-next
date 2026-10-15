@@ -8,14 +8,16 @@
 //!   RDATA1@0x1C）；写 = chnls+0x10000*apid（先落 WDATA 再发 CMD，
 //!   须 owner&7==ee——B7/B12 冻死案铁律）。
 //! - cmd=(opc<<27)|((addr&0xff)<<4)|(len-1)&7；≤8B。
-//! - 【S1-3b 双重寻址律第二律】短命令（READ=15/WRITE=14）在 SPMI 总线
-//!   上只携带 **5 位**寄存器地址——≥0x20 的偏移被悄悄截断到 addr&0x1F
-//!   （spmi_register_write 文档明写 5-bit address）。内核 PMIC regmap
-//!   走 devm_regmap_init_spmi_ext → spmi_ext_register_read/write（总线
-//!   EXT 命令带全 8 位），arb 翻译成内部 EXT_READ=13/EXT_WRITE=2
-//!   （spmi-pmic-arb.c fmt_read/write_cmd 的 opc 翻译表实锤；通道机制
-//!   与短命令完全同构）。本运输层因此**一律走 EXT**——<0x20 偏移同样
-//!   可用 EXT 访问（内核 regmap_ext 即如此全走）。
+//! - 【S1-3b/S1-3c 寻址律第三律：PMIC 侧寄存器寻址三档】短命令（READ=15
+//!   /WRITE=14）总线只带 **5 位**地址（≥0x20 截断，spmi_register_write
+//!   文档明写）；EXT（EXT_READ=13/EXT_WRITE=2）带 8 位——但 PM7250B
+//!   实测该空间为**死区**（S1-3b：写 ACK-全弃、读疑似低页别名，三寄存器
+//!   两外设同病）；内核 charger regmap 地址是 flat 16 位（如 WD_CFG
+//!   0x1651），regmap_spmi_ext 按 addr>0xFF 全走 **EXT-LONG**
+//!   （spmi_ext_register_writel/readl → arb EXT_WRITEL=0/EXT_READL=1，
+//!   16 位地址=periph 字节由 APID 路由承载+偏移 8 位，spmi-pmic-arb.c
+//!   翻译表 0x30-0x37→op0/0x38-0x3F→op1 实锤）。本运输层因此**一律
+//!   EXT-LONG**——这正是内核对此页的唯一走法。
 //! - STATUS：轮询 DONE=bit0，DONE 后查 FAILURE=bit1/DENIED=bit2/
 //!   DROPPED=bit3（内核 wait_for_done 同序）。
 //!
@@ -37,10 +39,12 @@ pub const CH_STATUS: u32 = 0x08;
 pub const CH_WDATA0: u32 = 0x10;
 pub const CH_RDATA0: u32 = 0x18;
 
-/// arbiter 内部 opcode（非 SPMI 总线码；内核 PMIC_ARB_OP_*）。一律 EXT：
-/// 短命令总线只带 5 位地址（≥0x20 截断错位），EXT 带全 8 位（S1-3b）。
-pub const OP_EXT_READ: u32 = 13;
-pub const OP_EXT_WRITE: u32 = 2;
+/// arbiter 内部 opcode（非 SPMI 总线码；内核 PMIC_ARB_OP_*）。一律
+/// EXT-LONG：短命令 5 位地址截断、8 位 EXT 空间 PM7250B 实测死区
+/// （S1-3b），内核 charger regmap（flat 16 位地址>0xFF）全走 LONG
+/// （S1-3c）。periph 字节由 APID 路由承载，cmd 只带 8 位偏移。
+pub const OP_EXT_READL: u32 = 1;
+pub const OP_EXT_WRITEL: u32 = 0;
 
 const ST_DONE: u32 = 1 << 0;
 const ST_FAILURE: u32 = 1 << 1;
@@ -175,7 +179,7 @@ impl Arb {
     pub fn read(&self, apid: u32, addr: u8, buf: &mut [u8]) -> Result<(), TErr> {
         assert!(buf.len() >= 1 && buf.len() <= 8);
         let off = 0x80 * apid as usize;
-        wr32(self.obsrvr + off, CH_CMD, fmt_cmd(OP_EXT_READ, addr, buf.len()));
+        wr32(self.obsrvr + off, CH_CMD, fmt_cmd(OP_EXT_READL, addr, buf.len()));
         Self::wait_done(self.obsrvr, off)?;
         let d0 = rd32(self.obsrvr + off, CH_RDATA0).to_le_bytes();
         let d1 = rd32(self.obsrvr + off, CH_RDATA0 + 4).to_le_bytes();
@@ -202,7 +206,7 @@ impl Arb {
             w1.copy_from_slice(&data[4..]);
             wr32(self.chnls + off, CH_WDATA0 + 4, u32::from_le_bytes(w1));
         }
-        wr32(self.chnls + off, CH_CMD, fmt_cmd(OP_EXT_WRITE, addr, data.len()));
+        wr32(self.chnls + off, CH_CMD, fmt_cmd(OP_EXT_WRITEL, addr, data.len()));
         Self::wait_done(self.chnls, off)
     }
 }
@@ -214,22 +218,25 @@ mod tests {
     #[test]
     fn fmt_cmd_matches_kernel_v2() {
         // (opc<<27)|((addr&0xff)<<4)|(bc&7)，bc=len-1。
-        assert_eq!(fmt_cmd(OP_EXT_READ, 0x06, 1), (13 << 27) | (0x06 << 4) | 0);
-        assert_eq!(fmt_cmd(OP_EXT_WRITE, 0x43, 1), (2 << 27) | (0x43 << 4) | 0);
-        // 地址域 8 位全带：0x1043 的 0x10 由 PPID 承载，命令字收全 0x43
-        // ——短命令会在总线上截到 5 位（0x43→0x03），EXT 不会。
-        assert_eq!(fmt_cmd(OP_EXT_WRITE, 0x43, 2) & 0x0000_0FF0, 0x430);
-        assert_eq!(fmt_cmd(OP_EXT_READ, 0x51, 1) & 0x0000_0FF0, 0x510);
+        assert_eq!(fmt_cmd(OP_EXT_READL, 0x06, 1), (1 << 27) | (0x06 << 4) | 0);
+        assert_eq!(fmt_cmd(OP_EXT_WRITEL, 0x43, 1), (0 << 27) | (0x43 << 4) | 0);
+        // 地址域 8 位全带：0x1043 的 0x10 由 PPID/APID 承载，cmd 收全
+        // 0x43——短命令在总线截到 5 位、8 位 EXT 在 PM7250B 是死区，
+        // LONG（op0/op1）才达 charger 页（S1-3b/S1-3c 立法）。
+        assert_eq!(fmt_cmd(OP_EXT_WRITEL, 0x43, 2) & 0x0000_0FF0, 0x430);
+        assert_eq!(fmt_cmd(OP_EXT_READL, 0x51, 1) & 0x0000_0FF0, 0x510);
         // len=8 → bc=7。
-        assert_eq!(fmt_cmd(OP_EXT_READ, 0x00, 8) & 7, 7);
+        assert_eq!(fmt_cmd(OP_EXT_READL, 0x00, 8) & 7, 7);
     }
 
     #[test]
-    fn ext_opcodes_match_kernel_enum() {
-        // spmi-pmic-arb.c PMIC_ARB_OP_*：EXT_READ=13/EXT_WRITE=2（S1-3b
-        // 立法：短命令 READ=15/WRITE=14 总线只带 5 位地址，弃用）。
-        assert_eq!(OP_EXT_READ, 13);
-        assert_eq!(OP_EXT_WRITE, 2);
+    fn extl_opcodes_match_kernel_enum() {
+        // spmi-pmic-arb.c PMIC_ARB_OP_*：EXT_WRITEL=0/EXT_READL=1（内核
+        // charger regmap flat 16 位地址>0xFF 全走 LONG——S1-3c）。死区档：
+        // 短 READ=15/WRITE=14（5 位截断）、8 位 EXT_READ=13/EXT_WRITE=2
+        // （PM7250B 写全弃）。
+        assert_eq!(OP_EXT_READL, 1);
+        assert_eq!(OP_EXT_WRITEL, 0);
     }
 
     #[test]

@@ -104,6 +104,7 @@ MODE="heartbeat"
 [ "${1:-}" = "--s12b" ] && MODE="s12b"
 [ "${1:-}" = "--s13" ] && MODE="s13"
 [ "${1:-}" = "--s13b" ] && MODE="s13b"
+[ "${1:-}" = "--s13c" ] && MODE="s13c"
 mkdir -p "${OUTDIR}"
 ELF="${OUTDIR}/heartbeat.elf"
 
@@ -768,10 +769,20 @@ elif [ "${MODE}" = "s13b" ]; then
   # NOLINUX-PLAN S1-3b：狗面刀 EXT 重制（短命令 5 位地址截断案定谳，
   # 运输层全换 EXT_READ=13/EXT_WRITE=2）：真基线 w0→写驻双试验 c42/m53
   # →武装梯 aw2（+0ms/+1s/+5s 回读）→喂×2@4s→停喂观察 8×5s→幸存解除。
+  # 注：S1-3b 判读=8 位 EXT 空间在 PM7250B 是死区（写 ACK 全弃/读疑似
+  # 低页别名）——S1-3c 为 EXT-LONG 重制刀。复现 S1-3b 行为 checkout 9ee4014。
   (cd "${HERE}" && cargo build --release --target aarch64-unknown-none-softfloat)
   ELF="${OUTDIR}/s13b.elf"
   cp "${HERE}/target/aarch64-unknown-none-softfloat/release/redfin-bare" "${ELF}"
   BIN="${OUTDIR}/s13b.bin"; IMG="${OUTDIR}/boot-s13b.img"
+elif [ "${MODE}" = "s13c" ]; then
+  # NOLINUX-PLAN S1-3c：狗面刀 EXT-LONG 重制（8 位 EXT 死区案定谳，
+  # 运输层换 WRITEL=op0/READL=op1——内核 charger regmap flat 16 位地址
+  # >0xFF 的唯一走法）：梯子同 S1-3b，观察窗 12×5s+解除前补喂。
+  (cd "${HERE}" && cargo build --release --target aarch64-unknown-none-softfloat)
+  ELF="${OUTDIR}/s13c.elf"
+  cp "${HERE}/target/aarch64-unknown-none-softfloat/release/redfin-bare" "${ELF}"
+  BIN="${OUTDIR}/s13c.bin"; IMG="${OUTDIR}/boot-s13c.img"
 else
   # 研究件：SPMI 全量 substrate。警告：start.S 迁移路径 2026-10-13 三验
   # （L10/L11/L12a）全部冻 logo（崩在 kmain 前）——修好前勿当心跳用。
