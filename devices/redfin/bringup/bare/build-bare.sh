@@ -108,6 +108,7 @@ MODE="heartbeat"
 [ "${1:-}" = "--s13d" ] && MODE="s13d"
 [ "${1:-}" = "--s14" ] && MODE="s14"
 [ "${1:-}" = "--s15" ] && MODE="s15"
+[ "${1:-}" = "--s16" ] && MODE="s16"
 mkdir -p "${OUTDIR}"
 ELF="${OUTDIR}/heartbeat.elf"
 
@@ -815,6 +816,18 @@ elif [ "${MODE}" = "s15" ]; then
   ELF="${OUTDIR}/s15.elf"
   cp "${HERE}/target/aarch64-unknown-none-softfloat/release/redfin-bare" "${ELF}"
   BIN="${OUTDIR}/s15.bin"; IMG="${OUTDIR}/boot-s15.img"
+elif [ "${MODE}" = "s16" ]; then
+  # NOLINUX-PLAN S1-6：温控读刀（VADC=PPID 0x231 外设 0x3100，
+  # qcom,spmi-adc5）：六通道一发读 die_temp 0x02/vph_pwr 0x83/
+  # vbat_sns 0x84/chg_temp 0x09/bat_therm 0x4a/smb1390_therm 0x0e，
+  # DIG_PARAM 0x28/0x18 + EOC 轮询 + DATA0/1；终态还原基线六寄存器；
+  # 4×2s die_temp 活性窗。换算 full_scale=0x70e4（V=raw×1875000/28900
+  # ×den；die m°C=raw×…/2−273150；chg=377500−V/4；smb=419400−V×100/356）。
+  # 复现 s15 checkout 32f27b1。
+  (cd "${HERE}" && cargo build --release --target aarch64-unknown-none-softfloat)
+  ELF="${OUTDIR}/s16.elf"
+  cp "${HERE}/target/aarch64-unknown-none-softfloat/release/redfin-bare" "${ELF}"
+  BIN="${OUTDIR}/s16.bin"; IMG="${OUTDIR}/boot-s16.img"
 else
   # 研究件：SPMI 全量 substrate。警告：start.S 迁移路径 2026-10-13 三验
   # （L10/L11/L12a）全部冻 logo（崩在 kmain 前）——修好前勿当心跳用。

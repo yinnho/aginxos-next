@@ -537,19 +537,21 @@ extern "C" fn rust_main() -> ! {
     gic::icc_igrpen1(true);
     gic::enable_ppi(rd, TIMER_INTID as u32, 0xa0);
 
-    // ⑩ SPMI 面（S1-5 电量计读刀）：S1-4 挂账定谳——qv 读 0x80=0x8000
-    //     是 FIFO_I_RESET_VAL（S2 FIFO 未满哨兵，qg-defs.h 实锤），非门。
-    //     正读集（qg-reg.h/qg-util.c 对齐）：0xC0 LAST_ADC_V（L0
-    //     voltage_now 同源，即瞬无需 FIFO）+ 0xC2 LAST_ADC_I（符号 16）+
-    //     0xBF MSOC（×100/255 %）+ 0x70/0x74 PON/GOOD OCV + 状态 0x08-0x0B
-    //     （QG_OK bit7/GOOD_OCV bit1/FIFO 计数 bits[3:0]）+ ID 0x04/0x05
-    //     （type=0x0D；subtype 3=5A 档/4=10A 档定 IBAT 尺）+ 0x80/0x82
-    //     S2 平均对照 + HOLD 协议示范（0x42 bit0 hold→读 0xC6 burst avg
-    //     →release，qg_get_battery_current 同序）。SDAM（PPID 0x2B1）
-    //     读 VALID 0x46/SOC 0x47/MAGIC 0x80——L0 驱动先跑过应见其笔迹。
-    //     5×2s 采样窗看裸世 ADC 自走活性。换算：V µV=raw×194637/1000；
-    //     I µA=raw×152588/1000（subtype 3）/×305176/1000（subtype 4）。
-    //    证据码：632=非 v5、633=QG 无副本、634=读事务失败、636=写事务失败。
+    // ⑩ SPMI 面（S1-6 温控读刀）：PM7250B VADC（PPID 0x231，外设
+    //     0x3100，qcom,spmi-adc5）六通道一发读——die_temp 0x02/vph_pwr
+    //     0x83/vbat_sns 0x84/chg_temp 0x09/bat_therm 0x4a（ratiometric）/
+    //     smb1390_therm 0x0e。协议（adc_configure 同序）：DIG_PARAM 0x42
+    //     （absolute=0x28 TIMER_CAL+ABS+dec2/ratiometric=0x18）→FAST_AVG
+    //     0x43=0→CH_SEL 0x44=ch→DELAY 0x45（bat/smb=2 即 200µs，余 0）→
+    //     EN_CTL1 0x46|=0x80→CONV_REQ 0x47=0x80→轮询 STATUS1 0x08（bit1
+    //     REQ_STS 清+bit0 EOC 置）→DATA0/1 0x50/0x51=raw 15bit。
+    //     换算（data_pmic5 full_scale=0x70e4）：VµV=raw×1875000/28900×den
+    //     （vph/vbat 预分压 ÷1/3 即 den=3）；die m°C=raw×1875000/28900/2
+    //     −273150；chg m°C=377500−VµV/4；smb m°C=419400−VµV×100/356；
+    //     bat_therm V→R=100k·V/(1.875V−V) 查 NTC。终态还原基线六寄存器
+    //     并验回读；4×2s 活性窗连发 die_temp 看温漂。vbat_sns 与 QG
+    //     0xC0 机内对账。
+    //    证据码：632=非 v5、635=VADC 无副本、634=读事务失败、636=写事务失败。
     let arb = spmi::Arb {
         core: CORE,
         chnls: CHNLS,
@@ -566,27 +568,15 @@ extern "C" fn rust_main() -> ! {
         instrument::report_reset(PS_HOLD, 632, freq);
     }
     let n_apid = spmi::apid_count(feat);
-    // QG 主角（fatal）+ SDAM 可选腿：oXXX=ppid<<16|apid<<8|owner。
-    let qg = match arb.find_apid_owner(PPID_QG as u32, 0, n_apid) {
+    // VADC 主角（fatal）：o231=ppid<<16|apid<<8|owner。
+    let vad = match arb.find_apid_owner(PPID_VADC as u32, 0, n_apid) {
         Some(a) => a,
-        None => instrument::report_reset(PS_HOLD, 633, freq),
+        None => instrument::report_reset(PS_HOLD, 635, freq),
     };
-    let v = ((PPID_QG as u64) << 16) | ((qg as u64) << 8) | arb.owner(qg) as u64;
-    let txt = hex_text(&mut t, unsafe { RING.seq }, " o248=0x", v);
+    let v = ((PPID_VADC as u64) << 16) | ((vad as u64) << 8) | arb.owner(vad) as u64;
+    let txt = hex_text(&mut t, unsafe { RING.seq }, " o231=0x", v);
     ring_put(&mut ufs, freq, logring::LVL_INFO, txt);
-    let sdam = arb.find_apid_owner(PPID_QGSDAM as u32, 0, n_apid);
-    match sdam {
-        Some(a) => {
-            let v = ((PPID_QGSDAM as u64) << 16) | ((a as u64) << 8) | arb.owner(a) as u64;
-            let txt = hex_text(&mut t, unsafe { RING.seq }, " o2b1=0x", v);
-            ring_put(&mut ufs, freq, logring::LVL_INFO, txt);
-        }
-        None => {
-            let txt = hex_text(&mut t, unsafe { RING.seq }, " o2b1=0x", 0);
-            ring_put(&mut ufs, freq, logring::LVL_INFO, txt);
-        }
-    }
-    // 跨外设单字节读助手：失败即 634 落环复位。
+    // 跨外设单字节读写助手：失败即 634/636 落环复位。
     let rd = |ap: u32, off: u8| -> u8 {
         let mut b = [0u8; 1];
         match arb.read(ap, off, &mut b) {
@@ -599,70 +589,92 @@ extern "C" fn rust_main() -> ! {
             instrument::report_reset(PS_HOLD, 636, freq);
         }
     };
-    // 2 字节读助手（LE）：qg_get_* 同形。
-    let rd2 = |ap: u32, off: u8| -> u64 {
-        let mut b2 = [0u8; 2];
-        match arb.read(ap, off, &mut b2) {
-            Ok(()) => b2[0] as u64 | (b2[1] as u64) << 8,
-            Err(_) => instrument::report_reset(PS_HOLD, 634, freq),
+    // 单通道转换（adc_configure/adc_wait_eoc 同序）：配五寄存器→REQ→
+    // EOC 轮询（deadline 300ms）→DATA0/1。返回 raw|status<<16|npolls<<24。
+    let conv = |ch: u8, dp: u8, dl: u8| -> u64 {
+        wr(vad, 0x42, dp);
+        wr(vad, 0x43, 0x00);
+        wr(vad, 0x44, ch);
+        wr(vad, 0x45, dl);
+        let en = rd(vad, 0x46) | 0x80;
+        wr(vad, 0x46, en);
+        wr(vad, 0x47, 0x80);
+        let deadline = time::cntvct() + freq as u64 * 300 / 1000;
+        let mut status = 0u8;
+        let mut npolls = 0u64;
+        while time::cntvct() < deadline {
+            status = rd(vad, 0x08);
+            npolls += 1;
+            if status & 0x03 == 0x01 {
+                break;
+            }
         }
+        let raw = rd(vad, 0x50) as u64 | (rd(vad, 0x51) as u64) << 8;
+        raw | (status as u64) << 16 | npolls.min(255) << 24
     };
-    // ID：type 0x0D | subtype<<8（3=5A 档/4=10A 档）。
-    let qi = rd(qg, 0x04) as u64 | (rd(qg, 0x05) as u64) << 8;
-    let txt = hex_text(&mut t, unsafe { RING.seq }, " qi=0x", qi);
+    // 基线：STATUS1/2 + 0x42-0x47 六连（还原底本）。
+    let bs = rd(vad, 0x08) as u64 | (rd(vad, 0x09) as u64) << 8;
+    let txt = hex_text(&mut t, unsafe { RING.seq }, " bs=0x", bs);
     ring_put(&mut ufs, freq, logring::LVL_INFO, txt);
-    // 状态四连：QG_OK bit7/GOOD_OCV bit1/FIFO 计数 bits[3:0]。
-    let qs = rd(qg, 0x08) as u64
-        | (rd(qg, 0x09) as u64) << 8
-        | (rd(qg, 0x0A) as u64) << 16
-        | (rd(qg, 0x0B) as u64) << 24;
-    let txt = hex_text(&mut t, unsafe { RING.seq }, " qs=0x", qs);
+    let base = [
+        rd(vad, 0x42),
+        rd(vad, 0x43),
+        rd(vad, 0x44),
+        rd(vad, 0x45),
+        rd(vad, 0x46),
+        rd(vad, 0x47),
+    ];
+    let bb = base.iter().enumerate().fold(0u64, |a, (i, &b)| a | (b as u64) << (8 * i));
+    let txt = hex_text(&mut t, unsafe { RING.seq }, " bb=0x", bb);
     ring_put(&mut ufs, freq, logring::LVL_INFO, txt);
-    // 主读集：即瞬 V/I + MSOC + 双 OCV + S2 平均对照。
-    let v0 = rd2(qg, 0xC0);
-    let txt = hex_text(&mut t, unsafe { RING.seq }, " v0=0x", v0);
-    ring_put(&mut ufs, freq, logring::LVL_INFO, txt);
-    let i0 = rd2(qg, 0xC2);
-    let txt = hex_text(&mut t, unsafe { RING.seq }, " i0=0x", i0);
-    ring_put(&mut ufs, freq, logring::LVL_INFO, txt);
-    let mo = rd(qg, 0xBF) as u64;
-    let txt = hex_text(&mut t, unsafe { RING.seq }, " mo=0x", mo);
-    ring_put(&mut ufs, freq, logring::LVL_INFO, txt);
-    let oc = rd2(qg, 0x70) | rd2(qg, 0x74) << 16;
-    let txt = hex_text(&mut t, unsafe { RING.seq }, " oc=0x", oc);
-    ring_put(&mut ufs, freq, logring::LVL_INFO, txt);
-    let s2 = rd2(qg, 0x80) | rd2(qg, 0x82) << 16;
-    let txt = hex_text(&mut t, unsafe { RING.seq }, " s2=0x", s2);
-    ring_put(&mut ufs, freq, logring::LVL_INFO, txt);
-    // HOLD 协议示范（qg_get_battery_current 同序）：0x42 bit0 hold →
-    // 读 0xC6 burst avg I → release → 终读 0x42 应回基线。
-    let c42 = rd(qg, 0x42);
-    wr(qg, 0x42, c42 | 1);
-    let bi = rd2(qg, 0xC6);
-    wr(qg, 0x42, c42);
-    let c42f = rd(qg, 0x42);
-    let v = bi | (c42f as u64) << 16;
-    let txt = hex_text(&mut t, unsafe { RING.seq }, " bi=0x", v);
-    ring_put(&mut ufs, freq, logring::LVL_INFO, txt);
-    // SDAM 三读（L0 驱动笔迹）：VALID 0x46|SOC 0x47<<8 + MAGIC 低 2B。
-    if let Some(sap) = sdam {
-        let sv = rd(sap, 0x46) as u64 | (rd(sap, 0x47) as u64) << 8;
-        let txt = hex_text(&mut t, unsafe { RING.seq }, " sv=0x", sv);
-        ring_put(&mut ufs, freq, logring::LVL_INFO, txt);
-        let sm = rd2(sap, 0x80);
-        let txt = hex_text(&mut t, unsafe { RING.seq }, " sm=0x", sm);
+    // 六通道一发读：(ch, DIG_PARAM, DELAY)。rXX=raw|status<<16|npolls<<24。
+    let chans: [(u8, u8, u8); 6] = [
+        (0x02, 0x28, 0x00),
+        (0x83, 0x28, 0x00),
+        (0x84, 0x28, 0x00),
+        (0x09, 0x28, 0x00),
+        (0x4a, 0x18, 0x02),
+        (0x0e, 0x28, 0x02),
+    ];
+    for &(ch, dp, dl) in &chans {
+        let v = conv(ch, dp, dl);
+        let label = match ch {
+            0x02 => " r02=0x",
+            0x83 => " r83=0x",
+            0x84 => " r84=0x",
+            0x09 => " r09=0x",
+            0x4a => " r4a=0x",
+            _ => " r0e=0x",
+        };
+        let txt = hex_text(&mut t, unsafe { RING.seq }, label, v);
         ring_put(&mut ufs, freq, logring::LVL_INFO, txt);
     }
-    // 采样窗 5×2s：v0|i0<<16|msoc<<32——裸世 ADC 自走活性。
-    for s in 0..5u64 {
-        let w = rd2(qg, 0xC0) | rd2(qg, 0xC2) << 16 | (rd(qg, 0xBF) as u64) << 32;
-        let txt = hex_text(&mut t, unsafe { RING.seq }, " w5=0x", w);
+    // 活性窗 4×2s：die_temp 连发（w4=raw|status<<16）——裸世温漂活性。
+    for s in 0..4u64 {
+        let v = conv(0x02, 0x28, 0x00);
+        let txt = hex_text(&mut t, unsafe { RING.seq }, " w4=0x", v & 0xffff_ffff);
         ring_put(&mut ufs, freq, logring::LVL_INFO, txt);
-        if s < 4 {
+        if s < 3 {
             let end = time::cntvct() + freq as u64 * 2;
             while time::cntvct() < end {}
         }
     }
+    // 还原基线六寄存器，验回读：rs=现 0x42|0x44<<8|0x46<<16|原值同序<<24。
+    wr(vad, 0x42, base[0]);
+    wr(vad, 0x43, base[1]);
+    wr(vad, 0x44, base[2]);
+    wr(vad, 0x45, base[3]);
+    wr(vad, 0x46, base[4]);
+    wr(vad, 0x47, base[5]);
+    let cur = [rd(vad, 0x42), rd(vad, 0x44), rd(vad, 0x46)];
+    let rs = (cur[0] as u64)
+        | (cur[1] as u64) << 8
+        | (cur[2] as u64) << 16
+        | (base[0] as u64) << 24
+        | (base[2] as u64) << 32
+        | (base[4] as u64) << 40;
+    let txt = hex_text(&mut t, unsafe { RING.seq }, " rs=0x", rs);
+    ring_put(&mut ufs, freq, logring::LVL_INFO, txt);
 
     // ⑪ PSCI 面（S0-6）：version 落环 → 清 mailbox → 7 副核 CPU_ON
     //    （rc 各落环；SMC 从 EL1 陷 EL3 由 TZ 受理——L0 内核拉副核
