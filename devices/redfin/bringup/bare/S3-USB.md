@@ -109,15 +109,86 @@ DCTL 0xc704、DSTS 0xc70c。
 8. DCTL(0xc704)：清 SFTDISCONNECT(bit1)→**上线**，Mac 端即见高速设备
    拉电流。
 
-## EP0 → CDC-NCM（后续刀面，概要）
+## EP0 → CDC-ECM/NCM（s20 刀面全配方，2026-10-16 案头收讫）
 
-- EP0：DALEPENA(0xb008) 使能 EP0；SETUP 事件三段处理（标准请求
-  GET_DESCRIPTOR/SET_ADDRESS/SET_CONFIGURATION + 类请求）。
-- 描述符表：IAD + CDC-NCM 两接口（ECM 静态数组可直接上，NTB 后进）；
-  bulk IN/OUT EP1 + interrupt EP2。TRB 环 16 对齐。
-- macOS 原生 NCM 驱动自动绑定（若嫌重可先 CDC-ECM：老 Mac NCM 栈坑多，
-  ECM 兼容面广但 1500 MTU）。**裁决留给刀上实测**。
-- smoltcp + 自环 device 帧收发（S5 syscall 层的 socket 面在彼不在此）。
+### 设备/EP 寄存器总表（core.h 真值）
+
+| 寄存器 | 偏移 | 关键位 |
+|---|---|---|
+| DCFG | 0xc700 | DEVSPD bits2:0（HS=0/FS=1）；**DEVADDR=addr<<3（bits9:3，mask 0x7f<<3）** |
+| DCTL | 0xc704 | SFTDISCONNECT bit1（清=上线）；CSFTRST bit11 |
+| DSTS | 0xc70c | CONNECTSPD bits2:0（HS=0）；DEVCTRLHLT bit22 |
+| DEVTEN | 0xc708 | DISCONNEVTEN bit0｜USBRSTEN bit1｜CONNECTDONEEN bit2（轮询刀三开即可；gadget.c:2588 全表多 EVNTOVERFLOW/CMD 等） |
+| DALEPENA | **0xc720** | bit n=物理 EP n（ep0 OUT=bit0、ep1 IN=bit1）——⚠ 概要旧文误写 0xb008，此为正 |
+| GUSB2PHYCFG(0) | 0xc200 | USBTRDTIM=9<<10（UTMI 8-bit）；**SUSPHY=bit6、ENBLSLPM=bit8——发任何 DEPCMD 前必须清、完命令后复原**（gadget.c:398-420，HS/FS 铁律） |
+| DEP_BASE(n) | 0xc800+n·0x10 | PAR2=+0x00、PAR1=+0x04、PAR0=+0x08、DEPCMD=+0x0c |
+
+DEPCMD 编码（core.h:534-553）：opcode 低 8 位（SETEPCONFIG=1、SETTRANSFRESOURCE=2、
+SETSTALL=4、CLEARSTALL=5、STARTTRANSFER=6、ENDTRANSFER=8、DEPSTARTCFG=9），
+PARAM bits31:16，CMDIOC bit8，**CMDACT bit10 写 1 轮询自清**，完成态
+DEPCMD bits15:12（0=OK）。STARTTRANSFER 参数（ep0.c:82-83）：
+**PAR0=TRB 地址高 32 位、PAR1=低 32 位**（写反是经典坑）。
+
+### 事件缓冲协议（gadget.c:4250-4321）
+
+- 轮询：`count = rd(GEVNTCOUNT(0)) & 0xfffc`（count 恒 4 倍数，每事件 4 字节）。
+- 处理 count/4 条后**回写消耗字节数到 GEVNTCOUNT(0)=ack**（:4313），缓冲即可复用；
+  自维护 lpos=(lpos+count)%SIZE 环走。
+- 事件 u32 解码：**bit0=1 设备事件**（type=bits11:8，event_info=bits24:16；
+  RESET=1、CONNECT_DONE=2）；**bit0=0 EP 事件**（epnum=bits5:1、
+  event=bits11:8：XFERCOMPLETE=1/XFERNOTREADY=3/EPCMDCMPLT=7、
+  status=bits17:14、param=bits31:16）。XFERNOTREADY 的 status：
+  CONTROL_DATA=1、CONTROL_STATUS=2。
+- ConnectDone：读 DSTS CONNECTSPD 定速；**HS 下 EP0 maxpacket=64**
+  （gadget.c conndone，SS 才 512）。
+
+### EP0 状态机（ep0.c 全读收讫）
+
+TRB 16 字节：bpl(缓冲 lo)、bph(缓冲 hi)、size（len bits0-23；完成态 TRBSTS
+bits28-31，SETUP_PENDING=2）、ctrl（HWO=bit0、LST=bit1、CHN=bit2、
+**TRBCTL=bits9:4**：SETUP=2/DATA=5/STATUS2=3/STATUS3=4/normal=1、
+ISP_IMI=bit10、IOC=bit11）。
+
+1. **武装 SETUP**（dwc3_ep0_out_start，ep0.c:296）：TRB=(缓冲=TRB 自身地址，
+   len=8, TRBCTL=CONTROL_SETUP, HWO|ISP_IMI|IOC|LST)，物理 ep0 发
+   STARTTRANSFER。**SETUP 包 8 字节直接落进 TRB 缓冲**（inspect 以
+   `ctrl=(void*)dwc->ep0_trb` 读，ep0.c:872）。
+2. XFERCOMPLETE(ep0) → 解析 SETUP：
+   - `wLength==0` 两段式：处理后等 NRDY(STATUS)。
+   - `wLength!=0` 三段式：方向=bRequestType&0x80。**DATA 段立即起**
+     （CONTROL_DATA TRB + STARTTRANSFER，不等 NRDY(DATA)——ep0.c:149-180
+     长注释：等了会在背靠背 SETUP 时死等）。
+   - IN 描述符答 wLength 与描述符长取 min，短包即完。
+3. NRDY(STATUS) → 在事件指定的物理 EP 上武装 STATUS3（三段式）/STATUS2
+   （两段式）TRB（len=0）→ XFERCOMPLETE → 回 SETUP_PHASE、重新武装 ①。
+4. 失败/stall：物理 ep0 发 SETSTALL(4) 后重新武装 SETUP（stall_and_restart）。
+5. **SET_ADDRESS**（DCFG DEVADDR=addr<<3）与 **GET_DESCRIPTOR** 的分工
+   （ep0.c:835-867）：dwc3 只吃 GET_STATUS/SET_FEATURE/CLEAR_FEATURE/
+   SET_ADDRESS/SET_CONFIGURATION/SET_SEL/SET_ISOCH_DELAY；**GET_DESCRIPTOR
+   不在册，归 gadget 层**——裸刀自答 DEVICE(1)/CONFIG(2)/STRING(3)/
+   DEVICE_QUALIFIER(6)。HS 主机必问 Qualifier（答合法副本），BOS(0x0F)
+   可 stall（2.0 设备）。
+
+### ECM 描述符（f_ecm.c 模板 → 裸刀静态字节）
+
+裁决沿用：先 CDC-ECM 上机（兼容面最广、零类请求负担），NCM（NTB 大帧）
+后进。device 描述符 bcdUSB=0200、**IAD 形 0xEF/02/01**；config 88B：
+IAD(8)+控制接口(9, class 02/06/00, 1 端点)+CDC header(5, bcdCDC 0110)+
+union(5, 0→1)+ECM(13, iMAC 字符串指向 12 hex 字符)+notify EP(0x81 IN int
+16B)+data alt0(9, 0 端点)+alt1(9, 2 bulk)+bulk IN(0x82, 512)+bulk OUT
+(0x01, 512)。EP 物理映射：ep0/ep1=控制，ep2(bulk IN 0x82→物理 5?)——
+**物理 EP 号=USB EP 地址·2|方向**（wIndex_to_dep 律）：bulk IN 0x82→物理 5、
+bulk OUT 0x01→物理 2、notify 0x81→物理 3。SET_CONFIGURATION 后对每个
+非 ep0 EP：DEPSTARTCFG(9)→SETEPCONFIG(1)（param0=EP_TYPE bulk=2<
+<16?，见 gadget.c:665-736；SETTRANSFRESOURCE(2) param0=1）→DALEPENA 或位。
+
+### s20 验收
+
+- Mac 端 `system_profiler SPUSBDataType` 见新 HS 设备（idVendor/idProduct
+  自选值）+ `ioreg` 见 CDC ECM 接口绑定。
+- 环记录：枚举序列回放（SET_ADDRESS wValue、SET_CONFIG wValue、
+  各 GET_DESCRIPTOR 类型/长）、事件总数、DSTS/DCFG 读数。
+- 数据面（s21）：EP1/EP2 bulk 对发 + ARP/ping（smoltcp 后进）。
 
 ## 开放项
 
