@@ -1,9 +1,12 @@
-//! S0-6 — PSCI CPU_ON 拉起 7 副核（NOLINUX-PLAN S0 第六刀）。
+//! S0-6b — GICR RD_TYPER 全表探针：帧↔真 MPIDR↔DT target 三角定谳
+//! （NOLINUX-PLAN S0 第六刀补刀）。
 //!
-//! S0-5 链路原样保留（GIC+vtimer+WFI 睡入）；新增多核面：PSCI 1.0
-//! smc（arm,psci-1.0/method="smc"，活 DT 定谳；CPU_ON=SMC64
-//! 0xC4000003，内核 psci.c 同值）拉起 DT reg 表的 7 副核
-//! （MPIDR 0x100..0x700——每核一 cluster，cpu@0/100/…/700）。
+//! S0-6 链路原样保留（PSCI CPU_ON 7 副核心跳 + WFI 收割）；本刀只加
+//! 读探针：主核裸 MPIDR + 8 帧 GICR RD_TYPER 全表落环——S0-6 实测
+//! 副核自报 MPIDR=U|MT|Aff2=4|Aff1=0..6，与 DT target 0x100*i 差一
+//! 且含主核位 Aff1=0，三角悬案本刀定谳（TYPER 高 32=帧 aff、低 32
+//! 的 ProcessorNumber=硬件自己的线性编号）。顺带实改验显：inout
+//! 补修后 `on aff=` 应打真 target 0x100..0x700。
 //!
 //! 副核入口 = secondary_entry（裸 asm）：掩 DAIF、装 VBAR（向量表
 //! per-core！副核不复位态默认）、立独立栈，跳 Rust secondary_main
@@ -502,6 +505,18 @@ extern "C" fn rust_main() -> ! {
     let txt = hex_text(&mut t, unsafe { RING.seq }, " dist ctlr=0x", ctlr as u64);
     ring_put(&mut ufs, freq, logring::LVL_INFO, txt);
     let mpidr = gic::mpidr();
+    // ⑧b S0-6b 探针①：主核裸 MPIDR 落环（此前只喂 find_rd 从未落环
+    //    ——三角的主核角一直缺席）。
+    let txt = hex_text(&mut t, unsafe { RING.seq }, " mpidr=0x", mpidr);
+    ring_put(&mut ufs, freq, logring::LVL_INFO, txt);
+    // ⑧b 探针②：RD_TYPER 全表——8 帧按帧号序逐帧落环（find_rd 的
+    //    逐帧读已证安全），记录在 mpidr 记录之后连排，帧号=顺序号。
+    for i in 0..RD_COUNT {
+        let rd = GICR + i * RD_STRIDE;
+        let typer = gic::rd64(rd, gic::RD_TYPER);
+        let txt = hex_text(&mut t, unsafe { RING.seq }, " rdt=0x", typer);
+        ring_put(&mut ufs, freq, logring::LVL_INFO, txt);
+    }
     let rd = match gic::find_rd(GICR, RD_COUNT as u32, RD_STRIDE as u32, mpidr) {
         None => instrument::report_reset(PS_HOLD, 612, freq),
         Some(rd) => rd,
