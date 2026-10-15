@@ -627,9 +627,14 @@ extern "C" fn rust_main() -> ! {
     let bb = base.iter().enumerate().fold(0u64, |a, (i, &b)| a | (b as u64) << (8 * i));
     let txt = hex_text(&mut t, unsafe { RING.seq }, " bb=0x", bb);
     ring_put(&mut ufs, freq, logring::LVL_INFO, txt);
-    // 六通道一发读：(ch, DIG_PARAM, DELAY)。rXX=raw|status<<16|npolls<<24。
-    let chans: [(u8, u8, u8); 6] = [
-        (0x02, 0x28, 0x00),
+    // 八通道一发读：(ch, DIG_PARAM, DELAY)。rXX=raw|status<<16|npolls<<24。
+    // 通道号真源=qcom,spmi-vadc.h ADC_* 枚举（dtsi 节名 @2 是旧 VADC
+    // 编号残影——s16 首发射 die 用 0x02 读成浮脚，s16b 定谳 0x06）；
+    // r00/r01=ref_gnd/vref_1p25 锚点（应 0V/1.25V，免费刻度校准）。
+    let chans: [(u8, u8, u8); 8] = [
+        (0x00, 0x28, 0x00),
+        (0x01, 0x28, 0x00),
+        (0x06, 0x28, 0x00),
         (0x83, 0x28, 0x00),
         (0x84, 0x28, 0x00),
         (0x09, 0x28, 0x00),
@@ -639,7 +644,9 @@ extern "C" fn rust_main() -> ! {
     for &(ch, dp, dl) in &chans {
         let v = conv(ch, dp, dl);
         let label = match ch {
-            0x02 => " r02=0x",
+            0x00 => " r00=0x",
+            0x01 => " r01=0x",
+            0x06 => " r06=0x",
             0x83 => " r83=0x",
             0x84 => " r84=0x",
             0x09 => " r09=0x",
@@ -651,7 +658,7 @@ extern "C" fn rust_main() -> ! {
     }
     // 活性窗 4×2s：die_temp 连发（w4=raw|status<<16）——裸世温漂活性。
     for s in 0..4u64 {
-        let v = conv(0x02, 0x28, 0x00);
+        let v = conv(0x06, 0x28, 0x00);
         let txt = hex_text(&mut t, unsafe { RING.seq }, " w4=0x", v & 0xffff_ffff);
         ring_put(&mut ufs, freq, logring::LVL_INFO, txt);
         if s < 3 {

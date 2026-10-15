@@ -109,6 +109,7 @@ MODE="heartbeat"
 [ "${1:-}" = "--s14" ] && MODE="s14"
 [ "${1:-}" = "--s15" ] && MODE="s15"
 [ "${1:-}" = "--s16" ] && MODE="s16"
+[ "${1:-}" = "--s16b" ] && MODE="s16b"
 mkdir -p "${OUTDIR}"
 ELF="${OUTDIR}/heartbeat.elf"
 
@@ -828,6 +829,15 @@ elif [ "${MODE}" = "s16" ]; then
   ELF="${OUTDIR}/s16.elf"
   cp "${HERE}/target/aarch64-unknown-none-softfloat/release/redfin-bare" "${ELF}"
   BIN="${OUTDIR}/s16.bin"; IMG="${OUTDIR}/boot-s16.img"
+elif [ "${MODE}" = "s16b" ]; then
+  # NOLINUX-PLAN S1-6 修正刀：s16 首发射 die_temp 误用通道 0x02（dtsi
+  # 节名 @2 是旧 VADC 编号残影，真值=qcom,spmi-vadc.h ADC_DIE_TEMP=0x06）
+  # 读成浮脚 1.874V；本刀 die→0x06 + ref_gnd 0x00/vref_1p25 0x01 锚点
+  # （应 0V/1.25V 免费刻度校准）。复现 s16 checkout 5bd86bc。
+  (cd "${HERE}" && cargo build --release --target aarch64-unknown-none-softfloat)
+  ELF="${OUTDIR}/s16b.elf"
+  cp "${HERE}/target/aarch64-unknown-none-softfloat/release/redfin-bare" "${ELF}"
+  BIN="${OUTDIR}/s16b.bin"; IMG="${OUTDIR}/boot-s16b.img"
 else
   # 研究件：SPMI 全量 substrate。警告：start.S 迁移路径 2026-10-13 三验
   # （L10/L11/L12a）全部冻 logo（崩在 kmain 前）——修好前勿当心跳用。
