@@ -1,11 +1,11 @@
-//! S1-1 — SPMI v5 运输层只读探针（NOLINUX-PLAN S1 第一刀）。
+//! S1-2 — USBIN 判别刀：SPMI 写路径首上 Rust 线（NOLINUX-PLAN S1 第二刀）。
 //!
-//! S0 链路原样保留（自检→环→MMU→GIC→PSCI 7 副心→WFI 收割）；本刀
-//! 插入 ⑩ SPMI 面：arbiter 版本/特性落环 → CHGR 0x210 与 MISC 0x216
-//! **全副本 (apid,owner) 逐条落环**（B7/B12 冻死案的 owner 表真值）→
-//! 充电状态三寄存器（0x1006 状态/0x1042 使能/0x1310 USB 在位）5 采样
-//! ×4s 落环——**全部只读**，单变量=运输层本身。喂狗/解暂停写路径与
-//! ka v3（#497 修正）=下一刀 S1-2。
+//! S1-1 定谳裸世界 USBIN PLUGIN=0（无 Type-C/TCPM 策略引擎，充电器
+//! 视角无输入）。本刀单变量实验：owner-gated 写路径（B15/B16 asm 已
+//! 证，Rust 线初行使）→ **解挂 0x1340 bit0（USBIN_SUSPEND）+ 充电
+//! 使能 0x1042 bit0**，读回+采样判 PLUGIN（0x1310 bit4）能否无 TCPM
+//! 抬起——能则 ka v3 直进，不能则 S1 转 Type-C 口控制器（tcpci/I2C）。
+//! 全程写前读基线、写后读回，三段判读数据驱动。
 //!
 //! 副核入口 = secondary_entry（裸 asm）：掩 DAIF、装 VBAR（向量表
 //! per-core！副核不复位态默认）、立独立栈，跳 Rust secondary_main
@@ -535,10 +535,14 @@ extern "C" fn rust_main() -> ! {
     gic::icc_igrpen1(true);
     gic::enable_ppi(rd, TIMER_INTID as u32, 0xa0);
 
-    // ⑩ SPMI 面（S1-1 只读探针）：v5 判定 → CHGR/MISC 全副本 owner 落环
-    //    → 充电状态三寄存器 5 采样×4s。寄存器寻址=PPID 内 8 位偏移
-    //    （0x1006→0x06、0x1042→0x42、0x1310→0x10——高字节由 PPID 承载）。
-    //    证据码：632=非 v5、633=CHGR 无副本、634=读事务失败。
+    // ⑩ SPMI 面（S1-2 USBIN 判别刀）：v5 判定 → CHGR owner 副本落环 →
+    //    【写路径首上 Rust 线】基线读 → 解挂 RMW(0x1340 bit0←0)+读回 →
+    //    使能 RMW(0x1042 bit0←1)+读回 → 后采样 5×4s。单变量=解挂/使能
+    //    两个写；判读=PLUGIN(0x1310 bit4) 能否无 TCPM 抬起。
+    //    寄存器寻址=PPID 内 8 位偏移（0x1340→0x40、0x1310→0x10、
+    //    0x1006→0x06、0x1042→0x42）。
+    //    证据码：632=非 v5、633=CHGR 无 APPS owner 副本、634=读事务失败、
+    //    636=写事务失败（DENIED/FAILURE/DROPPED/超时统一）。
     let arb = spmi::Arb {
         core: CORE,
         chnls: CHNLS,
@@ -555,33 +559,65 @@ extern "C" fn rust_main() -> ! {
         instrument::report_reset(PS_HOLD, 632, freq);
     }
     let n_apid = spmi::apid_count(feat);
-    let (chgr_ppid, misc_ppid) = (PPID_CHGR as u32, PPID_MISC as u32);
-    for apid in 0..n_apid {
-        if let Some((p, _)) = arb.map_at(apid) {
-            if p == chgr_ppid || p == misc_ppid {
-                let v = ((apid as u64) << 8) | arb.owner(apid) as u64;
-                let label = if p == chgr_ppid { " p210=0x" } else { " p216=0x" };
-                let txt = hex_text(&mut t, unsafe { RING.seq }, label, v);
-                ring_put(&mut ufs, freq, logring::LVL_INFO, txt);
-            }
-        }
-    }
-    let chgr = match arb.find_apid_read(chgr_ppid, n_apid) {
+    let chgr_ppid = PPID_CHGR as u32;
+    let chgr = match arb.find_apid_owner(chgr_ppid, 0, n_apid) {
         Some(a) => a,
         None => instrument::report_reset(PS_HOLD, 633, freq),
     };
-    for s in 0..5u64 {
-        let (mut st, mut en, mut usb) = ([0u8; 1], [0u8; 1], [0u8; 1]);
-        if arb.read(chgr, 0x06, &mut st).is_err()
-            || arb.read(chgr, 0x42, &mut en).is_err()
-            || arb.read(chgr, 0x10, &mut usb).is_err()
-        {
-            let txt = text(&mut t, &[" s1 rderr=", " s="], &[unsafe { RING.seq }, s]);
-            ring_put(&mut ufs, freq, logring::LVL_ERR, txt);
-            instrument::report_reset(PS_HOLD, 634, freq);
+    let v = ((chgr as u64) << 8) | arb.owner(chgr) as u64;
+    let txt = hex_text(&mut t, unsafe { RING.seq }, " ow=0x", v);
+    ring_put(&mut ufs, freq, logring::LVL_INFO, txt);
+    // 单字节读写助手：失败即证据码落环复位（读 634 / 写 636）。
+    let rd = |off: u8| -> u8 {
+        let mut b = [0u8; 1];
+        match arb.read(chgr, off, &mut b) {
+            Ok(()) => b[0],
+            Err(_) => instrument::report_reset(PS_HOLD, 634, freq),
         }
-        let v = st[0] as u64 | (en[0] as u64) << 8 | (usb[0] as u64) << 16;
-        let txt = hex_text(&mut t, unsafe { RING.seq }, " chg=0x", v);
+    };
+    let wr = |off: u8, val: u8| {
+        if arb.write(chgr, off, &[val]).is_err() {
+            instrument::report_reset(PS_HOLD, 636, freq);
+        }
+    };
+    // 基线：sus(0x40)|plg(0x10)<<8|st(0x06)<<16|en(0x42)<<24。
+    let v0 = rd(0x40) as u64
+        | (rd(0x10) as u64) << 8
+        | (rd(0x06) as u64) << 16
+        | (rd(0x42) as u64) << 24;
+    let txt = hex_text(&mut t, unsafe { RING.seq }, " u0=0x", v0);
+    ring_put(&mut ufs, freq, logring::LVL_INFO, txt);
+    // 解挂 RMW：读→清 bit0→写→读回（uw=cur|back<<8）。
+    let cur = rd(0x40);
+    wr(0x40, cur & !1);
+    let back = rd(0x40);
+    let v = (cur as u64) | (back as u64) << 8;
+    let txt = hex_text(&mut t, unsafe { RING.seq }, " uw=0x", v);
+    ring_put(&mut ufs, freq, logring::LVL_INFO, txt);
+    let end = time::cntvct() + freq as u64;
+    while time::cntvct() < end {}
+    let v1 = rd(0x10) as u64 | (rd(0x06) as u64) << 8;
+    let txt = hex_text(&mut t, unsafe { RING.seq }, " u1=0x", v1);
+    ring_put(&mut ufs, freq, logring::LVL_INFO, txt);
+    // 充电使能 RMW：读→置 bit0→写→读回（cw=cur|back<<8）。
+    let cur = rd(0x42);
+    wr(0x42, cur | 1);
+    let back = rd(0x42);
+    let v = (cur as u64) | (back as u64) << 8;
+    let txt = hex_text(&mut t, unsafe { RING.seq }, " cw=0x", v);
+    ring_put(&mut ufs, freq, logring::LVL_INFO, txt);
+    let end = time::cntvct() + freq as u64;
+    while time::cntvct() < end {}
+    let v2 = rd(0x10) as u64 | (rd(0x06) as u64) << 8;
+    let txt = hex_text(&mut t, unsafe { RING.seq }, " u2=0x", v2);
+    ring_put(&mut ufs, freq, logring::LVL_INFO, txt);
+    // 后采样 5×4s：四寄存器打包（u3=sus|plg<<8|st<<16|en<<24）。
+    for s in 0..5u64 {
+        let v3 = rd(0x40) as u64
+            | (rd(0x10) as u64) << 8
+            | (rd(0x06) as u64) << 16
+            | (rd(0x42) as u64) << 24;
+        let txt = hex_text(&mut t, unsafe { RING.seq }, " u3=0x", v3);
         ring_put(&mut ufs, freq, logring::LVL_INFO, txt);
         if s < 4 {
             let end = time::cntvct() + freq as u64 * 4;

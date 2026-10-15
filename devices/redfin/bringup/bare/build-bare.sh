@@ -100,6 +100,7 @@ MODE="heartbeat"
 [ "${1:-}" = "--s06" ] && MODE="s06"
 [ "${1:-}" = "--s06b" ] && MODE="s06b"
 [ "${1:-}" = "--s11" ] && MODE="s11"
+[ "${1:-}" = "--s12" ] && MODE="s12"
 mkdir -p "${OUTDIR}"
 ELF="${OUTDIR}/heartbeat.elf"
 
@@ -728,11 +729,19 @@ elif [ "${MODE}" = "s06b" ]; then
 elif [ "${MODE}" = "s11" ]; then
   # NOLINUX-PLAN S1-1：SPMI v5 运输层只读探针（S0 链路 + ⑩ v5 判定/
   # CHGR+MISC 全副本 owner 落环/充电状态三寄存器 5 采样×4s——喂狗写
-  # 路径留 S1-2）。
+  # 路径留 S1-2）。复现 S1-1 行为 checkout 1880663。
   (cd "${HERE}" && cargo build --release --target aarch64-unknown-none-softfloat)
   ELF="${OUTDIR}/s11.elf"
   cp "${HERE}/target/aarch64-unknown-none-softfloat/release/redfin-bare" "${ELF}"
   BIN="${OUTDIR}/s11.bin"; IMG="${OUTDIR}/boot-s11.img"
+elif [ "${MODE}" = "s12" ]; then
+  # NOLINUX-PLAN S1-2：USBIN 判别刀（S1-1 链路 + ⑩ 写路径首上 Rust 线：
+  # 基线读→解挂 RMW 0x1340 bit0←0+读回→使能 RMW 0x1042 bit0←1+读回→
+  # 后采样 5×4s——判 PLUGIN 能否无 TCPM 抬起）。
+  (cd "${HERE}" && cargo build --release --target aarch64-unknown-none-softfloat)
+  ELF="${OUTDIR}/s12.elf"
+  cp "${HERE}/target/aarch64-unknown-none-softfloat/release/redfin-bare" "${ELF}"
+  BIN="${OUTDIR}/s12.bin"; IMG="${OUTDIR}/boot-s12.img"
 else
   # 研究件：SPMI 全量 substrate。警告：start.S 迁移路径 2026-10-13 三验
   # （L10/L11/L12a）全部冻 logo（崩在 kmain 前）——修好前勿当心跳用。
