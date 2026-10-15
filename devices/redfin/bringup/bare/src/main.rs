@@ -24,14 +24,14 @@
 //! md5 对账含多 extent 大件）。
 //!
 //! S3 首刀同刀（s19 段，⑩-3）：USB HS-only 设备面上电（配方真源
-//! S3-USB.md——本地内核树拆账）。A=交接残态四读（GPLL0/GDSC+GSNPSID/
-//! GCTL+GUSB2PHYCFG/QUSB2——顺序从安全到险，QUSB2 垫底：若 LDO 未上
-//! 读死即同步异常落环复位，前面读数已 FUA 保住）；B=上电正典（GDSC
-//! →USB30 BCR→五时钟腿→QUSB2 BCR→十六步 PHY write-readback）；
-//! C=dwc3 上线（软复位→GCTL 设备向→HS-only QSCRATCH 三步→事件缓冲
-//! @NC 窗 0xB0005000→DCTL 清 SFTDISCONNECT→2s 后读 DSTS/GEVTCOUNT/
-//! 首事件字）。全程零错误复位：超时/失配只记账（e 字位掩码），刀的
-//! 诊断输出=读数本身。
+//! S3-USB.md——本地内核树拆账）。读序铁律：GDSC/时钟未上前 dwc3 与
+//! QUSB2 空间读=总线挂死（同步异常→环+复位）——as-found 只读 GCC
+//! 常活区（GPLL0/GDSCR）；随后上电正典（GDSC→USB30 BCR→五时钟腿→
+//! QUSB2 BCR→十六步 PHY write-readback，读后置），末段 dwc3 上线
+//! （软复位→GCTL 设备向→HS-only QSCRATCH 三步→事件缓冲@NC 窗
+//! 0xB0005000→DCTL 清 SFTDISCONNECT→2s 后读 DSTS/GEVTCOUNT/首事
+//! 件字）。全程零错误复位：超时/失配只记账（e 字位掩码），刀的诊
+//! 断输出=读数本身。
 //!
 //! 副核入口 = secondary_entry（裸 asm）：掩 DAIF、装 VBAR（向量表
 //! per-core！副核不复位态默认）、立独立栈，跳 Rust secondary_main
@@ -832,27 +832,25 @@ extern "C" fn rust_main() -> ! {
 
     // ⑩-3 S3 首刀（s19 段）：USB HS-only 设备面上电。分段全落环、
     //     零错误复位（探针诊断=读数本身；超时/失配记 e 位掩码）。
-    //     e 位图：bit0=GDSC PWR_ON 超时 bit1=USB30 BCR 后无时钟位
-    //     bit2=master UPDATE 悬 bit3=utmi UPDATE 悬 bits4..19=PHY
-    //     十六步失配 bit20=GSNPSID 非 5533 bit21=DCTL 软复位悬。
+    //     e 位图：bit0=GDSC PWR_ON 超时 bit1/2=RCG UPDATE 悬
+    //     bits4..19=PHY 十六步失配 bit20=GSNPSID 非 5533
+    //     bit21=DCTL 软复位悬。
+    //     【读序铁律】GDSC/时钟未上前 dwc3 与 QUSB2 空间读=总线挂死
+    //     （同步异常→环+复位，一刀白烧）——as-found 只读 GPLL0 与
+    //     GDSCR（GCC 常活区）；dwc3/QUSB2 读全部后置到上电后。
     let t_s19 = time::cntvct();
 
-    // A 交接残态四读（顺序=安全→险：QUSB2 垫底，读死则前读已落环）。
+    // A 交接残态二读（GCC 常活区，安全）：GPLL0 LUCID STATUS/MODE、
+    //     GDSCR 原态（bit31 PWR_ON/bit0 SW_COLLAPSE=交接遗嘱）。
     let gpll0 = ((rd32(USB_GCC + 0x30) as u64) << 32) | rd32(USB_GCC) as u64;
     let txt = hex_text(&mut t, unsafe { RING.seq }, " s19 a0=0x", gpll0);
     ring_put(&mut ufs, freq, logring::LVL_INFO, txt);
-    let a1 = ((rd32(USB_GDSC) as u64) << 32) | rd32(USB_DWC3 + 0xc120) as u64;
+    let a1 = rd32(USB_GDSC) as u64;
     let txt = hex_text(&mut t, unsafe { RING.seq }, " s19 a1=0x", a1);
-    ring_put(&mut ufs, freq, logring::LVL_INFO, txt);
-    let a2 = ((rd32(USB_DWC3 + 0xc110) as u64) << 32) | rd32(USB_DWC3 + 0xc200) as u64;
-    let txt = hex_text(&mut t, unsafe { RING.seq }, " s19 a2=0x", a2);
-    ring_put(&mut ufs, freq, logring::LVL_INFO, txt);
-    let a3 = ((rd32(USB_HSPHY + 0x94) as u64) << 32) | rd32(USB_HSPHY + 0x50) as u64;
-    let txt = hex_text(&mut t, unsafe { RING.seq }, " s19 a3=0x", a3);
     ring_put(&mut ufs, freq, logring::LVL_INFO, txt);
 
     // B 上电正典（dwc3_msm_resume 序）：GDSC on→USB30 BCR→五时钟腿
-    // →QUSB2 BCR→十六步 PHY。
+    // →（此刻起 dwc3/QUSB2 读安全）→QUSB2 BCR→十六步 PHY。
     let mut e: u64 = 0;
     // ① GDSC：bit0 SW_COLLAPSE←0，poll bit31 PWR_ON（≤100ms）。
     rmw32(USB_GDSC, 1, 0);
@@ -871,7 +869,7 @@ extern "C" fn rust_main() -> ! {
     // ③ 五时钟腿。master RCG（0xf020）：CFG=GPLL0_MAIN(sel 1)/4.5
     //    （SRC_DIV=2h−1=8）→UPDATE poll 清；utmi RCG（0xf038）：
     //    XO(sel 0)/1（SRC_DIV=1）→UPDATE。CBCR=bit0←1、poll bit31
-    //    CLK_OFF 清（≤1ms，超时记位不阻路——残态读数照落）。
+    //    CLK_OFF 清（≤1ms，超时不记位——b0 读数自证）。
     let mut rcg = |base: usize, cfg: u32, bit: u64| {
         wr32(base + 4, cfg);
         wr32(base, 1);
@@ -903,6 +901,13 @@ extern "C" fn rust_main() -> ! {
         | ((rd32(USB_GCC + 0xf01c) as u64) << 16)
         | rd32(USB_GCC + 0xf07c) as u64;
     let txt = hex_text(&mut t, unsafe { RING.seq }, " s19 b0=0x", b0);
+    ring_put(&mut ufs, freq, logring::LVL_INFO, txt);
+    // 上电后 dwc3/QUSB2 读安全：验身 + QUSB2 复位前原态（POR 遗嘱）。
+    let a2 = ((rd32(USB_DWC3 + 0xc120) as u64) << 32) | rd32(USB_DWC3 + 0xc110) as u64;
+    let txt = hex_text(&mut t, unsafe { RING.seq }, " s19 a2=0x", a2);
+    ring_put(&mut ufs, freq, logring::LVL_INFO, txt);
+    let a3 = ((rd32(USB_HSPHY + 0x94) as u64) << 32) | rd32(USB_HSPHY + 0x50) as u64;
+    let txt = hex_text(&mut t, unsafe { RING.seq }, " s19 a3=0x", a3);
     ring_put(&mut ufs, freq, logring::LVL_INFO, txt);
     // ④ QUSB2 BCR（GCC+0x12000）：assert→100µs→deassert。
     wr32(USB_GCC + 0x12000, 1);
