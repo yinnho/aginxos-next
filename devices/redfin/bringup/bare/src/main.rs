@@ -158,13 +158,17 @@ fn push_hex(buf: &mut [u8], n: &mut usize, mut v: u64) {
 }
 
 /// 组文本（#seq 前缀——L0 解析直读十进制序号，od 按 BE 进位读不了 LE u64）。
+/// part 后跟 nums 对应位（无则裸标签——S0-3 首刷 trigger 标签即栽在
+/// zip 长度失配上：nums 只剩 seq 时循环体整段不跑）。
 fn text<'a>(buf: &'a mut [u8; 96], parts: &[&str], nums: &[u64]) -> &'a str {
     let mut n = 0;
     push_str(buf, &mut n, "#");
     push_u64(buf, &mut n, nums[0]);
-    for (s, v) in parts.iter().zip(nums.iter().skip(1)) {
+    for (i, s) in parts.iter().enumerate() {
         push_str(buf, &mut n, s);
-        push_u64(buf, &mut n, *v);
+        if let Some(v) = nums.get(i + 1) {
+            push_u64(buf, &mut n, *v);
+        }
     }
     core::str::from_utf8(&buf[..n]).unwrap_or("")
 }

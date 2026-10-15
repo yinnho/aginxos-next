@@ -382,3 +382,23 @@ U1 MMIO 探针（读 CAP+VER，VER 合法→blink；冻死=时钟没开）→ U2
   （最慢失败档 392s 单轮必复位）；816s adb 全程静默至用户进 fastboot；
   `slot-retry-count:a=2`（只开机一次、从未复位）。短验后 `set_active b`→L0 adb
   37s 回归（v2.1 SPMI 段仍带 #497 缺陷，不久留）。收据 #498。
+
+## 8. 异常与 EL 契约（S0-3 实测，2026-10-15）[DT]
+
+- **裸件运行于 EL1**（CurrentEL 定谳；boot 记录与 EXC 现场三轮全
+  `el=1`）。「EL 判定」挂账闭案。
+- **VBAR_EL1 装订活**：16 槽标准表（2KB 对齐、`.vectors` 段
+  `ALIGN(0x800)`），`msr vbar_el1`+`isb` 后异常即入桩；u1f 网结论
+  （2026-10-13）在 Rust 线复证。
+- **MMU-off 全 Device 属性 → 非对齐访问必 Alignment fault**，无需
+  先动 SCTLR.A（SCTLR.A 只辖 Normal 内存；Device 内存对齐检查硬开）。
+  `ldr w6,[x7]`、x7=RAM+1 实测三轮全炸。
+- **ESR 形状**（Data Abort current EL）：EC=0x25、DFSC=0x21（对齐
+  错）如预期；**IL=1**——与 32 位访问不符，alignment fault 的 ISS
+  零修饰格式硬件恒报 IL=1（判 ESR 别拿 IL 推访问宽度）。
+- **向量槽定位**：current EL using SP_ELx 的 sync 槽 = 表偏移 0x200
+  （16 槽序：象限 [SP0, SPx, lower-A64, lower-A32] × [sync, irq,
+  fiq, serror]，idx = 象限×4+kind）——实测 s=4。
+- **ELR = 触发指令自身地址**（非下一条）；FAR = 非对齐地址原样。
+- **trap 后 UFS 事务可重铺**：`Ufs::new`+`init()` 即可继续读写，无需
+  重发 SSU（设备仍 ACTIVE）——异常遗言落盘复用主流程契约。
