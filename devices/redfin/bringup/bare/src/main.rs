@@ -1,24 +1,22 @@
-//! S0-3 — 异常向量 + EL 定谳（NOLINUX-PLAN S0 第三刀）。
+//! S0-4 — MMU 恒等映射 + cache 使能（NOLINUX-PLAN S0 第四刀）。
 //!
-//! VBAR_EL1 装订 16 槽标准向量表（同步/IRQ/FIQ/SError × 四象限），
-//! 桩跳 exc_entry：现场（ESR/ELR/FAR/CurrentEL）记进日志环 LVL_ERR
-//! 记录后 PS_HOLD 复位——异常留遗言。
+//! u1x 机器已验形状上（T0SZ=25 单 L1 表、MAIR 0x44FF04）开真 cache
+//! （SCTLR M|C|I）：e0/e1/e3=Device-nGnRE 1GB 块、e2 拆 L2 2MB 粒
+//! （WB，DMA 窗 0xB0000000–0xB0200000 8 项 NC）——代码区 WB、UFS
+//! MMIO/DMA 各归其属性，ufs.rs 零维护点。
 //!
-//! 验收（规格原文）：故意触发非对齐访问 → L0 读出 ESR=对齐错误
-//! （期望 EC=0x25 Data Abort current EL + DFSC=0x21 Alignment fault ≈
-//! ESR 0x94000021）；boot 记录带 el=N（挂账「EL 判定」闭案）。
-//! MMU-off 世界全内存按 Device 属性（对齐检查硬开）——非对齐 ldr
-//! 必炸，无需先动 SCTLR。若意外不炸：落「no-fault」记录走 S0-2
-//! 心跳兜底（下一刀改 undef 指令触发）。
+//! 验收（规格原文）：开 cache 后 GPT 双 CRC 仍中；日志记录读盘耗时
+//! 对比（cache-off/on 各计时一遍 + 256 块扫描计时）。S0-3 异常遗言
+//! 机制保留——建表错即 fault 落 EXC 自报。
 
 #![no_std]
 #![no_main]
-// 环游标是 static mut（exc_entry 与主流程共用）——单核裸件、DAIF 全掩，
-// 无竞争；引用式访问只为省 addr_of 样板。
+// 环游标/页表是 static mut（exc_entry 与主流程共用）——单核裸件、
+// DAIF 全掩，无竞争；引用式访问只为省 addr_of 样板。
 #![allow(static_mut_refs)]
 
 use bare::ufs::{Fail, Ufs};
-use bare::{exc, gpt, instrument, logring, time};
+use bare::{exc, gpt, instrument, logring, mmu, time};
 
 include!(concat!(env!("OUT_DIR"), "/facts.rs"));
 
@@ -79,9 +77,19 @@ extern "C" {
     static __vectors: u8;
 }
 
-/// 裸件线约定（非机器事实）：boot_a 内 64MB 处 scratch 区（u5a 实证位）。
+/// 裸件线约定（非机器事实）：boot_a 内 scratch（u5a 实证位）。
 const RING_OFF: u32 = 16384;
 const RING_BLOCKS: u32 = 256;
+
+/// L1（1GB 块）+ L2（e2 拆 2MB）双表，4KB 对齐（TTBR 硬律）。
+#[repr(align(4096))]
+struct Table([u64; 512]);
+static mut L1: Table = Table([0; 512]);
+static mut L2: Table = Table([0; 512]);
+
+/// L2 里 DMA 非缓存窗：项 384..391（=PA 0xB0000000–0xB0200000）。
+const DMA_L2_FIRST: usize = 384;
+const DMA_L2_COUNT: usize = 8;
 
 /// 环游标（主流程推进；exc_entry 读——单核裸件无竞争）。
 struct Ring {
@@ -137,26 +145,6 @@ fn push_u64(buf: &mut [u8], n: &mut usize, mut v: u64) {
     }
 }
 
-fn push_hex(buf: &mut [u8], n: &mut usize, mut v: u64) {
-    const HEX: &[u8; 16] = b"0123456789abcdef";
-    push_str(buf, n, "0x");
-    let mut tmp = [0u8; 16];
-    let mut k = 0;
-    loop {
-        tmp[k] = HEX[(v & 0xF) as usize];
-        k += 1;
-        v >>= 4;
-        if v == 0 {
-            break;
-        }
-    }
-    while k > 0 {
-        k -= 1;
-        buf[*n] = tmp[k];
-        *n += 1;
-    }
-}
-
 /// 组文本（#seq 前缀——L0 解析直读十进制序号，od 按 BE 进位读不了 LE u64）。
 /// part 后跟 nums 对应位（无则裸标签——S0-3 首刷 trigger 标签即栽在
 /// zip 长度失配上：nums 只剩 seq 时循环体整段不跑）。
@@ -180,15 +168,34 @@ fn exc_text<'a>(buf: &'a mut [u8; 96], seq: u64, slot: usize, esr: u64, elr: u64
     push_u64(buf, &mut n, seq);
     push_str(buf, &mut n, " EXC s=");
     push_u64(buf, &mut n, slot as u64);
-    push_str(buf, &mut n, " esr=");
+    push_str(buf, &mut n, " esr=0x");
     push_hex(buf, &mut n, esr);
-    push_str(buf, &mut n, " elr=");
+    push_str(buf, &mut n, " elr=0x");
     push_hex(buf, &mut n, elr);
-    push_str(buf, &mut n, " far=");
+    push_str(buf, &mut n, " far=0x");
     push_hex(buf, &mut n, far);
     push_str(buf, &mut n, " el=");
     push_u64(buf, &mut n, el as u64);
     core::str::from_utf8(&buf[..n]).unwrap_or("")
+}
+
+fn push_hex(buf: &mut [u8], n: &mut usize, mut v: u64) {
+    const HEX: &[u8; 16] = b"0123456789abcdef";
+    let mut tmp = [0u8; 16];
+    let mut k = 0;
+    loop {
+        tmp[k] = HEX[(v & 0xF) as usize];
+        k += 1;
+        v >>= 4;
+        if v == 0 {
+            break;
+        }
+    }
+    while k > 0 {
+        k -= 1;
+        buf[*n] = tmp[k];
+        *n += 1;
+    }
 }
 
 /// 写一条环记录（组包 → WRITE(10) FUA → 回读验 seq），游标自增。
@@ -234,31 +241,10 @@ extern "C" fn exc_entry(slot: usize) -> ! {
     }
 }
 
-#[no_mangle]
-extern "C" fn rust_main() -> ! {
-    let freq = time::freq_or(FREQ_FALLBACK as u32);
-    let mut ufs = Ufs::new(HCI, UTRD, UCD, freq);
-    ufs.init();
-
-    // ⓪ 向量装订（任何后续异常都有桩——先于一切外设动作）
-    exc::set_vbar(unsafe { &__vectors as *const u8 as usize });
-
-    // ① SSU ACTIVE → W-LUN 0xD0（bootloader 留 PowerDown 的解药；呼叫点
-    //    UA 重试 1 次，u4j §20 同款）
-    let mut ua = false;
-    loop {
-        match ufs.ssu_active() {
-            Ok(()) => break,
-            Err(Fail::Check(key)) if key == 6 && !ua => ua = true,
-            Err(Fail::Timeout) => instrument::report_reset(PS_HOLD, 182, freq),
-            Err(Fail::Ocs(_)) => instrument::report_reset(PS_HOLD, 212, freq),
-            Err(Fail::BadResp) => instrument::report_reset(PS_HOLD, 242, freq),
-            Err(Fail::Check(_)) => instrument::report_reset(PS_HOLD, 152, freq),
-        }
-    }
-
-    // ② GPT 头 + ④ 条目数组 → 校验链（S0-1 原样；失败码不变）。
-    //    check() 保证 array_bytes ≤ 4096 → 数组恒 1 块。
+/// GPT 头+条目数组双 CRC 校验链（S0-2 自检正身），返回 (耗时 cycles,
+/// entries)。条目数组留 ARRAY 缓冲供名查。
+fn gpt_verify(ufs: &mut Ufs, freq: u32) -> (u64, usize) {
+    let t0 = time::cntvct();
     let entries = match ufs.read10(1, 1, DATA) {
         Err(e) => instrument::report_reset(PS_HOLD, read_code(e, 302), freq),
         Ok(()) => {
@@ -284,8 +270,66 @@ extern "C" fn rust_main() -> ! {
             }
         }
     };
+    (time::cntvct() - t0, entries)
+}
 
-    // ⑤ 名查 boot_a + 界检（u5a §⑤ 契约）
+/// 建双表：L1 项 0/1/3=Device 1GB 块、项 2→L2（2MB 全 WB，DMA 窗 NC）。
+fn fill_tables() {
+    let l1 = unsafe { &mut L1 };
+    let l2 = unsafe { &mut L2 };
+    l1.0[0] = mmu::dev_block(0x0);
+    l1.0[1] = mmu::dev_block(0x4000_0000);
+    l1.0[2] = mmu::table(l2 as *mut Table as usize);
+    l1.0[3] = mmu::dev_block(0xC000_0000);
+    for i in 0..512 {
+        // 注意括号：`0x8000_0000 + i << 21` 会解析成 `(0x8000_0000 + i) << 21`
+        // （+ 比 << 紧）——反汇编审计曾逮住（描述符=0x0010_0000_0000_0405）。
+        l2.0[i] = mmu::wb_block(0x8000_0000 + ((i as u64) << 21));
+    }
+    for i in DMA_L2_FIRST..DMA_L2_FIRST + DMA_L2_COUNT {
+        l2.0[i] = mmu::nc_block(0x8000_0000 + ((i as u64) << 21));
+    }
+}
+
+#[no_mangle]
+extern "C" fn rust_main() -> ! {
+    let freq = time::freq_or(FREQ_FALLBACK as u32);
+    let mut ufs = Ufs::new(HCI, UTRD, UCD, freq);
+    ufs.init();
+
+    // ⓪ 向量装订（任何后续异常都有桩——先于一切外设动作）
+    exc::set_vbar(unsafe { &__vectors as *const u8 as usize });
+
+    // ① SSU ACTIVE → W-LUN 0xD0（bootloader 留 PowerDown 的解药；呼叫点
+    //    UA 重试 1 次，u4j §20 同款）
+    let mut ua = false;
+    loop {
+        match ufs.ssu_active() {
+            Ok(()) => break,
+            Err(Fail::Check(key)) if key == 6 && !ua => ua = true,
+            Err(Fail::Timeout) => instrument::report_reset(PS_HOLD, 182, freq),
+            Err(Fail::Ocs(_)) => instrument::report_reset(PS_HOLD, 212, freq),
+            Err(Fail::BadResp) => instrument::report_reset(PS_HOLD, 242, freq),
+            Err(Fail::Check(_)) => instrument::report_reset(PS_HOLD, 152, freq),
+        }
+    }
+
+    // ② cache-off 基线：GPT 双 CRC 计时（对照读）
+    let (t_pre, _) = gpt_verify(&mut ufs, freq);
+
+    // ③ 建表 + 开闸（M|C|I）。表址 4KB 对齐由 repr 保证——运行时兜底
+    //    断言（对齐错即 fault，EXC 遗言自报）
+    fill_tables();
+    let l1_addr = unsafe { &L1 as *const Table as usize };
+    if l1_addr & 0xFFF != 0 {
+        instrument::report_reset(PS_HOLD, 92, freq);
+    }
+    mmu::enable(l1_addr);
+
+    // ④ 判据①：cache-on 世界 GPT 双 CRC 再验（不过→仪器码早退）
+    let (t_post, entries) = gpt_verify(&mut ufs, freq);
+
+    // ⑤ 名查 boot_a + 界检（u5a §⑤ 契约；array=cache-on 读）
     let array = unsafe { core::slice::from_raw_parts(ARRAY as *const u8, 4096) };
     let part = match gpt::find(array, entries, "boot_a") {
         None => instrument::report_reset(PS_HOLD, 272, freq),
@@ -299,7 +343,8 @@ extern "C" fn rust_main() -> ! {
         instrument::report_reset(PS_HOLD, 92, freq);
     }
 
-    // ⑥ 扫环找 max seq
+    // ⑥ 扫环找 max seq（cache-on 计时=判据②对比读）
+    let t0 = time::cntvct();
     let mut max_seq = 0u64;
     let mut max_slot = RING_BLOCKS - 1;
     for i in 0..RING_BLOCKS {
@@ -316,8 +361,10 @@ extern "C" fn rust_main() -> ! {
             }
         }
     }
+    let t_scan = time::cntvct() - t0;
 
-    // ⑦ 游标落位 + boot 记录（el=N = 挂账「EL 判定」闭案数据）
+    // ⑦ 游标落位 + 四连记录：boot / pre / mmu / scan（耗时 cycles
+    //    @freq；L0 侧 ms=cycles/19.2k）
     unsafe {
         RING.base = ring_base;
         RING.seq = max_seq + 1;
@@ -327,21 +374,14 @@ extern "C" fn rust_main() -> ! {
     let mut t = [0u8; 96];
     let txt = text(&mut t, &[" boot el=", " resume=", " freq="], &[unsafe { RING.seq }, el, max_seq, freq as u64]);
     ring_put(&mut ufs, freq, logring::LVL_BOOT, txt);
+    let txt = text(&mut t, &[" pre t="], &[unsafe { RING.seq }, t_pre]);
+    ring_put(&mut ufs, freq, logring::LVL_INFO, txt);
+    let txt = text(&mut t, &[" mmu=1 crc=1 t="], &[unsafe { RING.seq }, t_post]);
+    ring_put(&mut ufs, freq, logring::LVL_INFO, txt);
+    let txt = text(&mut t, &[" scan t="], &[unsafe { RING.seq }, t_scan]);
+    ring_put(&mut ufs, freq, logring::LVL_INFO, txt);
 
-    // ⑧ 故意触发：非对齐 ldr（MMU-off 全 Device 属性 → 必 Alignment fault）
-    let txt = text(&mut t, &[" trigger unaligned"], &[unsafe { RING.seq }]);
-    ring_put(&mut ufs, freq, logring::LVL_WARN, txt);
-    let bad = DATA + 1;
-    unsafe { core::arch::asm!("ldr w6, [x7]", in("x7") bad, out("w6") _, options(readonly, nostack)) };
-
-    // ⑨ 意外未触发兜底：落证据 + S0-2 心跳 + 正常复位
-    let txt = text(&mut t, &[" no-fault"], &[unsafe { RING.seq }]);
-    ring_put(&mut ufs, freq, logring::LVL_WARN, txt);
-    for i in 1..=3 {
-        time::spin_secs(10, freq);
-        let txt = text(&mut t, &[" heartbeat ", " elapsed="], &[unsafe { RING.seq }, i as u64, i as u64 * 10]);
-        ring_put(&mut ufs, freq, logring::LVL_INFO, txt);
-    }
+    // ⑧ 成功即复位（S0-2 形状；watchdog ≥130s 不咬本流）
     unsafe { (PS_HOLD as *mut u32).write_volatile(0) };
     loop {
         core::hint::spin_loop();

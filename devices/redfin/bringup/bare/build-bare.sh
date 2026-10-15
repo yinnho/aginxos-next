@@ -95,6 +95,7 @@ MODE="heartbeat"
 [ "${1:-}" = "--s01" ] && MODE="s01"
 [ "${1:-}" = "--s02" ] && MODE="s02"
 [ "${1:-}" = "--s03" ] && MODE="s03"
+[ "${1:-}" = "--s04" ] && MODE="s04"
 mkdir -p "${OUTDIR}"
 ELF="${OUTDIR}/heartbeat.elf"
 
@@ -681,10 +682,19 @@ elif [ "${MODE}" = "s02" ]; then
 elif [ "${MODE}" = "s03" ]; then
   # NOLINUX-PLAN S0-3：异常向量 + EL 定谳（VBAR 装订 → 故意非对齐 ldr →
   # ESR/ELR/FAR/CurrentEL 落环 → 复位）。
+  # 注：S0-4 起 main.rs 已换 MMU 正身——本模式出的件即当前 main.rs；
+  # 复现 S0-3 行为 checkout 53cb818。
   (cd "${HERE}" && cargo build --release --target aarch64-unknown-none-softfloat)
   ELF="${OUTDIR}/s03.elf"
   cp "${HERE}/target/aarch64-unknown-none-softfloat/release/redfin-bare" "${ELF}"
   BIN="${OUTDIR}/s03.bin"; IMG="${OUTDIR}/boot-s03.img"
+elif [ "${MODE}" = "s04" ]; then
+  # NOLINUX-PLAN S0-4：MMU 恒等映射 + cache 使能（.bss 双表 L1/L2、
+  # DMA 窗 NC；cache-off/on GPT 双 CRC 计时对比落环 + 256 块扫环计时）。
+  (cd "${HERE}" && cargo build --release --target aarch64-unknown-none-softfloat)
+  ELF="${OUTDIR}/s04.elf"
+  cp "${HERE}/target/aarch64-unknown-none-softfloat/release/redfin-bare" "${ELF}"
+  BIN="${OUTDIR}/s04.bin"; IMG="${OUTDIR}/boot-s04.img"
 else
   # 研究件：SPMI 全量 substrate。警告：start.S 迁移路径 2026-10-13 三验
   # （L10/L11/L12a）全部冻 logo（崩在 kmain 前）——修好前勿当心跳用。
