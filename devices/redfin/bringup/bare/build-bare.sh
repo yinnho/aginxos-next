@@ -103,6 +103,7 @@ MODE="heartbeat"
 [ "${1:-}" = "--s12" ] && MODE="s12"
 [ "${1:-}" = "--s12b" ] && MODE="s12b"
 [ "${1:-}" = "--s13" ] && MODE="s13"
+[ "${1:-}" = "--s13b" ] && MODE="s13b"
 mkdir -p "${OUTDIR}"
 ELF="${OUTDIR}/heartbeat.elf"
 
@@ -757,10 +758,20 @@ elif [ "${MODE}" = "s12b" ]; then
 elif [ "${MODE}" = "s13" ]; then
   # NOLINUX-PLAN S1-3：ka v3 狗面刀（WD_CFG 0x1651 基线→武装 RMW→
   # 喂 0x1643×5@4s→停喂观察 12×5s 判 bark/bite→幸存解除武装）。
+  # 注：S1-3 短命令只带 5 位地址（0x51→0x11 错位），aw=0x0 悬案——
+  # S1-3b 为 EXT 重制刀。复现 S1-3 行为 checkout 8adcc38。
   (cd "${HERE}" && cargo build --release --target aarch64-unknown-none-softfloat)
   ELF="${OUTDIR}/s13.elf"
   cp "${HERE}/target/aarch64-unknown-none-softfloat/release/redfin-bare" "${ELF}"
   BIN="${OUTDIR}/s13.bin"; IMG="${OUTDIR}/boot-s13.img"
+elif [ "${MODE}" = "s13b" ]; then
+  # NOLINUX-PLAN S1-3b：狗面刀 EXT 重制（短命令 5 位地址截断案定谳，
+  # 运输层全换 EXT_READ=13/EXT_WRITE=2）：真基线 w0→写驻双试验 c42/m53
+  # →武装梯 aw2（+0ms/+1s/+5s 回读）→喂×2@4s→停喂观察 8×5s→幸存解除。
+  (cd "${HERE}" && cargo build --release --target aarch64-unknown-none-softfloat)
+  ELF="${OUTDIR}/s13b.elf"
+  cp "${HERE}/target/aarch64-unknown-none-softfloat/release/redfin-bare" "${ELF}"
+  BIN="${OUTDIR}/s13b.bin"; IMG="${OUTDIR}/boot-s13b.img"
 else
   # 研究件：SPMI 全量 substrate。警告：start.S 迁移路径 2026-10-13 三验
   # （L10/L11/L12a）全部冻 logo（崩在 kmain 前）——修好前勿当心跳用。

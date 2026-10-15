@@ -7,7 +7,15 @@
 //! - 读 = obsrvr+0x80*apid 通道窗（CMD@0x00 STATUS@0x08 RDATA0@0x18
 //!   RDATA1@0x1C）；写 = chnls+0x10000*apid（先落 WDATA 再发 CMD，
 //!   须 owner&7==ee——B7/B12 冻死案铁律）。
-//! - cmd=(opc<<27)|((addr&0xff)<<4)|(len-1)&7；READ=15/WRITE=14；≤8B。
+//! - cmd=(opc<<27)|((addr&0xff)<<4)|(len-1)&7；≤8B。
+//! - 【S1-3b 双重寻址律第二律】短命令（READ=15/WRITE=14）在 SPMI 总线
+//!   上只携带 **5 位**寄存器地址——≥0x20 的偏移被悄悄截断到 addr&0x1F
+//!   （spmi_register_write 文档明写 5-bit address）。内核 PMIC regmap
+//!   走 devm_regmap_init_spmi_ext → spmi_ext_register_read/write（总线
+//!   EXT 命令带全 8 位），arb 翻译成内部 EXT_READ=13/EXT_WRITE=2
+//!   （spmi-pmic-arb.c fmt_read/write_cmd 的 opc 翻译表实锤；通道机制
+//!   与短命令完全同构）。本运输层因此**一律走 EXT**——<0x20 偏移同样
+//!   可用 EXT 访问（内核 regmap_ext 即如此全走）。
 //! - STATUS：轮询 DONE=bit0，DONE 后查 FAILURE=bit1/DENIED=bit2/
 //!   DROPPED=bit3（内核 wait_for_done 同序）。
 //!
@@ -29,9 +37,10 @@ pub const CH_STATUS: u32 = 0x08;
 pub const CH_WDATA0: u32 = 0x10;
 pub const CH_RDATA0: u32 = 0x18;
 
-/// arbiter 内部 opcode（非 SPMI 总线码；内核 PMIC_ARB_OP_*）。
-pub const OP_READ: u32 = 15;
-pub const OP_WRITE: u32 = 14;
+/// arbiter 内部 opcode（非 SPMI 总线码；内核 PMIC_ARB_OP_*）。一律 EXT：
+/// 短命令总线只带 5 位地址（≥0x20 截断错位），EXT 带全 8 位（S1-3b）。
+pub const OP_EXT_READ: u32 = 13;
+pub const OP_EXT_WRITE: u32 = 2;
 
 const ST_DONE: u32 = 1 << 0;
 const ST_FAILURE: u32 = 1 << 1;
@@ -166,7 +175,7 @@ impl Arb {
     pub fn read(&self, apid: u32, addr: u8, buf: &mut [u8]) -> Result<(), TErr> {
         assert!(buf.len() >= 1 && buf.len() <= 8);
         let off = 0x80 * apid as usize;
-        wr32(self.obsrvr + off, CH_CMD, fmt_cmd(OP_READ, addr, buf.len()));
+        wr32(self.obsrvr + off, CH_CMD, fmt_cmd(OP_EXT_READ, addr, buf.len()));
         Self::wait_done(self.obsrvr, off)?;
         let d0 = rd32(self.obsrvr + off, CH_RDATA0).to_le_bytes();
         let d1 = rd32(self.obsrvr + off, CH_RDATA0 + 4).to_le_bytes();
@@ -193,7 +202,7 @@ impl Arb {
             w1.copy_from_slice(&data[4..]);
             wr32(self.chnls + off, CH_WDATA0 + 4, u32::from_le_bytes(w1));
         }
-        wr32(self.chnls + off, CH_CMD, fmt_cmd(OP_WRITE, addr, data.len()));
+        wr32(self.chnls + off, CH_CMD, fmt_cmd(OP_EXT_WRITE, addr, data.len()));
         Self::wait_done(self.chnls, off)
     }
 }
@@ -205,12 +214,22 @@ mod tests {
     #[test]
     fn fmt_cmd_matches_kernel_v2() {
         // (opc<<27)|((addr&0xff)<<4)|(bc&7)，bc=len-1。
-        assert_eq!(fmt_cmd(OP_READ, 0x06, 1), (15 << 27) | (0x06 << 4) | 0);
-        assert_eq!(fmt_cmd(OP_WRITE, 0x43, 1), (14 << 27) | (0x43 << 4) | 0);
-        // 地址域只 8 位：0x1043 的 0x10 由 PPID 承载，命令字只收 0x43。
-        assert_eq!(fmt_cmd(OP_WRITE, 0x43, 2) & 0x0000_0FF0, 0x430);
+        assert_eq!(fmt_cmd(OP_EXT_READ, 0x06, 1), (13 << 27) | (0x06 << 4) | 0);
+        assert_eq!(fmt_cmd(OP_EXT_WRITE, 0x43, 1), (2 << 27) | (0x43 << 4) | 0);
+        // 地址域 8 位全带：0x1043 的 0x10 由 PPID 承载，命令字收全 0x43
+        // ——短命令会在总线上截到 5 位（0x43→0x03），EXT 不会。
+        assert_eq!(fmt_cmd(OP_EXT_WRITE, 0x43, 2) & 0x0000_0FF0, 0x430);
+        assert_eq!(fmt_cmd(OP_EXT_READ, 0x51, 1) & 0x0000_0FF0, 0x510);
         // len=8 → bc=7。
-        assert_eq!(fmt_cmd(OP_READ, 0x00, 8) & 7, 7);
+        assert_eq!(fmt_cmd(OP_EXT_READ, 0x00, 8) & 7, 7);
+    }
+
+    #[test]
+    fn ext_opcodes_match_kernel_enum() {
+        // spmi-pmic-arb.c PMIC_ARB_OP_*：EXT_READ=13/EXT_WRITE=2（S1-3b
+        // 立法：短命令 READ=15/WRITE=14 总线只带 5 位地址，弃用）。
+        assert_eq!(OP_EXT_READ, 13);
+        assert_eq!(OP_EXT_WRITE, 2);
     }
 
     #[test]

@@ -537,11 +537,16 @@ extern "C" fn rust_main() -> ! {
     gic::icc_igrpen1(true);
     gic::enable_ppi(rd, TIMER_INTID as u32, 0xa0);
 
-    // ⑩ SPMI 面（S1-3 ka v3 狗面刀）：v5 判定 → CHGR/USBIN/MISC 三 PPID
-    //    owner 副本落环 → 狗基线（WD_CFG 0x1651 | SNARL_BARK_BITE 0x1653
-    //    <<8 | MISC RT 0x1610<<16 | USBIN RT 0x1310<<24）→ 武装 RMW
-    //    （0x1651←|bit6|bit1）→ 喂 0x1643←1 ×5@4s → 停喂观察 12×5s
-    //    （w3=wd_cfg|misc_rt<<8，bark=0x1610 bit1）→ 幸存则解除武装。
+    // ⑩ SPMI 面（S1-3b 狗面刀·EXT 重制）：S1-3 悬案定谳——arb 短命令
+    //    总线只带 5 位寄存器地址，≥0x20 偏移全被悄悄截断（0x51→0x11），
+    //    本刀运输层全换 EXT_READ=13/EXT_WRITE=2（内核 regmap_ext 同路，
+    //    通道机制同构）。梯子：真基线 w0（WD_CFG 0x1651 | SBB 0x1653
+    //    <<8 | MISC_RT 0x1610<<16 | USBIN_RT 0x1310<<24）→ 双写驻试验
+    //    c42（CHGR 0x1042 充电使能：cur→0→回读→还原→终读）/m53（MISC
+    //    0x1653 SBB：cur→cur^0x10→回读→还原，狗未武装改值惰性）→
+    //    武装梯 aw2（0x1651←|0x42，+0ms/+1s/+5s 三次回读）→ 喂 0x1643←1
+    //    ×2@4s → 停喂观察 8×5s（w3=wd_cfg|misc_rt<<8|usbin_rt<<16，
+    //    bark=0x1610 bit1 升起→bite 截环）→ 幸存则解除武装。
     //    证据码：632=非 v5、633=PPID 无副本、634=读事务失败、636=写事务失败。
     let arb = spmi::Arb {
         core: CORE,
@@ -576,7 +581,7 @@ extern "C" fn rust_main() -> ! {
         let txt = hex_text(&mut t, unsafe { RING.seq }, label, v);
         ring_put(&mut ufs, freq, logring::LVL_INFO, txt);
     }
-    let (usbin, misc) = (apids[1], apids[2]);
+    let (chgr, usbin, misc) = (apids[0], apids[1], apids[2]);
     // 跨外设单字节读助手：失败即 634 落环复位。
     let rd = |ap: u32, off: u8| -> u8 {
         let mut b = [0u8; 1];
@@ -590,41 +595,75 @@ extern "C" fn rust_main() -> ! {
             instrument::report_reset(PS_HOLD, 636, freq);
         }
     };
-    // 狗基线：wd_cfg|sbb_cfg<<8|misc_rt<<16|usbin_rt<<24。
+    // 真基线：wd_cfg|sbb_cfg<<8|misc_rt<<16|usbin_rt<<24（EXT 后才是真值）。
     let v0 = rd(misc, 0x51) as u64
         | (rd(misc, 0x53) as u64) << 8
         | (rd(misc, 0x10) as u64) << 16
         | (rd(usbin, 0x10) as u64) << 24;
     let txt = hex_text(&mut t, unsafe { RING.seq }, " w0=0x", v0);
     ring_put(&mut ufs, freq, logring::LVL_INFO, txt);
-    // 武装 RMW：WD_CFG bit6（BARK IRQ 使能）|bit1（PLUGIN 启动计时）。
+    // 写驻试验一 c42：CHGR 0x1042 充电使能（内核同写的 RW 寄存器），
+    // 满电 TERMINATE 态下瞬时关断无碍——cur→0→回读→还原→终读。
+    let cur = rd(chgr, 0x42);
+    wr(chgr, 0x42, 0);
+    let back = rd(chgr, 0x42);
+    wr(chgr, 0x42, cur);
+    let fin = rd(chgr, 0x42);
+    let v = (cur as u64) | (back as u64) << 8 | (fin as u64) << 16;
+    let txt = hex_text(&mut t, unsafe { RING.seq }, " c42=0x", v);
+    ring_put(&mut ufs, freq, logring::LVL_INFO, txt);
+    // 写驻试验二 m53：MISC 0x1653 SBB 配置（狗未武装，SNARL 字段改值
+    // 惰性）——cur→cur^0x10→回读→还原→终读。
+    let cur = rd(misc, 0x53);
+    wr(misc, 0x53, cur ^ 0x10);
+    let back = rd(misc, 0x53);
+    wr(misc, 0x53, cur);
+    let fin = rd(misc, 0x53);
+    let v = (cur as u64) | (back as u64) << 8 | (fin as u64) << 16;
+    let txt = hex_text(&mut t, unsafe { RING.seq }, " m53=0x", v);
+    ring_put(&mut ufs, freq, logring::LVL_INFO, txt);
+    // 武装梯 aw2：WD_CFG←cur|0x42（bit6 bark IRQ 使能|bit1 PLUGIN 启动
+    // 计时；PLUGIN 在位=计时即启），+0ms/+1s/+5s 三次回读——S1-3 的
+    // aw=0x0 悬案在此重审。
     let cur = rd(misc, 0x51);
     wr(misc, 0x51, cur | 0x42);
-    let back = rd(misc, 0x51);
-    let v = (cur as u64) | (back as u64) << 8;
-    let txt = hex_text(&mut t, unsafe { RING.seq }, " aw=0x", v);
+    let a0 = rd(misc, 0x51);
+    let end = time::cntvct() + freq as u64;
+    while time::cntvct() < end {}
+    let a1 = rd(misc, 0x51);
+    let end = time::cntvct() + freq as u64 * 4;
+    while time::cntvct() < end {}
+    let a5 = rd(misc, 0x51);
+    let v = (cur as u64)
+        | (a0 as u64) << 8
+        | (a1 as u64) << 16
+        | (a5 as u64) << 24;
+    let txt = hex_text(&mut t, unsafe { RING.seq }, " aw2=0x", v);
     ring_put(&mut ufs, freq, logring::LVL_INFO, txt);
-    // 喂狗 ×5@4s：PET 位写 1。
-    for i in 1..=5u64 {
+    // 喂狗 ×2@4s：PET 位写 1。
+    for i in 1..=2u64 {
         wr(misc, 0x43, 1);
         let txt = hex_text(&mut t, unsafe { RING.seq }, " pf=0x", i);
         ring_put(&mut ufs, freq, logring::LVL_INFO, txt);
-        if i < 5 {
+        if i < 2 {
             let end = time::cntvct() + freq as u64 * 4;
             while time::cntvct() < end {}
         }
     }
-    // 停喂观察 12×5s：w3=wd_cfg|misc_rt<<8（bark=bit1 升起→bite 截环）。
-    for s in 0..12u64 {
-        let v3 = rd(misc, 0x51) as u64 | (rd(misc, 0x10) as u64) << 8;
+    // 停喂观察 8×5s：w3=wd_cfg|misc_rt<<8|usbin_rt<<16（bark=bit1 升起
+    // →bite 截环即答案；全程平=狗没咬）。
+    for s in 0..8u64 {
+        let v3 = rd(misc, 0x51) as u64
+            | (rd(misc, 0x10) as u64) << 8
+            | (rd(usbin, 0x10) as u64) << 16;
         let txt = hex_text(&mut t, unsafe { RING.seq }, " w3=0x", v3);
         ring_put(&mut ufs, freq, logring::LVL_INFO, txt);
-        if s < 11 {
+        if s < 7 {
             let end = time::cntvct() + freq as u64 * 5;
             while time::cntvct() < end {}
         }
     }
-    // 幸存 60s：解除武装（bit1←0，护回滚后的 XBL/L0 链），读回落环。
+    // 幸存 40s：解除武装（bit1←0，护回滚后的 XBL/L0 链），读回落环。
     let cur = rd(misc, 0x51);
     wr(misc, 0x51, cur & !0x02);
     let back = rd(misc, 0x51);
