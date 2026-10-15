@@ -1,7 +1,8 @@
 #!/bin/bash
 # redfin 裸 substrate 出件：zig cc freestanding → arm64 Image 壳 → LZ4 帧修块
 # → mkbootimg v3。产物 .local/device/redfin/boot-out/boot-heartbeat.img（默认）
-# 或 boot-bare.img（--full，研究件）。
+# 或 boot-bare.img（--full，研究件）。S0 起另有 Rust 线：--s01（本目录
+# 设备 crate + crates/bare 平台库，cargo 出件后走同一打包尾巴）。
 #
 # 【验收形状法】2026-10-13 整夜对切钉死（L1–L14），ABL 收自定义内核的充要形状：
 #   1. boot.img v3（mkbootimg --os_version 14.0.0 --os_patch_level 2023-11，
@@ -91,13 +92,14 @@ MODE="heartbeat"
 [ "${1:-}" = "--u4j" ] && MODE="u4j"
 [ "${1:-}" = "--u4k" ] && MODE="u4k"
 [ "${1:-}" = "--u5a" ] && MODE="u5a"
+[ "${1:-}" = "--s01" ] && MODE="s01"
 mkdir -p "${OUTDIR}"
 ELF="${OUTDIR}/heartbeat.elf"
 
 CFLAGS="-O2 -ffreestanding -nostdlib -fno-builtin -fno-stack-protector \
   -fno-asynchronous-unwind-tables -fomit-frame-pointer -Wl,--build-id=none"
 
-echo "==> zig cc freestanding (${MODE})"
+echo "==> 出件 (${MODE})"
 if [ "${MODE}" = "heartbeat" ]; then
   # 阶梯 1 正身：36B 位置无关 stub，链接基址 0（无需真落点）
   cat > "${OUTDIR}/heartbeat.ld" <<'LD'
@@ -655,6 +657,14 @@ elif [ "${MODE}" = "probe" ]; then
     -Wl,-T,"${HERE}/linker.ld" \
     -o "${ELF}" "${HERE}/start.S" "${HERE}/probe.c"
   BIN="${OUTDIR}/probe.bin"; IMG="${OUTDIR}/boot-probe.img"
+elif [ "${MODE}" = "s01" ]; then
+  # NOLINUX-PLAN S0-1：Rust 入口复刻 u4j（SSU 唤醒+GPT 双 CRC）。
+  # crates/bare 平台库（独立 workspace）+ 本目录设备 crate；机器事实
+  # 走 bare.toml→build.rs→facts.rs；rust.ld 链 ABL 落点+0x40。
+  (cd "${HERE}" && cargo build --release --target aarch64-unknown-none-softfloat)
+  ELF="${OUTDIR}/s01.elf"
+  cp "${HERE}/target/aarch64-unknown-none-softfloat/release/redfin-bare" "${ELF}"
+  BIN="${OUTDIR}/s01.bin"; IMG="${OUTDIR}/boot-s01.img"
 else
   # 研究件：SPMI 全量 substrate。警告：start.S 迁移路径 2026-10-13 三验
   # （L10/L11/L12a）全部冻 logo（崩在 kmain 前）——修好前勿当心跳用。

@@ -1,0 +1,20 @@
+# redfin 裸件机器事实（S0-1）。绝不进 device.toml——hwd 消费者
+# deny_unknown_fields 旧二进制会硬退（hwd 一代差铁律）。
+# 本档由 build.rs 手写解析（支持 0x 十六进制直写，非严格 TOML），
+# 产出 facts.rs 常量。真源裁决：机器事实只住 devices/<codename>/。
+
+# ABL 跳转契约（abl_a.img Ghidra 逆向收据，见 boot-pi.S 头注）：
+# 镜像落点 0xA7E80000、入口=镜像+0 → 代码起 0xA7E80040（rust.ld 同值）。
+load_base = 0xA7E80000
+
+[mmio]
+hci = 0x01D84000          # UFSHCI 寄存器（u3 起实证）
+utrd = 0xB0000000         # UTRDL 槽 0
+ucd = 0xB0001000          # UCD（cmd 0x200 | resp 0x200 | PRDT +0x400）
+data = 0xB0002000         # 读① GPT 头缓冲（1 块）
+array = 0xB0003000        # 读② 条目数组缓冲（≤1 块，u4h 起）
+stack_top = 0xB0008000    # 栈顶向下 16KB（不碰 0xB0004000 以下 UFS scratch）
+ps_hold = 0x0C264000      # PS_HOLD 复位门（写 0 冷重启）
+
+[time]
+freq_fallback = 19200000  # CNTFRQ 读 0 时的兜底 Hz

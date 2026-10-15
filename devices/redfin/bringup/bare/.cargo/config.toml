@@ -1,0 +1,4 @@
+# 裸件链接必须带 rust.ld（ABL 落点链基 + .text.boot 居首 + bss 符号）。
+# rustc 从本 crate 根跑（独立 workspace），相对路径即此。
+[target.aarch64-unknown-none-softfloat]
+rustflags = ["-C", "link-arg=-Trust.ld"]

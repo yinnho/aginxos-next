@@ -1,0 +1,18 @@
+# redfin 裸件 substrate crate（NOLINUX-PLAN S0 起）。
+# 独立 workspace（同 crates/bare）：不进主仓 workspace members，
+# check.sh 不扫（机器事实住本目录=devices/，D14 合规）。
+[workspace]
+
+[package]
+name = "redfin-bare"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+bare = { path = "../../../../crates/bare" }
+
+[profile.release]
+opt-level = "s"
+lto = true
+panic = "abort"
+codegen-units = 1
