@@ -507,7 +507,7 @@ U1 MMIO 探针（读 CAP+VER，VER 合法→blink；冻死=时钟没开）→ U2
   物理访问（Device 型）双侧非缓存，零一致性维护。心跳节流 1M 拍
   @19.2MHz ≈ 52ms/拍。
 
-## 12. SPMI v5 Rust 线与电源面真相（S1-1–S1-4 实测，2026-10-15）[DRV][DT]
+## 12. SPMI v5 Rust 线与电源面真相（S1-1–S1-5 实测，2026-10-15）[DRV][DT]
 
 - **运输层（crates/bare spmi，内核逐函数对账）三轮逐字一致**：
   `spmi v=0x50010000`（v5 窗判定过，与 L0 dmesg 同值）、
@@ -632,3 +632,23 @@ U1 MMIO 探针（读 CAP+VER，VER 合法→blink；冻死=时钟没开）→ U2
   TERMINATE）不复活、还原后亦不复活：**再充门是闩锁/政策层**（需
   VBAT 跌破再充阈或重插），FV 比较器只管终止不管复活。「FV 压→
   TAPER→TERMINATE 跳变」的行为证词需中段电量日再取。
+- **【S1-5 电量计读刀收讫——QG 裸读全通、ADC 自走】**s15（ring 三整轮
+  全同，20:21 发射 20:23 回滚）。源码研学先行（qpnp-qgauge：
+  qg-reg.h/qg-util.c/qg-defs.h）纠了 s14 的错档：**0x80 是 FIFO 平均
+  V（0x8000=FIFO_I_RESET_VAL 哨兵，非门），裸读电压的正主是 0xC0
+  LAST_ADC_V**（qg_get_battery_voltage 正身，即时无需 FIFO）。读集
+  全落：**qi=0x40d**（type 0x0D/subtype 4=10A 量程，I 系数 ×305176/
+  1000）；**v0=0x5926→22822×194637/1000=4442001µV**，三轮
+  4.4420/4.4430/4.4428V；**i0=0xfff1→−15 raw≈−4.6mA**（符号扩展，
+  满电轻放）；**mo=0xff——MSOC 255=100%**；oc：PON_OCV 0x70=4.443V
+  在册、GOOD_OCV 0x74=0x8000 哨兵未初始化；**HOLD 协议走通**
+  （0x42 读 0→置 bit0→读 0xC6 burst I=−14→还原→回读 0，三步全验）；
+  **SDAM 三读活**：VALID 0x46=1/SOC 0x47=0x64=100%/MAGIC 0x80=
+  0x5678——L0 驱动学习账在裸世界可读。**w5 活性窗：V 抖 ±1mV、
+  I 漂 −15→−27 raw——QG ADC 裸世界自走，无需内核喂**；唯 FIFO
+  平均（0x80/0x82 双哨兵+count=0）闲置——平均机要驱动装配，即时
+  读数全活。**内核世对证（同夜回滚后）**：L0 voltage_now=4439669µV
+  对裸读差 2~3mV（时 separated+ADC 噪声量级）、capacity=100 对
+  MSOC=255 精确对齐、电流两侧皆个位 mA。**裁决：无内核世界的电量
+  观测=三件套 V/I/SoC 全量可得且与内核世一致**，S1-5 收讫。ICL
+  挂账（s14）与 TAPER 行为证词（中段电量日）另案。
