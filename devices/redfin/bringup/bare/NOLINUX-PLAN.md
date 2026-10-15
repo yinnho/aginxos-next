@@ -80,3 +80,10 @@ S0-2 落地后时延编码仪器退役（UFS 起来之前的早期失败仍用�
 1. 「自己的脚本」= Rust `no_std` + 少量汇编（默认）。
 2. 对外通道先 USB 网络（S3），Wi-Fi（S4）后补（默认）。
 3. S5 走 Linux syscall 兼容层（默认）。
+
+## 4. S3 机况已就绪（2026-10-15 深夜案头）
+
+寄存器级配方全量落 `S3-USB.md`（本地 redbull 内核树拆账）：HS-only
+裁决（跳 QMP SS PHY 整族）、GCC/BCR/RCG/CBCR/GDSC 全偏移、QUSB2
+十四步上电序、dwc3 软复位→GCTL→HS-only QSCRATCH 三步→事件缓冲→
+DCTL 上线正典。裸刀 s19 从此文件起笔。
