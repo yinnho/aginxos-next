@@ -93,6 +93,7 @@ MODE="heartbeat"
 [ "${1:-}" = "--u4k" ] && MODE="u4k"
 [ "${1:-}" = "--u5a" ] && MODE="u5a"
 [ "${1:-}" = "--s01" ] && MODE="s01"
+[ "${1:-}" = "--s02" ] && MODE="s02"
 mkdir -p "${OUTDIR}"
 ELF="${OUTDIR}/heartbeat.elf"
 
@@ -661,10 +662,19 @@ elif [ "${MODE}" = "s01" ]; then
   # NOLINUX-PLAN S0-1：Rust 入口复刻 u4j（SSU 唤醒+GPT 双 CRC）。
   # crates/bare 平台库（独立 workspace）+ 本目录设备 crate；机器事实
   # 走 bare.toml→build.rs→facts.rs；rust.ld 链 ABL 落点+0x40。
+  # 注：S0-2 起 main.rs 已换日志环正身——本模式出的件即当前 main.rs；
+  # 复现 S0-1 行为 checkout 42aa96c。
   (cd "${HERE}" && cargo build --release --target aarch64-unknown-none-softfloat)
   ELF="${OUTDIR}/s01.elf"
   cp "${HERE}/target/aarch64-unknown-none-softfloat/release/redfin-bare" "${ELF}"
   BIN="${OUTDIR}/s01.bin"; IMG="${OUTDIR}/boot-s01.img"
+elif [ "${MODE}" = "s02" ]; then
+  # NOLINUX-PLAN S0-2：UFS 日志环（自检链前置 + boot_a scratch 256 块环、
+  # 心跳落盘、成功即复位）。同一设备 crate 换 main.rs 内容出件。
+  (cd "${HERE}" && cargo build --release --target aarch64-unknown-none-softfloat)
+  ELF="${OUTDIR}/s02.elf"
+  cp "${HERE}/target/aarch64-unknown-none-softfloat/release/redfin-bare" "${ELF}"
+  BIN="${OUTDIR}/s02.bin"; IMG="${OUTDIR}/boot-s02.img"
 else
   # 研究件：SPMI 全量 substrate。警告：start.S 迁移路径 2026-10-13 三验
   # （L10/L11/L12a）全部冻 logo（崩在 kmain 前）——修好前勿当心跳用。

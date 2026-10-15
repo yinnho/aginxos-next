@@ -121,6 +121,38 @@ impl Ufs {
         self.issue()
     }
 
+    /// WRITE(10) FUA：lba、blocks（4096B 块）、buf 为调用者组好的源（不清）。
+    /// UA(key 6) 内部重试 ≤2。sense 7（DATA PROTECT）由调用者识别。
+    /// u5a 契约：DW0 0x1200_0000、flags 0x20、CDB 2A 08。
+    pub fn write10(&mut self, lba: u32, blocks: u16, buf: usize) -> Result<(), Fail> {
+        let bytes = (blocks as u32) << 12;
+        let mut retries = 0u8;
+        loop {
+            self.prep();
+            wr32(self.utrd, 0x1200_0000);      // DW0：type1|DD 写
+            wr32(self.utrd + 28, 0x0100_0001); // DW7：PRDT off 0x100 | 1 条
+            wr32(self.ucd, 0x0000_2001);       // 内存 01 20 00 tag（flags W）
+            wr32(self.ucd + 12, bytes.swap_bytes()); // exp_len BE32
+            wr8(self.ucd + 16, 0x2A);          // CDB[0] WRITE(10)
+            wr8(self.ucd + 17, 0x08);          // CDB[1] FUA
+            let lba_be = lba.to_be_bytes();
+            wr8(self.ucd + 18, lba_be[0]);     // CDB[2..5] LBA BE
+            wr8(self.ucd + 19, lba_be[1]);
+            wr8(self.ucd + 20, lba_be[2]);
+            wr8(self.ucd + 21, lba_be[3]);
+            let blk_be = blocks.to_be_bytes();
+            wr8(self.ucd + 23, blk_be[0]);     // CDB[7..8] 块数 BE
+            wr8(self.ucd + 24, blk_be[1]);
+            wr64(self.ucd + 0x400, buf as u64); // PRDT base
+            wr32(self.ucd + 0x40C, bytes - 1);  // size = 字节−1
+            match self.issue() {
+                Ok(()) => return Ok(()),
+                Err(Fail::Check(6)) if retries < 2 => retries += 1,
+                Err(e) => return Err(e),
+            }
+        }
+    }
+
     /// READ(10)：lba（32 位内）、blocks（4096B 块）、buf 先清后读。
     /// UA(key 6) 内部重试 ≤2（u4j read 同款）。
     pub fn read10(&mut self, lba: u32, blocks: u16, buf: usize) -> Result<(), Fail> {

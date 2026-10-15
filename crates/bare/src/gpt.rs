@@ -69,3 +69,70 @@ pub fn array_crc_ok(hdr: &[u8], array: &[u8], h: &Header) -> bool {
     let expected = le32(hdr, 88);
     array.len() >= h.array_bytes && crate::crc32::crc32(&array[..h.array_bytes]) == expected
 }
+
+/// 分区条目产出：起止 LBA（GPT 原始 64 位——越 32 位由调用者判）。
+pub struct Part {
+    pub start: u64,
+    pub end: u64,
+}
+
+/// 在已校验条目数组按名找分区（u4k/u5a 契约）。名字限 ASCII，
+/// 按 UTF-16LE 与条目名区（+56，72B，\0 填充）全量比对——
+/// 比 u5a 的前 16 字节更严（防 boot_ax 误中）。找不到返 None。
+pub fn find(array: &[u8], entries: usize, name: &str) -> Option<Part> {
+    for i in 0..entries {
+        let e = &array[i * 128..];
+        if e.len() < 128 {
+            return None;
+        }
+        if !name_matches(&e[56..128], name) {
+            continue;
+        }
+        return Some(Part { start: le64(e, 32), end: le64(e, 40) });
+    }
+    None
+}
+
+/// 名区比对：UTF-16LE(name) + 0x0000 填充到区满（含 \0 终止符）。
+fn name_matches(field: &[u8], name: &str) -> bool {
+    let mut c = field.chunks_exact(2);
+    for b in name.bytes() {
+        match c.next() {
+            Some(u) if u[0] == b && u[1] == 0 => {}
+            _ => return false,
+        }
+    }
+    // 名字后必须紧跟 \0 终止，且余下全 0
+    match c.next() {
+        Some(u) if u[0] == 0 && u[1] == 0 => {}
+        _ => return false,
+    }
+    c.all(|u| u[0] == 0 && u[1] == 0)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn entry(name: &str, start: u64, end: u64) -> [u8; 128] {
+        let mut e = [0u8; 128];
+        e[32..40].copy_from_slice(&start.to_le_bytes());
+        e[40..48].copy_from_slice(&end.to_le_bytes());
+        for (i, u) in name.encode_utf16().enumerate() {
+            e[56 + i * 2..58 + i * 2].copy_from_slice(&u.to_le_bytes());
+        }
+        e
+    }
+
+    #[test]
+    fn finds_target_and_rejects_neighbors() {
+        let mut array = [0u8; 4096];
+        array[..128].copy_from_slice(&entry("boot_b", 33288, 40000));
+        array[128..256].copy_from_slice(&entry("boot_a", 8712, 33287));
+        array[256..384].copy_from_slice(&entry("boot_ab", 1, 2)); // 前缀陷阱
+        let p = find(&array, 3, "boot_a").unwrap();
+        assert_eq!((p.start, p.end), (8712, 33287));
+        assert!(find(&array, 3, "boot").is_none()); // 短名不命中长名槽
+        assert!(find(&array, 1, "boot_a").is_none()); // 条目数截断（只看 boot_b）
+    }
+}

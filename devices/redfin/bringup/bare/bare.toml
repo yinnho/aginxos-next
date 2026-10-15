@@ -11,9 +11,10 @@ load_base = 0xA7E80000
 hci = 0x01D84000          # UFSHCI 寄存器（u3 起实证）
 utrd = 0xB0000000         # UTRDL 槽 0
 ucd = 0xB0001000          # UCD（cmd 0x200 | resp 0x200 | PRDT +0x400）
-data = 0xB0002000         # 读① GPT 头缓冲（1 块）
+data = 0xB0002000         # 读缓冲（GPT 头 / 日志环逐块扫描）
 array = 0xB0003000        # 读② 条目数组缓冲（≤1 块，u4h 起）
-stack_top = 0xB0008000    # 栈顶向下 16KB（不碰 0xB0004000 以下 UFS scratch）
+staging = 0xB0004000      # 写源缓冲（u5a 起实证；日志环记录组包）
+stack_top = 0xB0008000    # 栈顶向下 16KB（不碰 0xB0005000 以下 UFS scratch）
 ps_hold = 0x0C264000      # PS_HOLD 复位门（写 0 冷重启）
 
 [time]
