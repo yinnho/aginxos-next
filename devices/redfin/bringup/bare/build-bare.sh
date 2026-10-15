@@ -111,6 +111,7 @@ MODE="heartbeat"
 [ "${1:-}" = "--s16" ] && MODE="s16"
 [ "${1:-}" = "--s16b" ] && MODE="s16b"
 [ "${1:-}" = "--s17" ] && MODE="s17"
+[ "${1:-}" = "--s18" ] && MODE="s18"
 mkdir -p "${OUTDIR}"
 ELF="${OUTDIR}/heartbeat.elf"
 
@@ -849,6 +850,15 @@ elif [ "${MODE}" = "s17" ]; then
   ELF="${OUTDIR}/s17.elf"
   cp "${HERE}/target/aarch64-unknown-none-softfloat/release/redfin-bare" "${ELF}"
   BIN="${OUTDIR}/s17.bin"; IMG="${OUTDIR}/boot-s17.img"
+elif [ "${MODE}" = "s18" ]; then
+  # NOLINUX-PLAN S2 正题刀：s17 全部面（开机自检+soak 环）不变，⑩-2 加
+  # ext4 只读正题——GPT 名查 userdata → UfsDev（read10 弹 DATA NC 窗）
+  # → ext4::Fs::open → 三靶 resolve+64KB 分段读+增量 crc32 落环。验收=
+  # 同晚 L0 侧 md5/crc 对账「读出与 L0 一致」。复现 s17 checkout b198974。
+  (cd "${HERE}" && cargo build --release --target aarch64-unknown-none-softfloat)
+  ELF="${OUTDIR}/s18.elf"
+  cp "${HERE}/target/aarch64-unknown-none-softfloat/release/redfin-bare" "${ELF}"
+  BIN="${OUTDIR}/s18.bin"; IMG="${OUTDIR}/boot-s18.img"
 else
   # 研究件：SPMI 全量 substrate。警告：start.S 迁移路径 2026-10-13 三验
   # （L10/L11/L12a）全部冻 logo（崩在 kmain 前）——修好前勿当心跳用。

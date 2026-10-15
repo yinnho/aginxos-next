@@ -15,6 +15,14 @@
 //! 量不降（MSOC 恒 100/V 不落）+ 温度平稳；0x1006=TAPER/FULLON 证
 //! 词需半电充电日（本刀满电=TERMINATE 恒态也是有效材料）。
 //!
+//! S2 正题同刀（s18 段，⑩-2）：裸件 ext4 只读——GPT 名查 userdata
+//! → UfsDev（read10 一块弹 DATA NC 窗按需切片）→ ext4::Fs::open →
+//! 三靶（/etc/hostname、/etc/inittab、/bin/busybox）resolve+64KB 分
+//! 段读+增量 crc32 落环；同晚 L0 侧 ssh md5/crc 对账=验收「读出与
+//! L0 一致」。借用律：Fs 持 &mut Ufs 期间不能落环——先算后记。
+//! ext4 解析器与增量 crc32 全在 crates/bare（19+1 测绿，真镜像
+//! md5 对账含多 extent 大件）。
+//!
 //! 副核入口 = secondary_entry（裸 asm）：掩 DAIF、装 VBAR（向量表
 //! per-core！副核不复位态默认）、立独立栈，跳 Rust secondary_main
 //! ——纯忙等心跳写 NC mailbox（32B 槽×7 @0xB0010000：magic/mpidr/
@@ -30,6 +38,8 @@
 #![allow(static_mut_refs)]
 
 use bare::ufs::{Fail, Ufs};
+use bare::crc32;
+use bare::ext4::{self, BlockDev};
 use bare::{exc, gic, gpt, instrument, logring, mmu, spmi, time};
 
 include!(concat!(env!("OUT_DIR"), "/facts.rs"));
@@ -169,6 +179,9 @@ static mut RING: Ring = Ring { base: 0, seq: 0, slot: 0 };
 
 /// 武装时刻（CNTVCT）——irq_entry 对拍 dt 用；0 = 尚未武装。
 static mut ARMED_AT: u64 = 0;
+
+/// S2 ext4 分段读缓冲（64KB——busybox 级全文件滚 crc）。
+static mut E2BUF: [u8; 65536] = [0; 65536];
 
 /// 读失败 → 仪器码（分命令超时；OCS/byte0/READ CHECK 恒码）。
 fn read_code(r: Fail, timeout_code: u32) -> u32 {
@@ -354,6 +367,32 @@ extern "C" fn irq_entry(_slot: usize) -> ! {
     unsafe { (PS_HOLD as *mut u32).write_volatile(0) };
     loop {
         core::hint::spin_loop();
+    }
+}
+
+/// S2：ext4::BlockDev 的 UFS 腿——byte_addr（userdata 分区内字节偏移）
+/// → LBA（4K）read10 一块弹 DATA（NC DMA 窗），按需切片拷出。跨块/
+/// 跨块边界由外层 while 分段；DATA 弹跳保证 DMA 只落 NC 窗。
+struct UfsDev<'a> {
+    ufs: &'a mut Ufs,
+    /// userdata 分区起始 LBA（GPT 名查，32 位已验）
+    base: u32,
+}
+
+impl BlockDev for UfsDev<'_> {
+    fn read(&mut self, byte_addr: u64, out: &mut [u8]) -> Result<(), ()> {
+        let mut done = 0usize;
+        while done < out.len() {
+            let a = byte_addr + done as u64;
+            let lba = self.base + (a >> 12) as u32;
+            let bo = (a & 0xFFF) as usize;
+            let n = (4096 - bo).min(out.len() - done);
+            self.ufs.read10(lba, 1, DATA).map_err(|_| ())?;
+            let blk = unsafe { core::slice::from_raw_parts(DATA as *const u8, 4096) };
+            out[done..done + n].copy_from_slice(&blk[bo..bo + n]);
+            done += n;
+        }
+        Ok(())
     }
 }
 
@@ -682,6 +721,88 @@ extern "C" fn rust_main() -> ! {
         | (base[2] as u64) << 32
         | (base[4] as u64) << 40;
     let txt = hex_text(&mut t, unsafe { RING.seq }, " rs=0x", rs);
+    ring_put(&mut ufs, freq, logring::LVL_INFO, txt);
+
+    // ⑩-2 S2 正题：裸件 ext4 只读（s18 段）。错误码不复位（soak 完整
+    //     性优先）：1=无 userdata 分区 2=LBA 越 32 位 3=Fs::open 败
+    //     4=resolve 败 5=read 败 6=4MB 上限截断。先算后记（Fs 持
+    //     &mut Ufs 借用期不落环）。
+    let t_e2 = time::cntvct();
+    let ud = gpt::find(array, entries, "userdata");
+    // 哨兵全 1=无分区；正常=end<<32|start（各 32 位内）。
+    let mut ud_word: u64 = 0xFFFF_FFFF_FFFF_FFFF;
+    let mut open_err: u64 = 0;
+    // 每靶四槽：[err, ino, nread, crc]。
+    let mut slots: [[u64; 4]; 3] = [[0; 4]; 3];
+    const TARGETS: [&str; 3] = ["/etc/hostname", "/etc/inittab", "/bin/busybox"];
+    if let Some(p) = ud {
+        ud_word = (p.end << 32) | p.start;
+        if (p.start | p.end) >> 32 != 0 {
+            open_err = 2;
+        } else {
+            let mut sc1 = [0u8; 4096];
+            let mut sc2 = [0u8; 4096];
+            let dev = UfsDev { ufs: &mut ufs, base: p.start as u32 };
+            match ext4::Fs::open(dev, &mut sc1) {
+                Err(_) => open_err = 3,
+                Ok(mut fs) => {
+                    for (i, path) in TARGETS.iter().enumerate() {
+                        match fs.resolve(path, &mut sc2) {
+                            Err(_) => slots[i][0] = 4,
+                            Ok(ino) => {
+                                let mut st = crc32::crc32_start();
+                                let mut off = 0u64;
+                                let mut nread = 0u64;
+                                let mut err = 0u64;
+                                loop {
+                                    let buf = unsafe { &mut E2BUF };
+                                    match fs.read_file(ino, off, buf, &mut sc2) {
+                                        Err(_) => {
+                                            err = 5;
+                                            break;
+                                        }
+                                        Ok(0) => break,
+                                        Ok(n) => {
+                                            st = crc32::crc32_update(st, &buf[..n]);
+                                            off += n as u64;
+                                            nread += n as u64;
+                                            if nread > 4 << 20 {
+                                                err = 6;
+                                                break;
+                                            }
+                                        }
+                                    }
+                                }
+                                slots[i] = [err, ino as u64, nread, crc32::crc32_finish(st) as u64];
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    let t_e2 = time::cntvct() - t_e2;
+    // phase B：统一落环（借用已放）。
+    let txt = hex_text(&mut t, unsafe { RING.seq }, " s18 ud=0x", ud_word);
+    ring_put(&mut ufs, freq, logring::LVL_INFO, txt);
+    if open_err != 0 {
+        let txt = hex_text(&mut t, unsafe { RING.seq }, " s18 o=0x", open_err);
+        ring_put(&mut ufs, freq, logring::LVL_INFO, txt);
+    } else {
+        // 标签逐靶固定（fa/fb/fc——hex_text 吃静态标签）。
+        let fl = [" s18 fa=0x", " s18 fb=0x", " s18 fc=0x"];
+        let gl = [" s18 ga=0x", " s18 gb=0x", " s18 gc=0x"];
+        let hl = [" s18 ha=0x", " s18 hb=0x", " s18 hc=0x"];
+        for i in 0..3 {
+            let txt = hex_text(&mut t, unsafe { RING.seq }, fl[i], slots[i][1] << 32 | slots[i][0] << 56);
+            ring_put(&mut ufs, freq, logring::LVL_INFO, txt);
+            let txt = hex_text(&mut t, unsafe { RING.seq }, gl[i], slots[i][2]);
+            ring_put(&mut ufs, freq, logring::LVL_INFO, txt);
+            let txt = hex_text(&mut t, unsafe { RING.seq }, hl[i], slots[i][3]);
+            ring_put(&mut ufs, freq, logring::LVL_INFO, txt);
+        }
+    }
+    let txt = hex_text(&mut t, unsafe { RING.seq }, " s18 t=0x", t_e2);
     ring_put(&mut ufs, freq, logring::LVL_INFO, txt);
 
     // ⑪ 常驻 soak 环（S1-7）：三 pick（MISC 0x216 喂狗面/CHGR 0x210

@@ -50,10 +50,6 @@ fn le16(b: &[u8], o: usize) -> u16 {
 fn le32(b: &[u8], o: usize) -> u32 {
     b[o] as u32 | (b[o + 1] as u32) << 8 | (b[o + 2] as u32) << 16 | (b[o + 3] as u32) << 24
 }
-fn le64(b: &[u8], o: usize) -> u64 {
-    le32(b, o) as u64 | (le32(b, o + 4) as u64) << 32
-}
-
 /// 只读文件系统句柄。块大小=1024<<block_bits。
 pub struct Fs<R: BlockDev> {
     dev: R,
