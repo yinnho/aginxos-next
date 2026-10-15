@@ -20,7 +20,7 @@
 | 阶段 | 内容 | 验收 |
 |---|---|---|
 | **S0 底座骨架** | Rust no_std 化；异常向量；UFS 日志环；MMU+cache；GIC+定时器中断；PSCI 多核 | 见 §2 逐刀 |
-| **S1 电源完整** | ka v3（喂狗经 MISC APID、解暂停 0x1043）；充电控制；电量计（aginx-fg 算法搬入）；温控 | 常驻 ≥1 天电量不降；日志里 0x1006=TAPER/FULLON |
+| **S1 电源完整** | ka v3（喂狗经 MISC APID、解暂停 0x1043）；充电控制；电量计（aginx-fg 算法搬入）；温控。**S1-1 实测新增前置：Type-C/TCPM 面未起则 USBIN 不在位（TRUTH §12）——喂狗/解暂停都在其后** | 常驻 ≥1 天电量不降；日志里 0x1006=TAPER/FULLON |
 | **S2 存储完整** | UFS 多 LUN/错误恢复/链路功耗；ext4 只读 | 裸件读出 userdata 指定文件与 L0 一致 |
 | **S3 USB 网络** | dwc3 设备模式 → CDC-NCM → smoltcp TCP/IP → 控制通道 | Mac 一根线 ping 通、连上控制口 |
 | **S4 Wi-Fi** | PIL（TZ 认证加载 WLAN 固件到 MSA）→ QRTR/GLINK+QMI（WLFW 握手）→ 802.11/WPA | 裸件连 AP、ping 通；**体量最大，周~月级** |
