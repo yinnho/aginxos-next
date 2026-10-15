@@ -507,7 +507,7 @@ U1 MMIO 探针（读 CAP+VER，VER 合法→blink；冻死=时钟没开）→ U2
   物理访问（Device 型）双侧非缓存，零一致性维护。心跳节流 1M 拍
   @19.2MHz ≈ 52ms/拍。
 
-## 12. SPMI v5 Rust 线与电源面真相（S1-1–S1-3c 实测，2026-10-15）[DRV][DT]
+## 12. SPMI v5 Rust 线与电源面真相（S1-1–S1-3d 实测，2026-10-15）[DRV][DT]
 
 - **运输层（crates/bare spmi，内核逐函数对账）三轮逐字一致**：
   `spmi v=0x50010000`（v5 窗判定过，与 L0 dmesg 同值）、
@@ -530,22 +530,20 @@ U1 MMIO 探针（读 CAP+VER，VER 合法→blink；冻死=时钟没开）→ U2
     （内核 spmi.h 明文 "5-bit address"）——偏移 ≥0x20 一律静默截断
     成 addr&0x1F。**<0x20 的读全真**（S1-2b 电源面叙事幸存），
     ≥0x20 的短命令读=读到偏移低 5 位的别名，写=写到别处。
-  2. **8 位 EXT**（arb EXT_READ=13/EXT_WRITE=2，总线 op 0x20-0x2F
-    读/≤0x0F 写）：地址位够 8 位，s13b 环证事务 DONE 但写不驻
-    （三寄存器两外设全不驻、13min 观察窗 misc_rt 平 0）——当时判
-    「EXT 死区」，S1-3c 证明 LONG 同死，死的不止这一档（见第 3 档
-    与世界门悬案）。
+    2. **8 位 EXT**（arb EXT_READ=13/EXT_WRITE=2，总线 op 0x20-0x2F
+    读/≤0x0F 写）：地址位够 8 位，s13b 环证事务 DONE（当时判「EXT
+    死区」，S1-3d 证该档全活——不驻是 PMIC 病态，见世界门定谳）。
   3. **16 位 EXT-LONG**（arb **EXT_WRITEL=op 0/EXT_READL=op 1**，
     总线 op 0x30-0x37 写/0x38-0x3F 读）：内核充电页的唯一走法——
     PMIC regmap `.reg_bits=16`（qcom-spmi-pmic.c:112）且 regmap-spmi
     以 `addr <= 0xFF` 分界（regmap-spmi.c:130/145/170/185），充电
     寄存器 flat 全 >0xFF → 内核一律走 LONG。外设字节走 APID 寻由，
-    CMD 字只带 8 位偏移。**S1-3c 环定谳（ring md5 017a5018…cad8）：
-    LONG 写也不驻**——c42/m53/aw2 三试验逐字复刻 s13b 形状，且与
-    内核侧逐位逐序对账全同（fmt_cmd_v2 无 sid 位、WDATA 先落、
-    RW=chnls+0x10000×apid、wait_for_done 同窗同序），即命令形状
-    无懈可击。**结论升格：三档写全 ACK-DONE-不驻，读三档全真**
-    （跨档交叉一致+物理合理）。
+    CMD 字只带 8 位偏移。S1-3c 环（ring md5 017a5018…cad8）当时定谳
+    「LONG 写也不驻」，与内核侧逐位逐序对账全同（fmt_cmd_v2 无 sid
+    位、WDATA 先落、RW=chnls+0x10000×apid、wait_for_done 同窗同序）
+    ——对账结论仍然成立：命令形状自始无懈可击。**「不驻」本身已被
+    S1-3d 推翻为 PMIC 病态读数（见世界门定谳）；读三档全真**
+    （跨档交叉一致+物理合理）不受影响。
 - **【回溯失效，S1-3b 改判】**①S1-2「写路径 Rust 首证」**撤**——
   那次写走的短命令，0x40 截成 0x00+恒等写，空洞；②S1-2b 的
   `0x1544=0x02（EN_SNK_ONLY）`条目**死**（短命令实读 0x1504）；
@@ -570,17 +568,44 @@ U1 MMIO 探针（读 CAP+VER，VER 合法→blink；冻死=时钟没开）→ U2
   内核 probe 写的是另一形状（SBB←SNARL 8s|BARK=64s 档|BITE 8s|
   bit7 咬后禁充、WD_CFG←0x42）。ka 线 130s 无咬根因=**狗从未被
   装配**（WD_CFG=0），非时序差一秒。BITE=0 档=裸世界即使装配也
-  只有 bark 中断无 bite，无禁充/复位风险。
-- **【世界门悬案，S1-3c 开案】**L0 活体对证（2026-10-15 18:36）：
-  `wdog-bark` 中断计数在涨（3→5，~60s 节奏）=狗在内核世真武装真叫；
-  而裸世界 13min 零 bark+aw 全不驻。内核 arb 写路径与我 Rust 逐位
-  逐序全同（fmt_cmd_v2/write_data/wait_for_done 三对账），充电驱动
-  无 SEC/secure 门（源码级无据）→ 差别只能来自世界：内核世带着
-  TZ/SCM/AOP 全套启动（msm_scm 驱动在 dmesg 名册），裸世界没有。
-  两种待判解释：①TZ 在内核启动时解锁充电页（或 PMIC 安全寄存器
-  ACK-drop 仅对未解锁 master）；②内核自己的写其实也没落，狗是
-  TZ/AOP 装的（bark 节奏 64s vs 128s 可判：S1-3d 回网后先测）。
-  **S1-3d 判别刀已备**：sp54=CHGR 0x1054 官方 CHARGER_SPARE（6 位
-  备用，内核仅调试痕）翻位读回——落=裸世写本通（死者皆安全寄存器
-  个案）；平=充电页写整死（世界门实锤）→S1 充电控制改走 RPMh/AOP
-  路线立项。
+  只有 bark 中断无 bite——但内核世 BITE=8s 在装：**BITE=整机 PMIC
+  硬复位的执行者**（见 15min 病条）。
+- **【世界门定谳，S1-3d 环证——「三档写全死」整体翻案】**
+  S1-3d（ring md5 65bcd5cd…e492，19:04–19:14 三整轮）跑在 18:59
+  PMIC 硬复位冷启后的**健康窗**内：`w0=0x10000c00`=全 POR 真基线
+  （WD_CFG=0/SBB=0x0c/MISC_RT=0/USBIN=0x10 PLUGIN）；**sp54=0x7f407f**：
+  cur 0x7f→写 0x40→回读 0x40→还原→回读 0x7f，CHARGER_SPARE 翻满
+  6 位两往返全落；**c42=0x10001**（s13c 同址 0x10101=死）：写 0→
+  回读 0→还原→回读原值；**aw3=0x4200**：WD_CFG 0x00→写 0x42→回读
+  0x42 武装落地；**dw=0x42→写 0→回读 0x00** 解除也落地；150s 停喂
+  无 bark（POR SBB BITE=0 无咬风险，设计如此）。**裁决：写路径三档
+  全通、命令形状自始无懈可击；s13/s13b/s13c 的「死写」全是病态
+  PMIC 上的读数**——三条环都跑在当晚病灶期（见 15min 病条），
+  PMIC/AOP 进入「ACK-DONE-丢弃」策略态，PMIC 硬复位冷上电（重载
+  XBL/AOP）治愈。S1 充电控制回到正路：**直接 SPMI 写可用**，无需
+  RPMh/AOP 绕行立项（但见下条病程——健康窗有前提）。
+- **【内核世对证——狗=内核亲手装配】**回滚后 L0 活体（同夜）：
+  wdog-bark 计数 1880s 时=28，节奏恰 **64s=内核 SBB BARK 档** →
+  内核 regmap 写（同 LONG 路径）在健康 PMIC 上同样落袋。世界门
+  两解释（TZ 解锁页/TZ 代装狗）**双双出局：没有门，只有病**。
+- **【15min 黑窗病，同夜并案——BITE=复位执行者】**病程（全天）：
+  11:03 wifi 先死→下午沉疴→18:10/18:41 两轮全通道死（USB+wifi
+  同灭）→各 ~15–18min 后 **PMIC Hard Reset+cold boot 自拉回**
+  （18:59 receipt：Power-on reason="Hard Reset and 'cold' boot"；
+  pstore 空+时钟回退 ~8h 皆冷启指纹）。内核面病灶链（19:12 命
+  dmesg 直捕）：`i2c_geni 98c000 error :-107`（外围大总线，挂
+  cs35l41×2/drv2624/**fsa4480 USB 开关**/p9382 Qi/pac193x×3/
+  pm8008×2/slg51000）→`qcom_rpmh TCS Busy addr=0x50000` 慢滴
+  （~1/min）。死亡机制推断：RPMh/AOP 梗塞渐进断供（fsa4480 失联
+  =USB 先死）→喂狗链断→BARK 64s 无人喂→**BITE 8s→PMIC 硬复位**
+  ——这解释「楔死 ~15–18min 后自愈复位」的形状；BITE 既执行也
+  抹尸（RAM 掉电，pstore 无遗言）。s13d 终态 WD_CFG 解除（dw 验
+  0），回滚后内核重装，当前命 31min+ 未死（N=1 观察中）。
+  **取证在役**：disease-tick（cron 每分钟 uptime/mem/bark/进程数/
+  dmesg 尾三行→/var/log/disease.log，跨死存活）+Mac 侧 20s 收割档；
+  下一轮病发读 disease.log 死前最后帧定 i2c/RPMh 先后与肇事件。
+- **【wifi「死」分案——非病，选错 AP】**当晚华为 AP 与 ZTE-mahu
+  同场在空；wifi.conf 主槽=华为（老场地）→手机反复落 192.168.3.x，
+  Mac 在 5.x 够不着=「wifi 死」。已对调槽位（mahu 升主/华为降
+  alt1，/etc/wifi.conf.bak 留底）+net-watch 重联。教训：**多场地
+  双 AP 同场时主槽决定落点，「失联」先查子网再查病**。
