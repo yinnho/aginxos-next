@@ -191,7 +191,7 @@ impl<R: BlockDev> Fs<R> {
             for i in 0..entries {
                 let e = 12 + i * 12;
                 let eeb = le32(node, e) as u64;
-                let len = le16(node, e + 2) as u64 & 0x7FFF;
+                let len = le16(node, e + 4) as u64 & 0x7FFF;
                 let phys = le32(node, e + 8) as u64 | (le16(node, e + 6) as u64) << 32;
                 if eeb <= lb && lb < eeb + len.max(1) {
                     return Ok(Some(phys + lb - eeb));
@@ -463,6 +463,34 @@ mod tests {
         assert!(names.iter().any(|n| n == "hello") && names.iter().any(|n| n == "file"));
     }
 
+    /// 回归钉：eb>0 且 len>1 的 extent（ee_len 在 e+4——旧 bug 读 e+2=
+    /// ee_block 高半，eb<65536 时 len 恒 0→洞，真镜像大文件才炸）+ 洞填零。
+    #[test]
+    fn synthetic_extent_eb_offset_and_hole() {
+        let mut d = mkfs();
+        d.blocks.push([0u8; 4096]); // 第 9 块（phys 8）
+        // inode 3 改形：extent eb=1 len=2 phys 7..8；块 0=洞。size=8194。
+        let ifile = &mut d.blocks[3][256..384];
+        put32(ifile, 4, 2 * 4096 + 2);
+        put32(ifile, 52, 1); // ee_block=1
+        put16(ifile, 56, 2); // ee_len=2
+        put32(ifile, 60, 7); // phys=7
+        d.blocks[7][..4].copy_from_slice(b"aaaa");
+        d.blocks[8][..4].copy_from_slice(b"ABCD");
+        let mut fs = Fs::open(d, &mut [0u8; 4096]).unwrap();
+        let mut sc = [0u8; 4096];
+        let mut out = [0u8; 8];
+        // 洞：lb=0 无 extent 覆盖 → 零
+        assert_eq!(fs.read_file(3, 0, &mut out, &mut sc).unwrap(), 8);
+        assert_eq!(&out, &[0u8; 8]);
+        // lb=1（eb=1 首块）：块 7
+        fs.read_file(3, 4096, &mut out, &mut sc).unwrap();
+        assert_eq!(&out[..4], b"aaaa");
+        // lb=2（eb+1——旧 bug 此处判洞）：块 8；size 截尾只余 2 字节
+        assert_eq!(fs.read_file(3, 8192, &mut out, &mut sc).unwrap(), 2);
+        assert_eq!(&out[..2], b"AB");
+    }
+
     #[test]
     fn synthetic_depth_two_extent_tree() {
         // depth=1 索引树：root extent → 索引块 7 → 叶（phys 6）。
@@ -532,5 +560,80 @@ mod tests {
         let n = fs.read_file(ino, 0, &mut small, &mut sc).unwrap();
         assert_eq!(n, 30);
         assert_eq!(&small[..6], b"root:x");
+        // 深路径+全量 md5：/etc/aginx/device.toml ino=119 size=3811
+        // md5=19e6c57c…（python 定谳 2026-10-15）。
+        let ino = fs.resolve("/etc/aginx/device.toml", &mut sc).unwrap();
+        assert_eq!(ino, 119);
+        let mut dt = vec![0u8; 3811];
+        assert_eq!(fs.read_file(ino, 0, &mut dt, &mut sc).unwrap(), 3811);
+        assert_eq!(md5_hex(&dt), "19e6c57c64ce1f22c7d1ff6c0bee8c2a");
+        // 大文件多 extent：/lib/modules/msm_drm.ko ino=174 size=3838800
+        // 两段 512KiB 区间（第二段跨 extent 边界）md5 对账。
+        let ino = fs.resolve("/lib/modules/msm_drm.ko", &mut sc).unwrap();
+        assert_eq!(ino, 174);
+        let mut ko = vec![0u8; 524288];
+        fs.read_file(ino, 0, &mut ko, &mut sc).unwrap();
+        assert_eq!(md5_hex(&ko), "ad3a48fef88a4543e6eddc9ee5f8810d");
+        fs.read_file(ino, 1048576, &mut ko, &mut sc).unwrap();
+        assert_eq!(md5_hex(&ko), "c5cebab930f18a531ab7a04dda00d38b");
+        // 大目录：/bin 101 项（含 . 与 ..；python 对账）。
+        let ino = fs.resolve("/bin", &mut sc).unwrap();
+        let mut cnt = 0usize;
+        let sz = fs.listdir(ino, &mut sc, |_, _, _| cnt += 1).unwrap();
+        assert_eq!(cnt, 101);
+        assert!(sz >= 2048); // 101 项≈2.4KB，单块目录（非体积断言）
+    }
+
+    /// 测试用 md5（RFC1321 紧凑实现——真源对账够用，不进产品路径）。
+    fn md5_hex(data: &[u8]) -> String {
+        // 简版：逐块 64 轮转。常量表走算法标准 K[i]=floor(abs(sin(i+1))*2^32)。
+        fn k(i: usize) -> u32 {
+            ((i as f64 + 1.0).sin().abs() * 4294967296.0) as u32
+        }
+        let s = [7u32, 12, 17, 22, 7, 12, 17, 22, 7, 12, 17, 22, 7, 12, 17, 22,
+                     5, 9, 14, 20, 5, 9, 14, 20, 5, 9, 14, 20, 5, 9, 14, 20,
+                     4, 11, 16, 23, 4, 11, 16, 23, 4, 11, 16, 23, 4, 11, 16, 23,
+                     6, 10, 15, 21, 6, 10, 15, 21, 6, 10, 15, 21, 6, 10, 15, 21];
+        let mut msg = data.to_vec();
+        let bitlen = (data.len() as u64) * 8;
+        msg.push(0x80);
+        while msg.len() % 64 != 56 {
+            msg.push(0);
+        }
+        msg.extend_from_slice(&bitlen.to_le_bytes());
+        let mut h: [u32; 4] = [0x67452301, 0xefcdab89, 0x98badcfe, 0x10325476];
+        for chunk in msg.chunks(64) {
+            let mut m = [0u32; 16];
+            for i in 0..16 {
+                m[i] = u32::from_le_bytes(chunk[i * 4..i * 4 + 4].try_into().unwrap());
+            }
+            let (mut a, mut b, mut c, mut d) = (h[0], h[1], h[2], h[3]);
+            for i in 0..64 {
+                let (f, g) = match i / 16 {
+                    0 => ((b & c) | (!b & d), i),
+                    1 => ((d & b) | (!d & c), (5 * i + 1) % 16),
+                    2 => (b ^ c ^ d, (3 * i + 5) % 16),
+                    _ => (c ^ (b | !d), (7 * i) % 16),
+                };
+                let tmp = d;
+                d = c;
+                c = b;
+                b = b.wrapping_add((a.wrapping_add(f).wrapping_add(k(i))).wrapping_add(m[g]).rotate_left(s[i]));
+                a = tmp;
+            }
+            h[0] = h[0].wrapping_add(a);
+            h[1] = h[1].wrapping_add(b);
+            h[2] = h[2].wrapping_add(c);
+            h[3] = h[3].wrapping_add(d);
+        }
+        // 摘要=h[0..4] 逐字小端字节序列（{:08x} 打 u32 是大端序——
+        // 首版此坑：md5(abc) 出 98500190…，字内反序）。
+        let mut out = String::new();
+        for w in h {
+            for byte in w.to_le_bytes() {
+                out.push_str(&format!("{:02x}", byte));
+            }
+        }
+        out
     }
 }
