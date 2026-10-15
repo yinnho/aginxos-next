@@ -16,6 +16,12 @@ array = 0xB0003000        # 读② 条目数组缓冲（≤1 块，u4h 起）
 staging = 0xB0004000      # 写源缓冲（u5a 起实证；日志环记录组包）
 stack_top = 0xB0008000    # 栈顶向下 16KB（不碰 0xB0005000 以下 UFS scratch）
 ps_hold = 0x0C264000      # PS_HOLD 复位门（写 0 冷重启）
+# S0-6 副核面（PSCI CPU_ON）：mailbox 槽 32B×7 @ 0xB0010000、
+# 副核栈 4KB×7 @ 0xB0011000——都在 NC DMA 窗 [0xB0000000,0xB0200000)
+# 内：主核 NC 映射读写 ↔ 副核 MMU-off 物理访问（Device 直达），
+# 两侧皆非缓存，天然一致，主核收割免维护。
+sec_mailbox = 0xB0010000
+sec_stack = 0xB0011000
 
 [time]
 freq_fallback = 19200000  # CNTFRQ 读 0 时的兜底 Hz

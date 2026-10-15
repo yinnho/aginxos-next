@@ -97,6 +97,7 @@ MODE="heartbeat"
 [ "${1:-}" = "--s03" ] && MODE="s03"
 [ "${1:-}" = "--s04" ] && MODE="s04"
 [ "${1:-}" = "--s05" ] && MODE="s05"
+[ "${1:-}" = "--s06" ] && MODE="s06"
 mkdir -p "${OUTDIR}"
 ELF="${OUTDIR}/heartbeat.elf"
 
@@ -701,11 +702,18 @@ elif [ "${MODE}" = "s04" ]; then
 elif [ "${MODE}" = "s05" ]; then
   # NOLINUX-PLAN S0-5：GICv3 + 通用定时器中断（RD 唤醒/dist 使能/SRE/
   # PMR/IGRPEN1；虚拟定时器 INTID 19 武装 1s → daifclr → WFI → 槽 5
-  # IRQ 入口记 id/dt/ctl 落环复位）。
+  # IRQ 入口记 id/dt/ctl 落环复位）。复现 S0-5 行为 checkout 69e6885。
   (cd "${HERE}" && cargo build --release --target aarch64-unknown-none-softfloat)
   ELF="${OUTDIR}/s05.elf"
   cp "${HERE}/target/aarch64-unknown-none-softfloat/release/redfin-bare" "${ELF}"
   BIN="${OUTDIR}/s05.bin"; IMG="${OUTDIR}/boot-s05.img"
+elif [ "${MODE}" = "s06" ]; then
+  # NOLINUX-PLAN S0-6：PSCI CPU_ON 拉起 7 副核（version 落环→清
+  # mailbox→CPU_ON×7 rc 落环→3s WFI→IRQ 入口收割 7 槽心跳落环）。
+  (cd "${HERE}" && cargo build --release --target aarch64-unknown-none-softfloat)
+  ELF="${OUTDIR}/s06.elf"
+  cp "${HERE}/target/aarch64-unknown-none-softfloat/release/redfin-bare" "${ELF}"
+  BIN="${OUTDIR}/s06.bin"; IMG="${OUTDIR}/boot-s06.img"
 else
   # 研究件：SPMI 全量 substrate。警告：start.S 迁移路径 2026-10-13 三验
   # （L10/L11/L12a）全部冻 logo（崩在 kmain 前）——修好前勿当心跳用。

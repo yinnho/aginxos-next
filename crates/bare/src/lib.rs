@@ -14,5 +14,6 @@ pub mod gpt;
 pub mod instrument;
 pub mod logring;
 pub mod mmu;
+pub mod psci;
 pub mod time;
 pub mod ufs;

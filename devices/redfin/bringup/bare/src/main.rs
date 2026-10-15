@@ -1,18 +1,22 @@
-//! S0-5 — GICv3 + 通用定时器中断：忙等→WFI（NOLINUX-PLAN S0 第五刀）。
+//! S0-6 — PSCI CPU_ON 拉起 7 副核（NOLINUX-PLAN S0 第六刀）。
 //!
-//! S0-4 的 MMU/cache 链路原样保留；新增中断面：本核 RD 唤醒、dist
-//! 使能（ARE_NS|G1A|G1）、CPU 接口 SRE/PMR/IGRPEN1、虚拟定时器
-//! （INTID 19——bengal PPI3，活内核 /proc/interrupts 定谳）武装 1 秒
-//! → daifclr 解掩 → WFI。IRQ 落槽 5（current EL SPx），入口记
-//! id/dt/ctl 进环后复位。GIC MMIO 在 L1 e0 Device 段——表无需改。
+//! S0-5 链路原样保留（GIC+vtimer+WFI 睡入）；新增多核面：PSCI 1.0
+//! smc（arm,psci-1.0/method="smc"，活 DT 定谳；CPU_ON=SMC64
+//! 0xC4000003，内核 psci.c 同值）拉起 DT reg 表的 7 副核
+//! （MPIDR 0x100..0x700——每核一 cluster，cpu@0/100/…/700）。
 //!
-//! 首刷两雷（已修）：① GIC 初始化次序必须照内核（GICD TYPER 读 →
-//! dist 0→0x13 → RD 扫描 → RD 唤醒）——先碰 RD 帧总线直接停摆，
-//! 且停摆无 EXC 无仪器码，只有步进环记录能定位；② daifclr 立即数
-//! 是 DAIF 域掩码（F=bit0 I=bit1），解 IRQ 掩= `#2` 非 `#1`。
+//! 副核入口 = secondary_entry（裸 asm）：掩 DAIF、装 VBAR（向量表
+//! per-core！副核不复位态默认）、立独立栈，跳 Rust secondary_main
+//! ——纯忙等心跳写 NC mailbox（32B 槽×7 @0xB0010000：magic/mpidr/
+//! seq/cnt），**不碰 UFS/GIC**（单控制器/未初始化面）。主核武装
+//! 3 秒 WFI，IRQ 醒来收割 7 槽落环后复位。
 //!
-//! 验收（规格原文）：日志心跳按定时器节拍——IRQ 记录 id=19、dt≈武装
-//! 时长（CNTVCT 对拍）、零 EXC，连刷三轮一致。
+//! 一致性：主核 NC 映射 ↔ 副核 MMU-off 物理访问（Device 直达），
+//! 两侧皆非缓存免维护；副核栈 4KB×7 @0xB0011000 同窗。副核 PSCI
+//! 入口态=EL1、MMU off、x0=context_id（=槽号）。
+//!
+//! 验收（规格原文）：7 个副核各写心跳进日志——每槽 magic 对、
+//! mpidr 对号、seq>0，三轮一致，零 EXC。
 
 #![no_std]
 #![no_main]
@@ -21,7 +25,7 @@
 #![allow(static_mut_refs)]
 
 use bare::ufs::{Fail, Ufs};
-use bare::{exc, gic, gpt, instrument, logring, mmu, time};
+use bare::{exc, gic, gpt, instrument, logring, mmu, psci, time};
 
 include!(concat!(env!("OUT_DIR"), "/facts.rs"));
 
@@ -81,6 +85,59 @@ core::arch::global_asm!(
 
 extern "C" {
     static __vectors: u8;
+}
+
+/// mailbox 心跳魔数（"SEC1" LE）。
+const SEC_MAGIC: u64 = 0x3143_4553;
+/// 副核数（cpu@0 主核 + 7 副核，活 DT cpus 节点表定谳）。
+const SEC_COUNT: usize = 7;
+
+// 副核入口（PSCI CPU_ON 跳入；x0=context_id=槽号 1..7）：掩 DAIF →
+// 装 VBAR（向量表是 per-core 寄存器，副核不复位态默认）→ 立独立栈
+// （SEC_STACK + 槽号×4KB，向下生长）→ 跳 Rust。PSCI 入口态 MMU off
+// ——字面量池按物理地址取（主核恒等映射下同值）。
+core::arch::global_asm!(
+    ".section .text.sec_entry",
+    ".globl secondary_entry",
+    "secondary_entry:",
+    "    msr daifset, #0xf",
+    "    mov x20, x0",
+    "    ldr x0, =__vectors",
+    "    msr vbar_el1, x0",
+    "    isb",
+    "    ldr x1, ={sec_stack}",
+    "    lsl x2, x20, #12",
+    "    add sp, x1, x2",
+    "    mov x0, x20",
+    "    b secondary_main",
+    sec_stack = const SEC_STACK,
+);
+
+extern "C" {
+    static secondary_entry: u8;
+}
+
+/// 副心搏正身：纯忙等写 NC mailbox 槽（**不碰 UFS/GIC**——单控制器/
+/// 未初始化面）。槽 32B：[0]=magic [1]=mpidr [2]=seq [3]=cnt。
+#[no_mangle]
+extern "C" fn secondary_main(i: usize) -> ! {
+    let slot = (SEC_MAILBOX + i * 32) as *mut u64;
+    unsafe {
+        slot.add(0).write_volatile(SEC_MAGIC);
+        slot.add(1).write_volatile(gic::mpidr());
+        let mut seq: u64 = 0;
+        loop {
+            seq = seq.wrapping_add(1);
+            slot.add(2).write_volatile(seq);
+            slot.add(3).write_volatile(time::cntvct());
+            // 节流 ~52ms/拍（19.2MHz 百万拍）——NC 写直达 DRAM，
+            // 7 核全速写徒耗总线。
+            let t0 = time::cntvct();
+            while time::cntvct() - t0 < 1_000_000 {
+                core::hint::spin_loop();
+            }
+        }
+    }
 }
 
 /// 裸件线约定（非机器事实）：boot_a 内 scratch（u5a 实证位）。
@@ -262,7 +319,8 @@ extern "C" fn exc_entry(slot: usize) -> ! {
 
 /// IRQ 入口（槽 5 桩跳入，不返回）：先掩中断（EOI 降优先级后杂响会
 /// 重入本入口——首步断根）→ IAR 认领 → EOI 结案 → 撤定时器 → 环记录
-/// （id/dt/ctl；dt=CNTVCT 对拍武装时刻）→ 复位。
+/// （id/dt/ctl）→ **收割副核 mailbox**（S0-6：7 槽各记 aff/seq，
+/// seq>0 即该核跳过心跳过）→ 复位。
 #[no_mangle]
 extern "C" fn irq_entry(_slot: usize) -> ! {
     gic::irq_mask();
@@ -280,6 +338,14 @@ extern "C" fn irq_entry(_slot: usize) -> ! {
     let mut t = [0u8; 96];
     let txt = text(&mut t, &[" IRQ id=", " dt=", " ctl="], &[unsafe { RING.seq }, id as u64, dt, ctl as u64]);
     ring_put(&mut ufs, freq, logring::LVL_INFO, txt);
+    // 收割副核心跳（S0-6）：槽未动（主核 CPU_ON 前清零）= aff/seq 全
+    // 0=该核未起；活着=aff 对号（0x100×i）且 seq 持续增长。
+    for i in 1..=SEC_COUNT {
+        let slot = (SEC_MAILBOX + i * 32) as *const u64;
+        let (aff, seq) = unsafe { (slot.add(1).read_volatile(), slot.add(2).read_volatile()) };
+        let txt = text(&mut t, &[" sec aff=", " seq="], &[unsafe { RING.seq }, aff, seq]);
+        ring_put(&mut ufs, freq, logring::LVL_INFO, txt);
+    }
     unsafe { (PS_HOLD as *mut u32).write_volatile(0) };
     loop {
         core::hint::spin_loop();
@@ -455,8 +521,26 @@ extern "C" fn rust_main() -> ! {
     gic::icc_igrpen1(true);
     gic::enable_ppi(rd, TIMER_INTID as u32, 0xa0);
 
-    // ⑩ 武装 1 秒 → 记录 → 解掩 → WFI（IRQ 应落槽 5，入口接管收尾）
-    let delay = freq as u64;
+    // ⑪ PSCI 面（S0-6）：version 落环 → 清 mailbox → 7 副核 CPU_ON
+    //    （rc 各落环；SMC 从 EL1 陷 EL3 由 TZ 受理——L0 内核拉副核
+    //    同路径）→ 武装 3 秒 → 解掩 → WFI（IRQ 入口收割落环）。
+    let pv = psci::version();
+    let txt = hex_text(&mut t, unsafe { RING.seq }, " psci v=0x", pv as u64);
+    ring_put(&mut ufs, freq, logring::LVL_INFO, txt);
+    for i in 1..=SEC_COUNT {
+        let slot = (SEC_MAILBOX + i * 32) as *mut u64;
+        for w in 0..4 {
+            unsafe { slot.add(w).write_volatile(0) };
+        }
+    }
+    let entry = core::ptr::addr_of!(secondary_entry) as u64;
+    for i in 1..=SEC_COUNT {
+        let target = 0x100 * i as u64;
+        let rc = psci::cpu_on(target, entry, i as u64);
+        let txt = text(&mut t, &[" on aff=", " rc="], &[unsafe { RING.seq }, target, rc as u64]);
+        ring_put(&mut ufs, freq, logring::LVL_INFO, txt);
+    }
+    let delay = freq as u64 * 3;
     let armed_at = time::vtimer_arm(time::cntvct() + delay);
     unsafe { ARMED_AT = armed_at; }
     let txt = text(&mut t, &[" arm id=", " dt="], &[unsafe { RING.seq }, TIMER_INTID as u64, delay]);
