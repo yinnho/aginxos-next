@@ -934,3 +934,10 @@ IPCC 补踢刷机后 `gq` 仍 `408.3d0`、`fp=3`、无 `0x45`——门铃假设�
 
 结论：错误 next2 sc/pra 即 frpck 主因；应答已通。下一卡：实现 reverse tunnel
 （按 NOUT 调 AP 侧方法后再 next2），并清 apr/IPCRTR INTENT 卡环；QRTR 仍缺 WLFW。
+
+## 2026-10-18 夜：reverse tunnel 首刀（remotectl_open + 续 next2）
+
+对账 hexagonrpcd/listener.c：next2 → dispatch ifaces[handle] → 带 result 再 next2。
+首包 NOUT=`b0.0.20200.29` = remotectl_open（handle0/sc=`0x20200`）。
+实现：解 inbufs、按名回 apps_std=1/apps_mem=2、编码 outbufs、续 next2。
+其它方法暂 AEE_EUNSUPPORTED。sm 增 `rv=rev.n.h.sc.res.name`。

@@ -5254,6 +5254,21 @@ static mut FP_IDONE: u8 = 0;
 static mut FP_NXN: u8 = 0;
 static mut FP_NX: [u32; 4] = [0; 4];
 static mut FP_NOUT: [u32; 4] = [0xffff_ffff; 4];
+/// reverse tunnel：下一包 next2 应答的 intent / 嵌套调用。
+static mut FP_NLIID: u32 = 0;
+static mut FP_NDONE: u8 = 0;
+/// 0 闲，1 有未处理嵌套，2 已编码待发续 next2。
+static mut FP_REV: u8 = 0;
+static mut FP_RVN: u32 = 0; // 已处理的 reverse 次数
+static mut FP_RVH: u32 = 0xffff_ffff; // 上次 open 返回的 handle
+static mut FP_RVSC: u32 = 0; // 上次嵌套 sc
+static mut FP_RVRES: u32 = 0xffff_ffff;
+static mut FP_RVOUTN: u32 = 0;
+static mut FP_RVOUT: [u8; 320] = [0; 320];
+static mut FP_RVINN: u32 = 0;
+static mut FP_RVIN: [u8; 256] = [0; 256];
+static mut FP_RVNAME: [u8; 32] = [0; 32];
+static mut FP_RVNAMEN: u8 = 0;
 /// remotectl_open 的应答：ctx、retval。0 还没有。
 static mut FP_OPN: u8 = 0;
 static mut FP_OPEN: [u32; 4] = [0; 4];
@@ -6168,6 +6183,293 @@ fn fastrpc_next2(d: u64, txf: u64, txn: u64, at: u64) -> bool {
     true
 }
 
+/// 解开 next2 嵌套 inbufs 线格式（与 hexagonrpcd/iobuffer.c 同形）。
+fn fp_rev_take_buf(src: &[u8], mut off: usize, align: &mut usize) -> Option<(usize, usize)> {
+    if off + 4 > src.len() {
+        return None;
+    }
+    let sz = u32::from_le_bytes([src[off], src[off + 1], src[off + 2], src[off + 3]]) as usize;
+    off += 4;
+    *align = (*align + 4) & 7;
+    if *align != 0 {
+        let pad = 8 - *align;
+        if off + pad > src.len() {
+            return None;
+        }
+        off += pad;
+        *align = 0;
+    }
+    if off + sz > src.len() {
+        return None;
+    }
+    let start = off;
+    off += sz;
+    *align = (*align + sz) & 7;
+    Some((start, sz))
+}
+
+/// handle0 / method0 = remotectl_open：按名返回 apps_std=1 / apps_mem=2。
+fn fp_rev_remotectl_open() -> u32 {
+    let n = unsafe { FP_RVINN } as usize;
+    let src = unsafe { &FP_RVIN[..n] };
+    let mut align = 0usize;
+    let mut off = 0usize;
+    let Some((o0, l0)) = fp_rev_take_buf(src, off, &mut align) else {
+        unsafe { FP_RVRES = 14 }; // AEE_EBADPARM
+        return 14;
+    };
+    off = o0 + l0;
+    if l0 < 8 {
+        unsafe { FP_RVRES = 14 };
+        return 14;
+    }
+    let inlen = u32::from_le_bytes([src[o0], src[o0 + 1], src[o0 + 2], src[o0 + 3]]);
+    let outlen = u32::from_le_bytes([src[o0 + 4], src[o0 + 5], src[o0 + 6], src[o0 + 7]]);
+    let Some((o1, l1)) = fp_rev_take_buf(src, off, &mut align) else {
+        unsafe { FP_RVRES = 14 };
+        return 14;
+    };
+    if l1 == 0 || l1 > 31 || (inlen as usize != 0 && inlen as usize != l1) {
+        // inlen 偶发与实际长度一致；放宽
+    }
+    if src[o1 + l1 - 1] != 0 {
+        unsafe { FP_RVRES = 14 };
+        return 14;
+    }
+    let namelen = l1.min(31);
+    unsafe {
+        FP_RVNAMEN = namelen as u8;
+        let mut i = 0usize;
+        while i < namelen {
+            FP_RVNAME[i] = src[o1 + i];
+            i += 1;
+        }
+        while i < 32 {
+            FP_RVNAME[i] = 0;
+            i += 1;
+        }
+    }
+    let name = &src[o1..o1 + l1];
+    let hdl = if name.starts_with(b"apps_std") {
+        1u32
+    } else if name.starts_with(b"apps_mem") {
+        2u32
+    } else if name.starts_with(b"remotectl") {
+        0u32
+    } else {
+        // 未知接口：Android 同形回 -5
+        let err = (-5i32) as u32;
+        let ol = outlen.min(256);
+        // encode outbufs: {0, err} + zero errstr
+        let mut enc = [0u8; 320];
+        let mut eo = 0usize;
+        // out0 size 8
+        enc[eo..eo + 4].copy_from_slice(&8u32.to_le_bytes());
+        eo += 4;
+        eo += 4; // pad
+        enc[eo..eo + 4].copy_from_slice(&0u32.to_le_bytes());
+        enc[eo + 4..eo + 8].copy_from_slice(&err.to_le_bytes());
+        eo += 8;
+        // out1
+        enc[eo..eo + 4].copy_from_slice(&ol.to_le_bytes());
+        eo += 4;
+        eo += 4; // pad
+        eo += ol as usize;
+        unsafe {
+            FP_RVOUTN = eo as u32;
+            FP_RVOUT[..eo].copy_from_slice(&enc[..eo]);
+            FP_RVH = 0;
+            FP_RVRES = err;
+        }
+        return err;
+    };
+    let ol = outlen.min(256);
+    let mut enc = [0u8; 320];
+    let mut eo = 0usize;
+    enc[eo..eo + 4].copy_from_slice(&8u32.to_le_bytes());
+    eo += 4;
+    eo += 4;
+    enc[eo..eo + 4].copy_from_slice(&hdl.to_le_bytes());
+    enc[eo + 4..eo + 8].copy_from_slice(&0u32.to_le_bytes());
+    eo += 8;
+    enc[eo..eo + 4].copy_from_slice(&ol.to_le_bytes());
+    eo += 4;
+    eo += 4;
+    // zeros already
+    eo += ol as usize;
+    unsafe {
+        FP_RVOUTN = eo as u32;
+        FP_RVOUT[..eo].copy_from_slice(&enc[..eo]);
+        FP_RVH = hdl;
+        FP_RVRES = 0;
+        FP_RVN = FP_RVN.wrapping_add(1);
+    }
+    0
+}
+
+/// 处理嵌套 reverse invoke；成功则 FP_REV=2（待发续 next2）。
+fn fp_rev_dispatch() {
+    let sc = unsafe { FP_NOUT[2] };
+    let handle = unsafe { FP_NOUT[1] };
+    unsafe { FP_RVSC = sc };
+    let method = (sc >> 24) & 0x1f;
+    let result = if handle == 0 && method == 0 {
+        fp_rev_remotectl_open()
+    } else {
+        // 尚未实现的 AP 侧方法：回 EUNSUPPORTED，避免卡死循环
+        let err = 20u32; // AEE_EUNSUPPORTED
+        unsafe {
+            FP_RVOUTN = 0;
+            FP_RVRES = err;
+            FP_RVN = FP_RVN.wrapping_add(1);
+        }
+        err
+    };
+    let _ = result;
+    unsafe { FP_REV = 2 };
+}
+
+/// 发续 next2：带上上一轮 reverse 的 result + 编码 outbufs。
+fn fastrpc_next2_cont(d: u64, txf: u64, txn: u64, at: u64) -> bool {
+    if unsafe { FP_REUSE } == 0 && unsafe { FP_INEW } != 1 {
+        if unsafe { FP_INEW } == 0 && at + 8 <= txn {
+            lpass_store(txf + at, 7 | (4 << 16));
+            lpass_store(txf + at + 4, 64);
+            lpass_tx_commit(d, txf, at, 8);
+            unsafe { FP_INEW = 2 };
+            return true;
+        }
+        return false;
+    }
+    let rcid = unsafe { FP_RCID } as usize;
+    if rcid >= 8 {
+        return false;
+    }
+    let iid = unsafe { FP_ILOG[rcid * 2] };
+    let isz = unsafe { FP_ILOG[rcid * 2 + 1] };
+    let out_n = unsafe { FP_RVOUTN } as u64;
+    // prim 16 + optional outbufs (aligned into page) + need 56 for glink hdr
+    let total_glink = 56u64;
+    if isz < 40 || at + total_glink > txn {
+        return false;
+    }
+    let page = core::ptr::addr_of!(FP_PAGE) as u64;
+    if page < 0x8000_0000 || page + 4096 > 0xC000_0000 {
+        return false;
+    }
+    if out_n > 0 && 1024 + out_n > 4096 {
+        return false;
+    }
+    let tagged = (3u64 << 32) | page;
+    let mut i = 0u64;
+    while i < 4096 {
+        wr32((page + i) as usize, 0);
+        i += 4;
+    }
+    // 拷贝编码后的 outbufs 到页内 1024
+    if out_n != 0 {
+        let mut j = 0u32;
+        while j < out_n as u32 {
+            unsafe {
+                *((page + 1024 + j as u64) as *mut u8) = FP_RVOUT[j as usize];
+            }
+            j += 1;
+        }
+    }
+    let outs_len = out_n;
+    // pra: prim in @640, nested out @1024 (len outs_len), prim out @768, nested in @896
+    let offs = [640u64, 1024u64, 768u64, 896u64];
+    let lens = [16u64, outs_len, 16u64, 256u64];
+    let mut n = 0usize;
+    while n < 4 {
+        let off = offs[n];
+        let len = lens[n];
+        if len != 0 {
+            let pv = tagged + off;
+            wr32((page + n as u64 * 16) as usize, pv as u32);
+            wr32((page + n as u64 * 16 + 4) as usize, (pv >> 32) as u32);
+        }
+        wr32((page + n as u64 * 16 + 8) as usize, len as u32);
+        wr32((page + 64 + n as u64 * 8) as usize, if len != 0 { 1 } else { 0 });
+        wr32((page + 64 + n as u64 * 8 + 4) as usize, n as u32);
+        wr32((page + 96 + n as u64 * 16) as usize, tagged as u32);
+        wr32((page + 96 + n as u64 * 16 + 4) as usize, (tagged >> 32) as u32);
+        wr32((page + 96 + n as u64 * 16 + 8) as usize, 4096);
+        n += 1;
+    }
+    let rctx = unsafe { FP_NOUT[0] };
+    let result = unsafe { FP_RVRES };
+    wr32((page + 640) as usize, rctx);
+    wr32((page + 644) as usize, result);
+    wr32((page + 648) as usize, outs_len as u32);
+    wr32((page + 652) as usize, 256);
+    dcache_civac(page, 4096);
+    let ctx = 0x6002u32;
+    // 续调用仍用同一 ctx 槽，便于对账；DSP 不依赖此值匹配
+    let msg = [
+        1u32,
+        1,
+        ctx,
+        0,
+        3u32,
+        0x0402_0200,
+        tagged as u32,
+        (tagged >> 32) as u32,
+        4096,
+        0,
+    ];
+    lpass_store(txf + at, 9 | (4 << 16));
+    lpass_store(txf + at + 4, iid);
+    lpass_store(txf + at + 8, 40);
+    lpass_store(txf + at + 12, 0);
+    let mut w = 0usize;
+    while w < 10 {
+        lpass_store(txf + at + 16 + w as u64 * 4, msg[w]);
+        w += 1;
+    }
+    lpass_tx_commit(d, txf, at, 56);
+    unsafe {
+        FP_SENT = 10;
+        FP_LAST = iid;
+        FP_REUSE = 0;
+        FP_INEW = 0;
+        FP_REV = 0;
+        FP_NXN = 0;
+        FP_NDONE = 0;
+    }
+    true
+}
+
+fn fastrpc_rev_work(d: u64, txf: u64, txn: u64, at: u64) -> bool {
+    if unsafe { FP_SENT } != 10 {
+        return false;
+    }
+    // 先归还 next2 应答占用的 intent
+    if unsafe { FP_NXN } != 0 && unsafe { FP_NDONE } == 0 {
+        let liid = unsafe { FP_NLIID };
+        if liid == 0 {
+            unsafe { FP_NDONE = 1 };
+            return false;
+        }
+        if at + 8 > txn {
+            return false;
+        }
+        lpass_store(txf + at, 14 | (4 << 16));
+        lpass_store(txf + at + 4, liid);
+        lpass_tx_commit(d, txf, at, 8);
+        unsafe { FP_NDONE = 1 };
+        return true;
+    }
+    if unsafe { FP_REV } == 1 {
+        fp_rev_dispatch();
+        // 立刻尝试发续包（若 TX idle）
+    }
+    if unsafe { FP_REV } == 2 {
+        return fastrpc_next2_cont(d, txf, txn, at);
+    }
+    false
+}
+
 /// `fastrpc_init_process` 的 FASTRPC_INIT_ATTACH_SENSORS。
 /// handle 1，method 0，一个 4 字节 tgid，pd=2。一拍只发一包，接收 FIFO 必须是空的。
 fn fastrpc_attach(d: u64, txf: u64, txn: u64, at: u64) -> bool {
@@ -6199,6 +6501,9 @@ fn fastrpc_attach(d: u64, txf: u64, txn: u64, at: u64) -> bool {
     }
     if sent == 9 {
         return fastrpc_next2(d, txf, txn, at);
+    }
+    if sent == 10 {
+        return fastrpc_rev_work(d, txf, txn, at);
     }
     if sent != 0 {
         return false;
@@ -6536,11 +6841,34 @@ fn lpass_glink_work() {
                         FP_ILIID = liid;
                     }
                 }
-                if ctxw == 0x6002 && unsafe { FP_NXN } == 0 {
+                if ctxw == 0x6002 {
                     unsafe {
                         FP_NXN = 1;
                         FP_NX[0] = ctxw;
                         FP_NX[2] = retw;
+                        FP_NLIID = liid;
+                        FP_NDONE = 0;
+                        FP_REV = 1;
+                    }
+                    // prim out @768、nested inbufs @896（invoke 页）
+                    let page = core::ptr::addr_of!(FP_PAGE) as u64;
+                    dcache_ivac(page + 768, 256 + 16);
+                    let mut k = 0usize;
+                    while k < 4 {
+                        unsafe {
+                            FP_NOUT[k] = rd32((page + 768 + k as u64 * 4) as usize);
+                        }
+                        k += 1;
+                    }
+                    let n = unsafe { FP_NOUT[3] }.min(256);
+                    unsafe { FP_RVINN = n };
+                    let mut i = 0u32;
+                    while i < n {
+                        unsafe {
+                            FP_RVIN[i as usize] =
+                                *((page + 896 + i as u64) as *const u8);
+                        }
+                        i += 1;
                     }
                 }
                 unsafe { LG_FPN = LG_FPN.saturating_add(1) };
@@ -6636,9 +6964,8 @@ fn lpass_glink_work() {
     if fastrpc_attach(d, txf, txn, at) {
         return;
     }
-    // next2 已发、等应答时不要再灌 IPCRTR INTENT，否则 TX 卡环
-    // 会让后续 INTENT_REQ 无法回包（DSP 读端停/frpck 后尤甚）。
-    if unsafe { FP_SENT } == 10 && unsafe { FP_NXN } == 0 {
+    // next2 / reverse 进行中不要灌 INTENT，避免堵死 TX。
+    if unsafe { FP_SENT } == 10 {
         return;
     }
     let mut ch = 0u32;
@@ -7825,6 +8152,27 @@ fn ctrl_service(
                                     push_str(&mut reply, &mut rn, ".");
                                     push_hex(&mut reply, &mut rn, unsafe { FP_NOUT[k] } as u64);
                                     k += 1;
+                                }
+                                push_str(&mut reply, &mut rn, " rv=");
+                                push_hex(&mut reply, &mut rn, unsafe { FP_REV } as u64);
+                                push_str(&mut reply, &mut rn, ".");
+                                push_hex(&mut reply, &mut rn, unsafe { FP_RVN } as u64);
+                                push_str(&mut reply, &mut rn, ".");
+                                push_hex(&mut reply, &mut rn, unsafe { FP_RVH } as u64);
+                                push_str(&mut reply, &mut rn, ".");
+                                push_hex(&mut reply, &mut rn, unsafe { FP_RVSC } as u64);
+                                push_str(&mut reply, &mut rn, ".");
+                                push_hex(&mut reply, &mut rn, unsafe { FP_RVRES } as u64);
+                                push_str(&mut reply, &mut rn, ".");
+                                let rvn = unsafe { FP_RVNAMEN } as usize;
+                                let mut ri = 0usize;
+                                while ri < rvn && ri < 32 {
+                                    let b = unsafe { FP_RVNAME[ri] };
+                                    if (0x21..0x7f).contains(&b) && rn < reply.len() {
+                                        reply[rn] = b;
+                                        rn += 1;
+                                    }
+                                    ri += 1;
                                 }
                                 push_str(&mut reply, &mut rn, " gq=");
                                 push_hex(&mut reply, &mut rn, unsafe { FP_CH } as u64);
