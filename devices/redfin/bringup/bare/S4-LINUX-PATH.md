@@ -1050,3 +1050,39 @@ GATE：串号 `13201FDD4001N8`，`flash boot_a` + `set_active a` + reboot（01:2
 
 恢复：Power 硬复位或等 tries 烧尽回 b；`fastboot -s 13201FDD4001N8 set_active a`
 重刷 `.local/device/redfin/boot-out/boot-s20.img` 后再采 `pm=`/`qp=`/`rf=`/`rh=`/`q=`/`s=`。
+
+### 本轮：0x35 NEW_SERVER 提前 + LOOKUP 应答（Asia/Shanghai 2026-10-19 ~04:10）
+
+改动（本地 commit，未推）：
+1. `glink_announce` 顺序改为 **0x35 → rmtfs → tftp → pd-mapper**（HELLO 后尽早可被 lookup）。
+2. 收到对本机服务的 `NEW_LOOKUP`(10) 立刻回 `NEW_SERVER`（`lk=` 计数）。
+3. 曾试同轮连发 4 条 NEW_SERVER → `rf=0`/`qp=0`（疑似复用同一 GLINK intent）；已改回 **一 tick 一包**。
+
+GATE 刷验（串号 `13201FDD4001N8`，`fb`→flash→set_active a）：
+- 关键 sm（连发版，04:11–04:13）：`hh=1` **`lk=0.0.4`**（HOST_ADV=4，0x35 已进公告）
+  `pm=0.0.0` **`LOOK_N=0`** `qp=0` `rf=0` `rh=0` `pr=0`
+  `q=42.b401,2b.1202` `s=107` `d=150.288.348.348`
+- 一 tick 版重刷后 USB 掉线，未采到对照 sm。
+
+**结论**
+- 公告侧：0x35 已能在 HELLO 后立刻进 `HOST_ADV`（`lk=*.*.4`）。
+- 需求侧：modem **从不**对本机发 0x35/14/64/4096 的 LOOKUP（`LOOK_N=0`），故 `pm=0` 不是「公告太晚」，而是 **这条路径上没有 SSREQ 客户**。
+- 同轮连发会打坏 RFS OPEN（`rf=0`）；保留一 tick + 0x35 打头。
+- **下一刀应转 Linux 抓包**：确认库存 bringup 上 modem/AP 是否出现 0x35 LOOKUP/QMI；若库存也无 0x35 流量，则 0x35 与 OPEN→ALLOC/0x45 脱钩，停裸机猜 pm-service。
+
+#### 最小可执行 Linux 侧抓取计划（槽 b / AginxOS）
+
+目标：在一次 **能到 wlan 或至少 modem ONLINE** 的库存启动里，证明有无 QRTR 0x35 / pm-service 流量。
+
+1. `fastboot set_active b` + `reboot`（或 tries 回滚）进 Linux；确认 `androidboot.serialno=13201FDD4001N8`。
+2. 开机后立刻（modem 起来前后）：
+   - `ps | grep -E 'pm-service|pm-proxy|Peripheral'`
+   - 若有 `qrtr-lookup`：`qrtr-lookup` / `qrtr-lookup 0x35`；或读 `/dev/socket` 无则用：
+     `cat /sys/kernel/debug/qrtr/*/...`（有则）、`ls /sys/kernel/debug/ipc_logging/`
+   - `logcat -b all -d | grep -iE 'pm-service|SSREQ|0x35|PeripheralManager'`（若 logcat 可用）
+   - 动态调试（若镜像许）：`echo 'module qrtr +p' > /sys/kernel/debug/dynamic_debug/control` 后重启子系统或整机，`dmesg | grep -i qrtr`
+3. 可选：`stop vendor.pm-service` / 杀 pm-service 再 `start`，看 modem 是否 LOOKUP 重试（对照「服务消失」行为）。
+4. 收据：一段含时间戳的 `dmesg`/`logcat`/`qrtr-lookup` 输出；明确写清 **有/无** `service 0x35` 与 QMI 到 pm-service 端口。
+5. 判定：
+   - 库存也无 0x35 → 关掉裸机 0x35 刀，改追 OPEN 后 ALLOC（EFS/intent/别的 QMI）。
+   - 库存有 0x35 LOOKUP/QMI → 对账时序/实例字/节点，再回裸机补。

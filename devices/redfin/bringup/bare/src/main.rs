@@ -3086,7 +3086,7 @@ static mut GLINK_HELLO: bool = false;
 static mut GLINK_INTENTS: bool = false;
 static mut GLINK_LOOKUP: bool = false;
 static mut GLINK_LOC: bool = false;
-/// 0 还没公告，1 rmtfs，2 tftp，3 pd-mapper。
+/// 0 还没公告，1=0x35 已发，2 rmtfs，3 tftp，4 pd-mapper 齐。
 static mut HOST_ADV: u32 = 0;
 static mut LISTEN_TICK: u32 = 0;
 static mut LAST_IID: u32 = 0;
@@ -3162,6 +3162,9 @@ static mut PM_NODE: u32 = 0;
 static mut PM_PORT: u32 = 0;
 static mut PM_MSG: u32 = 0;
 static mut PM_N: u32 = 0;
+/// LOOKUP 待回 NEW_SERVER：svc|inst<<16；0=无。
+static mut LOOK_PEND: u32 = 0;
+static mut LOOK_N: u32 = 0;
 static mut RFS_READY: u8 = 0;
 /// rmt_storage_alloc_buff_cb：buff_size 0 表示 IOVEC 里的地址是窗口内偏移。
 static mut RFS_IOFF: u8 = 0;
@@ -4232,8 +4235,20 @@ fn glink_hello(at478: u64, at479: u64, sz479: u64, at480: u64, sz480: u64) -> u3
             return 0;
         }
         let use_id = iid;
+        // LOOKUP 应答优先：对端已在找本机服务。
+        let pend = unsafe { LOOK_PEND };
+        if pend != 0 {
+            let svc = pend & 0xffff;
+            let inst_q = pend >> 16;
+            if let Some((inst, port)) = host_svc_port(svc, inst_q) {
+                glink_tx_qrtr(at478, at479, tx_head, use_id, 4, svc, inst, 1, port);
+                unsafe { LOOK_PEND = 0; }
+                return 14;
+            }
+            unsafe { LOOK_PEND = 0; }
+        }
         if unsafe { HOST_ADV } < 4 {
-            // qrtr.c：收到对方 HELLO 之后才推本机服务。一次一包。
+            // qrtr.c：对方 HELLO 之后推本机服务。一次一包（一 intent）；0x35 打头。
             if unsafe { HELLO_RX } > 0 {
                 glink_announce(at478, at479, tx_head, sz479, use_id);
             }
@@ -4294,25 +4309,41 @@ fn glink_hello(at478: u64, at479: u64, sz479: u64, at480: u64, sz480: u64) -> u3
     7
 }
 
-/// rmtfs 14、tftp 4096、pd-mapper 64、pm-service 0x35（radio-bringup 环境检查）。
-/// 一次只发一包。实例字是 instance<<8|version。节点 1。
+/// pm-service 0x35 最先（radio-bringup：PIL 前环境；HELLO 后尽早可被 LOOKUP），
+/// 再 rmtfs 14、tftp 4096、pd-mapper 64。一次一包。实例字 instance<<8|version。节点 1。
 fn glink_announce(at478: u64, at479: u64, head: u64, sz479: u64, iid: u32) {
     let n = unsafe { HOST_ADV };
     if n >= 4 || head + 72 > sz479 {
         return;
     }
     let (svc, inst, port) = if n == 0 {
-        (14u32, 1u32, 0x10u32)
-    } else if n == 1 {
-        (4096, 1, 0x11)
-    } else if n == 2 {
-        (64, 257, 0x12)
-    } else {
         // pm-service：version 1 instance 0 → 实例字 1，端口 0x13。
-        (0x35, 1, 0x13)
+        (0x35u32, 1u32, 0x13u32)
+    } else if n == 1 {
+        (14, 1, 0x10)
+    } else if n == 2 {
+        (4096, 1, 0x11)
+    } else {
+        (64, 257, 0x12)
     };
     glink_tx_qrtr(at478, at479, head, iid, 4, svc, inst, 1, port);
     unsafe { HOST_ADV = n + 1; }
+}
+
+/// 本机可公告的服务：LOOKUP 命中则立刻回 NEW_SERVER（对齐 qrtr ns）。
+fn host_svc_port(svc: u32, inst: u32) -> Option<(u32, u32)> {
+    // inst：对端 LOOKUP 常带精确实例字，或 0 表示通配。
+    if svc == 0x35 && (inst == 0 || inst == 1) {
+        Some((1, 0x13))
+    } else if svc == 14 && (inst == 0 || inst == 1) {
+        Some((1, 0x10))
+    } else if svc == 4096 && (inst == 0 || inst == 1) {
+        Some((1, 0x11))
+    } else if svc == 64 && (inst == 0 || inst == 257) {
+        Some((257, 0x12))
+    } else {
+        None
+    }
 }
 
 fn glink_tx_qrtr(
@@ -8207,6 +8238,13 @@ fn scan_new_servers(fifo: u64, rh: u64) {
                                 SMEM_NLOOK = n + 1;
                             }
                         }
+                        // qrtr ns：本机有的服务立刻排队回 NEW_SERVER。
+                        if host_svc_port(svc, inst).is_some() && unsafe { LOOK_PEND } == 0 {
+                            unsafe {
+                                LOOK_PEND = svc | (inst << 16);
+                                LOOK_N = LOOK_N.wrapping_add(1);
+                            }
+                        }
                     }
                 }
             }
@@ -8677,6 +8715,12 @@ fn ctrl_service(
                                 push_hex(&mut reply, &mut rn, unsafe { PM_N } as u64);
                                 push_str(&mut reply, &mut rn, ".");
                                 push_hex(&mut reply, &mut rn, unsafe { PM_MSG } as u64);
+                                push_str(&mut reply, &mut rn, " lk=");
+                                push_hex(&mut reply, &mut rn, unsafe { LOOK_N } as u64);
+                                push_str(&mut reply, &mut rn, ".");
+                                push_hex(&mut reply, &mut rn, unsafe { LOOK_PEND } as u64);
+                                push_str(&mut reply, &mut rn, ".");
+                                push_hex(&mut reply, &mut rn, unsafe { HOST_ADV } as u64);
                                 push_str(&mut reply, &mut rn, " qp=");
                                 push_hex(&mut reply, &mut rn, unsafe { QP_HIST_N } as u64);
                                 push_str(&mut reply, &mut rn, ".");
