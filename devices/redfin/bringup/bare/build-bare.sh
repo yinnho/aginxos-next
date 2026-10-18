@@ -113,6 +113,7 @@ MODE="heartbeat"
 [ "${1:-}" = "--s17" ] && MODE="s17"
 [ "${1:-}" = "--s18" ] && MODE="s18"
 [ "${1:-}" = "--s19" ] && MODE="s19"
+[ "${1:-}" = "--s20" ] && MODE="s20"
 mkdir -p "${OUTDIR}"
 ELF="${OUTDIR}/heartbeat.elf"
 
@@ -871,6 +872,14 @@ elif [ "${MODE}" = "s19" ]; then
   ELF="${OUTDIR}/s19.elf"
   cp "${HERE}/target/aarch64-unknown-none-softfloat/release/redfin-bare" "${ELF}"
   BIN="${OUTDIR}/s19.bin"; IMG="${OUTDIR}/boot-s19.img"
+elif [ "${MODE}" = "s20" ]; then
+  # NOLINUX-PLAN S3 第二刀：s19 上电面不变，⑩-4 加 EP0 + CDC-ECM 枚举
+  # （配方 S3-USB.md「EP0 → CDC-ECM/NCM」）。先断线再武装 SETUP，清
+  # SFTDISCONNECT 后枚举在 soak 的 30s 窗里轮询。未刷：收线窗仍先 s18。
+  (cd "${HERE}" && cargo build --release --target aarch64-unknown-none-softfloat)
+  ELF="${OUTDIR}/s20.elf"
+  cp "${HERE}/target/aarch64-unknown-none-softfloat/release/redfin-bare" "${ELF}"
+  BIN="${OUTDIR}/s20.bin"; IMG="${OUTDIR}/boot-s20.img"
 else
   # 研究件：SPMI 全量 substrate。警告：start.S 迁移路径 2026-10-13 三验
   # （L10/L11/L12a）全部冻 logo（崩在 kmain 前）——修好前勿当心跳用。

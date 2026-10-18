@@ -91,7 +91,9 @@ DCTL 0xc704、DSTS 0xc70c。
 1. 读 GSNPSID 验身（0xc120 高 16 位 0x5533）。
 2. GUSB2PHYCFG(0)：USBTRDTIM←9（UTMI 8-bit，core.c:680-682）+ 清
    SUSPHY（连接完成前）。
-3. DCTL←CORESOFTRESET（bit11，core.h:253）软复位，poll DCTL 回落。
+3. DCTL←CSFTRST（**bit30**，core.h:420）软复位，poll 该位自清。
+   core.h:253 的 bit11 是 **GCTL**.CORESOFTRESET，不是 DCTL。DCTL bit11
+   是 ACCEPTU2ENA，写 1 不会自清，poll 必然超时。
    HS PHY init（上节 14 步）在此前/此后各一次均可——内核序 =
    soft_reset 内先 `usb_phy_init`（core.c:206-209）再 DCTL 复位。
 4. GCTL：清 PRTCAPDIR(bits13:12) 再写 0b10（DEVICE，core.c:132-133
@@ -116,7 +118,7 @@ DCTL 0xc704、DSTS 0xc70c。
 | 寄存器 | 偏移 | 关键位 |
 |---|---|---|
 | DCFG | 0xc700 | DEVSPD bits2:0（HS=0/FS=1）；**DEVADDR=addr<<3（bits9:3，mask 0x7f<<3）** |
-| DCTL | 0xc704 | SFTDISCONNECT bit1（清=上线）；CSFTRST bit11 |
+| DCTL | 0xc704 | SFTDISCONNECT bit1（清=上线）；**CSFTRST bit30**（bit11=ACCEPTU2ENA） |
 | DSTS | 0xc70c | CONNECTSPD bits2:0（HS=0）；DEVCTRLHLT bit22 |
 | DEVTEN | 0xc708 | DISCONNEVTEN bit0｜USBRSTEN bit1｜CONNECTDONEEN bit2（轮询刀三开即可；gadget.c:2588 全表多 EVNTOVERFLOW/CMD 等） |
 | DALEPENA | **0xc720** | bit n=物理 EP n（ep0 OUT=bit0、ep1 IN=bit1）——⚠ 概要旧文误写 0xb008，此为正 |

@@ -71,3 +71,7 @@ usb_hsphy = 0x088E3000    # QUSB2 femto HS PHY（十四步上电序在 S3-USB.md
 usb_gcc = 0x00100000      # GCC 基址（USB30 BCR 0xf000/QUSB2 BCR 0x12000/CBCR 0xf0xx/GPLL0 LUCID MODE@+0 STATUS@+0x30）
 usb_gdsc = 0x10F004       # usb30_prim GDSC（bit0 SW_COLLAPSE←0 开、poll bit31 PWR_ON）
 usb_evbuf = 0xB0005000    # dwc3 事件缓冲 4KB（NC DMA 窗空闲槽：staging 0xB0004000 与栈 0xB0008000 之间）
+usb_trb = 0xB0006000      # EP0 TRB 16B（NC；事件缓冲之后、栈 0xB0008000 之前）
+usb_epbuf = 0xB0006100    # 控制 DATA 缓冲 256B（同一 NC 槽）
+smmu_base = 0x15000000    # apps SMMU GR0（msm-arm-smmu-lito.dtsi）
+usb_sid = 0xE0            # lito-usb.dtsi：iommus = <&apps_smmu 0xE0 0x0>
