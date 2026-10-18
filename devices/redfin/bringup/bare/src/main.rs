@@ -6308,18 +6308,68 @@ fn fp_rev_remotectl_open() -> u32 {
 }
 
 /// 处理嵌套 reverse invoke；成功则 FP_REV=2（待发续 next2）。
+fn fp_rev_encode_empty_outs(sc: u32, fill4: bool) {
+    let n_out = ((sc >> 8) & 0xff) as usize;
+    let mut enc = [0u8; 320];
+    let mut eo = 0usize;
+    let mut i = 0usize;
+    while i < n_out && eo + 16 < enc.len() {
+        let sz: u32 = if fill4 { 4 } else { 0 };
+        enc[eo..eo + 4].copy_from_slice(&sz.to_le_bytes());
+        eo += 4;
+        // pad to 8
+        eo += 4;
+        if fill4 {
+            // 4 zero bytes already
+            eo += 4;
+        }
+        i += 1;
+    }
+    unsafe {
+        FP_RVOUTN = eo as u32;
+        FP_RVOUT[..eo].copy_from_slice(&enc[..eo]);
+    }
+}
+
 fn fp_rev_dispatch() {
     let sc = unsafe { FP_NOUT[2] };
     let handle = unsafe { FP_NOUT[1] };
     unsafe { FP_RVSC = sc };
-    let method = (sc >> 24) & 0x1f;
+    let mut method = (sc >> 24) & 0x1f;
+    // method==31：扩展号在 inbufs 首字（hexagonrpcd listener.c）
+    if method == 31 {
+        let n = unsafe { FP_RVINN } as usize;
+        if n >= 4 {
+            // 粗解：跳过第一个 size/pad 后读 4 字节，或直接扫
+            let mut align = 0usize;
+            if let Some((o0, l0)) = fp_rev_take_buf(unsafe { &FP_RVIN[..n] }, 0, &mut align) {
+                if l0 >= 4 {
+                    method = u32::from_le_bytes([
+                        unsafe { FP_RVIN[o0] },
+                        unsafe { FP_RVIN[o0 + 1] },
+                        unsafe { FP_RVIN[o0 + 2] },
+                        unsafe { FP_RVIN[o0 + 3] },
+                    ]);
+                }
+            }
+        }
+    }
     let result = if handle == 0 && method == 0 {
         fp_rev_remotectl_open()
-    } else {
-        // 尚未实现的 AP 侧方法：回 EUNSUPPORTED，避免卡死循环
-        let err = 20u32; // AEE_EUNSUPPORTED
+    } else if handle == 1 {
+        // apps_std：尚未接 hexagonfs；按 sc 回空 out + EUNSUPPORTED，
+        // 避免 outs_len=0 的续 next2 再卡读端。
+        let err = 20u32;
+        fp_rev_encode_empty_outs(sc, true);
         unsafe {
-            FP_RVOUTN = 0;
+            FP_RVRES = err;
+            FP_RVN = FP_RVN.wrapping_add(1);
+        }
+        err
+    } else {
+        let err = 20u32;
+        fp_rev_encode_empty_outs(sc, true);
+        unsafe {
             FP_RVRES = err;
             FP_RVN = FP_RVN.wrapping_add(1);
         }
