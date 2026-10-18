@@ -4618,8 +4618,13 @@ fn rfs_caller(name: &[u8]) -> Option<u32> {
 }
 
 fn qmi_finish(q: &mut [u8], n: usize, txn: u32, msgid: u32) {
+    qmi_finish_typed(q, n, 2, txn, msgid);
+}
+
+/// qtype：0=REQ 2=RESP 4=IND。
+fn qmi_finish_typed(q: &mut [u8], n: usize, qtype: u8, txn: u32, msgid: u32) {
     let msglen = (n - 7) as u16;
-    q[0] = 2;
+    q[0] = qtype;
     q[1] = txn as u8;
     q[2] = (txn >> 8) as u8;
     q[3] = msgid as u8;
@@ -4818,7 +4823,10 @@ fn tf_reply(at478: u64, at479: u64, sz479: u64) {
     }
 }
 
-/// pm-service 0x35 探针：任意请求回 result 成功（空载荷），看 modem 是否来连。
+/// pm-service / SSREQ（QRTR 0x35）：对账 vendor pm-service 内嵌 IDL。
+/// msgid 0x20=SYSTEM_SHUTDOWN / 0x21=SYSTEM_RESTART / 0x22=PERIPHERAL_RESTART
+/// （REQ/RESP/IND 同号；max_sz=7）。Linux：RESP result 成功；SHUTDOWN/RESTART
+/// 再发 IND status=SERVICED(1)；PERIPHERAL_RESTART 只 RESP。不在此 reboot。
 fn pm_reply(at478: u64, at479: u64, sz479: u64) {
     if unsafe { !PM_PEND } || at478 == 0 || at479 == 0 {
         return;
@@ -4828,25 +4836,35 @@ fn pm_reply(at478: u64, at479: u64, sz479: u64) {
     if tx_head != tx_tail {
         return;
     }
+    let msg = unsafe { PM_MSG };
+    let txn = unsafe { PM_TXN };
+    let node = unsafe { PM_NODE };
+    let port = unsafe { PM_PORT };
+    // 未知 msgid：失败 RESP，不发 IND（对齐 CSI 拒识）。
+    let known = msg >= 0x20 && msg <= 0x22;
     let mut q = [0u8; 16];
     let mut n = 7usize;
-    put_result(&mut q, &mut n, false);
-    qmi_finish(&mut q, n, unsafe { PM_TXN }, unsafe { PM_MSG });
-    if glink_tx_payload(
-        at478,
-        at479,
-        tx_head,
-        sz479,
-        0x13,
-        unsafe { PM_NODE },
-        unsafe { PM_PORT },
-        &q[..n],
-    ) {
-        unsafe {
-            PM_PEND = false;
-            PM_N = PM_N.wrapping_add(1);
-        }
+    put_result(&mut q, &mut n, !known);
+    qmi_finish(&mut q, n, txn, msg);
+    if !glink_tx_payload(at478, at479, tx_head, sz479, 0x13, node, port, &q[..n]) {
+        return;
     }
+    unsafe {
+        PM_PEND = false;
+        PM_N = PM_N.wrapping_add(1);
+    }
+    // SHUTDOWN/RESTART：再发 IND（同 msgid，qtype=4，txn=0xffff，TLV01 status=1）。
+    if !known || msg == 0x22 {
+        return;
+    }
+    let tx_head = rd32((at478 + 4) as usize) as u64;
+    let mut ind = [0u8; 16];
+    let mut in_ = 7usize;
+    put_u8(&mut ind, &mut in_, 1);
+    put_u16(&mut ind, &mut in_, 4);
+    put_u32(&mut ind, &mut in_, 1);
+    qmi_finish_typed(&mut ind, in_, 4, 0xffff, msg);
+    let _ = glink_tx_payload(at478, at479, tx_head, sz479, 0x13, node, port, &ind[..in_]);
 }
 
 fn pd_reply(at478: u64, at479: u64, sz479: u64) {
