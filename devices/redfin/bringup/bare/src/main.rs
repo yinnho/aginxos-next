@@ -3150,6 +3150,18 @@ static mut RF_HIST_N: u32 = 0;
 /// 上一笔 OPEN 应答前 12 字节（对账 wire）。
 static mut RF_RSP: [u8; 12] = [0; 12];
 static mut RF_RSP_N: u8 = 0;
+/// 任意打到本机 node1 的 DATA：port|msgid<<8|qtype<<16，最近 8 条。
+static mut QP_HIST: [u32; 8] = [0; 8];
+static mut QP_HIST_N: u32 = 0;
+static mut QP_VIS: u64 = 0;
+/// pm-service(0x35) 端口 0x13 收到的请求数。
+static mut PM_HIT: u32 = 0;
+static mut PM_PEND: bool = false;
+static mut PM_TXN: u32 = 0;
+static mut PM_NODE: u32 = 0;
+static mut PM_PORT: u32 = 0;
+static mut PM_MSG: u32 = 0;
+static mut PM_N: u32 = 0;
 static mut RFS_READY: u8 = 0;
 /// rmt_storage_alloc_buff_cb：buff_size 0 表示 IOVEC 里的地址是窗口内偏移。
 static mut RFS_IOFF: u8 = 0;
@@ -3890,6 +3902,7 @@ fn smem_scan(do_glink: bool) {
                     let before = unsafe { RF_N };
                     rf_reply(at478, at479, sz479);
                     tf_reply(at478, at479, sz479);
+                    pm_reply(at478, at479, sz479);
                     round += 1;
                     if unsafe { RF_N } == before || round >= 4 {
                         break;
@@ -4219,7 +4232,7 @@ fn glink_hello(at478: u64, at479: u64, sz479: u64, at480: u64, sz480: u64) -> u3
             return 0;
         }
         let use_id = iid;
-        if unsafe { HOST_ADV } < 3 {
+        if unsafe { HOST_ADV } < 4 {
             // qrtr.c：收到对方 HELLO 之后才推本机服务。一次一包。
             if unsafe { HELLO_RX } > 0 {
                 glink_announce(at478, at479, tx_head, sz479, use_id);
@@ -4281,19 +4294,22 @@ fn glink_hello(at478: u64, at479: u64, sz479: u64, at480: u64, sz480: u64) -> u3
     7
 }
 
-/// rmtfs 14/1 端口 0x10，tftp 4096/1 端口 0x11，pd-mapper 64/257 端口 0x12。
+/// rmtfs 14、tftp 4096、pd-mapper 64、pm-service 0x35（radio-bringup 环境检查）。
 /// 一次只发一包。实例字是 instance<<8|version。节点 1。
 fn glink_announce(at478: u64, at479: u64, head: u64, sz479: u64, iid: u32) {
     let n = unsafe { HOST_ADV };
-    if n >= 3 || head + 72 > sz479 {
+    if n >= 4 || head + 72 > sz479 {
         return;
     }
     let (svc, inst, port) = if n == 0 {
         (14u32, 1u32, 0x10u32)
     } else if n == 1 {
         (4096, 1, 0x11)
-    } else {
+    } else if n == 2 {
         (64, 257, 0x12)
+    } else {
+        // pm-service：version 1 instance 0 → 实例字 1，端口 0x13。
+        (0x35, 1, 0x13)
     };
     glink_tx_qrtr(at478, at479, head, iid, 4, svc, inst, 1, port);
     unsafe { HOST_ADV = n + 1; }
@@ -4798,6 +4814,37 @@ fn tf_reply(at478: u64, at479: u64, sz479: u64) {
             }
             TF_PEND = false;
             TF_N += 1;
+        }
+    }
+}
+
+/// pm-service 0x35 探针：任意请求回 result 成功（空载荷），看 modem 是否来连。
+fn pm_reply(at478: u64, at479: u64, sz479: u64) {
+    if unsafe { !PM_PEND } || at478 == 0 || at479 == 0 {
+        return;
+    }
+    let tx_head = rd32((at478 + 4) as usize) as u64;
+    let tx_tail = rd32(at478 as usize) as u64;
+    if tx_head != tx_tail {
+        return;
+    }
+    let mut q = [0u8; 16];
+    let mut n = 7usize;
+    put_result(&mut q, &mut n, false);
+    qmi_finish(&mut q, n, unsafe { PM_TXN }, unsafe { PM_MSG });
+    if glink_tx_payload(
+        at478,
+        at479,
+        tx_head,
+        sz479,
+        0x13,
+        unsafe { PM_NODE },
+        unsafe { PM_PORT },
+        &q[..n],
+    ) {
+        unsafe {
+            PM_PEND = false;
+            PM_N = PM_N.wrapping_add(1);
         }
     }
 }
@@ -7874,6 +7921,9 @@ fn scan_new_servers(fifo: u64, rh: u64) {
     if rh < unsafe { RX_VIS } {
         unsafe { RX_VIS = 0; }
     }
+    if rh < unsafe { QP_VIS } {
+        unsafe { QP_VIS = 0; }
+    }
     let mut off = 0u64;
     let mut guard = 0u32;
     while off + 8 <= rh && guard < 200 {
@@ -7911,7 +7961,7 @@ fn scan_new_servers(fifo: u64, rh: u64) {
             unsafe {
                 // 不限 intent id：OPEN 可能用掉 >10 的 id，不还则 modem 发不出 ALLOC。
                 if GLINK_INTENTS
-                    && HOST_ADV >= 3
+                    && HOST_ADV >= 4
                     && lcid == 2
                     && liid != 0
                     && off >= RX_VIS
@@ -7933,6 +7983,21 @@ fn scan_new_servers(fifo: u64, rh: u64) {
                             HELLO_RX = HELLO_RX.wrapping_add(1);
                             HELLO_VIS = off + step;
                         }
+                    }
+                }
+                if typ == 1 && dst_node == 1 && chunk >= 40 && off >= unsafe { QP_VIS } {
+                    let w = rd32((fifo + off + 48) as usize);
+                    let w1 = rd32((fifo + off + 52) as usize);
+                    let qtype = w & 0xff;
+                    let msgid = ((w >> 24) & 0xff) | ((w1 & 0xff) << 8);
+                    unsafe {
+                        let slot = (QP_HIST_N % 8) as usize;
+                        QP_HIST[slot] = (dst_port & 0xff)
+                            | ((msgid & 0xff) << 8)
+                            | ((qtype & 0xff) << 16)
+                            | (((dst_port >> 8) & 0xff) << 24);
+                        QP_HIST_N = QP_HIST_N.wrapping_add(1);
+                        QP_VIS = off + step;
                     }
                 }
                 if typ == 1 && dst_node == 1 && confirm != 0 {
@@ -8049,6 +8114,23 @@ fn scan_new_servers(fifo: u64, rh: u64) {
                         }
                     }
                 }
+                if typ == 1 && dst_node == 1 && dst_port == 0x13 && chunk >= 40 {
+                    let w = rd32((fifo + off + 48) as usize);
+                    let w1 = rd32((fifo + off + 52) as usize);
+                    let qtype = w & 0xff;
+                    let txn = (w >> 8) & 0xffff;
+                    let msgid = ((w >> 24) & 0xff) | ((w1 & 0xff) << 8);
+                    if qtype == 0 && unsafe { !PM_PEND } {
+                        unsafe {
+                            PM_HIT = PM_HIT.wrapping_add(1);
+                            PM_TXN = txn;
+                            PM_NODE = rd32((fifo + off + 24) as usize);
+                            PM_PORT = rd32((fifo + off + 28) as usize);
+                            PM_MSG = msgid;
+                            PM_PEND = true;
+                        }
+                    }
+                }
                 if typ == 1 && dst_node == 1 && dst_port == 0x11 && chunk >= 34 {
                     let key = off as u32;
                     let mut seen = false;
@@ -8130,7 +8212,7 @@ fn scan_new_servers(fifo: u64, rh: u64) {
 /// qcom_glink_smem.c 的 tx_avail = length - head + tail，再留 16 字节。
 /// tail 停在 0 时，head 顶到长度就写不进去。公告发出后，把 tail 推到已解析处。
 fn glink_rx_advance(at478: u64, sz480: u64) {
-    if at478 == 0 || unsafe { HOST_ADV } < 3 || sz480 == 0 {
+    if at478 == 0 || unsafe { HOST_ADV } < 4 || sz480 == 0 {
         return;
     }
     let head = rd32((at478 + 12) as usize) as u64;
@@ -8571,6 +8653,22 @@ fn ctrl_service(
                                         i += 1;
                                     }
                                 }
+                                push_str(&mut reply, &mut rn, " pm=");
+                                push_hex(&mut reply, &mut rn, unsafe { PM_HIT } as u64);
+                                push_str(&mut reply, &mut rn, ".");
+                                push_hex(&mut reply, &mut rn, unsafe { PM_N } as u64);
+                                push_str(&mut reply, &mut rn, ".");
+                                push_hex(&mut reply, &mut rn, unsafe { PM_MSG } as u64);
+                                push_str(&mut reply, &mut rn, " qp=");
+                                push_hex(&mut reply, &mut rn, unsafe { QP_HIST_N } as u64);
+                                push_str(&mut reply, &mut rn, ".");
+                                push_hex(&mut reply, &mut rn, unsafe { QP_HIST[0] } as u64);
+                                push_str(&mut reply, &mut rn, ".");
+                                push_hex(&mut reply, &mut rn, unsafe { QP_HIST[1] } as u64);
+                                push_str(&mut reply, &mut rn, ".");
+                                push_hex(&mut reply, &mut rn, unsafe { QP_HIST[2] } as u64);
+                                push_str(&mut reply, &mut rn, ".");
+                                push_hex(&mut reply, &mut rn, unsafe { QP_HIST[3] } as u64);
                                 push_str(&mut reply, &mut rn, " es=");
                                 push_hex(&mut reply, &mut rn, unsafe { RFS_SEED } as u64);
                                 push_str(&mut reply, &mut rn, ".");
@@ -10191,7 +10289,7 @@ extern "C" fn rust_main() -> ! {
             unsafe {
                 LISTEN_TICK = LISTEN_TICK.wrapping_add(1);
                 // HELLO 之后把三包公告赶在 modem 的 RFS 客户超时之前。
-                let every = if GLINK_HELLO && HOST_ADV < 3 { 5 } else { 200 };
+                let every = if GLINK_HELLO && HOST_ADV < 4 { 5 } else { 200 };
                 if LISTEN_TICK >= every {
                     LISTEN_TICK = 0;
                     lpass_glink();

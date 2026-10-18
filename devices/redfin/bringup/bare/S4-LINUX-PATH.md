@@ -992,3 +992,46 @@ EFS 未真正 IOVEC 服务时的看门狗。TFTP 本轮仍无请求（WRQ ACK �
 
 下一卡：OPEN 成功后 modem 还在等什么（非 rmtfs 格式）——servreg/wlan_pd 前置、
 或另一条 QRTR/QMI 链。
+
+## 2026-10-18 深夜：OPEN 后前置对账 → 收束交接（未推）
+
+### 对账结论（Linux radio-bringup + S4）
+
+1. **DOG / EFS**：`qrtr-ns + pd-mapper + tftp + rmt_storage` 在 modem PIL
+   **之前**监听，且 EFS 被真正 IOVEC 服务 → DOG 沉默。我们已能答 OPEN，
+   但 modem **从不发 ALLOC/IOVEC**（`rh=1.0.101` 已证），故 EFS 未 serve，
+   `tmr_slave3` ~65–80s 必炸——与「格式错」无关（`rs=` wire 已对齐）。
+
+2. **0x45 / wlan_pd**：stock 上 2023 modem 在 PIL 后 ~2.5s **自己**拉起
+   `wlan_pd`（段在 `modem_wlan_region`），无 AP 侧拉固件。前提是 AP 环境：
+   ADSP 先于 modem、早期 wlan.ko/cnss、**pm-service QMI `0x35` 在 PIL 前登记**
+   （晚 22min 无效）、servloc enable。最小环境同镜像同 EFS 也会
+   `SERVICE_NOT_FOUND` for `msm/modem/wlan_pd`。**0x45 不缺 vendor WLFW 文件，
+   缺的是 modem 把 wlan_pd 拉起来的 AP 侧环境 + 先过 RFS init。**
+
+3. **主机侧曾试过的公告**：memshare `0x34`、IPA `0x31` —— modem `ql=` 空，
+   从未 LOOKUP。pd-mapper 只见 `tms/pddump_disabled`（jsn 无此名 → 域数 0 正确）。
+   tftp 全程无 RRQ/WRQ。
+
+### 本轮刀（代码已进树，末次刷机后设备掉 USB，**sm 未采到**）
+
+- 第 4 条 `NEW_SERVER`：`0x35` / 实例字 1 / 端口 `0x13`，任意 QMI 回 result 成功（探针）
+- `pm=` hit.n.msg；`qp=` 本机 DATA 环（port|msgid<<8|qtype<<16）
+- `HOST_ADV` 门槛 3→4
+
+### 收束判断（今晚停）
+
+继续在裸机上猜 OPEN→ALLOC 缺口 **边际收益低**：缺的是
+**(A) 同机 Linux 上 OPEN→ALLOC 的 QRTR 抓包对照**，或
+**(B) 按 radio-bringup 补齐 pm-service/0x35 真实 IDL + PIL 前环境**，
+而不是再改 rmtfs OPEN 字节。`0x45` 卡在 wlan_pd，wlan_pd 卡在 modem init，
+init 卡在 EFS 未 IOVEC——主链已钉死。
+
+### 下一棒怎么接
+
+1. 恢复设备 USB（若 tries 耗尽回 b：`fastboot -s 13201FDD4001N8 set_active a` + 重刷
+   `boot-s20.img`），采 `sm`：看 `pm=` / `qp=` / `rf=` / `rh=`。
+2. 若 `pm>0`：按 QMI 0x35（pm-service）补真实应答，再观察是否出现 ALLOC。
+3. 若 `pm=0` 且 `qp` 仍只有 `0x10/OPEN` + `0x12/pddump`：停裸机 RFS 猜谜，
+   改在 Linux 槽抓 `qrtr`/`rmt_storage` 日志对照 OPEN 后下一包。
+4. **不要**再为冲 0x45 去堆 apps_mem/hexagonfs（已证伪前置）。

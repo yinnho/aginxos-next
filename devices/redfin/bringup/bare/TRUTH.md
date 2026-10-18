@@ -723,3 +723,11 @@ U1 MMIO 探针（读 CAP+VER，VER 合法→blink；冻死=时钟没开）→ U2
   （`s20 su=`/`s20 cd=`）按 HANDOFF 清单的正式收据——**均未写入
   本节为绿**。下一棒若要把本节升格验收，须重开 GATE 刷窗 + 拉环
   + ledger 正式号，不得仅凭本节。
+
+## S4 窗口收束 2026-10-18 夜
+
+- **钉死**：rmtfs OPEN wire 正确；modem 只 OPEN 一次、无 ALLOC/IOVEC；EFS LUN5 四槽已灌仍 DOG；无 0x45。
+- **判断**：缺的不是 WLFW 固件文件，是 modem init（EFS IOVEC）+ AP 环境（pm-service 0x35 等）才能拉 wlan_pd。
+- **树尖**：本地 ahead，含 RF 取证 / 0x35 探针；末次刷后设备掉 USB，探针 sm 未验证。禁止 push。
+- **下一棒**：见 S4「收束交接」；先恢复 USB 采 `pm=`/`qp=`，再决定补 0x35 IDL 或 Linux 抓包。
+
