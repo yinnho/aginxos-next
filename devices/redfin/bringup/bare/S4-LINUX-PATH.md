@@ -878,3 +878,17 @@ IPCC 补踢刷机后 `gq` 仍 `408.3d0`、`fp=3`、无 `0x45`——门铃假设�
 结论：IPCC / 额外 intent / READ_NOTIF 三刀均不能让 tail 前进。卡点不在门铃/intent 数量/读通知，而在 **RX_DONE 被消费后 DSP 读端停死**（任意后继包放在 0x3d0 都不吃）。register 后 `FP_GLIID=1` 的 RX_DONE 最可疑。
 
 下一刀：`fastrpc_init2` 内跳过该 RX_DONE（`FP_GDONE=2`），其余不变。验 `gq` tail 是否过 0x3d0、`fp`/`rn`/`tx h=`。
+
+## 2026-10-18 夜：跳过 register RX_DONE — 已刷，init2 被消费
+
+`53c677e` GATE 刷入。`gd=2.1`（未发 RX_DONE）。
+
+关键 sm/tx（Asia/Shanghai）：
+- `gq=410.400.400.3c8.4.92` — **tail 从 0x3c8 推进到 0x400**，init2（@0x3c8 起 56B）已被 DSP 吃掉
+- `FP_DN=4`（多一次）、`ru=1`（intent 0x92 还回）
+- `fp=3` / `FP_ININ=0` — **仍无 init2 应答 TX_DATA**
+- `tx h=` @0x400：`20008.1.d.0...` = RX_INTENT_REQ_ACK(cmd8,cid2,granted1) + READ_NOTIF(cmd13)；head=0x410
+
+根因升格：register 后那次 `RX_DONE_W_REUSE(liid=1)` 会把 DSP TX 读端楔死（证伪 IPCC/intent/READ_NOTIF 后，跳过该包即恢复消费）。
+
+下一缺口：init2 无应答；pending ACK+RNOTIF。是否补发 RX_DONE（在 init2 消费后）或查为何 DSP 不回 ctx 0x5002。
