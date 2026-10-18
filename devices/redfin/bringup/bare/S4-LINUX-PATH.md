@@ -941,3 +941,13 @@ IPCC 补踢刷机后 `gq` 仍 `408.3d0`、`fp=3`、无 `0x45`——门铃假设�
 首包 NOUT=`b0.0.20200.29` = remotectl_open（handle0/sc=`0x20200`）。
 实现：解 inbufs、按名回 apps_std=1/apps_mem=2、编码 outbufs、续 next2。
 其它方法暂 AEE_EUNSUPPORTED。sm 增 `rv=rev.n.h.sc.res.name`。
+
+## 2026-10-18 夜：reverse tunnel 已刷 — 走通 11 轮，开到 apps_std，无 0x45
+
+`fd39611` GATE。关键：
+- `rv=0.11.1.1f020100.14.apps_std`：处理 11 次；已 `remotectl_open("apps_std")→hdl1`
+- 末次嵌套 `sc=0x1f020100`（method=31 扩展号 + in2/out1），`res=14` EBADPARM
+- `fp=16` `gq=6c0.688`（56B 续 next2 未吃）`q` 仍无 `0x45`
+- `af` 仍 sar/chre（非 frpck）
+
+结论：reverse 主循环已通；下一卡 apps_std 扩展方法（fopen 等）+ 续包卡环。
