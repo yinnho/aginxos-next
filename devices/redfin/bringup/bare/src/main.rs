@@ -3093,16 +3093,6 @@ static mut LISTEN_TICK: u32 = 0;
 static mut LAST_IID: u32 = 0;
 static mut LAST_ISZ: u32 = 0;
 static mut HAVE_IID: bool = false;
-/// 飞行中的 TX intent：对端 RX_DONE 前不得再用同一 liid（glink_core_intent.c:777）。
-static mut TX_BUSY_ID: u32 = 0;
-static mut TX_BUSY_N: u32 = 0;
-static mut TX_WAIT_N: u32 = 0;
-/// modem 公告过的备用 intent（id,sz），BUSY 时换用。
-static mut TX_ALT_ID: [u32; 8] = [0; 8];
-static mut TX_ALT_SZ: [u32; 8] = [0; 8];
-static mut TX_ALT_N: u8 = 0;
-static mut TX_ALT_VIS: u64 = 0;
-static mut TX_CMD5_VIS: u64 = 0;
 /// 已经归还过 intent 的接收偏移。qcom_glink_rx_done 每个 TX_DATA 只还一次。
 static mut RX_VIS: u64 = 0;
 /// 本轮从 0 走到的接收偏移，以及 item 480 的长度。消费尾按这个往前推。
@@ -4004,96 +3994,6 @@ fn smem_scan(do_glink: bool) {
     }
 }
 
-
-fn tx_alt_add(id: u32, size: u32) {
-    if id == 0 || size < 52 {
-        return;
-    }
-    unsafe {
-        let mut i = 0u8;
-        while i < TX_ALT_N {
-            if TX_ALT_ID[i as usize] == id {
-                return;
-            }
-            i += 1;
-        }
-        if TX_ALT_N < 8 {
-            let n = TX_ALT_N as usize;
-            TX_ALT_ID[n] = id;
-            TX_ALT_SZ[n] = size;
-            TX_ALT_N += 1;
-        }
-        if size > LAST_ISZ || !HAVE_IID {
-            LAST_IID = id;
-            LAST_ISZ = size;
-            HAVE_IID = true;
-        }
-    }
-}
-
-fn tx_pick(need: u32) -> Option<u32> {
-    tx_pick_hint(need, 0)
-}
-
-fn tx_pick_hint(need: u32, hint: u32) -> Option<u32> {
-    unsafe {
-        // hint 空闲则用之
-        if hint != 0 && hint != TX_BUSY_ID {
-            let mut i = 0u8;
-            while i < TX_ALT_N {
-                if TX_ALT_ID[i as usize] == hint && TX_ALT_SZ[i as usize] >= need {
-                    TX_BUSY_ID = hint;
-                    LAST_IID = hint;
-                    LAST_ISZ = TX_ALT_SZ[i as usize];
-                    HAVE_IID = true;
-                    TX_BUSY_N = TX_BUSY_N.wrapping_add(1);
-                    return Some(hint);
-                }
-                i += 1;
-            }
-            if HAVE_IID && LAST_IID == hint && LAST_ISZ >= need {
-                TX_BUSY_ID = hint;
-                TX_BUSY_N = TX_BUSY_N.wrapping_add(1);
-                return Some(hint);
-            }
-        }
-        let mut i = 0u8;
-        while i < TX_ALT_N {
-            let id = TX_ALT_ID[i as usize];
-            let sz = TX_ALT_SZ[i as usize];
-            if id != 0 && id != TX_BUSY_ID && sz >= need {
-                TX_BUSY_ID = id;
-                LAST_IID = id;
-                LAST_ISZ = sz;
-                HAVE_IID = true;
-                TX_BUSY_N = TX_BUSY_N.wrapping_add(1);
-                return Some(id);
-            }
-            i += 1;
-        }
-        if HAVE_IID && LAST_ISZ >= need && LAST_IID != TX_BUSY_ID && LAST_IID != 0 {
-            TX_BUSY_ID = LAST_IID;
-            TX_BUSY_N = TX_BUSY_N.wrapping_add(1);
-            return Some(LAST_IID);
-        }
-        if HAVE_IID && LAST_ISZ >= need && TX_BUSY_ID == 0 {
-            TX_BUSY_ID = LAST_IID;
-            TX_BUSY_N = TX_BUSY_N.wrapping_add(1);
-            return Some(LAST_IID);
-        }
-        TX_WAIT_N = TX_WAIT_N.wrapping_add(1);
-        None
-    }
-}
-
-fn tx_free(liid: u32) {
-    unsafe {
-        if liid != 0 && liid == TX_BUSY_ID {
-            TX_BUSY_ID = 0;
-        }
-    }
-}
-
 /// 描述符 478 已在、发送 FIFO 479 不在时，按 glink_smem 分配 16KB FIFO，
 /// 写入 VERSION（cmd 0，版本 1，特性 INTENT_REUSE），把头拨到 8，
 /// 再踢 IPCC signal 0。返回 1 表示这次发出去了。
@@ -4292,11 +4192,13 @@ fn glink_hello(at478: u64, at479: u64, sz479: u64, at480: u64, sz480: u64) -> u3
             let count = rd32((at480 + off + 4) as usize);
             let size = rd32((at480 + off + 8) as usize);
             let id = rd32((at480 + off + 12) as usize);
-            if lcid == 2 && count >= 1 && size >= 52 {
-                tx_alt_add(id, size);
-                if !found || size > unsafe { LAST_ISZ } {
-                    iid = id;
-                    found = true;
+            if lcid == 2 && count >= 1 && size >= 52 && (!found || size > unsafe { LAST_ISZ }) {
+                iid = id;
+                found = true;
+                unsafe {
+                    LAST_IID = id;
+                    LAST_ISZ = size;
+                    HAVE_IID = true;
                 }
             }
             16
@@ -4386,9 +4288,8 @@ fn glink_hello(at478: u64, at479: u64, sz479: u64, at480: u64, sz480: u64) -> u3
         i += 4;
     }
     // TX_DATA，lcid 2，intent id。
-    let hello_iid = tx_pick_hint(52, iid).unwrap_or(iid);
     wr32(hello_at as usize, 9 | (2 << 16));
-    wr32((hello_at + 4) as usize, hello_iid);
+    wr32((hello_at + 4) as usize, iid);
     wr32((hello_at + 8) as usize, 52);
     wr32((hello_at + 12) as usize, 0);
     // qrtr_hdr_v1：版本 1，HELLO，源节点 1，控制口，目标广播节点。
@@ -4466,9 +4367,6 @@ fn glink_tx_qrtr(
     node: u32,
     port: u32,
 ) {
-    let Some(use_iid) = tx_pick_hint(52, iid) else {
-        return;
-    };
     let p = at479 + tx_head;
     let mut i = 0u64;
     while i < 72 {
@@ -4476,7 +4374,7 @@ fn glink_tx_qrtr(
         i += 4;
     }
     wr32(p as usize, 9 | (2 << 16));
-    wr32((p + 4) as usize, use_iid);
+    wr32((p + 4) as usize, iid);
     wr32((p + 8) as usize, 52);
     wr32((p + 12) as usize, 0);
     wr32((p + 16) as usize, 1);
@@ -4518,9 +4416,8 @@ fn glink_resume(at478: u64, at479: u64, sz479: u64) {
         wr32((p + i) as usize, 0);
         i += 4;
     }
-    let Some(rid) = tx_pick(52) else { return; };
     wr32(p as usize, 9 | (2 << 16));
-    wr32((p + 4) as usize, rid);
+    wr32((p + 4) as usize, unsafe { LAST_IID });
     wr32((p + 8) as usize, 44);
     wr32((p + 16) as usize, 1);
     wr32((p + 20) as usize, 7);
@@ -4668,12 +4565,9 @@ fn glink_tx_payload(
     let padded = (n + 3) & !3;
     let chunk = 32 + padded;
     let total = (16 + chunk + 7) & !7;
-    let Some(iid) = tx_pick(chunk as u32) else {
-        return false;
-    };
     let isz = unsafe { LAST_ISZ } as usize;
-    if n > 256 || chunk > isz || total > 512 || tx_head + total as u64 > sz479 {
-        tx_free(iid);
+    if !unsafe { HAVE_IID } || n > 256 || chunk > isz || total > 512 || tx_head + total as u64 > sz479
+    {
         return false;
     }
     let p = at479 + tx_head;
@@ -4683,7 +4577,7 @@ fn glink_tx_payload(
         i += 4;
     }
     wr32(p as usize, 9 | (2 << 16));
-    wr32((p + 4) as usize, iid);
+    wr32((p + 4) as usize, unsafe { LAST_IID });
     wr32((p + 8) as usize, chunk as u32);
     wr32((p + 12) as usize, 0);
     wr32((p + 16) as usize, 1);
@@ -8105,11 +7999,6 @@ fn scan_new_servers(fifo: u64, rh: u64) {
         guard += 1;
         let w0 = rd32((fifo + off) as usize);
         let cmd = w0 & 0xffff;
-        if (cmd == 6 || cmd == 14) && off >= unsafe { TX_ALT_VIS } {
-            let liid = rd32((fifo + off + 4) as usize);
-            tx_free(liid);
-            unsafe { TX_ALT_VIS = off + 8 };
-        }
         let step = if cmd == 0
             || cmd == 1
             || cmd == 4
@@ -8128,15 +8017,6 @@ fn scan_new_servers(fifo: u64, rh: u64) {
             }
             (8 + nlen as u64 + 7) & !7
         } else if cmd == 5 {
-            if off + 16 <= rh && off >= unsafe { TX_CMD5_VIS } {
-                let count = rd32((fifo + off + 4) as usize);
-                let size = rd32((fifo + off + 8) as usize);
-                let id = rd32((fifo + off + 12) as usize);
-                if count >= 1 && size >= 52 {
-                    tx_alt_add(id, size);
-                }
-                unsafe { TX_CMD5_VIS = off + 16 };
-            }
             16
         } else if cmd == 9 {
             let chunk = rd32((fifo + off + 8) as usize) as u64;
@@ -8732,14 +8612,6 @@ fn ctrl_service(
                                 push_hex(&mut reply, &mut rn, s.rx0 as u64);
                                 push_str(&mut reply, &mut rn, " rk=");
                                 push_hex(&mut reply, &mut rn, unsafe { RX_DONE_N } as u64);
-                                push_str(&mut reply, &mut rn, " tw=");
-                                push_hex(&mut reply, &mut rn, unsafe { TX_BUSY_ID } as u64);
-                                push_str(&mut reply, &mut rn, ".");
-                                push_hex(&mut reply, &mut rn, unsafe { TX_BUSY_N } as u64);
-                                push_str(&mut reply, &mut rn, ".");
-                                push_hex(&mut reply, &mut rn, unsafe { TX_WAIT_N } as u64);
-                                push_str(&mut reply, &mut rn, ".");
-                                push_hex(&mut reply, &mut rn, unsafe { TX_ALT_N } as u64);
                                 push_str(&mut reply, &mut rn, " cf=");
                                 push_hex(&mut reply, &mut rn, unsafe { CF_N } as u64);
                                 push_str(&mut reply, &mut rn, " hh=");
