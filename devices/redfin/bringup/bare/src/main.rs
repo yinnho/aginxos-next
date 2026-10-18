@@ -6105,32 +6105,36 @@ fn fastrpc_next2(d: u64, txf: u64, txn: u64, at: u64) -> bool {
         wr32((page + i) as usize, 0);
         i += 4;
     }
-    // 4 个 remote_arg64，第二个长度是 0。list 从 64 起，phy page 从 96 起。
-    // 数据在 640（16 字节）、768（16 字节）、896（256 字节）。
-    let spec = [(0u64, 640u64, 16u64), (2, 768, 16), (3, 896, 256)];
+    // hexagonrpc / 线表：REMOTE_SCALARS_MAKE(4, 2, 2) → 2 in + 2 out。
+    // dump: argument 00000000FFFFFFFF0000000000000000 + 空 inbuf；
+    // prim out 16B + nested_inbufs 256B。旧 sc=0x04020300（out=3）会让
+    // DSP 多走一个 remote_arg → frpck_1_1。
+    // pra[0] prim in 16B @640；pra[1] 空 in；pra[2] prim out @768；
+    // pra[3] nested inbufs @896。
+    let offs = [640u64, 0, 768, 896];
+    let lens = [16u64, 0, 16, 256];
     let mut n = 0usize;
-    while n < 3 {
-        let idx = spec[n].0;
-        let off = spec[n].1;
-        let len = spec[n].2;
-        let pv = tagged + off;
-        wr32((page + idx * 16) as usize, pv as u32);
-        wr32((page + idx * 16 + 4) as usize, (pv >> 32) as u32);
-        wr32((page + idx * 16 + 8) as usize, len as u32);
-        wr32((page + 64 + idx * 8) as usize, 1);
-        wr32((page + 64 + idx * 8 + 4) as usize, idx as u32);
-        wr32((page + 96 + idx * 16) as usize, tagged as u32);
-        wr32((page + 96 + idx * 16 + 4) as usize, (tagged >> 32) as u32);
-        wr32((page + 96 + idx * 16 + 8) as usize, 4096);
+    while n < 4 {
+        let off = offs[n];
+        let len = lens[n];
+        if len != 0 {
+            let pv = tagged + off;
+            wr32((page + n as u64 * 16) as usize, pv as u32);
+            wr32((page + n as u64 * 16 + 4) as usize, (pv >> 32) as u32);
+        }
+        wr32((page + n as u64 * 16 + 8) as usize, len as u32);
+        wr32((page + 64 + n as u64 * 8) as usize, if len != 0 { 1 } else { 0 });
+        wr32((page + 64 + n as u64 * 8 + 4) as usize, n as u32);
+        wr32((page + 96 + n as u64 * 16) as usize, tagged as u32);
+        wr32((page + 96 + n as u64 * 16 + 4) as usize, (tagged >> 32) as u32);
+        wr32((page + 96 + n as u64 * 16 + 8) as usize, 4096);
         n += 1;
     }
-    // 长度 0 的输入缓冲：num=0，pgidx=1，pv 保持 0。
-    wr32((page + 64 + 8 + 4) as usize, 1);
-    // rctx=0，result=0xffffffff，输入长度 0，输出上限 256。
+    // prev_ctx=0, prev_result=0xffffffff, outbufs_len=0, inbufs_size=0
     wr32((page + 640) as usize, 0);
     wr32((page + 644) as usize, 0xffff_ffff);
     wr32((page + 648) as usize, 0);
-    wr32((page + 652) as usize, 256);
+    wr32((page + 652) as usize, 0);
     dcache_civac(page, 4096);
     let ctx = 0x6002u32;
     let msg = [
@@ -6139,7 +6143,7 @@ fn fastrpc_next2(d: u64, txf: u64, txn: u64, at: u64) -> bool {
         ctx,
         0,
         3u32,
-        0x0402_0300,
+        0x0402_0200, // MAKE(4, 2, 2)
         tagged as u32,
         (tagged >> 32) as u32,
         4096,
@@ -6630,6 +6634,11 @@ fn lpass_glink_work() {
         return;
     }
     if fastrpc_attach(d, txf, txn, at) {
+        return;
+    }
+    // next2 已发、等应答时不要再灌 IPCRTR INTENT，否则 TX 卡环
+    // 会让后续 INTENT_REQ 无法回包（DSP 读端停/frpck 后尤甚）。
+    if unsafe { FP_SENT } == 10 && unsafe { FP_NXN } == 0 {
         return;
     }
     let mut ch = 0u32;

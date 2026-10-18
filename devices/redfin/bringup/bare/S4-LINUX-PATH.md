@@ -914,3 +914,10 @@ IPCC 补踢刷机后 `gq` 仍 `408.3d0`、`fp=3`、无 `0x45`——门铃假设�
 - `q=` 仍 `42.b401,2b.1202`，**无 0x45**
 
 结论：缺 RX intent（旧 ACK 错 cid + 不发 cmd5）是 init2 不回包的主因；延迟 RX_DONE 可用。下一卡：next2 无应答 + IPCRTR intent 停读 + ADSP frpck SFR。
+
+## 2026-10-18 夜：next2 sc/布局对齐 hexagonrpc（MAKE(4,2,2)）
+
+现机 `fs=a`/`NXN=0`，`af=frpck_1_1`。对账 linux-msm/hexagonrpc：
+`REMOTE_SCALARS_MAKE(4,2,2)`、dump `00000000FFFFFFFF0000000000000000`。
+旧 `sc=0x04020300`（out=3）+ 错 pra 索引 → DSP 多解一个 remote_arg。
+改 `0x04020200`、四槽 pra、prim 四字与 dump 一致；等 next2 应答时停灌 IPCRTR INTENT。
