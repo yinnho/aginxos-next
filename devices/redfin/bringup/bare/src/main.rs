@@ -3171,6 +3171,27 @@ static mut PM_NODE: u32 = 0;
 static mut PM_PORT: u32 = 0;
 static mut PM_MSG: u32 = 0;
 static mut PM_N: u32 = 0;
+/// SERVREG_NOTIF 客户端（冲 0x45）：对 modem 0x42@0xb401 听 wlan_pd。
+/// 不动 glink TX intent pick；只走 glink_tx_payload + LAST_IID。
+const SR_SVC: u32 = 0x42;
+const SR_INST: u32 = 0xb401;
+const SR_QRTR_PORT: u32 = 0x14;
+const SR_NAME: &[u8] = b"msm/modem/wlan_pd";
+const SR_STATE_UP: u32 = 0x1fff_ffff;
+static mut SR_NODE: u32 = 0;
+static mut SR_PORT: u32 = 0;
+static mut SR_HAVE: bool = false;
+/// REGISTER_LISTENER 成功发出次数（sm sr= 左）。
+static mut SR_HIT: u32 = 0;
+/// RESP TLV 0x10 curr_state；无 TLV / 未回 = 0xffffffff。
+static mut SR_STATE: u32 = 0xffff_ffff;
+static mut SR_TXN: u32 = 1;
+static mut SR_PEND: bool = false;
+static mut SR_NEED_RP: bool = false;
+/// RESTART_PD 发出次数 / RESP result（或 ffffffff）。
+static mut SR_RP_N: u32 = 0;
+static mut SR_RP_ERR: u32 = 0xffff_ffff;
+static mut SR_RP_PEND: bool = false;
 /// LOOKUP 待回 NEW_SERVER：svc|inst<<16；0=无。
 static mut LOOK_PEND: u32 = 0;
 static mut LOOK_N: u32 = 0;
@@ -3915,6 +3936,7 @@ fn smem_scan(do_glink: bool) {
                     rf_reply(at478, at479, sz479);
                     tf_reply(at478, at479, sz479);
                     pm_reply(at478, at479, sz479);
+                    sr_tick(at478, at479, sz479);
                     round += 1;
                     // Linux：fs1/fs2/fsg 连续 OPEN 后再 ALLOC；同轮多吞几笔。
                     if unsafe { RF_N } == before || round >= 8 {
@@ -4916,6 +4938,84 @@ fn pm_reply(at478: u64, at479: u64, sz479: u64) {
     put_u32(&mut ind, &mut in_, 1);
     qmi_finish_typed(&mut ind, in_, 4, 0xffff, msg);
     let _ = glink_tx_payload(at478, at479, tx_head, sz479, PM_QRTR_PORT, node, port, &ind[..in_]);
+}
+
+/// SERVREG_NOTIF PDR：REGISTER_LISTENER(0x20) → 可选一笔 RESTART_PD(0x24)。
+/// 对齐 Linux service-notifier；不改 TX intent pick/parse/BUSY/RR。
+fn sr_tick(at478: u64, at479: u64, sz479: u64) {
+    if at478 == 0 || at479 == 0 || unsafe { HOST_ADV } < 4 || !unsafe { HAVE_IID } {
+        return;
+    }
+    if !unsafe { SR_HAVE } || unsafe { SR_NODE } == 0 || unsafe { SR_PORT } == 0 {
+        return;
+    }
+    let tx_head = rd32((at478 + 4) as usize) as u64;
+    let tx_tail = rd32(at478 as usize) as u64;
+    if tx_head != tx_tail {
+        return;
+    }
+    // 一笔 REGISTER。
+    if unsafe { SR_HIT } == 0 && !unsafe { SR_PEND } {
+        let txn = unsafe { SR_TXN };
+        let mut q = [0u8; 64];
+        let mut n = 7usize;
+        put_u8(&mut q, &mut n, 1);
+        put_u16(&mut q, &mut n, 1);
+        put_u8(&mut q, &mut n, 1);
+        put_u8(&mut q, &mut n, 2);
+        put_u16(&mut q, &mut n, SR_NAME.len() as u16);
+        for &b in SR_NAME {
+            put_u8(&mut q, &mut n, b);
+        }
+        qmi_finish_typed(&mut q, n, 0, txn, 0x20);
+        if glink_tx_payload(
+            at478,
+            at479,
+            tx_head,
+            sz479,
+            SR_QRTR_PORT,
+            unsafe { SR_NODE },
+            unsafe { SR_PORT },
+            &q[..n],
+        ) {
+            unsafe {
+                SR_HIT = 1;
+                SR_PEND = true;
+                SR_TXN = SR_TXN.wrapping_add(1);
+            }
+        }
+        return;
+    }
+    // RESP 已回且需重启：一笔 RESTART_PD。
+    if unsafe { SR_NEED_RP } && unsafe { SR_RP_N } == 0 && !unsafe { SR_RP_PEND } && !unsafe { SR_PEND }
+    {
+        let txn = unsafe { SR_TXN };
+        let mut q = [0u8; 64];
+        let mut n = 7usize;
+        put_u8(&mut q, &mut n, 1);
+        put_u16(&mut q, &mut n, SR_NAME.len() as u16);
+        for &b in SR_NAME {
+            put_u8(&mut q, &mut n, b);
+        }
+        qmi_finish_typed(&mut q, n, 0, txn, 0x24);
+        if glink_tx_payload(
+            at478,
+            at479,
+            tx_head,
+            sz479,
+            SR_QRTR_PORT,
+            unsafe { SR_NODE },
+            unsafe { SR_PORT },
+            &q[..n],
+        ) {
+            unsafe {
+                SR_RP_N = 1;
+                SR_RP_PEND = true;
+                SR_NEED_RP = false;
+                SR_TXN = SR_TXN.wrapping_add(1);
+            }
+        }
+    }
 }
 
 fn pd_reply(at478: u64, at479: u64, sz479: u64) {
@@ -8209,6 +8309,33 @@ fn scan_new_servers(fifo: u64, rh: u64) {
                         }
                     }
                 }
+                if typ == 1 && dst_node == 1 && dst_port == SR_QRTR_PORT && chunk >= 56 {
+                    let w = rd32((fifo + off + 48) as usize);
+                    let w1 = rd32((fifo + off + 52) as usize);
+                    let qtype = w & 0xff;
+                    let msgid = ((w >> 24) & 0xff) | ((w1 & 0xff) << 8);
+                    if qtype == 2 && msgid == 0x20 && unsafe { SR_PEND } {
+                        let st = qmi_tlv_u32(fifo, off, chunk, 0x10).unwrap_or(0xffff_ffff);
+                        let res = qmi_tlv_u32(fifo, off, chunk, 0x02).unwrap_or(0xffff_ffff);
+                        unsafe {
+                            SR_STATE = st;
+                            SR_PEND = false;
+                            // state≠UP / 无 state / result 失败 → 一刀 RESTART_PD。
+                            if st != SR_STATE_UP || (res & 0xffff) != 0 {
+                                if SR_RP_N == 0 {
+                                    SR_NEED_RP = true;
+                                }
+                            }
+                        }
+                    }
+                    if qtype == 2 && msgid == 0x24 && unsafe { SR_RP_PEND } {
+                        let res = qmi_tlv_u32(fifo, off, chunk, 0x02).unwrap_or(0xffff_ffff);
+                        unsafe {
+                            SR_RP_ERR = res;
+                            SR_RP_PEND = false;
+                        }
+                    }
+                }
                 if typ == 1 && dst_node == 1 && dst_port == 0x11 && chunk >= 34 {
                     let key = off as u32;
                     let mut seen = false;
@@ -8256,6 +8383,18 @@ fn scan_new_servers(fifo: u64, rh: u64) {
                                 SMEM_SVC[n as usize * 2] = svc;
                                 SMEM_SVC[n as usize * 2 + 1] = inst;
                                 SMEM_NSVC = n + 1;
+                            }
+                        }
+                        // modem SERVREG_NOTIF：记下 node:port，供 PDR REGISTER。
+                        if svc == SR_SVC && inst == SR_INST && chunk >= 52 {
+                            let node = rd32((fifo + off + 60) as usize);
+                            let port = rd32((fifo + off + 64) as usize);
+                            unsafe {
+                                if !SR_HAVE && node != 0 && port != 0 {
+                                    SR_NODE = node;
+                                    SR_PORT = port;
+                                    SR_HAVE = true;
+                                }
                             }
                         }
                     } else {
@@ -8748,6 +8887,14 @@ fn ctrl_service(
                                 push_hex(&mut reply, &mut rn, unsafe { PM_N } as u64);
                                 push_str(&mut reply, &mut rn, ".");
                                 push_hex(&mut reply, &mut rn, unsafe { PM_MSG } as u64);
+                                push_str(&mut reply, &mut rn, " sr=");
+                                push_hex(&mut reply, &mut rn, unsafe { SR_HIT } as u64);
+                                push_str(&mut reply, &mut rn, ".");
+                                push_hex(&mut reply, &mut rn, unsafe { SR_STATE } as u64);
+                                push_str(&mut reply, &mut rn, " rp=");
+                                push_hex(&mut reply, &mut rn, unsafe { SR_RP_N } as u64);
+                                push_str(&mut reply, &mut rn, ".");
+                                push_hex(&mut reply, &mut rn, unsafe { SR_RP_ERR } as u64);
                                 push_str(&mut reply, &mut rn, " lk=");
                                 push_hex(&mut reply, &mut rn, unsafe { LOOK_N } as u64);
                                 push_str(&mut reply, &mut rn, ".");

@@ -1241,3 +1241,104 @@ glink TX pick。下一刀应离开 intent：对账 Linux 槽 b 上 `0x45` 出现
 的 QRTR/servreg/pd-mapper/cnss 时序，或查 `pm=0` 是否真与 wlan_pd 无关。
 
 未推。
+
+### 本轮：离线对账 Linux→0x45 前置（2026-10-19 ~07:30 Asia/Shanghai）
+
+设备挂死中，**未刷**。基线仍 `92393f6` / `boot-s20-92393f6.img`。
+禁刀：凡改 modem IPCRTR **TX intent pick/parse**（BUSY / RR / INTENT_REQ）
+均早期硬挂 ECM——下一刀不得再碰。
+
+#### Linux 在 QRTR 上出现 WLFW `0x45` 之前的时序
+
+真源：`devices/redfin/bringup/radio-bringup` 头注 + 槽 b
+`qrtr-lookup` + `icnss.c` / `service-notifier*.h` / `modemuw.jsn`。
+
+Stock / AginxOS radio 脚本顺序（时间相对开机）：
+
+| t | AP 侧 | 作用 |
+|---|---|---|
+| 先于 modem | `qrtr-ns`、**patched** `rmt_storage`、`tftp_server` 已 listen | 缺则 DOG `tmr_slave3` ~65s |
+| 先于 modem | binder fake-sm → **`pm-service` 登记 QRTR `0x35/0x1001@1:16407`** | 晚 22min 登记无效（2026-08-27） |
+| 先于 modem | `echo 1 > …/service_locator/enable` | 否则 icnss WLFW 发现永 -ENODEV |
+| 先于 modem | `pd-mapper`（jsn 含 `modemuw.jsn`→`wlan/fw`→`msm/modem/wlan_pd` inst **180**） | AP 侧域表 |
+| ~0.9s | `service-notifier` + `msm_icnss`：`qmi_add_lookup(0x45,v1,i0)` **且** `get_service_location("wlan/fw")` → 对 modem `0x42` **REGISTER_LISTENER** | 等 NEW_SERVER；PDR 不负责首次拉起，但 Linux **必走** |
+| ~3.4s | `wlan.ko` + `cnss-daemon` | WLFW 用户态半边；**在 0x45 之后**才有协议流量 |
+| ~3.5s | ADSP ONLINE | 2023 modem：ADSP 后于 modem → **永不** spawn wlan_pd |
+| ~6.3s | modem PIL | |
+| ~8.8s（PIL+~2.5s） | modem **自己**从 `modem_wlan_region` 拉起 `wlan_pd` | 无 AP 下发固件 |
+| 同时 | QRTR `NEW_SERVER`：**`0x45@0:88`** | icnss `server_arrive` → MSA/五路电 |
+
+槽 b 实证（2026-10-19）：`0x35/0x1001@1:16407`、`0x45/0x1@0:88`。
+
+`0x42` 实例字：`q` 里 `42.b401` = version 1、instance **0xb4=180**（与
+`modemr.jsn` / `modemuw.jsn` 的 `qmi_instance_id` 一致）。
+
+#### 裸机相对缺口（基线活体 sm）
+
+活 sm：`s=107 ik=4.0 pm=0.0.0`
+`q=42.b401,2b.1202,f.1,33.201,15.1,33.b01,18.1,16.1001` — **无 `45.*`**。
+
+| 已对齐 | 仍缺 / 误判 |
+|---|---|
+| RFS OPEN→ALLOC→IOVEC（`ik=4.0`） | modem **从不**对本机 `0x35` 发 QMI（`pm=0`；公告对账已齐） |
+| 公告 rmtfs/tftp/pd-mapper/`0x35` | **无**对 modem `0x42@inst180` 的 PDR 客户端：无 REGISTER_LISTENER / QUERY_STATE / RESTART_PD |
+| ADSP 先于 modem PAS；pd-mapper 答 jsn | pd-mapper 只见 `tms/pddump_disabled`，modem **未**要 `wlan/fw` |
+| LOOKUP `0x45` / `0x40` | `0x45` 不存在则 LOOKUP 无 NEW_SERVER（已证） |
+| | `q` 里 `16.1001` 是 **modem 侧**服务，不是 AP `0x35`（同实例字 0x1001 易混） |
+| | `s=107` + 旧 `fr=glink_core_intent`：intent 复用病仍在，但 **改 TX pick 已两挂禁做** |
+
+结论：RFS 绿之后，Linux→0x45 链上裸机缺的**下一刀可做、且不动 TX pick**
+的 AP 行为，是 icnss/service-notifier 在 `0x45` 出现前对
+`msm/modem/wlan_pd` 的 **SERVREG_NOTIF 接触**（听与可选重启）。
+
+#### 下一刀（未编、未刷）
+
+**单变量**：在 `HOST_ADV>=4` 且 `scan_new_servers` 已见 `svc=0x42
+inst=0xb401` 之后，向该 NEW_SERVER 的 **node:port**（ctrl 包 +60/+64，
+现只记了 svc/inst，须多存一对）发一笔 QMI：
+
+1. `QMI_SERVREG_NOTIF_REGISTER_LISTENER_REQ`（msgid **0x20**）  
+   - TLV `0x01` enable=`1`  
+   - TLV `0x02` string `msm/modem/wlan_pd`（18B，无内嵌长度前缀）  
+   - 对账：`service-notifier-private.h` MAX_MSG_LEN 71  
+2. 解析 RESP：TLV `0x02` result；可选 TLV `0x10` **curr_state**（i32；
+   CAF 常见 UP=`0x1FFFFFFF` DOWN=`0x0FFFFFFF` UNINIT=`0x7FFFFFFF`）  
+3. 若 state ≠ UP（或 result 失败 / 无 state）：再发一笔
+   `RESTART_PD`（msgid **0x24**，TLV `0x01`=同名）——对齐
+   `service_notif_pd_restart()`，**不是**改 glink TX。
+
+实现落点：`main.rs` 的 `glink_hello` 推进序列（LOOKUP 0x45/0x40 之后
+或并行一 tick），`glink_tx_payload` 复用现有 LAST_IID（**不**改
+pick/parse/BUSY/RR/INTENT_REQ）。sm 增：
+
+- `sr=hit.state` — REGISTER 次数与 curr_state（或 `ffffffff`=无 TLV）  
+- `rp=n.err` — RESTART 是否发出 / RESP error  
+
+**成功判据（一次 sm）**
+
+- 硬成功：`q=` 出现 **`45.1`**（或 `45.01`）  
+- 软成功（刀有效、PD 仍未起）：`sr` 非 0，state 可读为 DOWN/UNINIT，
+  且 `rp` 有发出；仍无 45 → 下一棒再论 env（非再砍 intent）  
+- 失败：`sr=0`（port 未抓到 / TX 未出）或 ECM 早期无 ping → 整段回退，
+  **勿**叠加 TX intent 刀  
+
+禁：刷 tip 上任何 TX intent 池/飞行锁；活体镜像保持
+`boot-s20-92393f6.img` 直到本刀编进 tip 且 tip≡可刷策略另定。
+
+未推。未刷。
+
+### 本轮：PDR 刀编入 tip（未刷，2026-10-19 ~07:40 Asia/Shanghai）
+
+在 `292291d`（main.rs≡`92393f6` glink TX）上加 SERVREG_NOTIF 客户端，
+**不**改 TX intent pick/parse/BUSY/RR/INTENT_REQ。
+
+行为（`sr_tick`，`HOST_ADV>=4` 且已抓到 `0x42@0xb401` 的 node:port）：
+
+1. 对本机 port `0x14` → modem SERVREG：`REGISTER_LISTENER` msgid `0x20`
+   （TLV01 enable=1，TLV02 `msm/modem/wlan_pd`）
+2. RESP：记 `sr=hit.state`；state≠UP / 无 state / result 失败 → 一笔
+   `RESTART_PD` msgid `0x24`（TLV01 同名）；`rp=n.err`
+
+sm 新键：`sr=`、`rp=`。成功判据仍：`q=` 含 `45.1`。
+
+镜像：`boot-s20.img`（本刀 tip）。**未刷**（基线可能仍在恢复）。未推。
