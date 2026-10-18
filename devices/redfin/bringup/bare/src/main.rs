@@ -3131,6 +3131,7 @@ static mut RF_PORT: u32 = 0;
 static mut RF_MSG: u32 = 0;
 static mut RF_OFF: u64 = 0;
 static mut RF_FIFO: u64 = 0;
+/// 已处理键：client_port<<16 | txn。不可只记 txn——多路 OPEN 常从 txn=1 重开。
 static mut RF_SEEN: [u32; 32] = [0xffff_ffff; 32];
 static mut RF_SEEN_N: u32 = 0;
 static mut RF_N: u32 = 0;
@@ -3911,7 +3912,8 @@ fn smem_scan(do_glink: bool) {
                     tf_reply(at478, at479, sz479);
                     pm_reply(at478, at479, sz479);
                     round += 1;
-                    if unsafe { RF_N } == before || round >= 4 {
+                    // Linux：fs1/fs2/fsg 连续 OPEN 后再 ALLOC；同轮多吞几笔。
+                    if unsafe { RF_N } == before || round >= 8 {
                         break;
                     }
                     let next = smem_payloads(at435, sz435, at478, sz478, at480, sz480);
@@ -4749,7 +4751,8 @@ fn rf_reply(at478: u64, at479: u64, sz479: u64) {
     if skip {
         unsafe {
             if RF_SEEN_N < 32 {
-                RF_SEEN[RF_SEEN_N as usize] = txn;
+                RF_SEEN[RF_SEEN_N as usize] =
+                    (unsafe { RF_PORT } << 16) | (txn & 0xffff);
                 RF_SEEN_N += 1;
             }
             RF_PEND = false;
@@ -4779,7 +4782,8 @@ fn rf_reply(at478: u64, at479: u64, sz479: u64) {
     ) {
         unsafe {
             if RF_SEEN_N < 32 {
-                RF_SEEN[RF_SEEN_N as usize] = txn;
+                RF_SEEN[RF_SEEN_N as usize] =
+                    (RF_PORT << 16) | (txn & 0xffff);
                 RF_SEEN_N += 1;
             }
             RF_PEND = false;
@@ -8099,16 +8103,22 @@ fn scan_new_servers(fifo: u64, rh: u64) {
                     let qtype = w & 0xff;
                     let txn = (w >> 8) & 0xffff;
                     let msgid = ((w >> 24) & 0xff) | ((w1 & 0xff) << 8);
+                    // 对端 QRTR port：多客户端各自从 txn=1 起算，必须进去重键。
+                    let sport = rd32((fifo + off + 28) as usize);
+                    let skey = (sport << 16) | (txn & 0xffff);
                     let mut seen = false;
                     unsafe {
                         let mut i = 0u32;
                         while i < RF_SEEN_N {
-                            if RF_SEEN[i as usize] == txn {
+                            if RF_SEEN[i as usize] == skey {
                                 seen = true;
                                 break;
                             }
                             i += 1;
                         }
+                    }
+                    if qtype == 0 && msgid >= 1 && msgid <= 5 && seen {
+                        unsafe { RF_DROP |= 1 };
                     }
                     if qtype == 0 && msgid >= 1 && msgid <= 5 && !seen && unsafe { RF_PEND } {
                         unsafe { RF_DROP |= 2 };
@@ -8117,7 +8127,10 @@ fn scan_new_servers(fifo: u64, rh: u64) {
                         unsafe {
                             RF_HIT = RF_HIT.wrapping_add(1);
                             let slot = (RF_HIST_N % 8) as usize;
-                            RF_HIST[slot] = (msgid & 0xff) | ((txn & 0xffff) << 8);
+                            // msgid|txn<<8|sport<<24（sport 低 8 位）
+                            RF_HIST[slot] = (msgid & 0xff)
+                                | ((txn & 0xffff) << 8)
+                                | ((sport & 0xff) << 24);
                             RF_HIST_N = RF_HIST_N.wrapping_add(1);
                         }
                         if msgid == 1 {

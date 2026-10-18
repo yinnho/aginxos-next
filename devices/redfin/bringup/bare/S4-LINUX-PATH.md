@@ -1097,3 +1097,22 @@ GATE 刷验（串号 `13201FDD4001N8`，`fb`→flash→set_active a）：
 
 裸机旧探针差异：曾公告 `inst=1`、`port=0x13` → 与 Linux 不一致，LOOKUP/客户对不上。
 已改 NEW_SERVER / 收包 / 应答为 **`inst=0x1001`、`port=16407`**（常量 `PM_INST` / `PM_QRTR_PORT`）。本轮只改码编译，**未刷 a 槽**。
+
+### 本轮：OPEN→ALLOC 缺口 = RF_SEEN 只按 txn 去重（2026-10-19 ~06:09 Asia/Shanghai）
+
+**Linux 对账**（gist/rmt_storage 日志范式）：同一启动里对 `/boot/modem_fs1`、`fs2`、`fsg`
+连续 **多路 OPEN**（各 QRTR client 常从 **txn=1** 起），再 `ALLOC`（msgid=4，如
+Size 1572864），再 `IOVEC`（msgid=3）。
+
+**裸机旧证**：`qp` 已见两次 `0x110`（port 0x10 msgid=1），但 `rh=1.0.101` /
+`rf=1` —— 第二路 OPEN 被丢。根因：`RF_SEEN` **只存 txn**，多客户端 txn 碰撞。
+
+**刀**：`RF_SEEN` 改为 `client_port<<16|txn`；seen 时 `RF_DROP|=1`；同轮 RF 处理
+上限 4→8。
+
+**刷验**（GATE `13201FDD4001N8`，boot-s20）：
+- `rf=3./boot/modem_fs2.2.6.280000.0` — 多笔应答；`RF_SZ=0x280000`；`as=0` hyp_assign 成功
+- `rh=6.3.…d000104.e000103` — **msgid=4 ALLOC** 与 **msgid=3 IOVEC** 已进 hist
+- 仍 `s=107`、`q=42.b401,2b.1202`（无 0x45）；下一刀另论 wlan_pd / 0x45
+
+未推。

@@ -735,3 +735,8 @@ U1 MMIO 探针（读 CAP+VER，VER 合法→blink；冻死=时钟没开）→ U2
 
 槽 b `qrtr-lookup`：`0x35/0x1001@1:16407`（pm-service）、`0x45/0x1@0:88`（WLFW 库存有）。
 裸机 NEW_SERVER 已从错误的 `1/0x13` 改为对齐 Linux；未在本窗口刷验。
+
+## S4 · OPEN→ALLOC 已通（2026-10-19）
+
+缺口：rmtfs `RF_SEEN` 仅 txn → 多路 OPEN 碰撞丢包。改为 port|txn 后出现
+ALLOC(msgid4) + IOVEC(msgid3)，`RF_SZ=0x280000`。仍无 0x45。
