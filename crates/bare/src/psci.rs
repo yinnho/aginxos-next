@@ -34,6 +34,44 @@ pub fn cpu_on(target: u64, entry: u64, ctx: u64) -> i64 {
     smc(CPU_ON_SMC64, target, entry, ctx)
 }
 
+/// SCM 64 位调用。x0=功能号，x1=arginfo，x2 起是参数。
+/// 回 (x0, x1)。x0==1 时内核在 asm 里重试（SCM_INTERRUPTED）。
+#[inline]
+pub fn smc_ret2(fnid: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u64) -> (i64, u64) {
+    let mut x0: i64 = fnid as i64;
+    let mut x1 = a1;
+    let mut x2 = a2;
+    let mut x3 = a3;
+    let mut x4 = a4;
+    let mut x5 = a5;
+    loop {
+        unsafe {
+            core::arch::asm!(
+                "smc #0",
+                inout("x0") x0,
+                inout("x1") x1,
+                inout("x2") x2,
+                inout("x3") x3,
+                inout("x4") x4,
+                inout("x5") x5,
+                lateout("x6") _,
+                lateout("x7") _,
+                options(nostack),
+            );
+        }
+        if x0 != 1 {
+            break;
+        }
+        x0 = fnid as i64;
+        x1 = a1;
+        x2 = a2;
+        x3 = a3;
+        x4 = a4;
+        x5 = a5;
+    }
+    (x0, x1)
+}
+
 #[inline]
 fn smc(fnid: u64, a1: u64, a2: u64, a3: u64) -> i64 {
     let ret: i64;

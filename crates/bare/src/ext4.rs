@@ -71,6 +71,16 @@ pub struct Inode {
     pub extents: bool,
 }
 
+/// 块映射的两块暂存。静态区，不进调用方栈。裸件栈顶 `0xB0008000`
+/// 向下只能到 `0xB0005000`，再往下是 UFS 的 DMA 窗（ARRAY/STAGING）。
+/// 4KB 数组若留在 `rust_main` 的栈帧里，入口就把 SP 压进 ARRAY，
+/// 第一次 GPT DMA 冲掉栈上的超时计数，门铃轮询不再返回，logo 停住、
+/// 环上零记录。单线程；lookup / read_file / listdir 不嵌套。
+static mut MAP_A: [u8; 4096] = [0; 4096];
+static mut MAP_B: [u8; 4096] = [0; 4096];
+/// extent 下一级整块。和 tree_scratch 分开，递归时不会把自己读掉。
+static mut EXT_NODE: [u8; 4096] = [0; 4096];
+
 impl<R: BlockDev> Fs<R> {
     /// 开盘：读 superblock（1024 字节偏移落在 sb_block 内）验形状。
     pub fn open(mut dev: R, scratch: &mut [u8]) -> Result<Fs<R>, Bad> {
@@ -165,22 +175,23 @@ impl<R: BlockDev> Fs<R> {
         self.walk(&hdr, tree_scratch, lb, depth_budget, 0)
     }
 
-    /// 走 extent 节点（node=60B：头 12B+4 项）。depth=0 叶：查区间；
-    /// depth>0 索引：ei_block<=lb 的最后一项下钻读叶块递归。
+    /// 走 extent 节点。inode 里只有 60B（最多 4 项）；下一级是整块，
+    /// 项数可以远大于 4。depth=0 叶：查区间；depth>0 索引：先记下子块号，
+    /// 再读进 tree_scratch，避免边读边覆盖当前节点。
     fn walk(
         &mut self,
-        node: &[u8; 60],
+        node: &[u8],
         tree_scratch: &mut [u8],
         lb: u64,
         budget: u32,
         _level: u32,
     ) -> Result<Option<u64>, Bad> {
-        if le16(node, 0) != 0xF30A {
+        if node.len() < 12 || le16(node, 0) != 0xF30A {
             return Err(Bad::BadExtent);
         }
         let entries = le16(node, 2) as usize;
         let depth = le16(node, 6) as u32;
-        if entries > 4 {
+        if 12 + entries * 12 > node.len() {
             return Err(Bad::BadExtent);
         }
         if depth == 0 {
@@ -213,9 +224,15 @@ impl<R: BlockDev> Fs<R> {
             None => return Ok(None),
         };
         self.rd_block(leaf_blk, tree_scratch)?;
-        let mut sub = [0u8; 60];
-        sub.copy_from_slice(&tree_scratch[..60]);
-        self.walk(&sub, tree_scratch, lb, budget - 1, _level + 1)
+        if tree_scratch.len() < 12 {
+            return Err(Bad::BadExtent);
+        }
+        // 整块拷到独立缓冲再递归，子级 rd_block 会重用 tree_scratch。
+        let n = tree_scratch.len().min(unsafe { EXT_NODE.len() });
+        unsafe {
+            EXT_NODE[..n].copy_from_slice(&tree_scratch[..n]);
+        }
+        self.walk(unsafe { &EXT_NODE[..n] }, tree_scratch, lb, budget - 1, _level + 1)
     }
 
     /// 目录查找：线性扫全部数据块（HTREE 目录也覆盖——只读无需 hash）。
@@ -234,10 +251,9 @@ impl<R: BlockDev> Fs<R> {
         }
         let bs = self.block_size() as u64;
         let blocks = size.div_ceil(bs);
-        let mut a = [0u8; 4096];
-        let mut b = [0u8; 4096];
+        let (a, b) = Self::map_pair();
         for lb in 0..blocks {
-            let phys = self.map_block(dir, &mut a, &mut b, lb, 5)?;
+            let phys = self.map_block(dir, a, b, lb, 5)?;
             let pb = match phys {
                 Some(p) => p,
                 None => continue, // 洞=跳过（目录通常无洞）
@@ -270,6 +286,15 @@ impl<R: BlockDev> Fs<R> {
         Ok(ino)
     }
 
+    fn map_pair() -> (&'static mut [u8; 4096], &'static mut [u8; 4096]) {
+        unsafe {
+            (
+                &mut *core::ptr::addr_of_mut!(MAP_A),
+                &mut *core::ptr::addr_of_mut!(MAP_B),
+            )
+        }
+    }
+
     /// 文件区间读（最多填满 out；返回实读字节数）。
     pub fn read_file(
         &mut self,
@@ -288,14 +313,13 @@ impl<R: BlockDev> Fs<R> {
         let want = out.len().min((m.size - off) as usize);
         let bs = self.block_size() as u64;
         let mut done = 0usize;
-        let mut a = [0u8; 4096];
-        let mut b = [0u8; 4096];
+        let (a, b) = Self::map_pair();
         while done < want {
             let lb = (off + done as u64) / bs;
             let bo = ((off + done as u64) % bs) as usize;
             let n = self.block_size() as usize - bo;
             let n = n.min(want - done);
-            match self.map_block(ino, &mut a, &mut b, lb, 5)? {
+            match self.map_block(ino, a, b, lb, 5)? {
                 Some(p) => {
                     self.rd_block(p, scratch)?;
                     out[done..done + n].copy_from_slice(&scratch[bo..bo + n]);
@@ -327,10 +351,9 @@ impl<R: BlockDev> Fs<R> {
             return Err(Bad::NotDir);
         }
         let bs = self.block_size() as u64;
-        let mut a = [0u8; 4096];
-        let mut b = [0u8; 4096];
+        let (a, b) = Self::map_pair();
         for lb in 0..size.div_ceil(bs) {
-            let pb = match self.map_block(dir, &mut a, &mut b, lb, 5)? {
+            let pb = match self.map_block(dir, a, b, lb, 5)? {
                 Some(p) => p,
                 None => continue,
             };
