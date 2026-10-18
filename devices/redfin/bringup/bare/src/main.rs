@@ -4946,7 +4946,8 @@ fn sr_tick(at478: u64, at479: u64, sz479: u64) {
     if at478 == 0 || at479 == 0 || unsafe { HOST_ADV } < 4 || !unsafe { HAVE_IID } {
         return;
     }
-    if !unsafe { SR_HAVE } || unsafe { SR_NODE } == 0 || unsafe { SR_PORT } == 0 {
+    // modem 可在 node 0；有 port 即可发 REGISTER。
+    if !unsafe { SR_HAVE } || unsafe { SR_PORT } == 0 {
         return;
     }
     let tx_head = rd32((at478 + 4) as usize) as u64;
@@ -8386,11 +8387,12 @@ fn scan_new_servers(fifo: u64, rh: u64) {
                             }
                         }
                         // modem SERVREG_NOTIF：记下 node:port，供 PDR REGISTER。
+                        // modem QRTR node 常见为 0（AP 才是 1）；只拒 port==0。
                         if svc == SR_SVC && inst == SR_INST && chunk >= 52 {
                             let node = rd32((fifo + off + 60) as usize);
                             let port = rd32((fifo + off + 64) as usize);
                             unsafe {
-                                if !SR_HAVE && node != 0 && port != 0 {
+                                if port != 0 && (!SR_HAVE || SR_PORT != port || SR_NODE != node) {
                                     SR_NODE = node;
                                     SR_PORT = port;
                                     SR_HAVE = true;
@@ -8891,6 +8893,14 @@ fn ctrl_service(
                                 push_hex(&mut reply, &mut rn, unsafe { SR_HIT } as u64);
                                 push_str(&mut reply, &mut rn, ".");
                                 push_hex(&mut reply, &mut rn, unsafe { SR_STATE } as u64);
+                                push_str(&mut reply, &mut rn, " sp=");
+                                if unsafe { SR_HAVE } {
+                                    push_hex(&mut reply, &mut rn, unsafe { SR_NODE } as u64);
+                                    push_str(&mut reply, &mut rn, ".");
+                                    push_hex(&mut reply, &mut rn, unsafe { SR_PORT } as u64);
+                                } else {
+                                    push_str(&mut reply, &mut rn, "ffffffff");
+                                }
                                 push_str(&mut reply, &mut rn, " rp=");
                                 push_hex(&mut reply, &mut rn, unsafe { SR_RP_N } as u64);
                                 push_str(&mut reply, &mut rn, ".");
