@@ -6527,9 +6527,19 @@ fn lpass_glink_work() {
     let head = smem_rd32(d + 12).unwrap_or(0) as u64;
     let tail = smem_rd32(d + 8).unwrap_or(0) as u64;
     if tail > rxn || head > rxn || tail > head || tail + 8 <= head {
+        // RX 未排空会提前返回；若 TX 也 pending，同样补踢，避免绕过下面分支。
+        let th = smem_rd32(d + 4).unwrap_or(0);
+        let tt = smem_rd32(d).unwrap_or(0);
+        if th != tt {
+            wr32(0x4080_0c, 3 << 16);
+        }
         return;
     }
     let Some(at) = lpass_tx_idle(d, txn, 16) else {
+        // TX 环还有 DSP 没吃的包（init2 卡死形：head!=tail）。首踢若丢，
+        // 旧逻辑在此直接 return，永远不再敲门铃。单变量：pending 时补踢
+        // IPCC client3 signal0（与 lpass_tx_commit 同值）。
+        wr32(0x4080_0c, 3 << 16);
         return;
     };
     let need = unsafe { LG_NEED };

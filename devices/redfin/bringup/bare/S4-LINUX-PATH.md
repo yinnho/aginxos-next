@@ -841,3 +841,17 @@ intent。下一张不再发 close：register 的 RX_DONE 之后直接
 `0x408`/`0x3d0`，之后还是这两个数。差 `0x38`，56 字节，
 就是这一包。DSP 没有把 tail 往前推。RX_DONE 只有 3 次，
 最后一次 intent 是 `0x92`，对应前三包。这包还在主机发送环里。
+
+## 2026-10-18 夜：init2 卡环 — pending TX 补踢 IPCC（窗口级，未刷）
+
+现机仍活：`ping 169.254.1.1` + 2323 `aginx`；`sm` 见
+`gq=408.3d0.408.3d0.3.92`、`fs=9`、`fp=3`、`q` 无 `0x45`——init2
+已写入发送环，DSP 不推 tail。
+
+对账：`lpass_tx_commit` 已写 head 并踢 `0x40800C=(3<<16)`；但
+`lpass_glink_work` 在 `lpass_tx_idle` 失败（head!=tail）时直接
+return，**不再补踢**。若首踢丢失/DSP 当时未醒，包会永久挂着，
+连后续 intent 也发不出。
+
+单变量改：idle 失败分支补踢同一 IPCC 门铃。未刷机；升格须 GATE
+窗看 `gq` tail 是否前进、`fp`/`FP_ININ`、最终是否出现 `0x45`。
