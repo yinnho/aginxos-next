@@ -686,3 +686,40 @@ U1 MMIO 探针（读 CAP+VER，VER 合法→blink；冻死=时钟没开）→ U2
   观测全量可得且刻度自证**（VADC APID=0xef APPS），S1-6 收讫。
   附产：VADC 基线 0x42-0x47=0x14a8018——L0 内核最后一次转换留的
   是 bat_therm ratiometric 配置（温监控的笔迹）。
+
+## 13. S3 USB 网与 TCP 2323 控制口——窗口观察（2026-10-17/18）[窗口·非验收]
+
+> **纪律**：本节是刷机窗口笔记蒸馏，**不是验收绿**。未发新正式收据号
+> （ledger 支工作树当时不可达；上一正式号止于 #498 / HANDOFF 曾预留
+> #516 给 s17/s18 收线，亦未见落账）。码 tip=`680e2e1`（S3 刀码 +
+> S4 案头已推公开仓；本节与 HANDOFF 只留本机）。细节流水真源=
+> `S4-LINUX-PATH.md` 同窗段落。
+
+- **码面（已入库，开刀中）**：`devices/redfin/bringup/bare/src/main.rs`
+  叠 s19 上电 + s20 EP0/CDC-ECM + smoltcp（ARP/ICMP/TCP）；控制口=
+  TCP **2323**，问候 `aginx\n`；本机链路意图 **169.254.1.1** /
+  MAC `02:00:00:00:00:02`。配方勘误：`S3-USB.md` DCTL **CSFTRST=bit30**
+  （旧文 bit11=ACCEPTU2ENA 误）。出件：当日大刀常打成
+  `.local/device/redfin/boot-out/boot-s18.img`（10-18 ~21:38，~90KB）；
+  `boot-s19.img`/`boot-s20.img` 仍为 10-15 小镜像，**已落后于 tip**。
+- **【窗口观察 · ping】** 多轮刷 `boot_a`+`set_active a` 后，Mac 侧对
+  `169.254.1.1` **ICMP 通**（笔记中有「ping 仍在 / 44s·48s·56s 通」
+  等；亦有整段 `civac` 误伤后 **120s 无 ping/无 2323/无 fastboot**
+  的反例——拿掉整段 civac 后恢复）。**≠ TRUTH 验收**；亦未做
+  持续 soak≥N 的正式判据落账。
+- **【窗口观察 · TCP 2323】** 同窗：先有 RST（errno 61）阶段，后修
+  listen/abort 后 **数毫秒内连上、首包 `aginx\n`**，拆连再连仍可
+  （10-18「不再刷」时三次复现）。环上曾见 `s20 tcp=0x1` /
+  `s20 cmd=…`（`tcp=0x1`=已 Established 并写出问候，**不是** Listen
+  标志）。**≠ 控制口命令全集验收**（id/ping/up/fb/log/bat/fr 等未
+  按清单收讫）。
+- **【窗口观察 · 伴随面，非 S3 验收】** 同刀继续探 modem PAS /
+  rmtfs·tftp / ADSP GLINK·fastrpc：多见 modem `s=6`、`q=42.b401,2b.1202`
+  **无 WLFW `0x45`**；ADSP 侧有 OPEN 握手字（如 `ag=12.2`）与
+  fastrpc attach/open/register，listener 环推进仍未闭合。属 **S4
+  前置探测笔记**，Wi-Fi 未连 AP。
+- **明确未收**：s17 24h soak 正式判读（预留 #516）、s18 三靶 vs L0
+  `cksum` 对账、s19 PHY readback 记录组、s20 枚举环字
+  （`s20 su=`/`s20 cd=`）按 HANDOFF 清单的正式收据——**均未写入
+  本节为绿**。下一棒若要把本节升格验收，须重开 GATE 刷窗 + 拉环
+  + ledger 正式号，不得仅凭本节。
