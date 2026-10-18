@@ -921,3 +921,16 @@ IPCC 补踢刷机后 `gq` 仍 `408.3d0`、`fp=3`、无 `0x45`——门铃假设�
 `REMOTE_SCALARS_MAKE(4,2,2)`、dump `00000000FFFFFFFF0000000000000000`。
 旧 `sc=0x04020300`（out=3）+ 错 pra 索引 → DSP 多解一个 remote_arg。
 改 `0x04020200`、四槽 pra、prim 四字与 dump 一致；等 next2 应答时停灌 IPCRTR INTENT。
+
+## 2026-10-18 夜：next2 sc 刀已刷 — NXN=1，frpck 消失，无 0x45
+
+`208e9b5` GATE 刷入。
+
+- `fo=…1.5002.0.1.6002.0.b0.0.20200.29`：`FP_NXN=1`，ctx=`0x6002` retval=0；
+  NOUT=`b0.0.20200.29`（嵌套 reverse invoke：handle0 sc=`0x20200` in_len=`0x29`）
+- `fp=5`；`af` 回到 `sar.cc:…chre_utils`（**不再 frpck_1_1**）
+- `gq=4f0.4e0`，`tx h=30005.1.200.12`（apr INTENT 仍卡 16B）
+- `q=` 仍 `42.b401,2b.1202`，**无 0x45**
+
+结论：错误 next2 sc/pra 即 frpck 主因；应答已通。下一卡：实现 reverse tunnel
+（按 NOUT 调 AP 侧方法后再 next2），并清 apr/IPCRTR INTENT 卡环；QRTR 仍缺 WLFW。
