@@ -902,3 +902,15 @@ IPCC 补踢刷机后 `gq` 仍 `408.3d0`、`fp=3`、无 `0x45`——门铃假设�
 改动：
 1. cmd7：本机 lcid（fastrpc=4）+ cmd5 INTENT + cmd8 ACK；撤 READ_NOTIF 写入
 2. `FP_SENT==9 && FP_GDONE==2` 时延迟发 register 的 RX_DONE（`FP_GDONE=3`）
+
+## 2026-10-18 夜：INTENT_REQ 刀已刷 — 拿到 init2 应答，next2 已发
+
+`d1f2908` GATE 刷入。关键 sm（Asia/Shanghai）：
+
+- `fo=…1.5002.0.0…`：`FP_ININ=1`，`FP_INI=5002/0` — **init2 应答 retval=0**
+- `fs=a`（10）：`adsp_listener_next2` 已发出；`FP_NXN=0` — **尚无 next2 应答**
+- `fp=4` `gd=3.1` `gq=250.240.1e0.1a8.5.92` `ru=1` `rn=0`
+- `tx h=` `10005.1.800.1` — IPCRTR INTENT 卡在 tail；DSP `af` 现为 `frpck_1_1:0x9c:PC=…`（进 fastrpc 故障路径）
+- `q=` 仍 `42.b401,2b.1202`，**无 0x45**
+
+结论：缺 RX intent（旧 ACK 错 cid + 不发 cmd5）是 init2 不回包的主因；延迟 RX_DONE 可用。下一卡：next2 无应答 + IPCRTR intent 停读 + ADSP frpck SFR。
