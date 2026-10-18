@@ -951,3 +951,14 @@ IPCC 补踢刷机后 `gq` 仍 `408.3d0`、`fp=3`、无 `0x45`——门铃假设�
 - `af` 仍 sar/chre（非 frpck）
 
 结论：reverse 主循环已通；下一卡 apps_std 扩展方法（fopen 等）+ 续包卡环。
+
+## 2026-10-18 reverse apps_std 最小实现（未推）
+
+对账 `hexagonrpcd`：`sc=0x1f020100` = `MAKE(31,2,1)` = **apps_std_stat**（扩展号），不是 fopen。
+
+已实现 apps_std：`fflush(2)/fclose(3)/fread(4)/fseek(9)/fopen_with_env(19)/opendir(26)/closedir(27)/readdir(28)/stat(31)`。
+stat/fopen 对任意路径回 64B 零文件；reverse 应答后对 NLIID 发 RX_DONE_W_REUSE（与 register 的 GLIID 跳过分开）。
+
+实测：`rv` 到 `8`，`gq` TX 空闲（续 next2 卡环解开），`ri` 显示 pathname 为 `"\0"`（空串），`af` 现 `SNS_REG_INIT…SNS_RC_SUCCESS`，**仍无 `0x45`**。
+缺：真实 hexagonfs 文件（`ADSP_LIBRARY_PATH` / sensors registry 等）；`0x45` 仍属 modem WLFW 侧。
+

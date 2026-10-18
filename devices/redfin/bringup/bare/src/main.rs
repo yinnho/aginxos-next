@@ -5264,11 +5264,16 @@ static mut FP_RVH: u32 = 0xffff_ffff; // 上次 open 返回的 handle
 static mut FP_RVSC: u32 = 0; // 上次嵌套 sc
 static mut FP_RVRES: u32 = 0xffff_ffff;
 static mut FP_RVOUTN: u32 = 0;
-static mut FP_RVOUT: [u8; 320] = [0; 320];
+static mut FP_RVOUT: [u8; 1024] = [0; 1024];
 static mut FP_RVINN: u32 = 0;
 static mut FP_RVIN: [u8; 256] = [0; 256];
 static mut FP_RVNAME: [u8; 32] = [0; 32];
 static mut FP_RVNAMEN: u8 = 0;
+/// apps_std 最小虚拟文件：fd 3..6，空文件（size=0），供 stat/fopen/fread 走通。
+static mut AST_FD_OPEN: [u8; 4] = [0; 4];
+static mut AST_FD_POS: [u32; 4] = [0; 4];
+static mut AST_FD_SIZE: [u32; 4] = [0; 4];
+static mut AST_METHOD: u32 = 0xffff_ffff; // 上次 apps_std 方法号（含扩展）
 /// remotectl_open 的应答：ctx、retval。0 还没有。
 static mut FP_OPN: u8 = 0;
 static mut FP_OPEN: [u32; 4] = [0; 4];
@@ -6310,17 +6315,15 @@ fn fp_rev_remotectl_open() -> u32 {
 /// 处理嵌套 reverse invoke；成功则 FP_REV=2（待发续 next2）。
 fn fp_rev_encode_empty_outs(sc: u32, fill4: bool) {
     let n_out = ((sc >> 8) & 0xff) as usize;
-    let mut enc = [0u8; 320];
+    let mut enc = [0u8; 1024];
     let mut eo = 0usize;
     let mut i = 0usize;
     while i < n_out && eo + 16 < enc.len() {
         let sz: u32 = if fill4 { 4 } else { 0 };
         enc[eo..eo + 4].copy_from_slice(&sz.to_le_bytes());
         eo += 4;
-        // pad to 8
-        eo += 4;
+        eo += 4; // pad to 8
         if fill4 {
-            // 4 zero bytes already
             eo += 4;
         }
         i += 1;
@@ -6331,16 +6334,341 @@ fn fp_rev_encode_empty_outs(sc: u32, fill4: bool) {
     }
 }
 
+/// 编码若干 outbufs（与 hexagonrpcd/iobuffer.c outbufs_encode 同形）。
+fn fp_rev_encode_outs(bufs: &[&[u8]]) {
+    let mut enc = [0u8; 1024];
+    let mut eo = 0usize;
+    let mut align = 0usize;
+    let mut bi = 0usize;
+    while bi < bufs.len() {
+        let b = bufs[bi];
+        if eo + 4 > enc.len() {
+            break;
+        }
+        enc[eo..eo + 4].copy_from_slice(&(b.len() as u32).to_le_bytes());
+        eo += 4;
+        align = (align + 4) & 7;
+        if !b.is_empty() {
+            if align != 0 {
+                let pad = 8 - align;
+                if eo + pad > enc.len() {
+                    break;
+                }
+                eo += pad;
+                align = 0;
+            }
+            if eo + b.len() > enc.len() {
+                break;
+            }
+            enc[eo..eo + b.len()].copy_from_slice(b);
+            eo += b.len();
+            align = (align + b.len()) & 7;
+        }
+        bi += 1;
+    }
+    unsafe {
+        FP_RVOUTN = eo as u32;
+        FP_RVOUT[..eo].copy_from_slice(&enc[..eo]);
+    }
+}
+
+fn fp_rev_set_path_name(src: &[u8]) {
+    let mut n = 0usize;
+    while n < src.len() && n < 31 && src[n] != 0 {
+        n += 1;
+    }
+    unsafe {
+        FP_RVNAMEN = n as u8;
+        let mut i = 0usize;
+        while i < n {
+            FP_RVNAME[i] = src[i];
+            i += 1;
+        }
+        while i < 32 {
+            FP_RVNAME[i] = 0;
+            i += 1;
+        }
+    }
+}
+
+fn fp_rev_parse_inbufs(src: &[u8], outs: &mut [(usize, usize); 8]) -> usize {
+    let mut align = 0usize;
+    let mut off = 0usize;
+    let mut n = 0usize;
+    while n < 8 {
+        let Some((start, sz)) = fp_rev_take_buf(src, off, &mut align) else {
+            break;
+        };
+        outs[n] = (start, sz);
+        off = start + sz;
+        n += 1;
+    }
+    n
+}
+
+fn fp_ast_alloc_fd(size: u32) -> Option<u32> {
+    let mut i = 0usize;
+    while i < 4 {
+        if unsafe { AST_FD_OPEN[i] } == 0 {
+            unsafe {
+                AST_FD_OPEN[i] = 1;
+                AST_FD_POS[i] = 0;
+                AST_FD_SIZE[i] = size;
+            }
+            return Some((i as u32) + 3); // fd 3..6
+        }
+        i += 1;
+    }
+    None
+}
+
+fn fp_ast_fd_idx(fd: u32) -> Option<usize> {
+    if fd >= 3 && fd <= 6 {
+        let i = (fd - 3) as usize;
+        if unsafe { AST_FD_OPEN[i] } != 0 {
+            return Some(i);
+        }
+    }
+    None
+}
+
+/// apps_std_stat 应答：96 字节 packed（对账 hexagonrpcd/apps_std.c）。
+fn fp_ast_stat_bytes(size: u64, mode: u32) -> [u8; 96] {
+    let mut o = [0u8; 96];
+    // tsz=0, dev=1, ino=1
+    o[8..16].copy_from_slice(&1u64.to_le_bytes());
+    o[16..24].copy_from_slice(&1u64.to_le_bytes());
+    o[24..28].copy_from_slice(&mode.to_le_bytes());
+    o[28..32].copy_from_slice(&1u32.to_le_bytes()); // nlink
+    // rdev=0
+    o[40..48].copy_from_slice(&size.to_le_bytes());
+    o
+}
+
+fn fp_rev_apps_std(method: u32, sc: u32) -> u32 {
+    unsafe { AST_METHOD = method };
+    let n = unsafe { FP_RVINN } as usize;
+    let src = unsafe { &FP_RVIN[..n] };
+    let mut bufs = [(0usize, 0usize); 8];
+    let nb = fp_rev_parse_inbufs(src, &mut bufs);
+
+    // AEE_EFAILED=1, EBADPARM=14, EUNSUPPORTED=20, ERESOURCENOTFOUND=22
+    match method {
+        // fflush(2) / fclose(3) / fseek(9)：无 outbufs
+        2 => {
+            fp_rev_encode_outs(&[]);
+            0
+        }
+        3 => {
+            // fclose: prim in = fd
+            if nb >= 1 && bufs[0].1 >= 4 {
+                let (s, _) = bufs[0];
+                let fd = u32::from_le_bytes([src[s], src[s + 1], src[s + 2], src[s + 3]]);
+                if let Some(i) = fp_ast_fd_idx(fd) {
+                    unsafe { AST_FD_OPEN[i] = 0 };
+                }
+            }
+            fp_rev_encode_outs(&[]);
+            0
+        }
+        9 => {
+            // fseek: fd, pos, whence
+            if nb >= 1 && bufs[0].1 >= 12 {
+                let (s, _) = bufs[0];
+                let fd = u32::from_le_bytes([src[s], src[s + 1], src[s + 2], src[s + 3]]);
+                let pos = u32::from_le_bytes([src[s + 4], src[s + 5], src[s + 6], src[s + 7]]);
+                let whence = u32::from_le_bytes([src[s + 8], src[s + 9], src[s + 10], src[s + 11]]);
+                if let Some(i) = fp_ast_fd_idx(fd) {
+                    let size = unsafe { AST_FD_SIZE[i] };
+                    let cur = unsafe { AST_FD_POS[i] };
+                    let np = match whence {
+                        0 => pos, // SEEK_SET
+                        1 => cur.wrapping_add(pos),
+                        2 => size.wrapping_add(pos), // SEEK_END, pos usually 0
+                        _ => cur,
+                    };
+                    unsafe { AST_FD_POS[i] = np };
+                }
+            }
+            fp_rev_encode_outs(&[]);
+            0
+        }
+        // fread(4): out0 = {written,u32 is_eof,u32}, out1 = data
+        4 => {
+            // fread：从虚拟 fd 吐零直到 size；prim 里 fd+buf_size（容错 4/8B）
+            let mut want = 0u32;
+            let mut fd = 0u32;
+            if nb >= 1 && bufs[0].1 >= 4 {
+                let (s, l) = bufs[0];
+                fd = u32::from_le_bytes([src[s], src[s + 1], src[s + 2], src[s + 3]]);
+                if l >= 8 {
+                    want = u32::from_le_bytes([src[s + 4], src[s + 5], src[s + 6], src[s + 7]]);
+                }
+            }
+            // OUT_BLOB_SEQ 长度：从 inbufs[0] 描述符末尾尽力读；否则用 want
+            let mut seq = want;
+            if nb >= 1 && bufs[0].1 >= 12 {
+                let (s, l) = bufs[0];
+                // 扩展/普通：跳过 method? fread msg_id=4 <31，无 method 字。
+                // 布局约：fd, buf_size, out_seq_count…
+                if l >= 12 {
+                    seq = u32::from_le_bytes([src[s + 8], src[s + 9], src[s + 10], src[s + 11]]);
+                }
+            }
+            if seq == 0 {
+                seq = want;
+            }
+            if seq > 256 {
+                seq = 256; // 编码缓冲上限
+            }
+            let mut written = 0u32;
+            let mut is_eof = 1u32;
+            if let Some(i) = fp_ast_fd_idx(fd) {
+                let size = unsafe { AST_FD_SIZE[i] };
+                let pos = unsafe { AST_FD_POS[i] };
+                let rem = if pos < size { size - pos } else { 0 };
+                written = if rem < seq { rem } else { seq };
+                unsafe { AST_FD_POS[i] = pos.wrapping_add(written) };
+                is_eof = if unsafe { AST_FD_POS[i] } >= size { 1 } else { 0 };
+            }
+            let meta = {
+                let mut m = [0u8; 8];
+                m[0..4].copy_from_slice(&written.to_le_bytes());
+                m[4..8].copy_from_slice(&is_eof.to_le_bytes());
+                m
+            };
+            // 零页作 data
+            let z = [0u8; 256];
+            let data = &z[..written as usize];
+            let n_out = ((sc >> 8) & 0xff) as usize;
+            if n_out >= 2 {
+                fp_rev_encode_outs(&[&meta, data]);
+            } else if n_out == 1 {
+                fp_rev_encode_outs(&[&meta]);
+            } else {
+                fp_rev_encode_outs(&[]);
+            }
+            0
+        }
+        // fopen_with_env(19): inbufs[1]=env, [3]=path, [4]=mode；out=fd
+        19 => {
+            if nb < 5 {
+                fp_rev_encode_empty_outs(sc, true);
+                return 14;
+            }
+            let (e0, el) = bufs[1];
+            let (p0, pl) = bufs[3];
+            let (m0, ml) = bufs[4];
+            if pl == 0 || src[p0 + pl - 1] != 0 || el == 0 || src[e0 + el - 1] != 0 {
+                fp_rev_encode_empty_outs(sc, true);
+                return 14;
+            }
+            if ml == 0 || src[m0 + ml - 1] != 0 {
+                fp_rev_encode_empty_outs(sc, true);
+                return 14;
+            }
+            let mode0 = src[m0];
+            if mode0 == b'w' || mode0 == b'a' {
+                fp_rev_encode_empty_outs(sc, true);
+                return 20; // EUNSUPPORTED
+            }
+            fp_rev_set_path_name(&src[p0..p0 + pl]);
+            // 最小：任意只读 open → 64B 零文件 fd（与 stat size 对齐）
+            match fp_ast_alloc_fd(64) {
+                Some(fd) => {
+                    let fb = fd.to_le_bytes();
+                    fp_rev_encode_outs(&[&fb]);
+                    0
+                }
+                None => {
+                    fp_rev_encode_empty_outs(sc, true);
+                    2 // ENOMEMORY
+                }
+            }
+        }
+        // opendir(26): out = u64 dirfd；空目录给假 fd
+        26 => {
+            if nb >= 2 {
+                let (p0, pl) = bufs[1];
+                if pl > 0 {
+                    fp_rev_set_path_name(&src[p0..p0 + pl.min(31)]);
+                }
+            }
+            match fp_ast_alloc_fd(0) {
+                Some(fd) => {
+                    let mut d = [0u8; 8];
+                    d[0..4].copy_from_slice(&fd.to_le_bytes());
+                    fp_rev_encode_outs(&[&d]);
+                    0
+                }
+                None => {
+                    fp_rev_encode_empty_outs(sc, true);
+                    2
+                }
+            }
+        }
+        27 => {
+            // closedir
+            if nb >= 1 && bufs[0].1 >= 4 {
+                let (s, _) = bufs[0];
+                let fd = u32::from_le_bytes([src[s], src[s + 1], src[s + 2], src[s + 3]]);
+                if let Some(i) = fp_ast_fd_idx(fd) {
+                    unsafe { AST_FD_OPEN[i] = 0 };
+                }
+            }
+            fp_rev_encode_outs(&[]);
+            0
+        }
+        // readdir(28): 立刻 EOF（nout first u32 = 0）
+        28 => {
+            let zero4 = [0u8; 4];
+            let name = [0u8; 256];
+            let n_out = ((sc >> 8) & 0xff) as usize;
+            if n_out >= 3 {
+                fp_rev_encode_outs(&[&zero4, &name, &zero4]);
+            } else {
+                fp_rev_encode_empty_outs(sc, true);
+            }
+            0
+        }
+        // stat(31)：扩展号，pathname 在 inbufs[1]
+        31 => {
+            if nb < 2 {
+                // 仍回 96 字节零，避免 DSP 按成功布局解包踩坑
+                let zb = [0u8; 96];
+                fp_rev_encode_outs(&[&zb]);
+                return 14;
+            }
+            let (p0, pl) = bufs[1];
+            if pl == 0 || src[p0 + pl - 1] != 0 {
+                let zb = [0u8; 96];
+                fp_rev_encode_outs(&[&zb]);
+                return 14;
+            }
+            fp_rev_set_path_name(&src[p0..p0 + pl]);
+            // 策略：对任意路径回「64B 普通文件」成功，逼 DSP 走 fopen/fread，
+            // 以便 sm 打出路径名；内容仍是零（缺真实 .so / registry）。
+            // mode: S_IFREG|0644 = 0x8000|0x1a4 = 0x81a4
+            let st = fp_ast_stat_bytes(64, 0x81a4);
+            fp_rev_encode_outs(&[&st]);
+            0
+        }
+        _ => {
+            fp_rev_encode_empty_outs(sc, true);
+            20
+        }
+    }
+}
+
 fn fp_rev_dispatch() {
     let sc = unsafe { FP_NOUT[2] };
     let handle = unsafe { FP_NOUT[1] };
     unsafe { FP_RVSC = sc };
     let mut method = (sc >> 24) & 0x1f;
-    // method==31：扩展号在 inbufs 首字（hexagonrpcd listener.c）
+    // method==31：扩展号在 inbufs[0] 首字（hexagonrpcd listener.c）
     if method == 31 {
         let n = unsafe { FP_RVINN } as usize;
         if n >= 4 {
-            // 粗解：跳过第一个 size/pad 后读 4 字节，或直接扫
             let mut align = 0usize;
             if let Some((o0, l0)) = fp_rev_take_buf(unsafe { &FP_RVIN[..n] }, 0, &mut align) {
                 if l0 >= 4 {
@@ -6357,8 +6685,14 @@ fn fp_rev_dispatch() {
     let result = if handle == 0 && method == 0 {
         fp_rev_remotectl_open()
     } else if handle == 1 {
-        // apps_std：尚未接 hexagonfs；按 sc 回空 out + EUNSUPPORTED，
-        // 避免 outs_len=0 的续 next2 再卡读端。
+        let r = fp_rev_apps_std(method, sc);
+        unsafe {
+            FP_RVRES = r;
+            FP_RVN = FP_RVN.wrapping_add(1);
+        }
+        r
+    } else if handle == 2 {
+        // apps_mem：暂不支持
         let err = 20u32;
         fp_rev_encode_empty_outs(sc, true);
         unsafe {
@@ -6494,14 +6828,23 @@ fn fastrpc_rev_work(d: u64, txf: u64, txn: u64, at: u64) -> bool {
     if unsafe { FP_SENT } != 10 {
         return false;
     }
-    // 与 register 同形：next2 应答后的 RX_DONE 会楔死读端（实证
-    // gq 停在 RX_DONE 后的续 next2）。跳过，靠多 intent / REUSE。
+    // register→init2：RX_DONE 会楔死读端（已证）。但 reverse 循环必须
+    // 归还 RX intent，否则 DSP 发完有限 intent 后无法再推嵌套 invoke
+    //（实证 RVN 停在 ~5、TX 空闲、无新 6002）。此处对 NLIID 发
+    // RX_DONE_W_REUSE，与 register 的 GLIID 路径分开。
     if unsafe { FP_NXN } != 0 && unsafe { FP_NDONE } == 0 {
-        unsafe { FP_NDONE = 2 }; // 2 = 故意未发
+        let liid = unsafe { FP_NLIID };
+        if liid != 0 && at + 8 <= txn {
+            lpass_store(txf + at, 14 | (4 << 16));
+            lpass_store(txf + at + 4, liid);
+            lpass_tx_commit(d, txf, at, 8);
+            unsafe { FP_NDONE = 1 }; // 1 = 已发 reuse
+            return true; // 下一拍再 dispatch / cont（TX 可能需等 idle）
+        }
+        unsafe { FP_NDONE = 2 };
     }
     if unsafe { FP_REV } == 1 {
         fp_rev_dispatch();
-        // 立刻尝试发续包（若 TX idle）
     }
     if unsafe { FP_REV } == 2 {
         return fastrpc_next2_cont(d, txf, txn, at);
@@ -8203,6 +8546,8 @@ fn ctrl_service(
                                 push_str(&mut reply, &mut rn, ".");
                                 push_hex(&mut reply, &mut rn, unsafe { FP_RVRES } as u64);
                                 push_str(&mut reply, &mut rn, ".");
+                                push_hex(&mut reply, &mut rn, unsafe { AST_METHOD } as u64);
+                                push_str(&mut reply, &mut rn, ".");
                                 let rvn = unsafe { FP_RVNAMEN } as usize;
                                 let mut ri = 0usize;
                                 while ri < rvn && ri < 32 {
@@ -8210,6 +8555,16 @@ fn ctrl_service(
                                     if (0x21..0x7f).contains(&b) && rn < reply.len() {
                                         reply[rn] = b;
                                         rn += 1;
+                                    }
+                                    ri += 1;
+                                }
+                                push_str(&mut reply, &mut rn, " ri=");
+                                let rvin_n = unsafe { FP_RVINN }.min(29) as usize;
+                                let mut ri = 0usize;
+                                while ri < rvin_n {
+                                    push_hex(&mut reply, &mut rn, unsafe { FP_RVIN[ri] } as u64);
+                                    if ri + 1 < rvin_n {
+                                        push_str(&mut reply, &mut rn, ".");
                                     }
                                     ri += 1;
                                 }
