@@ -1218,3 +1218,26 @@ incomplete、ping 全丢、2323 不可达；等到 ~07:08（>5min，远超 90s �
 3. sm 增 `tp=N.pick`
 
 未推。待编 `boot-s20.img` GATE 刷验。
+
+
+### 本轮结果：intent 池 RR 亦硬挂（2026-10-19 ~07:23 Asia/Shanghai）
+
+刷 tip `1119de1`（池 RR + cmd5 multi-count）GATE `13201FDD4001N8`：
+`flash boot_a` + `set_active a` + reboot OK。
+
+**结果：硬挂**（与飞行锁同类）。en10 ECM active、host link-local 在，
+但对 `169.254.1.1` ARP incomplete（无 peer MAC `02:00:00:00:00:02`），
+≥90s 无 ping / 无 2323 / 无 fb / 无 adb。**无 sm。**
+
+**处置**：`main.rs` 已回退到 `92393f6` 字节（去掉池 RR）；笔记保留。
+**勿再刷 tip 意图刀**。需人工硬复位进 fb 后刷
+`.local/device/redfin/boot-out/boot-s20-92393f6.img` 复活。
+
+**0x45**：本轮未观察到。
+
+**假说修正**：凡改 modem IPCRTR 的 TX intent 选取/解析（BUSY 或 RR 或
+INTENT_REQ）均在早期把主循环/ECM IP 堵死；0x45 缺口暂时不宜再动
+glink TX pick。下一刀应离开 intent：对账 Linux 槽 b 上 `0x45` 出现前
+的 QRTR/servreg/pd-mapper/cnss 时序，或查 `pm=0` 是否真与 wlan_pd 无关。
+
+未推。

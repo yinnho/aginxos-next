@@ -3093,13 +3093,6 @@ static mut LISTEN_TICK: u32 = 0;
 static mut LAST_IID: u32 = 0;
 static mut LAST_ISZ: u32 = 0;
 static mut HAVE_IID: bool = false;
-/// modem 公告的 TX 可用 intent（riids）。基线只留最大一条 → 突发复用同 liid
-/// → glink_core_intent.c:777。收集全部并 RR，不 busy-wait、不 INTENT_REQ。
-static mut TX_POOL_ID: [u32; 8] = [0; 8];
-static mut TX_POOL_SZ: [u32; 8] = [0; 8];
-static mut TX_POOL_N: u8 = 0;
-static mut TX_POOL_RR: u8 = 0;
-static mut TX_POOL_PICK: u32 = 0;
 /// 已经归还过 intent 的接收偏移。qcom_glink_rx_done 每个 TX_DATA 只还一次。
 static mut RX_VIS: u64 = 0;
 /// 本轮从 0 走到的接收偏移，以及 item 480 的长度。消费尾按这个往前推。
@@ -4001,99 +3994,6 @@ fn smem_scan(do_glink: bool) {
     }
 }
 
-
-fn tx_pool_add(id: u32, size: u32) {
-    if id == 0 || size < 52 {
-        return;
-    }
-    unsafe {
-        let mut i = 0u8;
-        while i < TX_POOL_N {
-            if TX_POOL_ID[i as usize] == id {
-                TX_POOL_SZ[i as usize] = size;
-                if size > LAST_ISZ || !HAVE_IID {
-                    LAST_IID = id;
-                    LAST_ISZ = size;
-                    HAVE_IID = true;
-                }
-                return;
-            }
-            i += 1;
-        }
-        if TX_POOL_N < 8 {
-            let n = TX_POOL_N as usize;
-            TX_POOL_ID[n] = id;
-            TX_POOL_SZ[n] = size;
-            TX_POOL_N += 1;
-        }
-        if size > LAST_ISZ || !HAVE_IID {
-            LAST_IID = id;
-            LAST_ISZ = size;
-            HAVE_IID = true;
-        }
-    }
-}
-
-/// 在已收集的 modem intent 里 RR 取一条够大的；池空则回落 LAST_IID。
-/// 永不返回 None（有 LAST_IID 时）——避免飞行锁那种堵死。
-fn tx_pool_pick(need: u32) -> u32 {
-    unsafe {
-        if TX_POOL_N > 0 {
-            let n = TX_POOL_N as u32;
-            let mut k = 0u32;
-            while k < n {
-                let idx = ((TX_POOL_RR as u32 + k) % n) as usize;
-                if TX_POOL_SZ[idx] >= need && TX_POOL_ID[idx] != 0 {
-                    let id = TX_POOL_ID[idx];
-                    TX_POOL_RR = ((idx as u8) + 1) % TX_POOL_N;
-                    LAST_IID = id;
-                    LAST_ISZ = TX_POOL_SZ[idx];
-                    HAVE_IID = true;
-                    TX_POOL_PICK = TX_POOL_PICK.wrapping_add(1);
-                    return id;
-                }
-                k += 1;
-            }
-        }
-        LAST_IID
-    }
-}
-
-/// cmd5 INTENT：Linux 为 8B 头（cmd|lcid + count）+ count×(size,iid)。
-/// 基线误固定 step=16，count>1 会切断 FIFO；并把多条 intent 丢成只留最大。
-fn intent_cmd_step(fifo: u64, off: u64, limit: u64) -> u64 {
-    if off + 8 > limit {
-        return 0;
-    }
-    let count = rd32((fifo + off + 4) as usize);
-    if count == 0 || count > 8 {
-        return 0;
-    }
-    let need = 8u64 + (count as u64) * 8;
-    if off + need > limit {
-        return 0;
-    }
-    need
-}
-
-fn intent_cmd_ingest(fifo: u64, off: u64, limit: u64, lcid: u32) -> u64 {
-    let step = intent_cmd_step(fifo, off, limit);
-    if step < 16 {
-        return step;
-    }
-    let count = rd32((fifo + off + 4) as usize);
-    if lcid == 2 {
-        let mut i = 0u32;
-        while i < count {
-            let size = rd32((fifo + off + 8 + i as u64 * 8) as usize);
-            let id = rd32((fifo + off + 12 + i as u64 * 8) as usize);
-            tx_pool_add(id, size);
-            i += 1;
-        }
-    }
-    step
-}
-
 /// 描述符 478 已在、发送 FIFO 479 不在时，按 glink_smem 分配 16KB FIFO，
 /// 写入 VERSION（cmd 0，版本 1，特性 INTENT_REUSE），把头拨到 8，
 /// 再踢 IPCC signal 0。返回 1 表示这次发出去了。
@@ -4288,30 +4188,20 @@ fn glink_hello(at478: u64, at479: u64, sz479: u64, at480: u64, sz480: u64) -> u3
                 break;
             }
             (8 + nlen as u64 + 7) & !7
-        } else if cmd == 5 {
-            let step = intent_cmd_ingest(at480, off, rx_head, lcid);
-            if step >= 16 {
-                // 取池中最大一条作本轮 HELLO/公告默认 iid（与旧「只留最大」兼容）。
+        } else if cmd == 5 && off + 16 <= rx_head {
+            let count = rd32((at480 + off + 4) as usize);
+            let size = rd32((at480 + off + 8) as usize);
+            let id = rd32((at480 + off + 12) as usize);
+            if lcid == 2 && count >= 1 && size >= 52 && (!found || size > unsafe { LAST_ISZ }) {
+                iid = id;
+                found = true;
                 unsafe {
-                    let mut i = 0u8;
-                    while i < TX_POOL_N {
-                        let sz = TX_POOL_SZ[i as usize];
-                        let id = TX_POOL_ID[i as usize];
-                        if id != 0 && sz >= 52 && (!found || sz > LAST_ISZ) {
-                            iid = id;
-                            found = true;
-                            LAST_IID = id;
-                            LAST_ISZ = sz;
-                            HAVE_IID = true;
-                        }
-                        i += 1;
-                    }
+                    LAST_IID = id;
+                    LAST_ISZ = size;
+                    HAVE_IID = true;
                 }
             }
-            if step == 0 {
-                break;
-            }
-            step
+            16
         } else if cmd == 9 {
             let chunk = rd32((at480 + off + 8) as usize) as u64;
             if chunk > 512 || off + 16 + chunk > rx_head + 16 {
@@ -4354,13 +4244,7 @@ fn glink_hello(at478: u64, at479: u64, sz479: u64, at480: u64, sz480: u64) -> u3
         if !found || tx_head + 72 > sz479 {
             return 0;
         }
-        // 公告/LOOKUP 也走池 RR，避免同 liid 连发（仍不 busy-wait）。
-        let use_id = if unsafe { TX_POOL_N } > 0 {
-            let id = tx_pool_pick(52);
-            if id != 0 { id } else { iid }
-        } else {
-            iid
-        };
+        let use_id = iid;
         // LOOKUP 应答优先：对端已在找本机服务。
         let pend = unsafe { LOOK_PEND };
         if pend != 0 {
@@ -4532,12 +4416,8 @@ fn glink_resume(at478: u64, at479: u64, sz479: u64) {
         wr32((p + i) as usize, 0);
         i += 4;
     }
-    let rid = tx_pool_pick(44);
-    if rid == 0 {
-        return;
-    }
     wr32(p as usize, 9 | (2 << 16));
-    wr32((p + 4) as usize, rid);
+    wr32((p + 4) as usize, unsafe { LAST_IID });
     wr32((p + 8) as usize, 44);
     wr32((p + 16) as usize, 1);
     wr32((p + 20) as usize, 7);
@@ -4685,12 +4565,9 @@ fn glink_tx_payload(
     let padded = (n + 3) & !3;
     let chunk = 32 + padded;
     let total = (16 + chunk + 7) & !7;
-    if !unsafe { HAVE_IID } || n > 256 || total > 512 || tx_head + total as u64 > sz479 {
-        return false;
-    }
-    let iid = tx_pool_pick(chunk as u32);
     let isz = unsafe { LAST_ISZ } as usize;
-    if iid == 0 || chunk > isz {
+    if !unsafe { HAVE_IID } || n > 256 || chunk > isz || total > 512 || tx_head + total as u64 > sz479
+    {
         return false;
     }
     let p = at479 + tx_head;
@@ -4700,7 +4577,7 @@ fn glink_tx_payload(
         i += 4;
     }
     wr32(p as usize, 9 | (2 << 16));
-    wr32((p + 4) as usize, iid);
+    wr32((p + 4) as usize, unsafe { LAST_IID });
     wr32((p + 8) as usize, chunk as u32);
     wr32((p + 12) as usize, 0);
     wr32((p + 16) as usize, 1);
@@ -8140,11 +8017,7 @@ fn scan_new_servers(fifo: u64, rh: u64) {
             }
             (8 + nlen as u64 + 7) & !7
         } else if cmd == 5 {
-            let step = intent_cmd_ingest(fifo, off, rh, w0 >> 16);
-            if step == 0 {
-                break;
-            }
-            step
+            16
         } else if cmd == 9 {
             let chunk = rd32((fifo + off + 8) as usize) as u64;
             if chunk > 512 || off + 16 + chunk > rh + 16 {
@@ -8869,10 +8742,6 @@ fn ctrl_service(
                                         i += 1;
                                     }
                                 }
-                                push_str(&mut reply, &mut rn, " tp=");
-                                push_hex(&mut reply, &mut rn, unsafe { TX_POOL_N } as u64);
-                                push_str(&mut reply, &mut rn, ".");
-                                push_hex(&mut reply, &mut rn, unsafe { TX_POOL_PICK } as u64);
                                 push_str(&mut reply, &mut rn, " pm=");
                                 push_hex(&mut reply, &mut rn, unsafe { PM_HIT } as u64);
                                 push_str(&mut reply, &mut rn, ".");
