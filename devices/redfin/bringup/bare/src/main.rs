@@ -5224,6 +5224,8 @@ static mut FP_DN: u32 = 0;
 static mut FP_RDP: u32 = 0xffff_ffff;
 /// intent 被删掉之后：1 新 intent 已经到了，2 正在要。
 static mut FP_INEW: u8 = 0;
+/// init2 前多交的那一个 RX intent（cmd5）。0 未交，1 已交。
+static mut FP_IXTRA: u8 = 0;
 /// 已经对对方的应答回过 RX_DONE_W_REUSE。第二包另计。
 static mut FP_RDONE: u8 = 0;
 static mut FP_ODONE: u8 = 0;
@@ -5996,9 +5998,32 @@ fn fastrpc_init2(d: u64, txf: u64, txn: u64, at: u64) -> bool {
         unsafe { FP_GDONE = 1 };
         return true;
     }
-    // 等 register 那包的 RX_DONE。不再另要 intent，免得和没人收的 close 抢同一块。
+    // 等 register 那包的 RX_DONE。
     if unsafe { FP_REUSE } == 0 {
         return false;
+    }
+    // 单变量下一刀：init2 TX 前先交一个额外 RX intent（cmd5），
+    // 给 DSP 回 init2 应答用。IPCC 补踢已证不足以让 DSP 推 tail。
+    if unsafe { FP_IXTRA } == 0 {
+        if at + 16 > txn {
+            return false;
+        }
+        let ch = 3u32; // fastrpcglink-apps-dsp
+        let sent = unsafe { LG_ISENT[ch as usize] };
+        let id = (sent as u32).saturating_add(1);
+        let sz = lpass_intent_sz(ch, sent.min(63));
+        lpass_store(txf + at, 5 | ((ch + 1) << 16));
+        lpass_store(txf + at + 4, 1);
+        lpass_store(txf + at + 8, sz);
+        lpass_store(txf + at + 12, id);
+        lpass_tx_commit(d, txf, at, 16);
+        unsafe {
+            FP_IXTRA = 1;
+            if sent < 255 {
+                LG_ISENT[ch as usize] = sent + 1;
+            }
+        }
+        return true;
     }
     let page = core::ptr::addr_of!(FP_PAGE) as u64;
     let rcid = unsafe { FP_RCID } as usize;

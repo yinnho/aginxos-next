@@ -855,3 +855,11 @@ return，**不再补踢**。若首踢丢失/DSP 当时未醒，包会永久挂�
 
 单变量改：idle 失败分支补踢同一 IPCC 门铃。未刷机；升格须 GATE
 窗看 `gq` tail 是否前进、`fp`/`FP_ININ`、最终是否出现 `0x45`。
+
+## 2026-10-18 夜：init2 前额外 RX intent（窗口级）
+
+IPCC 补踢刷机后 `gq` 仍 `408.3d0`、`fp=3`、无 `0x45`——门铃假设不成立。
+
+下一刀单变量：`fastrpc_init2` 在 `FP_REUSE` 之后、init2 TX 之前先发
+一条 cmd5（fastrpc 通道 lcid4）额外 RX intent，再发 init2。验 `gq`/
+`fp`/`fs`/`q`。
