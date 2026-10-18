@@ -1086,3 +1086,14 @@ GATE 刷验（串号 `13201FDD4001N8`，`fb`→flash→set_active a）：
 5. 判定：
    - 库存也无 0x35 → 关掉裸机 0x35 刀，改追 OPEN 后 ALLOC（EFS/intent/别的 QMI）。
    - 库存有 0x35 LOOKUP/QMI → 对账时序/实例字/节点，再回裸机补。
+
+### Linux 槽抓包（Asia/Shanghai 2026-10-19，adb aginxosredfin / 槽 b）
+
+进程：`/vendor/bin/pm-service`、`/bin/rmt_storage`、`cnss-daemon`、`pd-mapper`、`qrtr-ns` 均在跑。
+
+`qrtr-lookup` 关键行：
+- **`svc=0x35 inst=0x1001 at 1:16407`**（AP 节点 1，pm-service / SSREQ）
+- **`svc=0x45 inst=0x1 at 0:88`**（modem 节点 0，WLFW **库存已有**）
+
+裸机旧探针差异：曾公告 `inst=1`、`port=0x13` → 与 Linux 不一致，LOOKUP/客户对不上。
+已改 NEW_SERVER / 收包 / 应答为 **`inst=0x1001`、`port=16407`**（常量 `PM_INST` / `PM_QRTR_PORT`）。本轮只改码编译，**未刷 a 槽**。

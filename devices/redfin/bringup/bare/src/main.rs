@@ -3154,7 +3154,11 @@ static mut RF_RSP_N: u8 = 0;
 static mut QP_HIST: [u32; 8] = [0; 8];
 static mut QP_HIST_N: u32 = 0;
 static mut QP_VIS: u64 = 0;
-/// pm-service(0x35) 端口 0x13 收到的请求数。
+/// pm-service / SSREQ。对账 Linux qrtr-lookup：svc=0x35 inst=0x1001 at 1:16407。
+const PM_SVC: u32 = 0x35;
+const PM_INST: u32 = 0x1001;
+const PM_QRTR_PORT: u32 = 16407;
+/// 端口 PM_QRTR_PORT 收到的请求数。
 static mut PM_HIT: u32 = 0;
 static mut PM_PEND: bool = false;
 static mut PM_TXN: u32 = 0;
@@ -4309,16 +4313,16 @@ fn glink_hello(at478: u64, at479: u64, sz479: u64, at480: u64, sz480: u64) -> u3
     7
 }
 
-/// pm-service 0x35 最先（radio-bringup：PIL 前环境；HELLO 后尽早可被 LOOKUP），
-/// 再 rmtfs 14、tftp 4096、pd-mapper 64。一次一包。实例字 instance<<8|version。节点 1。
+/// pm-service 0x35 最先（对齐 Linux qrtr-lookup inst=0x1001 port=16407），
+/// 再 rmtfs 14、tftp 4096、pd-mapper 64。一次一包。节点 1。
 fn glink_announce(at478: u64, at479: u64, head: u64, sz479: u64, iid: u32) {
     let n = unsafe { HOST_ADV };
     if n >= 4 || head + 72 > sz479 {
         return;
     }
     let (svc, inst, port) = if n == 0 {
-        // pm-service：version 1 instance 0 → 实例字 1，端口 0x13。
-        (0x35u32, 1u32, 0x13u32)
+        // Linux：svc=0x35 inst=0x1001 at 1:16407（非旧探针 1/0x13）。
+        (PM_SVC, PM_INST, PM_QRTR_PORT)
     } else if n == 1 {
         (14, 1, 0x10)
     } else if n == 2 {
@@ -4333,8 +4337,8 @@ fn glink_announce(at478: u64, at479: u64, head: u64, sz479: u64, iid: u32) {
 /// 本机可公告的服务：LOOKUP 命中则立刻回 NEW_SERVER（对齐 qrtr ns）。
 fn host_svc_port(svc: u32, inst: u32) -> Option<(u32, u32)> {
     // inst：对端 LOOKUP 常带精确实例字，或 0 表示通配。
-    if svc == 0x35 && (inst == 0 || inst == 1) {
-        Some((1, 0x13))
+    if svc == PM_SVC && (inst == 0 || inst == PM_INST || inst == 1) {
+        Some((PM_INST, PM_QRTR_PORT))
     } else if svc == 14 && (inst == 0 || inst == 1) {
         Some((1, 0x10))
     } else if svc == 4096 && (inst == 0 || inst == 1) {
@@ -4877,7 +4881,7 @@ fn pm_reply(at478: u64, at479: u64, sz479: u64) {
     let mut n = 7usize;
     put_result(&mut q, &mut n, !known);
     qmi_finish(&mut q, n, txn, msg);
-    if !glink_tx_payload(at478, at479, tx_head, sz479, 0x13, node, port, &q[..n]) {
+    if !glink_tx_payload(at478, at479, tx_head, sz479, PM_QRTR_PORT, node, port, &q[..n]) {
         return;
     }
     unsafe {
@@ -4895,7 +4899,7 @@ fn pm_reply(at478: u64, at479: u64, sz479: u64) {
     put_u16(&mut ind, &mut in_, 4);
     put_u32(&mut ind, &mut in_, 1);
     qmi_finish_typed(&mut ind, in_, 4, 0xffff, msg);
-    let _ = glink_tx_payload(at478, at479, tx_head, sz479, 0x13, node, port, &ind[..in_]);
+    let _ = glink_tx_payload(at478, at479, tx_head, sz479, PM_QRTR_PORT, node, port, &ind[..in_]);
 }
 
 fn pd_reply(at478: u64, at479: u64, sz479: u64) {
@@ -8163,7 +8167,7 @@ fn scan_new_servers(fifo: u64, rh: u64) {
                         }
                     }
                 }
-                if typ == 1 && dst_node == 1 && dst_port == 0x13 && chunk >= 40 {
+                if typ == 1 && dst_node == 1 && dst_port == PM_QRTR_PORT && chunk >= 40 {
                     let w = rd32((fifo + off + 48) as usize);
                     let w1 = rd32((fifo + off + 52) as usize);
                     let qtype = w & 0xff;

@@ -731,3 +731,7 @@ U1 MMIO 探针（读 CAP+VER，VER 合法→blink；冻死=时钟没开）→ U2
 - **树尖**：本地 ahead，含 RF 取证 / 0x35 探针；末次刷后设备掉 USB，探针 sm 未验证。禁止 push。
 - **下一棒**：见 S4「收束交接」；先恢复 USB 采 `pm=`/`qp=`，再决定补 0x35 IDL 或 Linux 抓包。
 
+## S4 窗口 · Linux 0x35/0x45 对账（2026-10-19 Asia/Shanghai）
+
+槽 b `qrtr-lookup`：`0x35/0x1001@1:16407`（pm-service）、`0x45/0x1@0:88`（WLFW 库存有）。
+裸机 NEW_SERVER 已从错误的 `1/0x13` 改为对齐 Linux；未在本窗口刷验。
