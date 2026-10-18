@@ -892,3 +892,13 @@ IPCC 补踢刷机后 `gq` 仍 `408.3d0`、`fp=3`、无 `0x45`——门铃假设�
 根因升格：register 后那次 `RX_DONE_W_REUSE(liid=1)` 会把 DSP TX 读端楔死（证伪 IPCC/intent/READ_NOTIF 后，跳过该包即恢复消费）。
 
 下一缺口：init2 无应答；pending ACK+RNOTIF。是否补发 RX_DONE（在 init2 消费后）或查为何 DSP 不回 ctx 0x5002。
+
+## 2026-10-18 夜：INTENT_REQ 补 INTENT+本机 lcid ACK；延迟 RX_DONE
+
+现机：init2 已消费、DN=4/ru=1，无应答；`tx` 见错误 ACK `20008`（回显对方 cid）+ RNOTIF。
+
+对账内核 `qcom_glink_handle_intent_req`：应 **advertise cmd5 再 ACK**，ACK 的 param1 为本机 lcid。旧逻辑只 ACK 且回显对方 cid，DSP 无可用 RX intent 回 init2。
+
+改动：
+1. cmd7：本机 lcid（fastrpc=4）+ cmd5 INTENT + cmd8 ACK；撤 READ_NOTIF 写入
+2. `FP_SENT==9 && FP_GDONE==2` 时延迟发 register 的 RX_DONE（`FP_GDONE=3`）

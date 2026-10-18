@@ -6180,6 +6180,19 @@ fn fastrpc_attach(d: u64, txf: u64, txn: u64, at: u64) -> bool {
     if sent == 5 {
         return fastrpc_init2(d, txf, txn, at);
     }
+    // init2 已提交后补发 register 的 RX_DONE（跳过楔死位，延迟到此）。
+    // 内核对账：归还对方用过的 intent，DSP 才能再 TX 回 init2 应答。
+    if sent == 9 && unsafe { FP_GDONE } == 2 {
+        let liid = unsafe { FP_GLIID };
+        if liid != 0 && at + 8 <= txn {
+            lpass_store(txf + at, 14 | (4 << 16));
+            lpass_store(txf + at + 4, liid);
+            lpass_tx_commit(d, txf, at, 8);
+            unsafe { FP_GDONE = 3 }; // 3 = 延迟已发
+            return true;
+        }
+        unsafe { FP_GDONE = 3 };
+    }
     if sent == 9 {
         return fastrpc_next2(d, txf, txn, at);
     }
@@ -6356,12 +6369,46 @@ fn lpass_glink_work() {
             continue;
         }
         if cmd == 7 {
-            let Some(at) = lpass_tx_idle(d, txn, 8) else {
+            // 内核 qcom_glink_handle_intent_req：先 advertise INTENT(cmd5)，
+            // 再 ACK；ACK 的 param1 是 **本机 lcid**，不是对方 cid。
+            // 旧逻辑回显 param1（对方 lcid=FP_RCID）且不发 cmd5 → DSP
+            // 以为 granted 却永远等不到 intent，init2 只能还 TX intent 不回包。
+            let size = param2;
+            if size == 0 || size > 0x10000 {
+                lpass_rx_advance(d, 8, rxn);
+                drained += 1;
+                continue;
+            }
+            let our_lcid = if param1 == unsafe { FP_RCID } {
+                4u32
+            } else if (1..=4).contains(&param1) {
+                // 兜底：按本机 ch+1 试；OPEN 时对方 cid 偶发与本机相同编号
+                param1
+            } else {
+                4u32
+            };
+            let need = 16u64 + 8; // INTENT 16B + ACK 8B
+            let Some(at) = lpass_tx_idle(d, txn, need) else {
                 return;
             };
-            lpass_store(txf + at, 8 | (param1 << 16));
+            let ch = our_lcid.saturating_sub(1) as usize;
+            let sent = if ch < 4 {
+                unsafe { LG_ISENT[ch] }
+            } else {
+                0
+            };
+            let id = (sent as u32).saturating_add(1);
+            let sz = if size < 0x40 { 0x40 } else { size };
+            lpass_store(txf + at, 5 | (our_lcid << 16));
             lpass_store(txf + at + 4, 1);
-            lpass_tx_commit(d, txf, at, 8);
+            lpass_store(txf + at + 8, sz);
+            lpass_store(txf + at + 12, id);
+            lpass_store(txf + at + 16, 8 | (our_lcid << 16));
+            lpass_store(txf + at + 20, 1); // granted
+            lpass_tx_commit(d, txf, at, 24);
+            if ch < 4 && sent < 255 {
+                unsafe { LG_ISENT[ch] = sent + 1 };
+            }
             lpass_rx_advance(d, 8, rxn);
             return;
         }
@@ -6537,14 +6584,8 @@ fn lpass_glink_work() {
         // 只发一次（FP_RNOTIF），其后仅补踢。
         let th = smem_rd32(d + 4).unwrap_or(0) as u64;
         let tt = smem_rd32(d).unwrap_or(0) as u64;
-        if unsafe { FP_RNOTIF } == 0 && th >= tt && th + 8 <= txn {
-            lpass_store(txf + th, 13); // cmd=13 param1=0
-            lpass_store(txf + th + 4, 0);
-            lpass_tx_commit(d, txf, th, 8);
-            unsafe { FP_RNOTIF = 1 };
-        } else {
-            wr32(0x4080_0c, 3 << 16);
-        }
+        // READ_NOTIF 已证伪为解锁手段，且会堵在 ACK 前。pending 时只补踢。
+        wr32(0x4080_0c, 3 << 16);
         return;
     };
     let need = unsafe { LG_NEED };
