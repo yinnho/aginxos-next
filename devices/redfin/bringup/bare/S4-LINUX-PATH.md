@@ -1035,3 +1035,18 @@ init 卡在 EFS 未 IOVEC——主链已钉死。
 3. 若 `pm=0` 且 `qp` 仍只有 `0x10/OPEN` + `0x12/pddump`：停裸机 RFS 猜谜，
    改在 Linux 槽抓 `qrtr`/`rmt_storage` 日志对照 OPEN 后下一包。
 4. **不要**再为冲 0x45 去堆 apps_mem/hexagonfs（已证伪前置）。
+
+### 本轮：0x35 真 SSREQ 应答（b28c223，Asia/Shanghai 2026-10-19 ~01:28）
+
+对账 `/vendor_a/bin/pm-service` 内嵌 IDL：`service_id=0x35`，msgid
+`0x20/0x21/0x22` = SYSTEM_SHUTDOWN / SYSTEM_RESTART / PERIPHERAL_RESTART
+（REQ/RESP/IND 同号，`max_sz=7`）。`pm_reply` 替换假探针：已知 msgid
+RESP result 成功；SHUTDOWN/RESTART 再发 IND TLV01 status=1（SERVICED）；
+PERIPHERAL_RESTART 只 RESP；未知 msgid 失败 RESP。不 reboot。
+
+GATE：串号 `13201FDD4001N8`，`flash boot_a` + `set_active a` + reboot（01:28:25）。
+其后 ≥10 min 无 ping / 无 adb / 无 fastboot（USB 掉线，与上一轮 0x35 探针刷后相同）。
+**sm 未采到**；ALLOC / 0x45 无证据。代码已本地 commit `b28c223`，未推。
+
+恢复：Power 硬复位或等 tries 烧尽回 b；`fastboot -s 13201FDD4001N8 set_active a`
+重刷 `.local/device/redfin/boot-out/boot-s20.img` 后再采 `pm=`/`qp=`/`rf=`/`rh=`/`q=`/`s=`。
