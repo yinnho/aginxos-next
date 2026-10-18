@@ -1143,3 +1143,78 @@ IOVEC 回失败 → 旧证 `fs_rmts_pm.c:1038` DOG。RFS 窗口 `0x280000` 本�
 modem SFR `glink_core_intent`，非再砍影子长度。
 
 未推。
+
+
+### 本轮：glink intent 配额（2026-10-19 ~06:43 Asia/Shanghai）
+
+**现象**：IOVEC 通后 `fr=glink_core_intent.c:777:[irq65]`，疑 TX 复用同一
+modem INTENT 未等 RX_DONE。
+
+**刀 1（过猛，已弃）**：完整 TX 空闲池 + INTENT_REQ 应答。首刷后
+`MI_REQ_N` 因 FIFO 重扫暴涨、`HOST_ADV=0`/`rf=0`；再修仍导致无 ping
+硬挂（ECM ARP incomplete），疑早期路径堵死。未留下可用 sm。
+
+**刀 2（当前树，未刷成）**：回退到 `92393f6` 基线，只加：
+- `tx_alt_add` 收集 modem cmd5 INTENT
+- `tx_pick`/`TX_BUSY_ID`：飞行中同 liid 不连发，RX_DONE(cmd6/14) 清 busy
+- `tw=` 计数；不碰 HELLO/公告时序门槛
+
+**刷验**：刀 1 第二/三刷后设备无 ping/无 adb/无 fb（06:37 起）；人工硬复位回 fb。
+
+**刀 2 上机**（Asia/Shanghai 2026-10-19 ~07:02）：tip `ee60b5a`，GATE
+`13201FDD4001N8`，`flash boot_a` + `set_active a` + `reboot` OK。
+`boot-s20.img` 98304 B @06:42。
+
+**结果：仍硬挂**。USB/Aginx ECM `en10` 枚举且 active（host MAC
+`02:00:00:00:00:01`，host IP `169.254.252.30`），但对 `169.254.1.1` ARP
+incomplete、ping 全丢、2323 不可达；等到 ~07:08（>5min，远超 90s 门槛）
+仍无 peer MAC `02:00:00:00:00:02`。无 sm 样本。**未再刷**。
+
+**0x45**：本轮**未观察到**（刀 2 上机后无 ECM IP，无法采 `q=`）。
+
+**阻断**：温和飞行锁仍疑早期路径堵死（与刀 1 同类症状：ECM 链路在、IP
+栈不应答）。需人工硬复位回 fb；下一刀应再收窄或整段回退 `92393f6` 基线
+验证「仅回滚即可复活」，再考虑别的 intent 切入点。
+
+未推。
+
+
+### 本轮：基线复活刷 `92393f6`（2026-10-19 ~07:14 Asia/Shanghai）
+
+意图刀 2（`ee60b5a` 飞行锁）硬挂后，GATE `13201FDD4001N8` 刷已知好镜像
+`.local/device/redfin/boot-out/boot-s20-92393f6.img`
+（sha256 `bc14b7705f30f3b01b5542a05a3a0b262c2f48537923ebb0c19a00ef3bcb0a84`，
+`SH_SIZE=0x280000`，无飞行锁）。tip 仍停 `ee60b5a`，**未推、未刷 tip**。
+
+**结果：复活**。ping `169.254.1.1` ~49s OK；TCP 2323 OK。两次 `sm`：
+- `s=107` `ik=4.0` `rf=3./boot/modem_fsc.3.8.280000.0`
+- `rh=8.3.9000101.a000101.d000104.e000103` `pm=0.0.0`
+- `q=42.b401,2b.1202,f.1,33.201,15.1,33.b01,18.1,16.1001` — **无 0x45**
+
+结论：硬挂坐实在飞行锁；下一刀在 tip 上要么整段丢掉 BUSY，要么再收窄 intent。
+
+
+### 本轮：丢掉飞行锁 + TX intent 池 RR（2026-10-19 ~07:20 Asia/Shanghai）
+
+**回退**：`git revert ee60b5a` → `abff614`。`main.rs` 与 `92393f6` 字节一致
+（无 TX_BUSY / INTENT_REQ）。笔记保留刀 1/2 硬挂与基线复活 sm。
+
+**诊断（基线活体 sm）**：
+- RFS 绿：`ik=4.0` `rh=…d000104.e000103`
+- `pm=0.0.0`（modem 仍不 SSREQ 0x35）
+- `q=42.b401,2b.1202,f.1,33.201,15.1,33.b01,18.1,16.1001` — **无 0x45**
+- Linux 槽 b：`0x45@0:88`、`0x35/0x1001@1:16407`
+- 旧 SFR：`glink_core_intent.c:777`（IOVEC 通后）
+
+**假说**：基线 `glink_hello` 只留 **最大一条** modem cmd5 intent，且 cmd5
+`count>1` 时 step 固定 16 会切错 FIFO。突发 `glink_tx_payload` 复用同一
+`LAST_IID` → modem `lc_intent == NULL`。飞行锁整路径 busy-wait 已两挂，禁。
+
+**刀（窄）**：
+1. 按 Linux wire 解析 cmd5：`step = 8 + 8*count`（count≤8），ingest 全部
+   (size,iid) 进 `TX_POOL[8]`
+2. `glink_tx_payload` / `glink_resume` / 公告·LOOKUP：池内 **RR**，**不**
+   busy-wait、**不** INTENT_REQ
+3. sm 增 `tp=N.pick`
+
+未推。待编 `boot-s20.img` GATE 刷验。
