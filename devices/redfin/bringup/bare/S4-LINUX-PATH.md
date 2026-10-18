@@ -1143,3 +1143,25 @@ IOVEC 回失败 → 旧证 `fs_rmts_pm.c:1038` DOG。RFS 窗口 `0x280000` 本�
 modem SFR `glink_core_intent`，非再砍影子长度。
 
 未推。
+
+
+### 本轮：glink intent 配额（2026-10-19 ~06:43 Asia/Shanghai）
+
+**现象**：IOVEC 通后 `fr=glink_core_intent.c:777:[irq65]`，疑 TX 复用同一
+modem INTENT 未等 RX_DONE。
+
+**刀 1（过猛，已弃）**：完整 TX 空闲池 + INTENT_REQ 应答。首刷后
+`MI_REQ_N` 因 FIFO 重扫暴涨、`HOST_ADV=0`/`rf=0`；再修仍导致无 ping
+硬挂（ECM ARP incomplete），疑早期路径堵死。未留下可用 sm。
+
+**刀 2（当前树，未刷成）**：回退到 `92393f6` 基线，只加：
+- `tx_alt_add` 收集 modem cmd5 INTENT
+- `tx_pick`/`TX_BUSY_ID`：飞行中同 liid 不连发，RX_DONE(cmd6/14) 清 busy
+- `tw=` 计数；不碰 HELLO/公告时序门槛
+
+**刷验**：刀 1 第二/三刷后设备无 ping/无 adb/无 fb（06:37 起）；等 tries
+回滚或需人工断电。刀 2 镜像已编出 `boot-s20.img`，**待设备回 fb 再刷**。
+
+**0x45**：本轮**未观察到**（刀 1 回归丢 RFS；刀 2 未上机）。
+
+未推。
