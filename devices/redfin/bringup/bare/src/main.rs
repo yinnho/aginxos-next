@@ -3140,6 +3140,16 @@ static mut RF_ID: u32 = 0xffff_ffff;
 static mut RF_SZ: u32 = 0;
 /// hyp_assign 的 x0。0xffffffff 还没叫。
 static mut RF_AS: u32 = 0xffff_ffff;
+/// 打到 0x10 的请求次数（含因 PEND/seen 丢掉的）。
+static mut RF_HIT: u32 = 0;
+/// 丢掉次数：bit0=seen bit1=pend。
+static mut RF_DROP: u32 = 0;
+/// 最近 8 次 msgid（低 8 位）| txn<<8。
+static mut RF_HIST: [u32; 8] = [0; 8];
+static mut RF_HIST_N: u32 = 0;
+/// 上一笔 OPEN 应答前 12 字节（对账 wire）。
+static mut RF_RSP: [u8; 12] = [0; 12];
+static mut RF_RSP_N: u8 = 0;
 static mut RFS_READY: u8 = 0;
 /// rmt_storage_alloc_buff_cb：buff_size 0 表示 IOVEC 里的地址是窗口内偏移。
 static mut RFS_IOFF: u8 = 0;
@@ -4691,6 +4701,16 @@ fn rf_reply(at478: u64, at479: u64, sz479: u64) {
         return;
     }
     qmi_finish(&mut q, n, txn, msg);
+    if msg == 1 {
+        unsafe {
+            let mut i = 0usize;
+            while i < 12 && i < n {
+                RF_RSP[i] = q[i];
+                i += 1;
+            }
+            RF_RSP_N = i as u8;
+        }
+    }
     if glink_tx_payload(
         at478,
         at479,
@@ -4719,7 +4739,7 @@ fn put_u16_at(q: &mut [u8], at: usize, v: u16) {
     }
 }
 
-/// tftp。文件还没挂上，RRQ/WRQ 按 tqftpserv 打不开文件时的 ERROR 回。
+/// tftp。RRQ 仍 ERROR；WRQ（modem server_check.txt 探针）回 ACK block0。
 fn tf_reply(at478: u64, at479: u64, sz479: u64) {
     if unsafe { !TF_PEND } || at478 == 0 || at479 == 0 {
         return;
@@ -4730,29 +4750,37 @@ fn tf_reply(at478: u64, at479: u64, sz479: u64) {
         return;
     }
     let op = unsafe { TF_OP };
-    let (code, text): (u16, &[u8]) = if op == 1 {
-        (1, b"file not found")
-    } else if op == 2 {
-        (2, b"Access violation")
-    } else {
-        (4, b"bad op")
-    };
     let mut q = [0u8; 32];
-    q[0] = 0;
-    q[1] = 5;
-    q[2] = (code >> 8) as u8;
-    q[3] = code as u8;
-    let mut n = 4usize;
-    let mut i = 0usize;
-    while i < text.len() && n < q.len() {
-        q[n] = text[i];
-        n += 1;
-        i += 1;
-    }
-    if n < q.len() {
-        q[n] = 0;
-        n += 1;
-    }
+    let n = if op == 2 {
+        // ACK block 0 — 允许 WRQ 探针通过，不落盘。
+        q[0] = 0;
+        q[1] = 4;
+        q[2] = 0;
+        q[3] = 0;
+        4usize
+    } else {
+        let (code, text): (u16, &[u8]) = if op == 1 {
+            (1, b"file not found")
+        } else {
+            (4, b"bad op")
+        };
+        q[0] = 0;
+        q[1] = 5;
+        q[2] = (code >> 8) as u8;
+        q[3] = code as u8;
+        let mut n = 4usize;
+        let mut i = 0usize;
+        while i < text.len() && n < q.len() {
+            q[n] = text[i];
+            n += 1;
+            i += 1;
+        }
+        if n < q.len() {
+            q[n] = 0;
+            n += 1;
+        }
+        n
+    };
     if glink_tx_payload(
         at478,
         at479,
@@ -7881,10 +7909,11 @@ fn scan_new_servers(fifo: u64, rh: u64) {
             let lcid = w0 >> 16;
             let liid = rd32((fifo + off + 4) as usize);
             unsafe {
+                // 不限 intent id：OPEN 可能用掉 >10 的 id，不还则 modem 发不出 ALLOC。
                 if GLINK_INTENTS
                     && HOST_ADV >= 3
                     && lcid == 2
-                    && (1..=10).contains(&liid)
+                    && liid != 0
                     && off >= RX_VIS
                     && RX_LIID_N < 16
                 {
@@ -7963,7 +7992,16 @@ fn scan_new_servers(fifo: u64, rh: u64) {
                             i += 1;
                         }
                     }
+                    if qtype == 0 && msgid >= 1 && msgid <= 5 && !seen && unsafe { RF_PEND } {
+                        unsafe { RF_DROP |= 2 };
+                    }
                     if qtype == 0 && msgid >= 1 && msgid <= 5 && !seen && unsafe { !RF_PEND } {
+                        unsafe {
+                            RF_HIT = RF_HIT.wrapping_add(1);
+                            let slot = (RF_HIST_N % 8) as usize;
+                            RF_HIST[slot] = (msgid & 0xff) | ((txn & 0xffff) << 8);
+                            RF_HIST_N = RF_HIST_N.wrapping_add(1);
+                        }
                         if msgid == 1 {
                             let msglen = ((w1 >> 8) & 0xffff) as u64;
                             let mut name = [0u8; 64];
@@ -8337,7 +8375,7 @@ fn ctrl_service(
                             }
                             continue;
                         }
-                        let mut reply = [0u8; 1024];
+                        let mut reply = [0u8; 1536];
                         let mut rn = 0usize;
                         match code {
                             1 => push_str(&mut reply, &mut rn, "redfin\n"),
@@ -8505,6 +8543,34 @@ fn ctrl_service(
                                 push_hex(&mut reply, &mut rn, unsafe { RF_SZ } as u64);
                                 push_str(&mut reply, &mut rn, ".");
                                 push_hex(&mut reply, &mut rn, unsafe { RF_AS } as u64);
+                                push_str(&mut reply, &mut rn, " rh=");
+                                push_hex(&mut reply, &mut rn, unsafe { RF_HIT } as u64);
+                                push_str(&mut reply, &mut rn, ".");
+                                push_hex(&mut reply, &mut rn, unsafe { RF_DROP } as u64);
+                                push_str(&mut reply, &mut rn, ".");
+                                push_hex(&mut reply, &mut rn, unsafe { RF_HIST[0] } as u64);
+                                push_str(&mut reply, &mut rn, ".");
+                                push_hex(&mut reply, &mut rn, unsafe { RF_HIST[1] } as u64);
+                                push_str(&mut reply, &mut rn, ".");
+                                push_hex(&mut reply, &mut rn, unsafe { RF_HIST[2] } as u64);
+                                push_str(&mut reply, &mut rn, ".");
+                                push_hex(&mut reply, &mut rn, unsafe { RF_HIST[3] } as u64);
+                                push_str(&mut reply, &mut rn, " rs=");
+                                {
+                                    let rn0 = unsafe { RF_RSP_N } as usize;
+                                    let mut i = 0usize;
+                                    while i < rn0 && i < 8 {
+                                        let b = unsafe { RF_RSP[i] };
+                                        let hi = b >> 4;
+                                        let lo = b & 0xf;
+                                        if rn + 2 <= reply.len() {
+                                            reply[rn] = if hi < 10 { b'0' + hi } else { b'a' + (hi - 10) };
+                                            reply[rn + 1] = if lo < 10 { b'0' + lo } else { b'a' + (lo - 10) };
+                                            rn += 2;
+                                        }
+                                        i += 1;
+                                    }
+                                }
                                 push_str(&mut reply, &mut rn, " es=");
                                 push_hex(&mut reply, &mut rn, unsafe { RFS_SEED } as u64);
                                 push_str(&mut reply, &mut rn, ".");

@@ -973,3 +973,22 @@ modem `s=107` + `dog_hal_common.c:180:[tmr_slave3`（~65s 后 DOG），
 刷后仍 `s→107`、`q=42.b401,2b.1202`、无 ALLOC/IOVEC。空白影子假说证伪；
 下一卡是「OPEN 之后为何不再走 rmtfs / tmr_slave3 在等什么」。
 
+## 2026-10-18 夜：OPEN→ALLOC 断点 + rmtfs 应答对账（未推）
+
+刀：RF 取证（`rh=` hit/drop/hist，`rs=` OPEN 应答前 8 字节）、intent 归还不限 id、
+TFTP WRQ→ACK0、sm 缓冲 1536。
+
+对账：`rs=02010001000e0002` = type2 txn1 msgid1 msglen0x0e + TLV2 起 —— 与 libqrtr/
+qmi_rmtfs OPEN 成功应答一致；`caller_id` 仍 1（TLV16 在后 4 字节未进 rs 窗）。
+
+实测（GATE `13201FDD4001N8`，boot-s20）：
+- `rh=1.0.101.0.0.0` → **只收到 msgid=1 txn=1 一次**，无 msgid 4/3
+- `rf=1./boot/modem_fs1.1.1.0.0` `es=f.13` `gn=L5:…` `tf=.0.0`
+- `q=42.b401,2b.1202` **无 0x45**；`s→107`；`rk=8` `cf=0`
+
+根因判断：不是 OPEN 应答格式错（wire 已对齐；caller_id 0/1 历史都试过仍无 ALLOC）。
+modem 在一次成功 OPEN 之后**不再发** ALLOC/IOVEC；`tmr_slave3` DOG 是 init 在
+EFS 未真正 IOVEC 服务时的看门狗。TFTP 本轮仍无请求（WRQ ACK 未触发）。
+
+下一卡：OPEN 成功后 modem 还在等什么（非 rmtfs 格式）——servreg/wlan_pd 前置、
+或另一条 QRTR/QMI 链。
