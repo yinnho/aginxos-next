@@ -6444,21 +6444,10 @@ fn fastrpc_rev_work(d: u64, txf: u64, txn: u64, at: u64) -> bool {
     if unsafe { FP_SENT } != 10 {
         return false;
     }
-    // 先归还 next2 应答占用的 intent
+    // 与 register 同形：next2 应答后的 RX_DONE 会楔死读端（实证
+    // gq 停在 RX_DONE 后的续 next2）。跳过，靠多 intent / REUSE。
     if unsafe { FP_NXN } != 0 && unsafe { FP_NDONE } == 0 {
-        let liid = unsafe { FP_NLIID };
-        if liid == 0 {
-            unsafe { FP_NDONE = 1 };
-            return false;
-        }
-        if at + 8 > txn {
-            return false;
-        }
-        lpass_store(txf + at, 14 | (4 << 16));
-        lpass_store(txf + at + 4, liid);
-        lpass_tx_commit(d, txf, at, 8);
-        unsafe { FP_NDONE = 1 };
-        return true;
+        unsafe { FP_NDONE = 2 }; // 2 = 故意未发
     }
     if unsafe { FP_REV } == 1 {
         fp_rev_dispatch();
