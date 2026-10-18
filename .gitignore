@@ -21,3 +21,16 @@ docs/DSH-STUDY.md
 docs/HANDOFF-*.md
 docs/INVESTOR-*
 docs/MERGE-PLAN.md
+
+# 仓根杂物 / 构建产物闸（2026-10-18 收拾）
+crates/**/target/
+crates/bare/Cargo.lock
+.imported-claude-memory/
+.imported-claude-memory.tgz
+videos/
+sunrise-wechat.jpg
+sunrise-wechat.mp4
+taishigong.pptx
+太史公-剧情大纲.docx
+acp.rs.fixed
+0001-channels-v0.1.6-ACP.patch
