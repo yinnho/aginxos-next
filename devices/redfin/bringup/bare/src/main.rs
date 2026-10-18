@@ -5226,6 +5226,8 @@ static mut FP_RDP: u32 = 0xffff_ffff;
 static mut FP_INEW: u8 = 0;
 /// init2 前多交的那一个 RX intent（cmd5）。0 未交，1 已交。
 static mut FP_IXTRA: u8 = 0;
+/// 已向 TX 环塞过 READ_NOTIF（cmd13）。内核 sent_read_notify 同形。
+static mut FP_RNOTIF: u8 = 0;
 /// 已经对对方的应答回过 RX_DONE_W_REUSE。第二包另计。
 static mut FP_RDONE: u8 = 0;
 static mut FP_ODONE: u8 = 0;
@@ -6002,29 +6004,7 @@ fn fastrpc_init2(d: u64, txf: u64, txn: u64, at: u64) -> bool {
     if unsafe { FP_REUSE } == 0 {
         return false;
     }
-    // 单变量下一刀：init2 TX 前先交一个额外 RX intent（cmd5），
-    // 给 DSP 回 init2 应答用。IPCC 补踢已证不足以让 DSP 推 tail。
-    if unsafe { FP_IXTRA } == 0 {
-        if at + 16 > txn {
-            return false;
-        }
-        let ch = 3u32; // fastrpcglink-apps-dsp
-        let sent = unsafe { LG_ISENT[ch as usize] };
-        let id = (sent as u32).saturating_add(1);
-        let sz = lpass_intent_sz(ch, sent.min(63));
-        lpass_store(txf + at, 5 | ((ch + 1) << 16));
-        lpass_store(txf + at + 4, 1);
-        lpass_store(txf + at + 8, sz);
-        lpass_store(txf + at + 12, id);
-        lpass_tx_commit(d, txf, at, 16);
-        unsafe {
-            FP_IXTRA = 1;
-            if sent < 255 {
-                LG_ISENT[ch as usize] = sent + 1;
-            }
-        }
-        return true;
-    }
+    // FP_IXTRA 刀已证伪（intent 本身卡在 0x3d0）；改走 READ_NOTIF。
     let page = core::ptr::addr_of!(FP_PAGE) as u64;
     let rcid = unsafe { FP_RCID } as usize;
     if rcid >= 8 {
@@ -6561,10 +6541,19 @@ fn lpass_glink_work() {
         return;
     }
     let Some(at) = lpass_tx_idle(d, txn, 16) else {
-        // TX 环还有 DSP 没吃的包（init2 卡死形：head!=tail）。首踢若丢，
-        // 旧逻辑在此直接 return，永远不再敲门铃。单变量：pending 时补踢
-        // IPCC client3 signal0（与 lpass_tx_commit 同值）。
-        wr32(0x4080_0c, 3 << 16);
+        // TX 还有未消费数据。IPCC 补踢已证伪。内核在 tx_avail 不足时
+        // 发 GLINK_CMD_READ_NOTIF(13)，请对方继续读 TX 环；此处同形，
+        // 只发一次（FP_RNOTIF），其后仅补踢。
+        let th = smem_rd32(d + 4).unwrap_or(0) as u64;
+        let tt = smem_rd32(d).unwrap_or(0) as u64;
+        if unsafe { FP_RNOTIF } == 0 && th >= tt && th + 8 <= txn {
+            lpass_store(txf + th, 13); // cmd=13 param1=0
+            lpass_store(txf + th + 4, 0);
+            lpass_tx_commit(d, txf, th, 8);
+            unsafe { FP_RNOTIF = 1 };
+        } else {
+            wr32(0x4080_0c, 3 << 16);
+        }
         return;
     };
     let need = unsafe { LG_NEED };
@@ -7444,6 +7433,8 @@ fn ctrl_service(
                             14
                         } else if ctrl_line_is(b"fr") {
                             15
+                        } else if ctrl_line_is(b"tx") {
+                            16
                         } else if unsafe { CTRL_LINE_N } == 0 {
                             3
                         } else {
@@ -7881,6 +7872,12 @@ fn ctrl_service(
                                     }
                                     push_hex(&mut reply, &mut rn, unsafe { SMEM_RX[i] } as u64);
                                 }
+                                push_str(&mut reply, &mut rn, " rn=");
+                                push_hex(&mut reply, &mut rn, unsafe { FP_RNOTIF } as u64);
+                                push_str(&mut reply, &mut rn, " gd=");
+                                push_hex(&mut reply, &mut rn, unsafe { FP_GDONE } as u64);
+                                push_str(&mut reply, &mut rn, ".");
+                                push_hex(&mut reply, &mut rn, unsafe { FP_GLIID } as u64);
                                 push_str(&mut reply, &mut rn, "\n");
                             }
                             9 => {
@@ -8049,7 +8046,77 @@ fn ctrl_service(
                                 }
                                 push_str(&mut reply, &mut rn, "\n");
                             }
+                            16 => {
+                                // 发送环 pending 起 56B hex，对账 intent/TX_DATA/READ_NOTIF。
+                                let d = unsafe { LG_D };
+                                let txf = unsafe { LG_TX };
+                                let txn = unsafe { LG_TXN };
+                                let tt = if d != 0 {
+                                    smem_rd32(d).unwrap_or(0) as u64
+                                } else {
+                                    0
+                                };
+                                let th = if d != 0 {
+                                    smem_rd32(d + 4).unwrap_or(0) as u64
+                                } else {
+                                    0
+                                };
+                                push_str(&mut reply, &mut rn, "tx gq=");
+                                push_hex(&mut reply, &mut rn, th);
+                                push_str(&mut reply, &mut rn, ".");
+                                push_hex(&mut reply, &mut rn, tt);
+                                push_str(&mut reply, &mut rn, " rn=");
+                                push_hex(&mut reply, &mut rn, unsafe { FP_RNOTIF } as u64);
+                                push_str(&mut reply, &mut rn, " gd=");
+                                push_hex(&mut reply, &mut rn, unsafe { FP_GDONE } as u64);
+                                push_str(&mut reply, &mut rn, ".");
+                                push_hex(&mut reply, &mut rn, unsafe { FP_GLIID } as u64);
+                                push_str(&mut reply, &mut rn, " ix=");
+                                push_hex(&mut reply, &mut rn, unsafe { FP_IXTRA } as u64);
+                                push_str(&mut reply, &mut rn, " ru=");
+                                push_hex(&mut reply, &mut rn, unsafe { FP_REUSE } as u64);
+                                push_str(&mut reply, &mut rn, " h=");
+                                if txf != 0 && tt + 56 <= txn {
+                                    dcache_ivac(txf + tt, 56);
+                                    let mut i = 0u64;
+                                    while i < 14 {
+                                        if i != 0 {
+                                            push_str(&mut reply, &mut rn, ".");
+                                        }
+                                        push_hex(
+                                            &mut reply,
+                                            &mut rn,
+                                            smem_rd32(txf + tt + i * 4).unwrap_or(0xffff_ffff) as u64,
+                                        );
+                                        i += 1;
+                                    }
+                                } else {
+                                    push_str(&mut reply, &mut rn, "-");
+                                }
+                                // 前 16B 上下文（若 tail>=16）
+                                push_str(&mut reply, &mut rn, " p=");
+                                if txf != 0 && tt >= 16 {
+                                    let po = tt - 16;
+                                    dcache_ivac(txf + po, 16);
+                                    let mut i = 0u64;
+                                    while i < 4 {
+                                        if i != 0 {
+                                            push_str(&mut reply, &mut rn, ".");
+                                        }
+                                        push_hex(
+                                            &mut reply,
+                                            &mut rn,
+                                            smem_rd32(txf + po + i * 4).unwrap_or(0xffff_ffff) as u64,
+                                        );
+                                        i += 1;
+                                    }
+                                } else {
+                                    push_str(&mut reply, &mut rn, "-");
+                                }
+                                push_str(&mut reply, &mut rn, "\n");
+                            }
                             3 => {}
+
                             _ => push_str(&mut reply, &mut rn, "?\n"),
                         }
                         if rn > 0 && ctrl_reply(sock, &reply[..rn]) {
