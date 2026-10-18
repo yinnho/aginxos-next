@@ -2281,10 +2281,11 @@ static mut PAS_META: PasMeta = PasMeta { raw: [0; 12288] };
 
 /// modem 镜像止于 0x9D800000，cdsp_sec 从 0x9F400000 起。
 /// 窗口长度等于 lito.dtsi 里 qcom,sharedmem-uio 的 0x280000。
-/// 后面四段各 2MiB 是主机侧的 fs1/fs2/fsc/fsg，modem 看不见。
+/// 后面四段各 0x280000 是主机侧的 fs1/fs2/fsc/fsg，modem 看不见。
 const RFS_ADDR: u64 = 0x9E00_0000;
 const RFS_SIZE: u64 = 0x28_0000;
-const SH_SIZE: u64 = 0x20_0000;
+/// 对账 Linux：modemst1/2/fsg 均为 2621440；IOVEC 可读 offset=1024 size=2620416。
+const SH_SIZE: u64 = 0x28_0000;
 const SH0: u64 = RFS_ADDR + RFS_SIZE;
 
 #[repr(C, align(4096))]
@@ -2382,7 +2383,7 @@ fn rfs_shadow_ready(caller: u32) {
 }
 
 /// 从 GPT 分区灌 4 块 rmtfs 影子（对账 radio README：
-/// modemst1/2、fsc、fsg ↔ fs1/fs2/fsc/fsg）。每槽最多 2MiB。
+/// modemst1/2、fsc、fsg ↔ fs1/fs2/fsc/fsg）。每槽最多 0x280000（对账 modemst 分区）。
 /// 这是冲 0x45 的 EFS 前置：空白影子 → modem DOG → 永不 spawn wlan_pd。
 fn rfs_seed_efs(ufs: &mut Ufs) {
     // modemst/fsg 在 sdf（对账 radio README），常见 UFS LUN 5；
@@ -3148,6 +3149,9 @@ static mut RF_DROP: u32 = 0;
 /// 最近 8 次 msgid（低 8 位）| txn<<8。
 static mut RF_HIST: [u32; 8] = [0; 8];
 static mut RF_HIST_N: u32 = 0;
+/// IOVEC rfs_iovec 成功/失败次数（冲 0x45：影子过短曾全失败）。
+static mut RF_IOK: u32 = 0;
+static mut RF_IFAIL: u32 = 0;
 /// 上一笔 OPEN 应答前 12 字节（对账 wire）。
 static mut RF_RSP: [u8; 12] = [0; 12];
 static mut RF_RSP_N: u8 = 0;
@@ -4724,7 +4728,15 @@ fn rf_reply(at478: u64, at479: u64, sz479: u64) {
         put_result(&mut q, &mut n, id >= 10);
     } else if msg == 3 {
         let id = qmi_tlv_u32(fifo, off, chunk, 1).unwrap_or(0xffff_ffff);
-        put_result(&mut q, &mut n, !rfs_iovec(fifo, off, chunk, id));
+        let ok = rfs_iovec(fifo, off, chunk, id);
+        unsafe {
+            if ok {
+                RF_IOK = RF_IOK.wrapping_add(1);
+            } else {
+                RF_IFAIL = RF_IFAIL.wrapping_add(1);
+            }
+        }
+        put_result(&mut q, &mut n, !ok);
     } else if msg == 4 {
         let sz = qmi_tlv_u32(fifo, off, chunk, 2);
         if let Some(sz) = sz {
@@ -8710,6 +8722,10 @@ fn ctrl_service(
                                 push_hex(&mut reply, &mut rn, unsafe { RF_HIST[2] } as u64);
                                 push_str(&mut reply, &mut rn, ".");
                                 push_hex(&mut reply, &mut rn, unsafe { RF_HIST[3] } as u64);
+                                push_str(&mut reply, &mut rn, " ik=");
+                                push_hex(&mut reply, &mut rn, unsafe { RF_IOK } as u64);
+                                push_str(&mut reply, &mut rn, ".");
+                                push_hex(&mut reply, &mut rn, unsafe { RF_IFAIL } as u64);
                                 push_str(&mut reply, &mut rn, " rs=");
                                 {
                                     let rn0 = unsafe { RF_RSP_N } as usize;

@@ -1116,3 +1116,30 @@ Size 1572864），再 `IOVEC`（msgid=3）。
 - 仍 `s=107`、`q=42.b401,2b.1202`（无 0x45）；下一刀另论 wlan_pd / 0x45
 
 未推。
+
+
+### 本轮：SH_SIZE 影子过短 → IOVEC 大读失败（2026-10-19 ~06:25 Asia/Shanghai）
+
+**Linux 对账**（槽 b dmesg）：`Alloc req_size: 2621440`；随后 IOVEC Read
+`fs2 offset=1024 size=2620416`（= 分区 2621440 − 1024）。modemst1/2/fsg
+皆 **2621440**，fsc=131072。
+
+**根因**：裸机 `SH_SIZE=0x200000`（2MiB）< 2620416 → `rfs_one` 拒读 →
+IOVEC 回失败 → 旧证 `fs_rmts_pm.c:1038` DOG。RFS 窗口 `0x280000` 本身够，
+只影子短。
+
+**刀**：`SH_SIZE` → `0x280000`（仍止于 `0x9EC80000` < cdsp_sec`@9f400000`）；
+`ik=`/`RF_IOK`·`RF_IFAIL` 计数。
+
+**刷验**（GATE `13201FDD4001N8`，boot-s20，`set_active a`）：
+- `ik=4.0` — **IOVEC 4 成功 0 失败**
+- `es=f` `gn=L5:modemst1,L5:modemst2,L5:fsc,L5:fsg` — 四槽灌影
+- `rf=…8.280000.0` `rh=8.3.…d000104.e000103`
+- `q=42.b401,2b.1202,f.1,33.201,15.1,33.b01,18.1,16.1001` — 服务变多，**仍无 0x45**
+- `s=107`；`fr` 现 `glink_core_intent.c:777:[irq65]…`（**不再** `fs_rmts_pm`）
+- `af`=ADSP `SNS_REG_INIT…SNS_RC_SUCCESS`
+
+结论：RFS EFS 大读已通；0x45/wlan_pd 仍未注册；下一刀看 glink intent /
+modem SFR `glink_core_intent`，非再砍影子长度。
+
+未推。
