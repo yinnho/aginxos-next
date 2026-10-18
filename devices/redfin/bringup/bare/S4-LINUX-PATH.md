@@ -863,3 +863,18 @@ IPCC 补踢刷机后 `gq` 仍 `408.3d0`、`fp=3`、无 `0x45`——门铃假设�
 下一刀单变量：`fastrpc_init2` 在 `FP_REUSE` 之后、init2 TX 之前先发
 一条 cmd5（fastrpc 通道 lcid4）额外 RX intent，再发 init2。验 `gq`/
 `fp`/`fs`/`q`。
+
+## 2026-10-18 夜：READ_NOTIF + tx hex（已刷证伪）+ 下一刀跳过 register RX_DONE
+
+刷 `cc7c775`/`boot-s20`：GATE 串号 `13201FDD4001N8`。
+
+`tx` 实读（Asia/Shanghai）：
+- `gq=410.3d0` `rn=1` `gd=1.1` `ix=0` `ru=0`
+- `h=` @0x3d0 起 56B：`40009.92.28.0.1.1.5002.0.3.3000000.a7ebe000.3.1000.0`
+  → TX_DATA lcid4 iid=0x92 size=40；init2 smq（handle3 sc=0x03000000 ctx=0x5002）与内核布局一致
+- `p=` 前 16B：`1000.0.4000e.1` → 上包末 `1000.0` + **RX_DONE_W_REUSE lcid4 liid=1**
+- READ_NOTIF 已写入 @0x408（head=0x410=0x408+8），**tail 仍 0x3d0**——DSP 未读到 cmd13
+
+结论：IPCC / 额外 intent / READ_NOTIF 三刀均不能让 tail 前进。卡点不在门铃/intent 数量/读通知，而在 **RX_DONE 被消费后 DSP 读端停死**（任意后继包放在 0x3d0 都不吃）。register 后 `FP_GLIID=1` 的 RX_DONE 最可疑。
+
+下一刀：`fastrpc_init2` 内跳过该 RX_DONE（`FP_GDONE=2`），其余不变。验 `gq` tail 是否过 0x3d0、`fp`/`rn`/`tx h=`。

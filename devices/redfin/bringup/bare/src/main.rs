@@ -5985,26 +5985,17 @@ fn fastrpc_init2(d: u64, txf: u64, txn: u64, at: u64) -> bool {
     if unsafe { FP_REGN } == 0 || unsafe { FP_REG[0] } != 0x3002 || unsafe { FP_REG[2] } != 0 {
         return false;
     }
+    // 单变量刀：跳过 register 应答的 RX_DONE_W_REUSE。
+    // 证据：tail 停在 0x3d0=RX_DONE 之后；intent/init2/READ_NOTIF 放在
+    // 同一偏移均不消费 → 疑 RX_DONE(liid=FP_GLIID) 楔死 DSP 读端。
     if unsafe { FP_GDONE } == 0 {
-        let liid = unsafe { FP_GLIID };
-        if liid == 0 {
-            unsafe { FP_GDONE = 1 };
-            return false;
-        }
-        if at + 8 > txn {
-            return false;
-        }
-        lpass_store(txf + at, 14 | (4 << 16));
-        lpass_store(txf + at + 4, liid);
-        lpass_tx_commit(d, txf, at, 8);
-        unsafe { FP_GDONE = 1 };
-        return true;
+        unsafe { FP_GDONE = 2 }; // 2 = 故意未发
     }
-    // 等 register 那包的 RX_DONE。
+    // 等 register 那包的 RX_DONE（对方还我们的 TX intent）。
     if unsafe { FP_REUSE } == 0 {
         return false;
     }
-    // FP_IXTRA 刀已证伪（intent 本身卡在 0x3d0）；改走 READ_NOTIF。
+    // FP_IXTRA / READ_NOTIF 均已证伪（卡在 RX_DONE 之后的偏移）。
     let page = core::ptr::addr_of!(FP_PAGE) as u64;
     let rcid = unsafe { FP_RCID } as usize;
     if rcid >= 8 {
