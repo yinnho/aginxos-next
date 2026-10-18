@@ -2366,6 +2366,7 @@ fn rfs_copy(dst: u64, src: u64, n: u64) {
 }
 
 /// 第一笔读写之前把这块影子清成空白 EFS。modem 自己会写格式。
+/// 若开机已从 GPT 灌过（RFS_SEED），不再清零——保留真 EFS/fsg。
 fn rfs_shadow_ready(caller: u32) {
     let bit = 1u8 << caller;
     if unsafe { RFS_Z } & bit != 0 {
@@ -2380,8 +2381,129 @@ fn rfs_shadow_ready(caller: u32) {
     unsafe { RFS_Z |= bit };
 }
 
-/// rmtfs_iovec：direction 0 从影子读进窗口，非 0 从窗口写回影子。
-/// fsg 在 rmt_storage 的表里是 O_RDONLY。
+/// 从 GPT 分区灌 4 块 rmtfs 影子（对账 radio README：
+/// modemst1/2、fsc、fsg ↔ fs1/fs2/fsc/fsg）。每槽最多 2MiB。
+/// 这是冲 0x45 的 EFS 前置：空白影子 → modem DOG → 永不 spawn wlan_pd。
+fn rfs_seed_efs(ufs: &mut Ufs) {
+    // modemst/fsg 在 sdf（对账 radio README），常见 UFS LUN 5；
+    // sda=LUN0 的 GPT 只有 modem_a/b。逐 LUN 读 GPT 名查。
+    const MAP: &[(&[&str], u32)] = &[
+        (&["modemst1", "modem_st1"], 0),
+        (&["modemst2", "modem_st2"], 1),
+        (&["fsc"], 2),
+        (&["fsg"], 3),
+    ];
+    unsafe {
+        RFS_GNN = 0;
+        RFS_GN = [0; 64];
+    }
+    // 临时 GPT：头进 DATA，条目进 ARRAY（会覆盖 LUN0 缓存；名查完即用完）
+    let mut lun: u8 = 0;
+    while lun < 8 {
+        if ufs.read10_lun(lun, 1, 1, DATA).is_err() {
+            lun = lun.wrapping_add(1);
+            continue;
+        }
+        let hdr = unsafe { core::slice::from_raw_parts_mut(DATA as *mut u8, 4096) };
+        let Ok(h) = gpt::check(hdr) else {
+            lun = lun.wrapping_add(1);
+            continue;
+        };
+        if !gpt::header_crc_ok(hdr, &h) {
+            lun = lun.wrapping_add(1);
+            continue;
+        }
+        if ufs.read10_lun(lun, h.entry_lba, 1, ARRAY).is_err() {
+            lun = lun.wrapping_add(1);
+            continue;
+        }
+        let array = unsafe { core::slice::from_raw_parts(ARRAY as *const u8, 4096) };
+        if !gpt::array_crc_ok(hdr, array, &h) {
+            lun = lun.wrapping_add(1);
+            continue;
+        }
+        let entries = h.array_bytes >> 7;
+        // 记录本 LUN 上命中的候选名
+        for &(names, _slot) in MAP {
+            for name in names {
+                if gpt::find(array, entries, name).is_some() {
+                    unsafe {
+                        let mut p = RFS_GNN as usize;
+                        if p > 0 && p < 60 {
+                            RFS_GN[p] = b',';
+                            p += 1;
+                        }
+                        // 前缀 L 数字
+                        if p + 2 < 60 {
+                            RFS_GN[p] = b'L';
+                            RFS_GN[p + 1] = b'0' + lun;
+                            RFS_GN[p + 2] = b':';
+                            p += 3;
+                        }
+                        for &c in name.as_bytes() {
+                            if p < 63 {
+                                RFS_GN[p] = c;
+                                p += 1;
+                            }
+                        }
+                        RFS_GNN = p as u8;
+                    }
+                }
+            }
+        }
+        for &(names, slot) in MAP {
+            if unsafe { RFS_SEED } & (1 << slot) != 0 {
+                continue;
+            }
+            let mut part = None;
+            for name in names {
+                if let Some(p) = gpt::find(array, entries, name) {
+                    part = Some(p);
+                    break;
+                }
+            }
+            let Some(p) = part else {
+                continue;
+            };
+            if p.start > u32::MAX as u64 || p.end < p.start {
+                continue;
+            }
+            let start = p.start as u32;
+            let nblk = ((p.end - p.start + 1) as u64).min(SH_SIZE / 4096) as u32;
+            if nblk == 0 {
+                continue;
+            }
+            let dest = SH0 + (slot as u64) * SH_SIZE;
+            let mut i = 0u32;
+            let mut ok = true;
+            while i < nblk {
+                if ufs.read10_lun(lun, start + i, 1, DATA).is_err() {
+                    ok = false;
+                    break;
+                }
+                unsafe {
+                    core::ptr::copy_nonoverlapping(
+                        DATA as *const u8,
+                        (dest + (i as u64) * 4096) as *mut u8,
+                        4096,
+                    );
+                }
+                i += 1;
+            }
+            if ok {
+                dcache_civac(dest, (nblk as u64) * 4096);
+                unsafe {
+                    RFS_Z |= 1 << slot;
+                    RFS_SEED |= 1 << slot;
+                }
+            }
+        }
+        lun = lun.wrapping_add(1);
+    }
+    let _ = MAP;
+}
+
+
 fn rfs_one(caller: u32, dir: u8, sector: u32, phys: u32, nsec: u32) -> bool {
     if caller == 0 || caller > 4 || nsec == 0 {
         return caller >= 1 && caller <= 4;
@@ -3023,6 +3145,14 @@ static mut RFS_READY: u8 = 0;
 static mut RFS_IOFF: u8 = 0;
 /// 四块影子各清一次。bit0..3 对应 fs1/fs2/fsc/fsg。
 static mut RFS_Z: u8 = 0;
+/// 开机从 GPT 灌入的影子位图（同 slot）。es= 导出。
+static mut RFS_SEED: u8 = 0;
+/// gpt_verify 留下的条目数，供 rfs_seed 名查。
+static mut GPT_ENTRIES: usize = 0;
+/// 扫到的 EFS 相关 GPT 名（拼接，供 sm gn=）。
+static mut RFS_GN: [u8; 64] = [0; 64];
+static mut RFS_GNN: u8 = 0;
+
 /// ADSP 加载码。0x80000000 以上是段数，其余是失败码。p0/p1/p2 是 PAS 三步的 x0。
 static mut ADSP_ST: u32 = 0;
 static mut ADSP_P: [u32; 5] = [0xffff_ffff; 5];
@@ -8375,6 +8505,21 @@ fn ctrl_service(
                                 push_hex(&mut reply, &mut rn, unsafe { RF_SZ } as u64);
                                 push_str(&mut reply, &mut rn, ".");
                                 push_hex(&mut reply, &mut rn, unsafe { RF_AS } as u64);
+                                push_str(&mut reply, &mut rn, " es=");
+                                push_hex(&mut reply, &mut rn, unsafe { RFS_SEED } as u64);
+                                push_str(&mut reply, &mut rn, ".");
+                                push_hex(&mut reply, &mut rn, unsafe { GPT_ENTRIES } as u64);
+                                push_str(&mut reply, &mut rn, " gn=");
+                                let gnn = unsafe { RFS_GNN } as usize;
+                                let mut gi = 0usize;
+                                while gi < gnn && gi < 64 {
+                                    let b = unsafe { RFS_GN[gi] };
+                                    if (0x21..0x7f).contains(&b) && rn < reply.len() {
+                                        reply[rn] = b;
+                                        rn += 1;
+                                    }
+                                    gi += 1;
+                                }
                                 push_str(&mut reply, &mut rn, " tf=");
                                 let tfn = unsafe { TF_NAME_N } as usize;
                                 let mut ti = 0usize;
@@ -9170,6 +9315,7 @@ extern "C" fn rust_main() -> ! {
 
     // ④ 判据①：cache-on 世界 GPT 双 CRC 再验（不过→仪器码早退）
     let (t_post, entries) = gpt_verify(&mut ufs, freq);
+    unsafe { GPT_ENTRIES = entries };
 
     // ⑤ 名查 boot_a + 界检（u5a §⑤ 契约；array=cache-on 读）
     let array = unsafe { core::slice::from_raw_parts(ARRAY as *const u8, 4096) };
@@ -9921,6 +10067,9 @@ extern "C" fn rust_main() -> ! {
             }
         }
     }
+    // 冲 0x45：modem PAS 前灌真 EFS 影子，避免空白 fsg → DOG → 无 wlan_pd。
+    rfs_seed_efs(&mut ufs);
+    s20_log(&mut ufs, freq, &mut t, " s20 es=0x", unsafe { RFS_SEED } as u64);
     // msm_sharedmem_probe 在 modem 起来之前就把窗口交给 MSS。
     let _asg = rfs_assign();
     s20_log(&mut ufs, freq, &mut t, " s20 rfs=0x", unsafe { RF_AS } as u64);

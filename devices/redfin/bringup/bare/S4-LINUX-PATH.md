@@ -962,3 +962,14 @@ stat/fopen 对任意路径回 64B 零文件；reverse 应答后对 NLIID 发 RX_
 实测：`rv` 到 `8`，`gq` TX 空闲（续 next2 卡环解开），`ri` 显示 pathname 为 `"\0"`（空串），`af` 现 `SNS_REG_INIT…SNS_RC_SUCCESS`，**仍无 `0x45`**。
 缺：真实 hexagonfs 文件（`ADSP_LIBRARY_PATH` / sensors registry 等）；`0x45` 仍属 modem WLFW 侧。
 
+## 2026-10-18 夜：冲 0x45 — EFS 多 LUN 灌影（未推）
+
+判断：`0x45` 属 modem WLFW，**不是** apps_mem/hexagonfs 前置。现卡点是
+modem `s=107` + `dog_hal_common.c:180:[tmr_slave3`（~65s 后 DOG），
+`q` 永无 `0x45`；rmtfs 仍只有一次 `OPEN /boot/modem_fs1`。
+
+刀：`Ufs::read10_lun` + `rfs_seed_efs` 扫 LUN0..7 GPT。
+证据：`es=f.13` `gn=L5:modemst1,L5:modemst2,L5:fsc,L5:fsg` — **LUN5 四槽灌成功**。
+刷后仍 `s→107`、`q=42.b401,2b.1202`、无 ALLOC/IOVEC。空白影子假说证伪；
+下一卡是「OPEN 之后为何不再走 rmtfs / tmr_slave3 在等什么」。
+

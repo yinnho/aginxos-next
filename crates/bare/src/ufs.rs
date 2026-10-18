@@ -185,4 +185,38 @@ impl Ufs {
             }
         }
     }
+
+    /// READ(10) 指定 LUN（UPIU 头第 3 字节）。LUN0 = 默认 read10。
+    /// 冲 EFS：modemst/fsg 在 sdf（常见 LUN5），不在 sda。
+    pub fn read10_lun(&mut self, lun: u8, lba: u32, blocks: u16, buf: usize) -> Result<(), Fail> {
+        let bytes = (blocks as u32) << 12;
+        let mut retries = 0u8;
+        loop {
+            self.prep();
+            for off in (0..bytes as usize).step_by(8) {
+                wr64(buf + off, 0);
+            }
+            wr32(self.utrd, 0x1400_0000);
+            wr32(self.utrd + 28, 0x0100_0001);
+            // 01 40 <lun> tag —— LE 字：tag<<24 | lun<<16 | 0x40<<8 | 0x01
+            wr32(self.ucd, 0x0000_4001 | ((lun as u32) << 16));
+            wr32(self.ucd + 12, bytes.swap_bytes());
+            wr8(self.ucd + 16, 0x28);
+            let lba_be = lba.to_be_bytes();
+            wr8(self.ucd + 18, lba_be[0]);
+            wr8(self.ucd + 19, lba_be[1]);
+            wr8(self.ucd + 20, lba_be[2]);
+            wr8(self.ucd + 21, lba_be[3]);
+            let blk_be = blocks.to_be_bytes();
+            wr8(self.ucd + 23, blk_be[0]);
+            wr8(self.ucd + 24, blk_be[1]);
+            wr64(self.ucd + 0x400, buf as u64);
+            wr32(self.ucd + 0x40C, bytes - 1);
+            match self.issue() {
+                Ok(()) => return Ok(()),
+                Err(Fail::Check(6)) if retries < 2 => retries += 1,
+                Err(e) => return Err(e),
+            }
+        }
+    }
 }
