@@ -485,8 +485,8 @@ static mut IN_BUSY: bool = false;
 /// 交给 smoltcp 的一帧。OUT 环马上要复用 OUT_BUF，所以先拷出来。
 static mut RX_COPY: [u8; 1536] = [0; 1536];
 static mut RX_LEN: usize = 0;
-static mut TCP_RX: [u8; 2048] = [0; 2048];
-static mut TCP_TX: [u8; 2048] = [0; 2048];
+static mut TCP_RX: [u8; 2560] = [0; 2560];
+static mut TCP_TX: [u8; 2560] = [0; 2560];
 static mut CTRL_SLOTS: [smoltcp::iface::SocketStorage<'static>; 1] =
     [smoltcp::iface::SocketStorage::EMPTY];
 static mut CTRL_IFACE: Option<smoltcp::iface::Interface> = None;
@@ -1745,6 +1745,7 @@ fn ipa_bcm_vote(freq: u32) {
 
 /// IPA wrapper / GSI EE0 只读（lito DTS：ipa@1e00000 + gsi@1e04000；IPAv4.7→GSI 2.7）。
 /// 基址：IPA=0x1e00000 reg_base=0x40000；GSI=0x1e04000。无 doorbell / 无 CH_CMD。
+/// 同次另闩 CH7 CNTXT→gc=（初读；ALLOC/START 见 ipa_gsi_ch7_cfg）。
 const IPA_WRAP: usize = 0x01e0_0000;
 const IPA_REG_BASE_OFST: usize = 0x0004_0000;
 const IPA_VER_OFF: usize = 0x34;
@@ -1756,6 +1757,54 @@ const GSI_EE0_STATUS: usize = 0x1_2000;
 const GSI_EE0_HW_PARAM2: usize = 0x1_2040; // GSI 2.5/2.7
 const GSI_EE0_SW_VER: usize = 0x1_2044;
 const GSI_EE0_CH0_CNTXT0: usize = 0xf000;
+/// EE0 CH_k CNTXT：基 0xf000 + 0x80*k（gsi_reg_v2）。CH7 = APPS_WAN_CONS。
+const GSI_EE0_CH7_CNTXT0: usize = 0xf000 + 0x80 * 7; // 0xf380
+const GSI_EE0_TYPE_IRQ: usize = 0x1_2080;
+const GSI_EE0_ERROR_LOG: usize = 0x1_2200; // 只读；禁 ERROR_LOG_CLR
+/// gsi_reg_v2 EE0：CH_CMD / EV_CMD / IRQ 掩码 / doorbell / INTSET（GSI 2.7）。
+const GSI_EE0_CH_CMD: usize = 0x1_2008;
+const GSI_EE0_EV_CMD: usize = 0x1_2010;
+const GSI_EE0_TYPE_IRQ_MSK: usize = 0x1_2088;
+const GSI_EE0_SRC_CH_IRQ: usize = 0x1_2090;
+const GSI_EE0_SRC_EV_IRQ: usize = 0x1_2094;
+const GSI_EE0_SRC_CH_IRQ_MSK: usize = 0x1_2098;
+const GSI_EE0_SRC_EV_IRQ_MSK: usize = 0x1_209c;
+const GSI_EE0_SRC_CH_IRQ_CLR: usize = 0x1_20a0;
+const GSI_EE0_SRC_EV_IRQ_CLR: usize = 0x1_20a4;
+const GSI_EE0_IEOB_IRQ_CLR: usize = 0x1_20c0;
+const GSI_EE0_IEOB_IRQ_MSK: usize = 0x1_20b8;
+const GSI_EE0_INTSET: usize = 0x1_2180;
+/// EV0 CNTXT0 @ EE0（0x10000 + 0x80*0）
+const GSI_EE0_EV0_CNTXT0: usize = 0x1_0000;
+/// CH7 doorbell 0/1（0x11000 + 8*7）
+const GSI_EE0_CH7_DB0: usize = 0x1_1000 + 8 * 7;
+const GSI_EE0_CH7_DB1: usize = GSI_EE0_CH7_DB0 + 4;
+/// EV0 doorbell 0/1
+const GSI_EE0_EV0_DB0: usize = 0x1_1100;
+const GSI_EE0_EV0_DB1: usize = GSI_EE0_EV0_DB0 + 4;
+/// CH7 QOS（v2.5：CNTXT 块内 +0x5c）
+const GSI_EE0_CH7_QOS: usize = GSI_EE0_CH7_CNTXT0 + 0x5c;
+/// CH_CMD / EV_CMD opcodes（msm_gsi.h）
+const GSI_CH_ALLOCATE: u32 = 0x0;
+const GSI_CH_START: u32 = 0x1;
+const GSI_EVT_ALLOCATE: u32 = 0x0;
+/// CHSTATE（CNTXT0[23:20]）
+const GSI_CHSTATE_ALLOCATED: u32 = 0x1;
+const GSI_CHSTATE_STARTED: u32 = 0x2;
+/// GPI FROM_GSI / re=16 / EVT GPI_EV+IRQ（msm_gsi.h）
+const GSI_PROT_GPI: u32 = 0x2;
+const GSI_DIR_FROM_GSI: u32 = 0x0;
+const GSI_RE_SIZE_16: u32 = 16;
+const GSI_EVT_CHTYPE_GPI_EV: u32 = 0x2;
+const GSI_INTR_IRQ: u32 = 0x1;
+const GSI_ESCAPE_BUF_ONLY: u32 = 0x1;
+const GSI_RE_XFER: u32 = 0x2;
+/// IPA_GENERIC_RX_BUFF_BASE_SZ（ipa_dp.c）— TRE len 用基值，不对齐 SKB 宏
+const GSI_RX_BUF_SZ: u64 = 0x2000;
+/// 最少 RX TRE 数（Linux 会灌满 pool；本刀只证 doorbell 非空）
+const GSI_RX_TRE_MIN: u32 = 4;
+/// ALLOC/START 轮询超时（ms）。Linux：ALLOC wait 5*HZ；START 1s×5 poll ≈5s。
+const GSI_CMD_TIMEOUT_MS: u64 = 5000;
 /// ipa_4_7_mem_part canary 位点（相对 SW SRAM；canary 在 section-4）
 const IPA47_CA_OFF: usize = 0x684; // modem_hdr_ofst(0x688)-4
 const IPA47_CB_OFF: usize = 0x284; // v4_flt_hash_ofst(0x288)-4
@@ -1779,6 +1828,13 @@ fn ipa_gsi_ro_probe() {
     let gver = rd32(GSI_BASE + GSI_EE0_SW_VER);
     let hp2 = rd32(GSI_BASE + GSI_EE0_HW_PARAM2);
     let ch0 = rd32(GSI_BASE + GSI_EE0_CH0_CNTXT0);
+    // CH7（APPS_WAN_CONS）CNTXT0..3 + TYPE_IRQ + ERROR_LOG — 只读；无 CH_CMD/doorbell。
+    let c7_0 = rd32(GSI_BASE + GSI_EE0_CH7_CNTXT0);
+    let c7_1 = rd32(GSI_BASE + GSI_EE0_CH7_CNTXT0 + 4);
+    let c7_2 = rd32(GSI_BASE + GSI_EE0_CH7_CNTXT0 + 8);
+    let c7_3 = rd32(GSI_BASE + GSI_EE0_CH7_CNTXT0 + 12);
+    let tirq = rd32(GSI_BASE + GSI_EE0_TYPE_IRQ);
+    let errl = rd32(GSI_BASE + GSI_EE0_ERROR_LOG);
     // SHARED_MEM_SIZE：baddr[31:16]/size[15:0]，单位 8B → restr_bytes = baddr*8
     let baddr_u = (smem >> 16) & 0xffff;
     let restr = (baddr_u as usize).saturating_mul(8);
@@ -1798,6 +1854,277 @@ fn ipa_gsi_ro_probe() {
         IG_R = restr as u32;
         IG_ST = 1;
         IG_DONE = 1;
+        GC_C0 = c7_0;
+        GC_C1 = c7_1;
+        GC_C2 = c7_2;
+        GC_C3 = c7_3;
+        GC_IRQ = tirq;
+        GC_ERR = errl;
+        GC_ST = 1;
+    }
+}
+
+/// 只分配：清零 CH7 ring/EVT/RX 划区并 civac；不写 GSI CNTXT / CH_CMD / doorbell。
+fn ipa_gsi_ring_carve() {
+    if unsafe { GR_DONE } != 0 {
+        return;
+    }
+    let ipa_ok = unsafe { IPA_ST } & 0x8000_0000 != 0
+        && unsafe { IPA_P[0] } == 0
+        && unsafe { IPA_P[1] } == 0
+        && unsafe { IPA_P[2] } == 0;
+    if !ipa_ok {
+        return;
+    }
+    unsafe {
+        core::ptr::write_bytes(GSI_RING_BASE as *mut u8, 0, GSI_CARVE_SZ as usize);
+    }
+    dcache_civac(GSI_RING_BASE, GSI_CARVE_SZ);
+    unsafe {
+        GR_CH = (GSI_RING_BASE + GSI_CH_RING_OFF) as u32;
+        GR_EVT = (GSI_RING_BASE + GSI_EVT_RING_OFF) as u32;
+        GR_RX = (GSI_RING_BASE + GSI_RX_POOL_OFF) as u32;
+        GR_SZ = GSI_CARVE_SZ as u32;
+        GR_ST = 1;
+        GR_DONE = 1;
+    }
+}
+
+/// 轮询 CH/EV CNTXT0.CHSTATE 至 want，或超时。返回 true=命中。
+/// 不依赖 GIC：HW 改 CNTXT0 即可；顺带清 SRC_*_IRQ 位（best-effort）。
+fn gsi_poll_chstate(cntxt0: usize, irq_src: usize, irq_bit: u32, want: u32, freq: u32) -> bool {
+    let end = time::cntvct() + (freq as u64) * GSI_CMD_TIMEOUT_MS / 1000;
+    loop {
+        let v = rd32(GSI_BASE + cntxt0);
+        let st = (v >> 20) & 0xf;
+        if st == want {
+            // 清 pending（若有）
+            let pend = rd32(GSI_BASE + irq_src);
+            if pend & irq_bit != 0 {
+                wr32(
+                    GSI_BASE
+                        + if irq_src == GSI_EE0_SRC_CH_IRQ {
+                            GSI_EE0_SRC_CH_IRQ_CLR
+                        } else {
+                            GSI_EE0_SRC_EV_IRQ_CLR
+                        },
+                    irq_bit,
+                );
+            }
+            return true;
+        }
+        if time::cntvct() > end {
+            return false;
+        }
+    }
+}
+
+/// 写一颗 GPI TRE（16B）到 CH ring @ idx。公式：gsi.h `struct gsi_tre` +
+/// ipa_dp.c replenish flags = EOT|EOB|BEI、type=GSI_RE_XFER。
+fn gsi_write_rx_tre(ring_pa: u64, idx: u32, buf_pa: u64, buf_len: u16) {
+    let p = (ring_pa + (idx as u64) * 16) as *mut u32;
+    unsafe {
+        p.add(0).write_volatile(buf_pa as u32);
+        p.add(1).write_volatile((buf_pa >> 32) as u32);
+        p.add(2).write_volatile(buf_len as u32);
+        // flags@12 = bei|ieot|ieob；re_type@14 = XFER
+        p.add(3).write_volatile(0x0002_0700);
+    }
+}
+
+/// GSI CH7 config/start（划区 PA；INIT 另刀；无 EP16 cfg）。
+/// 序对照 Linux：EV ALLOC→program→prime → CH ALLOC→program → 填 TRE →
+/// doorbell → CH START → DB MSB。完成判据：CHSTATE=STARTED（超时 5s 记 st）。
+/// sm gc= 在本刀后重读 CNTXT（含 CHSTATE）；gr= 不变。
+fn ipa_gsi_ch7_cfg() {
+    if unsafe { GC_CFG_DONE } != 0 {
+        return;
+    }
+    if unsafe { GR_ST } != 1 || unsafe { IG_ST } != 1 {
+        return;
+    }
+    let freq = time::freq_or(FREQ_FALLBACK as u32);
+    let ch_pa = GSI_RING_BASE + GSI_CH_RING_OFF;
+    let evt_pa = GSI_RING_BASE + GSI_EVT_RING_OFF;
+    let rx_pa = GSI_RING_BASE + GSI_RX_POOL_OFF;
+    let ring_len: u32 = GSI_CH_RING_SZ as u32; // 0x1000
+    let re: u32 = GSI_RE_SIZE_16;
+    let max_elem = (ring_len / re) - 1; // 255
+
+    // IRQ 面：TYPE CH_CTRL|EV_CTRL；SRC mask CH7 + EV0；INTSET=IRQ
+    wr32(
+        GSI_BASE + GSI_EE0_TYPE_IRQ_MSK,
+        rd32(GSI_BASE + GSI_EE0_TYPE_IRQ_MSK) | 0x3,
+    );
+    wr32(
+        GSI_BASE + GSI_EE0_SRC_CH_IRQ_MSK,
+        rd32(GSI_BASE + GSI_EE0_SRC_CH_IRQ_MSK) | (1 << 7),
+    );
+    wr32(
+        GSI_BASE + GSI_EE0_SRC_EV_IRQ_MSK,
+        rd32(GSI_BASE + GSI_EE0_SRC_EV_IRQ_MSK) | 1,
+    );
+    wr32(GSI_BASE + GSI_EE0_INTSET, GSI_INTR_IRQ);
+
+    // ---- EV0 ALLOC ----
+    wr32(
+        GSI_BASE + GSI_EE0_EV_CMD,
+        (GSI_EVT_ALLOCATE << 24) | 0u32, // chid=0
+    );
+    unsafe {
+        core::arch::asm!("dsb sy", options(nostack));
+    }
+    let ev_ok = gsi_poll_chstate(
+        GSI_EE0_EV0_CNTXT0,
+        GSI_EE0_SRC_EV_IRQ,
+        1,
+        GSI_CHSTATE_ALLOCATED,
+        freq,
+    );
+    if !ev_ok {
+        // 超时：仍读回 gc，st=2
+        unsafe {
+            GC_C0 = rd32(GSI_BASE + GSI_EE0_CH7_CNTXT0);
+            GC_C1 = rd32(GSI_BASE + GSI_EE0_CH7_CNTXT0 + 4);
+            GC_C2 = rd32(GSI_BASE + GSI_EE0_CH7_CNTXT0 + 8);
+            GC_C3 = rd32(GSI_BASE + GSI_EE0_CH7_CNTXT0 + 12);
+            GC_IRQ = rd32(GSI_BASE + GSI_EE0_TYPE_IRQ);
+            GC_ERR = rd32(GSI_BASE + GSI_EE0_ERROR_LOG);
+            GC_ST = 2; // EV ALLOC timeout
+            GC_CFG_DONE = 1;
+        }
+        return;
+    }
+
+    // EV0 CNTXT program（gsi_program_evt_ring_ctx）
+    // CNTXT0: ELEMENT_SIZE<<24 | INTYPE<<16 | CHTYPE
+    let ev_c0 = (re << 24) | (GSI_INTR_IRQ << 16) | GSI_EVT_CHTYPE_GPI_EV;
+    wr32(GSI_BASE + GSI_EE0_EV0_CNTXT0, ev_c0);
+    wr32(GSI_BASE + GSI_EE0_EV0_CNTXT0 + 4, ring_len); // R_LENGTH
+    wr32(GSI_BASE + GSI_EE0_EV0_CNTXT0 + 8, evt_pa as u32);
+    wr32(GSI_BASE + GSI_EE0_EV0_CNTXT0 + 12, (evt_pa >> 32) as u32);
+    // CNTXT8: int_modc=1, int_modt=16（ipa_dp.c 非 napi）
+    wr32(GSI_BASE + GSI_EE0_EV0_CNTXT0 + 0x20, (1u32 << 16) | 16);
+    // CNTXT9..13 MSI/RP = 0
+    wr32(GSI_BASE + GSI_EE0_EV0_CNTXT0 + 0x24, 0);
+    wr32(GSI_BASE + GSI_EE0_EV0_CNTXT0 + 0x28, 0);
+    wr32(GSI_BASE + GSI_EE0_EV0_CNTXT0 + 0x2c, 0);
+    wr32(GSI_BASE + GSI_EE0_EV0_CNTXT0 + 0x30, 0);
+    wr32(GSI_BASE + GSI_EE0_EV0_CNTXT0 + 0x34, 0);
+
+    // prime EVT：wp = base + max_elem * re（gsi_prime_evt_ring）
+    let ev_wp = evt_pa + (max_elem as u64) * (re as u64);
+    wr32(GSI_BASE + GSI_EE0_EV0_DB1, (ev_wp >> 32) as u32);
+    unsafe {
+        core::arch::asm!("dsb sy", options(nostack));
+    }
+    wr32(GSI_BASE + GSI_EE0_EV0_DB0, ev_wp as u32);
+    wr32(GSI_BASE + GSI_EE0_IEOB_IRQ_CLR, 1);
+    wr32(
+        GSI_BASE + GSI_EE0_IEOB_IRQ_MSK,
+        rd32(GSI_BASE + GSI_EE0_IEOB_IRQ_MSK) | 1,
+    );
+
+    // ---- CH7 ALLOC ----
+    wr32(
+        GSI_BASE + GSI_EE0_CH_CMD,
+        (GSI_CH_ALLOCATE << 24) | 7u32,
+    );
+    unsafe {
+        core::arch::asm!("dsb sy", options(nostack));
+    }
+    let ch_ok = gsi_poll_chstate(
+        GSI_EE0_CH7_CNTXT0,
+        GSI_EE0_SRC_CH_IRQ,
+        1 << 7,
+        GSI_CHSTATE_ALLOCATED,
+        freq,
+    );
+    if !ch_ok {
+        unsafe {
+            GC_C0 = rd32(GSI_BASE + GSI_EE0_CH7_CNTXT0);
+            GC_C1 = rd32(GSI_BASE + GSI_EE0_CH7_CNTXT0 + 4);
+            GC_C2 = rd32(GSI_BASE + GSI_EE0_CH7_CNTXT0 + 8);
+            GC_C3 = rd32(GSI_BASE + GSI_EE0_CH7_CNTXT0 + 12);
+            GC_IRQ = rd32(GSI_BASE + GSI_EE0_TYPE_IRQ);
+            GC_ERR = rd32(GSI_BASE + GSI_EE0_ERROR_LOG);
+            GC_ST = 3; // CH ALLOC timeout
+            GC_CFG_DONE = 1;
+        }
+        return;
+    }
+
+    // CH7 CNTXT（gsi_program_chan_ctx）：GPI FROM_GSI erindex=0 re=16
+    let ch_c0 = (re << 24) | (0u32 << 14) /* ERINDEX=0 */ | (GSI_DIR_FROM_GSI << 3) | GSI_PROT_GPI;
+    wr32(GSI_BASE + GSI_EE0_CH7_CNTXT0, ch_c0);
+    wr32(GSI_BASE + GSI_EE0_CH7_CNTXT0 + 4, ring_len);
+    wr32(GSI_BASE + GSI_EE0_CH7_CNTXT0 + 8, ch_pa as u32);
+    wr32(GSI_BASE + GSI_EE0_CH7_CNTXT0 + 12, (ch_pa >> 32) as u32);
+    // QOS v2.5：weight=1, max_prefetch=0, use_db=DIRECT(0), prefetch=ESCAPE_BUF_ONLY, empty=0
+    let qos = (0u32 << 16) /* empty */ | (GSI_ESCAPE_BUF_ONLY << 10) | (0 << 9) | (0 << 8) | 1;
+    wr32(GSI_BASE + GSI_EE0_CH7_QOS, qos);
+    // scratch 清零（IPA4.5+ smart prefetch 由 HW；MCS 字段保持 0）
+    wr32(GSI_BASE + GSI_EE0_CH7_CNTXT0 + 0x60, 0);
+    wr32(GSI_BASE + GSI_EE0_CH7_CNTXT0 + 0x64, 0);
+    wr32(GSI_BASE + GSI_EE0_CH7_CNTXT0 + 0x68, 0);
+    wr32(GSI_BASE + GSI_EE0_CH7_CNTXT0 + 0x6c, 0);
+
+    // ---- 最小 RX TRE（Linux 在 START 前 replenish；公式已 attested）----
+    for i in 0..GSI_RX_TRE_MIN {
+        let buf = rx_pa + (i as u64) * GSI_RX_BUF_SZ;
+        gsi_write_rx_tre(ch_pa, i, buf, GSI_RX_BUF_SZ as u16);
+    }
+    dcache_civac(ch_pa, (GSI_RX_TRE_MIN as u64) * 16);
+    dcache_civac(rx_pa, (GSI_RX_TRE_MIN as u64) * GSI_RX_BUF_SZ);
+    let ch_wp = ch_pa + (GSI_RX_TRE_MIN as u64) * (re as u64);
+
+    // doorbell：先 EVT（FROM_GSI 路径 gsi_ring_chan_doorbell），再 CH LSB
+    wr32(GSI_BASE + GSI_EE0_EV0_DB1, (ev_wp >> 32) as u32);
+    unsafe {
+        core::arch::asm!("dsb sy", options(nostack));
+    }
+    wr32(GSI_BASE + GSI_EE0_EV0_DB0, ev_wp as u32);
+    wr32(GSI_BASE + GSI_EE0_CH7_DB1, (ch_wp >> 32) as u32);
+    unsafe {
+        core::arch::asm!("dsb sy", options(nostack));
+    }
+    wr32(GSI_BASE + GSI_EE0_CH7_DB0, ch_wp as u32);
+
+    // ---- CH7 START ----
+    wr32(
+        GSI_BASE + GSI_EE0_CH_CMD,
+        (GSI_CH_START << 24) | 7u32,
+    );
+    unsafe {
+        core::arch::asm!("dsb sy", options(nostack));
+    }
+    let st_ok = gsi_poll_chstate(
+        GSI_EE0_CH7_CNTXT0,
+        GSI_EE0_SRC_CH_IRQ,
+        1 << 7,
+        GSI_CHSTATE_STARTED,
+        freq,
+    );
+    // START 后 Linux 再写 DB MSB（本 PA 高 32 位=0）
+    wr32(GSI_BASE + GSI_EE0_CH7_DB1, (ch_wp >> 32) as u32);
+
+    // 重读 gc=
+    let c0 = rd32(GSI_BASE + GSI_EE0_CH7_CNTXT0);
+    let c1 = rd32(GSI_BASE + GSI_EE0_CH7_CNTXT0 + 4);
+    let c2 = rd32(GSI_BASE + GSI_EE0_CH7_CNTXT0 + 8);
+    let c3 = rd32(GSI_BASE + GSI_EE0_CH7_CNTXT0 + 12);
+    let tirq = rd32(GSI_BASE + GSI_EE0_TYPE_IRQ);
+    let errl = rd32(GSI_BASE + GSI_EE0_ERROR_LOG);
+    unsafe {
+        GC_C0 = c0;
+        GC_C1 = c1;
+        GC_C2 = c2;
+        GC_C3 = c3;
+        GC_IRQ = tirq;
+        GC_ERR = errl;
+        // st: 1=STARTED 绿；4=START 超时（CNTXT 仍可读）
+        GC_ST = if st_ok { 1 } else { 4 };
+        GC_CFG_DONE = 1;
     }
 }
 
@@ -3758,8 +4085,21 @@ static mut SMEM_RX: [u32; 22] = [0; 22];
 static mut SMEM_SVC: [u32; 16] = [0; 16];
 static mut SMEM_NSVC: u32 = 0;
 /// IPA QMI（svc 0x31）NEW_SERVER 目击闩：sm iq=seen.inst（零写，不限首 8 窗）。
+/// tip：另闩 node:port（偏 inst 0x201），供 INIT_MODEM_DRIVER 单发。
 static mut IQ_SEEN: u32 = 0;
 static mut IQ_INST: u32 = 0;
+static mut IQ_NODE: u32 = 0;
+static mut IQ_PORT: u32 = 0;
+/// IPA QMI 客户端口（本机 node1）；避开 0x10/11/12/14。
+const IPA_QRTR_PORT: u32 = 0x15;
+/// QMI_IPA_INIT_MODEM_DRIVER_REQ_V01。
+const IPA_INIT_MSGID: u32 = 0x0021;
+/// sm ii=st.txn.res — st:0未跑 1已发待RESP 2RESP到 3TX失败 4缺前置；res=TLV02 或 ffffffff。
+static mut II_ST: u32 = 0;
+static mut II_TXN: u32 = 0;
+static mut II_RES: u32 = 0xffff_ffff;
+static mut II_PEND: bool = false;
+static mut II_SENT: u32 = 0;
 /// NEW_LOOKUP（类型 10）的服务号、实例字，最多 8 对。
 static mut SMEM_LOOK: [u32; 16] = [0; 16];
 static mut SMEM_NLOOK: u32 = 0;
@@ -3914,6 +4254,7 @@ static mut IPA_P: [u32; 3] = [0xffff_ffff; 3];
 /// IPA/GSI 只读 MMIO 闩（PAS 绿后一次）。
 /// sm ig=st.iver.gcfg.gstat.gver.hp2.ch0.ca.cb.sm.r
 /// sm=IPA_SHARED_MEM_SIZE 原字；r=restr_bytes=baddr*8（INIT 绝对地址偏量）。
+/// 同次 gc=st.c0.c1.c2.c3.irq.err（CH7 态；仍零写）。
 /// 零写：无 doorbell / 无 ring / 无 QMI INIT / 不改 CDSP·TFTP·TX。
 static mut IG_DONE: u32 = 0;
 /// st: 0 未跑 / 1 已采 / 2 IPA 未绿跳过（不应持久）
@@ -3931,6 +4272,40 @@ static mut IG_CB: u32 = 0xffff_ffff;
 static mut IG_SMEM: u32 = 0xffff_ffff;
 /// smem_restricted_bytes = baddr*8 — INIT TLV 绝对地址 = ofst + r
 static mut IG_R: u32 = 0xffff_ffff;
+
+/// GSI CH7：RO 闩后可由 ch7_cfg 覆写。sm gc=st.c0.c1.c2.c3.irq.err
+/// c0=CNTXT0（含 CHSTATE）; c1=R_LENGTH; c2/c3=ring base LS/MS; irq=TYPE_IRQ; err=ERROR_LOG。
+/// st: 0 未跑 / 1 STARTED（或 RO 已采）/ 2 EV ALLOC 超时 / 3 CH ALLOC 超时 / 4 START 超时。
+/// tip：CONFIG+ALLOC+START+最小 TRE；INIT 见 ipa_init_tick（本刀后）。无 EP16 cfg。
+static mut GC_ST: u32 = 0;
+static mut GC_CFG_DONE: u32 = 0;
+static mut GC_C0: u32 = 0xffff_ffff;
+static mut GC_C1: u32 = 0xffff_ffff;
+static mut GC_C2: u32 = 0xffff_ffff;
+static mut GC_C3: u32 = 0xffff_ffff;
+static mut GC_IRQ: u32 = 0xffff_ffff;
+static mut GC_ERR: u32 = 0xffff_ffff;
+
+/// GSI CH7 DRAM 划区（allocate-only；无 GSI MMIO 写 / 无 doorbell / 无 INIT）。
+/// 基址：modem_wlan PAS 尾 `0x9D800000` → RFS `0x9E000000` 前 8MiB 空洞（DTS 无 no-map）。
+/// 布局：CH@+0 (0x1000) + EVT@+0x1000 (0x1000) + RX pool@+0x2000 (余下至 2MiB)。
+/// SMMU：I4 STE 0x520→USB_CB 已恒等映 0x80000000–0xBFFFFFFF；本区无需新 STE。
+/// sm gr=st.ch.evt.rx.sz — st=1 已清零；ch/evt/rx=PA；sz=总字节。
+const GSI_RING_BASE: u64 = 0x9D80_0000;
+const GSI_CH_RING_OFF: u64 = 0x0;
+const GSI_CH_RING_SZ: u64 = 0x1000; // 2 * (256 * 8) — lito wan-rx-desc default
+const GSI_EVT_RING_SZ: u64 = 0x1000; // dedicated EVT（WAN_CONS 非 common）
+const GSI_EVT_RING_OFF: u64 = GSI_CH_RING_OFF + GSI_CH_RING_SZ;
+const GSI_RX_POOL_OFF: u64 = GSI_EVT_RING_OFF + GSI_EVT_RING_SZ;
+const GSI_CARVE_SZ: u64 = 0x20_0000; // 2MiB；RX ≈ 192×8KiB + slack
+const _: () = assert!(GSI_RX_POOL_OFF == 0x2000);
+const _: () = assert!(GSI_CARVE_SZ > GSI_RX_POOL_OFF);
+static mut GR_DONE: u32 = 0;
+static mut GR_ST: u32 = 0;
+static mut GR_CH: u32 = 0xffff_ffff;
+static mut GR_EVT: u32 = 0xffff_ffff;
+static mut GR_RX: u32 = 0xffff_ffff;
+static mut GR_SZ: u32 = 0xffff_ffff;
 
 /// CDSP（pas-id 18 @ 0x87400000 / 0x1E00000）。仅 IPA+ADSP 绿后、modem 前。
 /// sm cd=st.p0.p1.p2 — 同 ip=：st 高位|段数；p0/1/2 = INIT/MEM/AUTH x0。
@@ -4686,6 +5061,7 @@ fn smem_scan(do_glink: bool) {
                     tf_reply(at478, at479, sz479);
                     pm_reply(at478, at479, sz479);
                     sr_tick(at478, at479, sz479);
+                    ipa_init_tick(at478, at479, sz479);
                     round += 1;
                     // Linux：fs1/fs2/fsg 连续 OPEN 后再 ALLOC；同轮多吞几笔。
                     if unsafe { RF_N } == before || round >= 8 {
@@ -6248,6 +6624,138 @@ fn sr_tick(at478: u64, at479: u64, sz479: u64) {
                 SR_NEED_RP = false;
                 SR_TXN = SR_TXN.wrapping_add(1);
             }
+        }
+    }
+}
+
+/// IPA QMI INIT_MODEM_DRIVER（msgid 0x0021）— 在 iq 闩 + GSI CH7 STARTED 后单发。
+/// TLV 对齐 vendor ipa3_qmi_init_modem_send_sync_msg + ipa_4_7_mem_part；R=IG_R（活体 0）。
+/// 冷启省略 is_ssr_bootup；modem_comp_decomp=0 省略 zip。hashable（lito 无 not-hashable）。
+/// sm ii=st.txn.res。不改 CDSP/TFTP/TX/glink intent。
+fn ipa_init_tick(at478: u64, at479: u64, sz479: u64) {
+    if at478 == 0 || at479 == 0 || !unsafe { HAVE_IID } {
+        return;
+    }
+    // 已发或已回：不再发。
+    if unsafe { II_SENT } != 0 || unsafe { II_PEND } || unsafe { II_ST } == 2 {
+        return;
+    }
+    // 前置：iq 0x31/0x201 + port；GSI CH7 STARTED；ig 已采（拿 R）。
+    if unsafe { IQ_SEEN } == 0 || unsafe { IQ_PORT } == 0 {
+        return;
+    }
+    // stock qrtr：0x31 inst 0x201；无精确实例则等偏置闩。
+    if unsafe { IQ_INST } != 0x201 {
+        return;
+    }
+    if unsafe { GC_ST } != 1 || unsafe { IG_ST } != 1 || unsafe { IG_R } == 0xffff_ffff {
+        return;
+    }
+    let tx_head = rd32((at478 + 4) as usize) as u64;
+    let tx_tail = rd32(at478 as usize) as u64;
+    if tx_head != tx_tail {
+        return;
+    }
+    let r = unsafe { IG_R };
+    let txn = 1u32;
+    // 体 ≤162；头 7 → 共 ~154。缓冲 192。
+    let mut q = [0u8; 192];
+    let mut n = 7usize;
+    // 0x10 platform_type = 3 (MSM_ANDROID)
+    put_u8(&mut q, &mut n, 0x10);
+    put_u16(&mut q, &mut n, 4);
+    put_u32(&mut q, &mut n, 3);
+    // 0x11 hdr_tbl_info — modem_hdr 0x688 / size 0x240 → end 0x8c7
+    put_u8(&mut q, &mut n, 0x11);
+    put_u16(&mut q, &mut n, 8);
+    put_u32(&mut q, &mut n, 0x688 + r);
+    put_u32(&mut q, &mut n, 0x688 + r + 0x240 - 1);
+    // 0x12 v4_route_tbl (nhash) — 0x508, indices=7
+    put_u8(&mut q, &mut n, 0x12);
+    put_u16(&mut q, &mut n, 8);
+    put_u32(&mut q, &mut n, 0x508 + r);
+    put_u32(&mut q, &mut n, 7);
+    // 0x13 v6_route_tbl — 0x608, indices=7
+    put_u8(&mut q, &mut n, 0x13);
+    put_u16(&mut q, &mut n, 8);
+    put_u32(&mut q, &mut n, 0x608 + r);
+    put_u32(&mut q, &mut n, 7);
+    // 0x14 v4_filter nhash — 0x308
+    put_u8(&mut q, &mut n, 0x14);
+    put_u16(&mut q, &mut n, 4);
+    put_u32(&mut q, &mut n, 0x308 + r);
+    // 0x15 v6_filter nhash — 0x408
+    put_u8(&mut q, &mut n, 0x15);
+    put_u16(&mut q, &mut n, 4);
+    put_u32(&mut q, &mut n, 0x408 + r);
+    // 0x16 modem_mem — 0x27d8 / 0x800
+    put_u8(&mut q, &mut n, 0x16);
+    put_u16(&mut q, &mut n, 8);
+    put_u32(&mut q, &mut n, 0x27d8 + r);
+    put_u32(&mut q, &mut n, 0x800);
+    // 0x17 ctrl_comm_dest_end_pt = 16 (APPS_WAN_CONS)
+    put_u8(&mut q, &mut n, 0x17);
+    put_u16(&mut q, &mut n, 4);
+    put_u32(&mut q, &mut n, 16);
+    // 0x18 is_ssr_bootup — 冷启省略（stock valid=false）
+    // 0x19 hdr_proc_ctx — 0xad0 / 0xac0 → end 0x158f
+    put_u8(&mut q, &mut n, 0x19);
+    put_u16(&mut q, &mut n, 8);
+    put_u32(&mut q, &mut n, 0xad0 + r);
+    put_u32(&mut q, &mut n, 0xad0 + r + 0xac0 - 1);
+    // 0x1A zip — size 0 省略
+    // 0x1B..0x1E hash tables（lito 无 ipa-fltrt-not-hashable）
+    put_u8(&mut q, &mut n, 0x1b);
+    put_u16(&mut q, &mut n, 8);
+    put_u32(&mut q, &mut n, 0x488 + r);
+    put_u32(&mut q, &mut n, 7);
+    put_u8(&mut q, &mut n, 0x1c);
+    put_u16(&mut q, &mut n, 8);
+    put_u32(&mut q, &mut n, 0x588 + r);
+    put_u32(&mut q, &mut n, 7);
+    put_u8(&mut q, &mut n, 0x1d);
+    put_u16(&mut q, &mut n, 4);
+    put_u32(&mut q, &mut n, 0x288 + r);
+    put_u8(&mut q, &mut n, 0x1e);
+    put_u16(&mut q, &mut n, 4);
+    put_u32(&mut q, &mut n, 0x388 + r);
+    // 0x1F/0x20 hw_stats_quota — base 0x2500 size 0x30
+    put_u8(&mut q, &mut n, 0x1f);
+    put_u16(&mut q, &mut n, 4);
+    put_u32(&mut q, &mut n, 0x2500 + r);
+    put_u8(&mut q, &mut n, 0x20);
+    put_u16(&mut q, &mut n, 4);
+    put_u32(&mut q, &mut n, 0x30);
+    // 0x21/0x22 hw_drop_stats — base 0x27b0 size 0x20
+    put_u8(&mut q, &mut n, 0x21);
+    put_u16(&mut q, &mut n, 4);
+    put_u32(&mut q, &mut n, 0x27b0 + r);
+    put_u8(&mut q, &mut n, 0x22);
+    put_u16(&mut q, &mut n, 4);
+    put_u32(&mut q, &mut n, 0x20);
+
+    qmi_finish_typed(&mut q, n, 0, txn, IPA_INIT_MSGID);
+    if glink_tx_payload(
+        at478,
+        at479,
+        tx_head,
+        sz479,
+        IPA_QRTR_PORT,
+        unsafe { IQ_NODE },
+        unsafe { IQ_PORT },
+        &q[..n],
+    ) {
+        unsafe {
+            II_TXN = txn;
+            II_PEND = true;
+            II_SENT = 1;
+            II_ST = 1;
+            II_RES = 0xffff_ffff;
+        }
+    } else {
+        unsafe {
+            II_ST = 3;
+            II_SENT = 1;
         }
     }
 }
@@ -9886,6 +10394,21 @@ fn scan_new_servers(fifo: u64, rh: u64) {
                         }
                     }
                 }
+                // IPA INIT_MODEM_DRIVER RESP（msgid 0x0021）→ ii=
+                if typ == 1 && dst_node == 1 && dst_port == IPA_QRTR_PORT && chunk >= 48 {
+                    let w = rd32((fifo + off + 48) as usize);
+                    let w1 = rd32((fifo + off + 52) as usize);
+                    let qtype = w & 0xff;
+                    let msgid = ((w >> 24) & 0xff) | ((w1 & 0xff) << 8);
+                    if qtype == 2 && msgid == IPA_INIT_MSGID && unsafe { II_PEND } {
+                        let res = qmi_tlv_u32(fifo, off, chunk, 0x02).unwrap_or(0xffff_ffff);
+                        unsafe {
+                            II_RES = res;
+                            II_PEND = false;
+                            II_ST = 2;
+                        }
+                    }
+                }
                 if typ == 1 && dst_node == 1 && dst_port == 0x11 && chunk >= 34 {
                     let key = off as u32;
                     let mut seen = false;
@@ -9935,12 +10458,23 @@ fn scan_new_servers(fifo: u64, rh: u64) {
                                 SMEM_NSVC = n + 1;
                             }
                         }
-                        // sm-only iq=：首见 QMI IPA svc 0x31 即闩（不限 8 窗；零写）。
-                        if svc == 0x31 {
+                        // sm iq=：首见 QMI IPA svc 0x31 即闩；偏 inst 0x201 记 node:port。
+                        if svc == 0x31 && chunk >= 52 {
+                            let node = rd32((fifo + off + 60) as usize);
+                            let port = rd32((fifo + off + 64) as usize);
                             unsafe {
                                 if IQ_SEEN == 0 {
                                     IQ_SEEN = 1;
                                     IQ_INST = inst;
+                                    if port != 0 {
+                                        IQ_NODE = node;
+                                        IQ_PORT = port;
+                                    }
+                                } else if inst == 0x201 && port != 0 {
+                                    // 偏 stock qrtr 0x31/0x201；可覆盖首见非 0x201。
+                                    IQ_INST = inst;
+                                    IQ_NODE = node;
+                                    IQ_PORT = port;
                                 }
                             }
                         }
@@ -10241,7 +10775,7 @@ fn ctrl_service(
                             }
                             continue;
                         }
-                        let mut reply = [0u8; 1536];
+                        let mut reply = [0u8; 1792];
                         let mut rn = 0usize;
                         match code {
                             1 => push_str(&mut reply, &mut rn, "redfin\n"),
@@ -10861,6 +11395,8 @@ fn ctrl_service(
                                 push_hex(&mut reply, &mut rn, unsafe { IQ_INST } as u64);
                                 // ig= — IPA/GSI 只读 MMIO（PAS 绿后一次；零写）
                                 ipa_gsi_ro_probe();
+                                ipa_gsi_ring_carve();
+                                ipa_gsi_ch7_cfg();
                                 push_str(&mut reply, &mut rn, " ig=");
                                 push_hex(&mut reply, &mut rn, unsafe { IG_ST } as u64);
                                 push_str(&mut reply, &mut rn, ".");
@@ -10883,6 +11419,39 @@ fn ctrl_service(
                                 push_hex(&mut reply, &mut rn, unsafe { IG_SMEM } as u64);
                                 push_str(&mut reply, &mut rn, ".");
                                 push_hex(&mut reply, &mut rn, unsafe { IG_R } as u64);
+                                // gc= — GSI CH7 只读（与 ig 同次；零写；非 alloc/start）
+                                push_str(&mut reply, &mut rn, " gc=");
+                                push_hex(&mut reply, &mut rn, unsafe { GC_ST } as u64);
+                                push_str(&mut reply, &mut rn, ".");
+                                push_hex(&mut reply, &mut rn, unsafe { GC_C0 } as u64);
+                                push_str(&mut reply, &mut rn, ".");
+                                push_hex(&mut reply, &mut rn, unsafe { GC_C1 } as u64);
+                                push_str(&mut reply, &mut rn, ".");
+                                push_hex(&mut reply, &mut rn, unsafe { GC_C2 } as u64);
+                                push_str(&mut reply, &mut rn, ".");
+                                push_hex(&mut reply, &mut rn, unsafe { GC_C3 } as u64);
+                                push_str(&mut reply, &mut rn, ".");
+                                push_hex(&mut reply, &mut rn, unsafe { GC_IRQ } as u64);
+                                push_str(&mut reply, &mut rn, ".");
+                                push_hex(&mut reply, &mut rn, unsafe { GC_ERR } as u64);
+                                // gr= — CH7 DRAM 划区（allocate-only；无 doorbell）
+                                push_str(&mut reply, &mut rn, " gr=");
+                                push_hex(&mut reply, &mut rn, unsafe { GR_ST } as u64);
+                                push_str(&mut reply, &mut rn, ".");
+                                push_hex(&mut reply, &mut rn, unsafe { GR_CH } as u64);
+                                push_str(&mut reply, &mut rn, ".");
+                                push_hex(&mut reply, &mut rn, unsafe { GR_EVT } as u64);
+                                push_str(&mut reply, &mut rn, ".");
+                                push_hex(&mut reply, &mut rn, unsafe { GR_RX } as u64);
+                                push_str(&mut reply, &mut rn, ".");
+                                push_hex(&mut reply, &mut rn, unsafe { GR_SZ } as u64);
+                                // ii=st.txn.res — INIT_MODEM_DRIVER 单发闩
+                                push_str(&mut reply, &mut rn, " ii=");
+                                push_hex(&mut reply, &mut rn, unsafe { II_ST } as u64);
+                                push_str(&mut reply, &mut rn, ".");
+                                push_hex(&mut reply, &mut rn, unsafe { II_TXN } as u64);
+                                push_str(&mut reply, &mut rn, ".");
+                                push_hex(&mut reply, &mut rn, unsafe { II_RES } as u64);
                                 push_str(&mut reply, &mut rn, " x=");
                                 for i in 0..22 {
                                     if i != 0 {
@@ -12191,6 +12760,8 @@ extern "C" fn rust_main() -> ! {
                 // PAS 绿后一次：只读 IPA/GSI MMIO（ig=）；无 doorbell/INIT。
                 if p0 == 0 && p1 == 0 && p2 == 0 {
                     ipa_gsi_ro_probe();
+                    ipa_gsi_ring_carve();
+                    ipa_gsi_ch7_cfg();
                 }
             }
         }
