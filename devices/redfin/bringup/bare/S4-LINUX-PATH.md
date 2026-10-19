@@ -2321,3 +2321,74 @@ IPA skip/fail → **不**跑 CDSP-before-modem，fall through 旧 modem-only，�
 **冷启无 IPA 前缀的 CDSP-before-modem** 仍禁。Flash-safe restore：`boot-s20-c38a6cd.img`。
 
 未推。未刷（等硬复位进 fastboot 再刷）。
+
+### dcbf8cf 刷验（2026-10-19 ~12:54 Asia/Shanghai）— CDSP 触达但 AUTH 脏
+
+`dcbf8cf` / `boot-s20-dcbf8cf.img` 已刷。capture：
+`.local/device/redfin/cdsp-before-modem-dcbf8cf-20261019-125446/`。
+
+| 键 | 值 | 判读 |
+|---|---|---|
+| `ste=` / `bv=` | `7.6.7.8` / `7f` | I4 仍绿 |
+| `ip=` | `80000003.0.0.0` | IPA PAS 仍绿 |
+| `ad=` | `80000020.0.0.0` | ADSP PAS 仍绿 |
+| **`cd=`** | **`8000000b.ffcffff1.0.0`** | 装了 **11** 段；**PAS 未净成功** |
+| `pn` / `sr` / `q=` | elf_loader / UNINIT / 无 `0x45` | **对自拉零增量** |
+| ECM | ping+sm OK，`HUNG=0` | **无挂**；活体仍 `dcbf8cf` |
+
+相对 `b99c785`：仅多脏 `cd=`；wlan 键零变化。条件解禁的 CDSP-before-modem **安全触达**（有 IPA 前缀不再 `8d88cd5` 冷挂），但 **未 ONLINE**。
+
+#### `cd=` / `pas_go` 编码（重要：注释易误导）
+
+`pas_go` 实际返回打包：
+
+| 退出点 | 返回 `(p0,p1,p2)` | sm 形 |
+|---|---|---|
+| INIT 失败 | `(i0, i1, -1)` | `*.*.ffffffff` |
+| MEM 失败 | `(0, m0, m1)` | `0.*.*` |
+| AUTH 路径（含成功） | `(a0, a1, 0)` | `*.*.0` |
+
+因此 **`cd=8000000b.ffcffff1.0.0` ⇒ INIT=0、MEM=0、AUTH x0=`0xffcffff1`、AUTH x1=0**。
+对比 IPA/ADSP 成功 `*.0.0.0`（AUTH 亦回 0）。
+注释里「p0/1/2 = INIT/MEM/AUTH x0」仅在三步全 0 时看起来成立；AUTH 失败时 p0 实为 **AUTH x0**。
+
+#### `0xffcffff1` 对表
+
+内核 `qcom_scm.h` 常见 remap 仅：
+
+| 码 | 名 |
+|--:|---|
+| -1 | `QCOM_SCM_ERROR` |
+| -2 | `EINVAL_ARG` |
+| -3 | `EINVAL_ADDR` |
+| -4 | `EOPNOTSUPP` |
+| -5 | `ENOMEM` |
+| -12 | `V2_EBUSY` |
+
+**`0xffcffff1`（≈ i32 −3145743）不在表内** — 为 TZ/PAS 原始 x0，非 Linux errno。
+巧合：`~0x30000e == 0xffcffff1`，而 cmd-db `cx.lvl` 基址为 `0x30000`；**未证实**与 rpmh 相关，仅备忘。
+公开 SCM/PAS 文档无此精确码；按 PIL 语义 AUTH 非 0 ⇒ **镜像认证失败或无法出复位**。
+
+pas-id **18**、区 **`0x87400000`/`0x1E00000`** 与 lito `qcom,turing` / stock dmesg
+`loading from 0x87400000 to 0x89200000` **一致** → **排除错 pas-id / 错基址·长度** 作为主因。
+
+#### 排序假说（无一够窄到可直接下一刀）
+
+1. **AUTH 哈希/段内容不符**（最像）— `st=0xb` 说明 `.bXX` 都打开并写入；仍可能 PA/reloc、缓存、或某段内容与 mdt hash 不一致。ADSP/IPA 同 `pas_go` 形已绿，CDSP 特有。
+2. **缺 stock 在 AUTH 前的 bus/BW** — `pil_make_proxy_vote` 的 `do_bus_scaling(pil-cdsp 154→821)` + `scm_pas_enable_bw`；裸机 ADSP/IPA 也没做却绿，故非充分证明，但是 CDSP DTS 独有 bus 向量。
+3. **代理票/序细节** — DTS 要 `vdd_cx`+`xo`；裸机开机已投 xo/cx，`load_cdsp` 再投 cx 但**不校验** `scx==0x10101`（ADSP 对 lcx/lmx 有硬失败）。AOP 在 load 前（stock 亦 AOP 最先）；次要。另：ADSP 在 `pas_go` 前 `sfr_wipe(423)`，CDSP smem-id **601** 未 wipe。
+
+**明确不选本轮**：改序 after-modem（radio 文档：modem 先起则事后不 spawn）；冷 CDSP 无 IPA；TFTP/TX intent/glink cap；盲加 bus vote 无探针。
+
+#### Park / 推荐探针（只读优先）
+
+**本轮不编刀、不刷。** 设备可停 `dcbf8cf`（健康）。
+
+推荐下一动作（单变量、偏只读）：
+
+1. **离线**：从 vendor 抽 `cdsp.mdt`，报 phnum / min_pa / max_pa / hash 段 flags；与 stock「8740→8920」对账；确认裸机 `reloc` 必为 false。
+2. **只读 sm 扩字段**（可选窄刀）：`cdx=`=cx 投票 sts、`cdr=`=reloc|min|max、`cdm=`=mdt bytes；**不**改 `pas_go`、**不**新 AOP/bus。用于证伪假说 1/3。
+3. 若离线证 reloc=0 且 mdt 与 stock 同跨度，再议 **单变量** 写刀：要么 AUTH 前 `pil-cdsp` bus vote，要么 `sfr_wipe(601)`+cx 强校验——二者勿同刀。
+
+禁区不变：IPA-before-ADSP、TX intent、TFTP 成功路径、glink cap、冷 CDSP 无 IPA。
+Flash-safe restore 仍：`boot-s20-c38a6cd.img` / 或回 `b99c785`（IPA 绿基线）。未推。
