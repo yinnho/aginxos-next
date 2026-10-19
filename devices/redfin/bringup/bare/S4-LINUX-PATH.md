@@ -2605,3 +2605,65 @@ hard-reset：**不需要**（无刷）。
 
 Flash-safe restore 仍：`boot-s20-c38a6cd.img` / `b99c785` / 活体可停 `af0c6ff`。
 等硬复位进 fastboot 再刷 stamp。
+
+### cef1fd9 后：iq=1.201 证伪「modem 无 0x31」→ INIT park（离线，2026-10-19 ~14:15 Asia/Shanghai）
+
+**活体**：`cef1fd9` / capture
+`.local/device/redfin/iq-latch-cef1fd9-20261019-140835/`。
+
+| 键 | 值 | 判读 |
+|---|---|---|
+| **`iq=`** | **`1.201`** | modem Q6 **已**公告 IPA QMI svc `0x31` inst `0x201`（t≈0 即闩；t≈66s 仍） |
+| `q=` | 无 `45.` | **仍无 WLFW** |
+| `ik=` / `cd=` / `ip=` / `ce=` / `ste=` / `bv=` | 绿 | 基线未毁 |
+| hang | HUNG=0 | ping+sm OK；**勿叠空 INIT** |
+
+分支（97b8056 park）：`iq=1.201` → 曾写「再议窄 INIT」。本轮对账 **否决「最小/空 INIT」刀**。
+
+#### Linux / vendor 对 `QMI_IPA_INIT_MODEM_DRIVER_REQ_V01`（msgid `0x0021`）
+
+IDL（`ipa_qmi_service_v01.h`）：`ipa_init_modem_driver_req_msg_v01` **全部 Optional** → 语法上空包合法。
+
+**stock 实发**（redfin vendor `ipa3_qmi_init_modem_send_sync_msg`，
+`.local/device/redfin/kernel-src/redbull/.../ipa_qmi_service.c`；mainline `drivers/net/ipa/ipa_qmi.c` 同构）：
+
+| TLV / 字段 | 来源 | 无 GSI/IPA 客户端时 |
+|---|---|---|
+| `platform_type` | `ipa_wan_platform`（常 `MSM_ANDROID=3`） | 可硬编码，**alone 非 stock** |
+| `hdr_tbl_info` start/end | `IPA_MEM_PART(modem_hdr_*)` + `smem_restr_bytes` | **需** mem_partition + SRAM 已铺 |
+| `v4/v6_route_tbl_info` | `v*_rt_nhash_ofst` / `v*_modem_rt_index_hi` | 同上 |
+| `v4/v6_filter_tbl_start_addr` | `v*_flt_nhash_ofst` | 同上 |
+| `modem_mem_info` | `modem_ofst` / `modem_size` | 同上 |
+| `ctrl_comm_dest_end_pt` | `ipa_get_ep_mapping(APPS_WAN_CONS)` | **需** GSI EP 分配 |
+| `hdr_proc_ctx_tbl_info` | `modem_hdr_proc_ctx_*` | mem_partition |
+| hash route/filter（若 hashable） | `v*_rt_hash_*` / `v*_flt_hash_*` | mem_partition |
+| `hw_stats_quota_*` / `hw_drop_stats_*` | `stats_quota_q6_*` / `stats_drop_*` | mem_partition |
+| `is_ssr_bootup` | **仅** `ipa3_uc_loaded_check()` 后才 valid=1 | **需** IPA uC 已载（GSI 路径） |
+
+冷启：`is_ssr_bootup_valid=false`（不发该 TLV）。slot-b dmesg：`Sending QMI_IPA_INIT_MODEM_DRIVER_REQ_V01` @~49.30 → RESP @~49.39（**在** GSI register @~40.9 **之后**）。
+
+`IPA_MEM_PART` = `ipa3_ctx->ctrl->mem_partition->*`（如 IPAv4.7 / lito `ipa_4_7_mem_part` 静态表）。表内 offset **只有**在 `ipa3_init_mem_partition` + SRAM canary/表写入之后才对 modem 有意义；裸抄数字而不铺 SRAM = **猜**。
+
+#### 为何不实现「空 / platform-only」INIT
+
+| 候选 | 裁定 |
+|---|---|
+| 空包（零 TLV） | IDL 合法；**非** stock；modem 接受/拒/半开未知 → **禁猜** |
+| 仅 `platform_type=3` | 同上；缺 mem/ep，不能当「最小合法 stock 探针」 |
+| 硬编码 `ipa_4_7_mem_part` + 假 `ctrl_comm` | 无 SRAM 布局 / 无 EP map / 无 uC → **假地址**；高危 |
+| 真 stock INIT | **绝对依赖** GSI 后半：mem 布局 + WAN_CONS EP +（SSR 时）uC loaded |
+
+结论：**无「不编程 GSI rings 的最小有效 INIT」**。本刀 **不写、不编、不刷**。
+
+#### 下一刀排序（只读优先；仍禁 TFTP/intent/glink/CDSP 叠）
+
+| # | 探针 | 目的 | 危 |
+|--:|---|---|---|
+| 1 | **slot-b 再采**：`dmesg` 开 IPAWANDBG / 或 `ipa_qmi` 打印的 offset 行；`debugfs` `ipa`/`gsi` mem_partition / EP map | 钉死 redfin 活体 TLV 数值（相对静态表 + `smem_restr`） | 零写 |
+| 2 | **裸机只读**：IPA MMIO `0x1e00000` 区 — GSI EE/通道态、SRAM 窗口是否已有 canary（对照 `ipa3_sram_set_canary`） | 证「PAS 后有无 GSI 驱动态」；**不** doorbell / **不** alloc channel | 只读 MMIO |
+| 3 | **裸机只读**：`cmd_db`/已有 BCM 外，查 GSI IRQ / `msm_gsi` 资源是否可映 | 为真 GSI bring-up 收据 | 只读 |
+| 4 | （收据齐后）**GSI+uC 写刀** → 再 **INIT**（可同序分两 tip；**勿**与 IQ 闩同刀） | 复制 slot-b 49.30 握手 | 高危写 |
+
+**本轮不编 tip、不出镜像、不 flash、不 push。** 活体可停 **`cef1fd9`**（健康，`iq=1.201`）。
+Flash-safe restore 仍：`boot-s20-c38a6cd.img` / `b99c785` / 绿 CDSP 基线 `af0c6ff`。
+hard-reset：**不需要**（无刷）。等 #1/#2 只读收据后再开 GSI 刀。
