@@ -3181,6 +3181,11 @@ const SR_SVC: u32 = 0x42;
 const SR_INST: u32 = 0xb401;
 const SR_QRTR_PORT: u32 = 0x14;
 const SR_NAME: &[u8] = b"msm/modem/wlan_pd";
+/// MPSS SMP2P：pub 返回码、出向 valid_entries、入向名位（bit0=ipa bit1=wlan）。
+static mut MPSS_PUB: u32 = 0xffff_ffff;
+static mut MPSS_VOUT: u32 = 0;
+static mut MPSS_IN: u32 = 0;
+
 /// CAF：UP=0x1FFFFFFF DOWN=0x0FFFFFFF UNINIT=0x7FFFFFFF。
 const SR_STATE_UP: u32 = 0x1fff_ffff;
 const SR_STATE_DOWN: u32 = 0x0fff_ffff;
@@ -3937,6 +3942,8 @@ fn smem_scan(do_glink: bool) {
             if kcode == 1 {
                 free_u = new_free;
                 g |= 1 << 1;
+            } else if unsafe { MPSS_PUB } == 0xffff_ffff {
+                unsafe { MPSS_PUB = kcode };
             }
             let gcode = if do_glink {
                 glink_version(
@@ -5646,6 +5653,9 @@ fn glink_put_open(fifo: u64, tx: u64, lcid: u32, name: &[u8]) -> u64 {
 fn smp_publish(base: u64, free_u: u32, g: u32, boff: u32, b0: u32, b1: u32) -> (u32, u32, u32) {
     let cached = rd32((base + 16) as usize);
     if g & 2 != 0 {
+        if unsafe { MPSS_PUB } == 0xffff_ffff {
+            unsafe { MPSS_PUB = 0 };
+        }
         return (0, free_u, cached);
     }
     if boff != free_u || b0 != 0 || b1 != 0 {
@@ -5689,11 +5699,17 @@ fn smp_publish(base: u64, free_u: u32, g: u32, boff: u32, b0: u32, b1: u32) -> (
     wr32(data as usize, 0x504d_5324);
     wr32((data + 4) as usize, 1 << 8);
     wr32((data + 8) as usize, 1 << 16);
-    wr32((data + 12) as usize, 16 | (1 << 16));
+    // Linux lito-smp2p：出向 master-kernel + ipa（valid=2）；入向另有
+    // slave-kernel / ipa / wlan（modem 侧建）。缺 ipa 出向时 modem 可能
+    // 不走内存内自拉 wlan_pd，掉进 elf_loader+TFTP。
+    wr32((data + 12) as usize, 16 | (2 << 16));
+    // entries[0] "master-kernel"
     wr32((data + 20) as usize, 0x7473_616d);
     wr32((data + 24) as usize, 0x6b2d_7265);
     wr32((data + 28) as usize, 0x656e_7265);
     wr32((data + 32) as usize, 0x6c);
+    // entries[1] "ipa" @ +40；value @ +56 = 0（已在上面清零）
+    wr32((data + 40) as usize, 0x0061_7069);
     unsafe {
         core::arch::asm!("dsb sy", options(nostack));
     }
@@ -5707,6 +5723,10 @@ fn smp_publish(base: u64, free_u: u32, g: u32, boff: u32, b0: u32, b1: u32) -> (
     wr32(MUTEX, 0);
     // MPSS client 2，SMP2P signal 2。
     wr32(0x4080_0c, (2 << 16) | 2);
+    unsafe {
+        MPSS_PUB = 1;
+        MPSS_VOUT = 2;
+    }
     (1, new_free, cached)
 }
 
@@ -8479,11 +8499,17 @@ fn smem_payloads(
                     let w1 = rd32((ent + 4) as usize);
                     let w2 = rd32((ent + 8) as usize);
                     let w3 = rd32((ent + 12) as usize);
-                    // "slave-kernel"
                     // "slave-kernel"：slav / e-ke / rnel
                     if w0 == 0x7661_6c73 && w1 == 0x656b_2d65 && w2 == 0x6c65_6e72 && w3 == 0 {
                         slave = rd32((ent + 16) as usize);
-                        break;
+                    }
+                    // "ipa\0..."
+                    if w0 == 0x0061_7069 && w1 == 0 && w2 == 0 && w3 == 0 {
+                        unsafe { MPSS_IN |= 1 };
+                    }
+                    // "wlan"
+                    if w0 == 0x6e61_6c77 && w1 == 0 && w2 == 0 && w3 == 0 {
+                        unsafe { MPSS_IN |= 2 };
                     }
                 }
             }
@@ -9478,6 +9504,13 @@ fn ctrl_service(
                                 push_hex(&mut reply, &mut rn, unsafe { TZ_SZ } as u64);
                                 push_str(&mut reply, &mut rn, ".");
                                 push_hex(&mut reply, &mut rn, unsafe { TZ_CL } as u64);
+                                // me=pub.vout.inflags — MPSS SMP2P ipa 刀
+                                push_str(&mut reply, &mut rn, " me=");
+                                push_hex(&mut reply, &mut rn, unsafe { MPSS_PUB } as u64);
+                                push_str(&mut reply, &mut rn, ".");
+                                push_hex(&mut reply, &mut rn, unsafe { MPSS_VOUT } as u64);
+                                push_str(&mut reply, &mut rn, ".");
+                                push_hex(&mut reply, &mut rn, unsafe { MPSS_IN } as u64);
                                 push_str(&mut reply, &mut rn, " ad=");
                                 push_hex(&mut reply, &mut rn, unsafe { ADSP_ST } as u64);
                                 push_str(&mut reply, &mut rn, ".");

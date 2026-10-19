@@ -1789,3 +1789,35 @@ tip 上 OACK（`8a761ad`）TFTP 已回退，main 与 f73c9bb TFTP 一致后再�
 | `tf` | SO 路径仍在；RRQ→ERROR |
 
 **未实现 / 未刷** sm-only（host **0/5** 项 **94/432**）：活体 tip 从未走过该分区；TOC/新分区误读有冻核史；本轮按「宁可 park 也不再挂」跳过。开放假说 A–F 仍成立；下一刀仍是零写 sm-only 或离线证 B/C/F。flash-safe 仍只有 **`f73c9bb`**。未推。
+
+---
+
+## 2026-10-19 ~10:48 Asia/Shanghai：离线对账 → MPSS SMP2P `ipa` 出向刀
+
+### 深对账（假说 B/C/F vs Linux stock 自拉）
+
+| 项 | Linux stock | 裸机 `f73c9bb` | 结论 |
+|---|---|---|---|
+| **PAS_MEM_SETUP size** | PIL 按 ELF min–max：`0x8C000000`–`0x9D800000` = **`0x11800000`**（DTS `modem_wlan_mem` 仅 `0xF800000` 是 reserved pool，不是 mem_setup 参数） | 同 **`0x11800000`**，AUTH 已过 | **假说 C 关闭**：段跨度不缺；BSS/hash 在 ELF 尾（含 past-DTS 的 30–34）已在 PAS 窗内 |
+| **AOP load_state** | `adsp` → **`cdsp`** → `modem`（`signal-aop`）；`ipa_fws` **无** signal-aop | 仅 `adsp` + `modem` | CDSP AOP 仍缺，但 **冷 CDSP PAS 已禁**（`8d88cd5` 硬挂） |
+| **IPA bringup** | `ipa3` 探 → `printf 1 >/dev/ipa` 才 PIL `ipa_fws`（pas-id **0xf** @ `0x8BC00000`）；注释写明主要为 **qcacld SMMU / 0x45 之后**，非自拉充分条件 | 无 IPA PAS / 无 QMI `0x31` 真栈 | 全量 IPA 冷启 ≈ CDSP 级写路径，**本轮不做** |
+| **MPSS SMP2P 出向** | `lito-smp2p.dtsi`：`master-kernel` + **`ipa`**（`valid_entries=2`）；入向另有 `slave-kernel` / `ipa` / `wlan` | `smp_publish` 只写 **`master-kernel`**（`valid=1`） | **相对 stock 的单点、零新 QRTR 缺口** |
+| **自拉 vs TFTP** | PIL+~2.5s 内存内 spawn `wlan_pd` → `0x45@0:88`；环境不对则同镜像 `SERVICE_NOT_FOUND` / 不 spawn | `pn=kernel/elf_loader` → RRQ SO → ERROR → PDR **UNINIT** | 回退链；禁 TFTP 成功 |
+
+内存序（只读钉死）：`CDSP@874` → `ADSP@892` → `WLAN_MSA@8ba` → **`IPA_FW@8bc`** → `modem_wlan@8c0`（DTS `0xf80_0000`；ELF/PAS `0x1180_0000`）。
+
+### 刀（已实现 / 将刷）
+
+**单变量**：`smp_publish` 在既有 item 428 分配里加出向名 **`ipa`**，`valid_entries=2`；入向 435 扫描记 `ipa`/`wlan` 名位。  
+**不改**：TFTP（仍 ERROR）、TX intent、glink 帽、PDR、PAS、AOP、CDSP。  
+**为何不像 CDSP-before 挂**：无 PAS/AOP/装段；与已活的 `master-kernel` 同一次 smem 写 + 同一 IPCC 踢；Linux 开机即有该名且 value=0。  
+**sm**：`me=pub.vout.inflags`（pub=publish 码，vout=2，inflags bit0=入向 ipa / bit1=wlan）。
+
+**成功判据**
+
+- 硬：`q=` 含 **`45.`**
+- 软（刀生效、仍无自拉）：仍 ping/`ik=4`；`me=1.2.*`；行为同基线（SO RRQ+UNINIT）
+- 失败：early ECM/ARP incomplete → 立刻刷回 `boot-s20-f73c9bb.img`
+
+基线：`f73c9bb`。未推。
+
