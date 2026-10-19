@@ -3856,10 +3856,13 @@ static mut CDSP_ST: u32 = 0;
 static mut CDSP_P: [u32; 3] = [0xffff_ffff; 3];
 /// pil-cdsp bus：bit0=CO2 bit1=CO0 ACTIVE 成功；0=未跑/全 miss。
 static mut CDSP_CB: u32 = 0;
-/// SMP2P 出向分配码 / 入向 slave / 等待毫秒（环用，不进 sm）。
+/// SMP2P 出向分配码 / 入向 slave / 等待毫秒。sm ce=pub.rdy.wt。
 static mut CDSP_PUB: u32 = 0xffff_ffff;
 static mut CDSP_RDY: u32 = 0x8000_0000;
 static mut CDSP_WT: u32 = 0xffff_ffff;
+/// pas_go 前 sfr_wipe(601) 结果。sm cz=st.zb（对齐 ADSP az=）。
+static mut CDSP_Z: u32 = 0xff;
+static mut CDSP_ZB: u32 = 0xff;
 static mut CDSP_FLUSHED: u64 = 0;
 static mut CDSP_HDR: u64 = 0;
 static mut CDSP_ACKED: u32 = 0;
@@ -10485,6 +10488,23 @@ fn ctrl_service(
                                 push_hex(&mut reply, &mut rn, unsafe { CDSP_P[2] } as u64);
                                 push_str(&mut reply, &mut rn, " cb=");
                                 push_hex(&mut reply, &mut rn, unsafe { CDSP_CB } as u64);
+                                // ce=pub.rdy.wt — CDSP ONLINE（bit1）；sm 时刷新 rdy
+                                {
+                                    let (_c, v, _p) = cdsp_edge(false);
+                                    if v & 0x8000_0000 == 0 {
+                                        unsafe { CDSP_RDY = v };
+                                    }
+                                }
+                                push_str(&mut reply, &mut rn, " ce=");
+                                push_hex(&mut reply, &mut rn, unsafe { CDSP_PUB } as u64);
+                                push_str(&mut reply, &mut rn, ".");
+                                push_hex(&mut reply, &mut rn, unsafe { CDSP_RDY } as u64);
+                                push_str(&mut reply, &mut rn, ".");
+                                push_hex(&mut reply, &mut rn, unsafe { CDSP_WT } as u64);
+                                push_str(&mut reply, &mut rn, " cz=");
+                                push_hex(&mut reply, &mut rn, unsafe { CDSP_Z } as u64);
+                                push_str(&mut reply, &mut rn, ".");
+                                push_hex(&mut reply, &mut rn, unsafe { CDSP_ZB } as u64);
                                 push_str(&mut reply, &mut rn, " ad=");
                                 push_hex(&mut reply, &mut rn, unsafe { ADSP_ST } as u64);
                                 push_str(&mut reply, &mut rn, ".");
@@ -12083,9 +12103,21 @@ extern "C" fn rust_main() -> ! {
                     unsafe { CDSP_ST = 0x8000_0000 | n as u32 };
                     let txt = hex_text(&mut t, unsafe { RING.seq }, " cdsp n=0x", n as u64);
                     ring_put(&mut ufs, freq, logring::LVL_INFO, txt);
-                    // AUTH 前 pil-cdsp ACTIVE（CO2+CO0，TCS 0x60000001）；单变量。
+                    // AUTH 前 pil-cdsp ACTIVE（CO2+CO0）；再 sfr_wipe(601) 对齐 ADSP 423。
                     cdsp_bus_vote(freq);
                     let txt = hex_text(&mut t, unsafe { RING.seq }, " cdsp cb=0x", unsafe { CDSP_CB } as u64);
+                    ring_put(&mut ufs, freq, logring::LVL_INFO, txt);
+                    let wiped = sfr_wipe(freq, 601);
+                    unsafe {
+                        CDSP_Z = wiped.st;
+                        CDSP_ZB = wiped.w[0] & 0xff;
+                    }
+                    let txt = hex_text(
+                        &mut t,
+                        unsafe { RING.seq },
+                        " cdsp cz=0x",
+                        ((unsafe { CDSP_Z } as u64) << 32) | unsafe { CDSP_ZB } as u64,
+                    );
                     ring_put(&mut ufs, freq, logring::LVL_INFO, txt);
                     let (p0, p1, p2) = pas_go(18, 0x8740_0000, 0x01E0_0000);
                     unsafe {

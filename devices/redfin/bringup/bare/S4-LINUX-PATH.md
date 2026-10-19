@@ -2477,3 +2477,52 @@ phdr 表（略 flags 低 3 bit = PF）：
 
 未推。未刷。Flash-safe restore：`boot-s20-c38a6cd.img` / `b99c785`。等硬复位进 fastboot 再刷 stamp。
 
+
+
+### ec81a77 刷验（2026-10-19 ~13:25 Asia/Shanghai）— CDSP AUTH 绿，仍无 0x45
+
+`ec81a77` / `boot-s20-ec81a77.img` 已刷。capture：
+`.local/device/redfin/cdsp-bus-ec81a77-20261019-132553/`。
+
+| 键 | 值 | 判读 |
+|---|---|---|
+| `ste=` / `bv=` | `7.6.7.8` / `7f` | I4 仍绿 |
+| `ip=` / `ad=` | `80000003.0.0.0` / `80000020.0.0.0` | IPA+ADSP PAS 绿 |
+| **`cd=`** | **`8000000b.0.0.0`** | **AUTH 干净**（对 `dcbf8cf` 的 `ffcffff1`） |
+| **`cb=`** | **`3`** | CO2+CO0 两票 ACTIVE |
+| `me=` / `ik=` / `rf`/`rh`/`es`/`gn` | `1.2.0` / `4.0` / RFS 绿 | **modem AUTH 已成**（RFS 开槽） |
+| `pm=` | `0.0.0` | 无 pm-service / SSREQ |
+| `sr=` | `1.7fffffff.0` | PDR REGISTER 命中，**wlan_pd UNINIT** |
+| `pn` / `tf` / `tz` | `kernel/elf_loader.1.30` / `549_38_0.mbn` / `1.eb43c.1a67` | **仍走 TFTP 回退** |
+| `q=` | 无 `0x45`（同前集） | **无 WLFW** |
+| ECM | ping+sm OK，`HUNG=0` | **无挂**；活体仍 `ec81a77` |
+
+**判读**：pil-cdsp bus **修好 AUTH**；对自拉 **零增量**（仍 elf_loader / UNINIT / 无 0x45）。
+modem PAS 本就在 CDSP 块之后无条件执行，且 RFS 已证 AUTH——缺口不是「没跑 modem」。
+
+#### 相对 slot-b（自拉）差什么
+
+| 序 | slot-b | 裸机 ec81a77 |
+|--:|---|---|
+| 1–4 | ipa→adsp→cdsp→modem | **有**（CDSP=AUTH 绿；ONLINE **sm 未见**） |
+| 5 | RFS → **wlan_pd ONLINE** / `0x45`（**零** tftp/elf_loader） | RFS 绿 → **elf_loader+TFTP**；PDR UNINIT；无 0x45 |
+
+软成功标准（CDSP 刀设计）要 `cd` **ready** 且 `pn`/`tf` 不再 elf_loader。现仅 AUTH 绿，ONLINE 未进 sm，环已滚掉 `cdsp rdy=`。
+
+#### 下一刀：`sfr_wipe(601)` + sm `ce=`/`cz=`（未刷）
+
+单变量写：ADSP 在 `pas_go` 前 `sfr_wipe(423)`；CDSP DTS `qcom,smem-id = <601>` 仍未 wipe。
+假说：AUTH 已绿，但 SFR 残串可能让 CDSP 立 fatal / 迟 ready，modem 仍见「环境不像 stock」而走 elf_loader。
+同刀只加观测（不改等待语义、不加 cx 硬失败）：
+
+| 项 | 值 |
+|---|---|
+| 时机 | IPA+ADSP+bus 门内；`cdsp_bus_vote` 后、**`pas_go(18)` 前** |
+| wipe | `sfr_wipe(601)` → `CDSP_Z`/`CDSP_ZB` |
+| sm | **`ce=pub.rdy.wt`**（sm 时 `cdsp_edge` 刷新 rdy）；**`cz=st.zb`** |
+| 采 | `ce=` bit1？`wt`≈超时 10000？`cz`；`pn`/`tf`/`sr`/`q` 有无 0x45 |
+| 禁 | cx 硬失败同刀；IPA-before-ADSP；TX intent；TFTP 成功；glink cap；冷 CDSP |
+
+未推。未刷。Flash-safe：`boot-s20-c38a6cd.img` / 活体可停 `ec81a77`。等硬复位再刷 stamp。
+
+**若刷后仍 elf_loader**：按 `ce=` 分流——ONLINE 且无 fatal → CDSP 非充分（另排 GSI/其它）；超时/无 bit1 → 再议 negotiate/wait；fatal+ready → 放宽 wait。
