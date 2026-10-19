@@ -2254,3 +2254,20 @@ AOP/CDSP/TFTP 成功路径。
 → 七笔 ACTIVE `rpmh_cmd`（上表 TCS）。sm：`ste=mask.s0.s1.s2`、`bv=` 七位成功位图。
 **无** `pas_go` / 无 TFTP 成功服 / 无 TX intent / 无 glink cap / 无 CDSP-before。
 人审 G2/G3 后再议刷。禁区不变。未推。
+
+### I4 绿后下一刀：IPA PAS **after ADSP**（未刷）
+
+**基线**：`8803af7` 活体 `ste=7.6.7.8 bv=7f`（capture `i4-vote-8803af7-20261019-122556/`）。
+
+**调用序（本刀）**：
+1. 既有：USB → LPASS SMP2P → `load_adsp` → AOP adsp on → `pas_go(1)` → ONLINE/settle
+2. **新**：若 `ADSP_ST` 高位且 `ADSP_P[0..2]==0` → `ipa_i4_once`（STE+七票）→ `load_ipa_fws` → `pas_go(0xf @ 0x8BC00000 / 0x10000)`
+3. 既有：EFS seed → modem AOP → `pas_init_image`（modem）
+
+**相对 Linux slot-b**（`ipa_fws@40.9 → adsp@47 → …`）：裸机**故意**把 IPA PAS 放到 ADSP 成功之后——`ceeb6fd` 链首 IPA-before-ADSP 硬挂无 ECM 仍为禁区。票+SMMU 前置保留（I4）。
+
+**sm**：保留 `ste=` / `bv=` / `bc=`；新增 `ip=st.p0.p1.p2`。
+
+**禁区不变**：IPA-before-ADSP（`ceeb6fd`）、CDSP-before-modem（`8d88cd5`）、TX intent、TFTP OACK/DATA 成功路径、glink cap bump。Flash-safe restore：`boot-s20-c38a6cd.img`。
+
+**未刷、未推。**
