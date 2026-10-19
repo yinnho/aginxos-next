@@ -1342,3 +1342,55 @@ pick/parse/BUSY/RR/INTENT_REQ）。sm 增：
 sm 新键：`sr=`、`rp=`。成功判据仍：`q=` 含 `45.1`。
 
 镜像：`boot-s20.img`（本刀 tip）。**未刷**（基线可能仍在恢复）。未推。
+
+### 本轮：PDR 刀已刷采样（2026-10-19 07:34–07:35 Asia/Shanghai）
+
+进 fb：活体 2323 上发 `fb` / `reboot` → GATE `13201FDD4001N8`。
+刷：`9523f1d` `boot-s20.img` → `boot_a` + `set_active a` + `reboot` OK。
+起：ping ~52s，**未挂**。
+
+sm×2 同：`ik=4.0 pm=0.0.0 sr=0.ffffffff rp=0.ffffffff`
+`q=42.b401,2b.1202,f.1,33.201,15.1,33.b01,18.1,16.1001` — **无 `45`**。
+
+判据：硬失败（无 45）；软也未过（`sr=0` = REGISTER 未命中 / 未出，
+尽管 `q` 已见 `42.b401`）。下一刀：对账为何抓到 svc/inst 却 `sr` 仍 0
+（node:port 是否写入、`HOST_ADV`、TX 路径），**勿**叠加 TX intent。
+
+未推。
+
+### 本轮：206821a 待刷（USB 卡住，2026-10-19 ~09:03 Asia/Shanghai）
+
+tip=`206821a`（允许 QRTR node 0；sm `sp=node.port`）。镜像
+`.local/device/redfin/boot-out/boot-s20.img` 与 tip 对齐（07:38 编）。
+
+Mac 回线后设备在 GATE `13201FDD4001N8` fastboot。两次
+`fastboot flash boot_a`：**无任何输出、>45s 无进展** → 已 kill。
+`getvar product` 同样挂死。判定 **USB/fastboot 通道粘滞**，
+不是镜像问题。未完成 set_active / reboot；**未采样** `sr`/`sp`。
+
+下一步：硬复位 + 重插 USB 再进 fb；通道稳后再刷同一镜像。未推。
+
+
+### 本轮：206821a 已刷 → 早期挂死（2026-10-19 ~09:06–09:12 Asia/Shanghai）
+
+刷：GATE `boot_a` + `set_active a` + `reboot` OK（~09:06）。
+起：ECM `en10` UP（Mac `169.254.146.55`），**ARP `169.254.1.1` incomplete**
+>90s（至 ~09:12 仍无 ping / 无 2323）。**未采到 sm**（无 `sr`/`sp`/`q`）。
+
+判据：按 GATE 失败分支（ECM 早期无 ping）→ **整段回退**，勿叠加 TX
+intent。下一假设：node-0 放行后 `sr_tick` 过早发 REGISTER/RESTART 堵死
+early path；回 `92393f6` 基线或把 PDR 推迟到更晚 gate（如 RFS `ik=4`
+之后）再试。未推。未再刷。
+
+
+### 本轮：PDR 推迟到 ik=4（code-only，未刷，2026-10-19 ~09:15 Asia/Shanghai）
+
+`206821a`（node-0 放行）刷后 early ECM 硬挂，与 TX-intent 刀同类。
+判定：REGISTER/RESTART 发太早堵 early path。
+
+下一镜像（本 tip）：**保留** node-0 放行（`port!=0`）；`sr_tick` 增门控
+`RF_IOK >= 4`（≡ sm `ik=4.x` RFS IOVEC 绿），并保留既有 `HOST_ADV>=4` /
+`HAVE_IID` / `SR_HAVE`。不动 glink TX intent pick/parse/BUSY/RR/INTENT_REQ。
+
+用户回 fb 时刷序：先 `.local/device/redfin/boot-out/boot-s20-92393f6.img`
+复活，再刷本 tip `boot-s20.img`。本轮 **未刷未推**。

@@ -4942,8 +4942,14 @@ fn pm_reply(at478: u64, at479: u64, sz479: u64) {
 
 /// SERVREG_NOTIF PDR：REGISTER_LISTENER(0x20) → 可选一笔 RESTART_PD(0x24)。
 /// 对齐 Linux service-notifier；不改 TX intent pick/parse/BUSY/RR。
+/// 门控：HOST_ADV>=4 且 RFS IOVEC 已绿（RF_IOK>=4 ≡ sm ik=4.x），避免
+/// node-0 放行后过早 REGISTER/RESTART 堵 early path（206821a 硬挂）。
 fn sr_tick(at478: u64, at479: u64, sz479: u64) {
     if at478 == 0 || at479 == 0 || unsafe { HOST_ADV } < 4 || !unsafe { HAVE_IID } {
+        return;
+    }
+    // RFS 绿后再发 PDR；ik= 左栏即 RF_IOK。
+    if unsafe { RF_IOK } < 4 {
         return;
     }
     // modem 可在 node 0；有 port 即可发 REGISTER。
