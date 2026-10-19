@@ -3274,21 +3274,21 @@ static mut TF_NAME_N: u8 = 0;
 static mut TZ_ST: u32 = 0;
 static mut TZ_SZ: u32 = 0;
 static mut TZ_CL: u32 = 0;
-/// TFTP 分块真喂（不抬 glink_tx 帽：n≤256/total≤512）。
-/// st: 0闲 1待发DATA 2等DATA-ACK 3完成 4未找到 5路径 6UFS 7无CTX 8待发OACK 9等OACK-ACK
-/// sm：tb=st.blk.acks；blksize 封顶 252（4+252=256）。
+/// TFTP OACK-only + ephemeral QRTR src（仿 tqftpserv；本刀永不 DATA）。
+/// st: 0闲 4未找到 5路径 7无CTX 8待发OACK 9等OACK-ACK a=ACK0已见(停，不发DATA)
+/// sm：tb=st.sport.acks；blksize 封顶 252；源口≠0x11。
 const TF_MAX_BSZ: u32 = 252;
+const TF_EPHEM_BASE: u32 = 0x1a00; // 试验 ephemeral 基，避开 0x10/0x11/0x12/0x35
 static mut TF_ST: u32 = 0;
 static mut TF_SZ: u32 = 0;
 static mut TF_CL: u32 = 0;
-static mut TF_BLK: u32 = 0;
-static mut TF_SOFF: u32 = 0;
+static mut TF_BLK: u32 = 0; // 本刀复用为 sport（sm 可见）
 static mut TF_ACKS: u32 = 0;
 static mut TF_BSZ: u32 = TF_MAX_BSZ;
 static mut TF_RSIZE: u32 = 0; // 0=整文件
 static mut TF_SEEK: u32 = 0;
-static mut TF_CL_CUR: u32 = 0xffff_ffff;
-static mut TF_CL_BUF: [u8; 16384] = [0; 16384];
+static mut TF_SPORT: u32 = 0; // 会话 ephemeral src；0=未开
+static mut TF_EP_SEQ: u32 = 0;
 /// cx addr/sel/sts，mss addr/sel/sts，xo addr/data/sts。sel 0x100 没找到，
 /// 0x101 不是 ARC，0x102 aux 里没有 384。
 static mut PROXY: [u32; 9] = [0; 9];
@@ -5369,70 +5369,6 @@ fn tf_put_opt(q: &mut [u8], n: &mut usize, key: &[u8], val: u32) {
     }
 }
 
-fn tf_load_cluster(ufs: &mut Ufs, data_lba: u32, cl: u32) -> Result<(), u32> {
-    if unsafe { TF_CL_CUR } == cl {
-        return Ok(());
-    }
-    if cl < 2 || cl >= 0xfff8 {
-        return Err(0x59);
-    }
-    let lba = data_lba + (cl - 2) * 4;
-    let mut s = 0u32;
-    while s < 4 {
-        ufs.read10(lba + s, 1, DATA).map_err(|_| 0x56u32)?;
-        unsafe {
-            core::ptr::copy_nonoverlapping(
-                DATA as *const u8,
-                TF_CL_BUF.as_mut_ptr().add(s as usize * 4096),
-                4096,
-            );
-        }
-        s += 1;
-    }
-    unsafe { TF_CL_CUR = cl };
-    Ok(())
-}
-
-/// 从 start_cl+off 读 dst.len() 字节进 dst（簇缓存 TF_CL_BUF）。
-fn tf_read_bytes(
-    ufs: &mut Ufs,
-    data_lba: u32,
-    start_cl: u32,
-    off: u32,
-    dst: &mut [u8],
-) -> Result<(), u32> {
-    let mut done = 0usize;
-    while done < dst.len() {
-        let abs = off.saturating_add(done as u32);
-        let mut cl = start_cl;
-        let mut o = abs;
-        let mut guard = 0u32;
-        while o >= 16384 {
-            cl = fat_next(cl) as u32;
-            if cl < 2 || cl >= 0xfff8 {
-                return Err(0x59);
-            }
-            o -= 16384;
-            guard += 1;
-            if guard > 65536 {
-                return Err(0x59);
-            }
-        }
-        tf_load_cluster(ufs, data_lba, cl)?;
-        let room = 16384usize.saturating_sub(o as usize);
-        let take = (dst.len() - done).min(room);
-        unsafe {
-            core::ptr::copy_nonoverlapping(
-                TF_CL_BUF.as_ptr().add(o as usize),
-                dst.as_mut_ptr().add(done),
-                take,
-            );
-        }
-        done += take;
-    }
-    Ok(())
-}
-
 fn tf_send_err(
     at478: u64,
     at479: u64,
@@ -5467,8 +5403,22 @@ fn tf_send_err(
     )
 }
 
-/// tftp。WRQ→ACK0；RRQ 对 SO 在 ik≥4 后 OACK(blksize≤252,wsize=1)+ACK 步进 DATA。
-/// **不**放宽 glink_tx_payload（仍 n≤256/total≤512）。经典 512 块不可行 → 必 OACK。
+/// tftp。WRQ→ACK0；RRQ 对 SO 在 ik≥4 后 **仅 OACK**（blksize≤252,wsize=1,tsize），
+/// 源口用 ephemeral（≠0x11，仿 tqftpserv qrtr_open/connect）。**永不 DATA**。
+/// 不放宽 glink_tx_payload（仍 n≤256/total≤512）。
+fn tf_ephem_sport() -> u32 {
+    unsafe {
+        let s = TF_EP_SEQ.wrapping_add(1);
+        TF_EP_SEQ = s;
+        let mut p = TF_EPHEM_BASE | (s & 0xff);
+        // 避开已知服务口；0x1a00 基本身已远离。
+        if p == 0x10 || p == 0x11 || p == 0x12 || p == 0x35 || p == 0 {
+            p = TF_EPHEM_BASE | 0x101;
+        }
+        p
+    }
+}
+
 fn tf_reply(at478: u64, at479: u64, sz479: u64) {
     if at478 == 0 || at479 == 0 {
         return;
@@ -5479,89 +5429,42 @@ fn tf_reply(at478: u64, at479: u64, sz479: u64) {
         return;
     }
 
-    // 会话进行中：待发 OACK / DATA（ACK 由 RX 推进 st）。
+    // 会话进行中：仅待发 OACK（ACK0 后冻结，不发 DATA）。
     let st = unsafe { TF_ST };
-    if st == 8 || st == 1 {
-        // OACK / DATA 也门控 ik≥4，避免早期堵路径。
+    if st == 8 {
         if unsafe { RF_IOK } < 4 {
             return;
         }
-        let ufs = unsafe {
-            if CTX_UFS.is_null() {
-                TF_ST = 7;
-                return;
-            }
-            &mut *CTX_UFS
-        };
-        if st == 8 {
-            // OACK：blksize=TF_BSZ、wsize=1、tsize=TF_SZ（字节）。
-            let mut q = [0u8; 96];
-            q[0] = 0;
-            q[1] = 6; // OP_OACK
-            let mut n = 2usize;
-            tf_put_opt(&mut q, &mut n, b"blksize", unsafe { TF_BSZ });
-            tf_put_opt(&mut q, &mut n, b"wsize", 1);
-            tf_put_opt(&mut q, &mut n, b"tsize", unsafe { TF_SZ });
-            if n > 256 {
-                unsafe { TF_ST = 5 };
-                return;
-            }
-            if glink_tx_payload(
-                at478,
-                at479,
-                tx_head,
-                sz479,
-                0x11,
-                unsafe { TF_NODE },
-                unsafe { TF_PORT },
-                &q[..n],
-            ) {
-                unsafe {
-                    TF_ST = 9; // 等 ACK block 0
-                    TF_N = TF_N.wrapping_add(1);
-                }
-            }
-            return;
-        }
-        // st==1：发一块 DATA
-        let data_lba = MODEM_LBA + 17;
-        let bsz = unsafe { TF_BSZ } as usize;
-        let left = unsafe { TF_SZ.saturating_sub(TF_SOFF) };
-        let ntake = if left as usize > bsz { bsz } else { left as usize };
-        let mut q = [0u8; 260];
+        let mut q = [0u8; 96];
         q[0] = 0;
-        q[1] = 3; // DATA
-        q[2] = (unsafe { TF_BLK } >> 8) as u8;
-        q[3] = unsafe { TF_BLK } as u8;
-        if ntake > 0 {
-            if let Err(e) = tf_read_bytes(
-                ufs,
-                data_lba,
-                unsafe { TF_CL },
-                unsafe { TF_SEEK.saturating_add(TF_SOFF) },
-                &mut q[4..4 + ntake],
-            ) {
-                unsafe { TF_ST = if e < 0x100 { e } else { 6 } };
-                return;
-            }
-        }
-        let pay = 4 + ntake;
-        if pay > 256 {
+        q[1] = 6; // OP_OACK
+        let mut n = 2usize;
+        tf_put_opt(&mut q, &mut n, b"blksize", unsafe { TF_BSZ });
+        tf_put_opt(&mut q, &mut n, b"wsize", 1);
+        tf_put_opt(&mut q, &mut n, b"tsize", unsafe { TF_SZ });
+        if n > 256 {
             unsafe { TF_ST = 5 };
             return;
         }
+        let sport = unsafe {
+            if TF_SPORT == 0 {
+                TF_SPORT = tf_ephem_sport();
+                TF_BLK = TF_SPORT; // sm: tb=st.sport.acks
+            }
+            TF_SPORT
+        };
         if glink_tx_payload(
             at478,
             at479,
             tx_head,
             sz479,
-            0x11,
+            sport,
             unsafe { TF_NODE },
             unsafe { TF_PORT },
-            &q[..pay],
+            &q[..n],
         ) {
             unsafe {
-                TF_ST = 2; // 等这块 ACK
+                TF_ST = 9; // 等 ACK block 0；见后故意不发 DATA
                 TF_N = TF_N.wrapping_add(1);
             }
         }
@@ -5573,7 +5476,7 @@ fn tf_reply(at478: u64, at479: u64, sz479: u64) {
     }
     let op = unsafe { TF_OP };
     if op == 2 {
-        // ACK block 0 — WRQ 探针
+        // ACK block 0 — WRQ 探针（仍走服务口 0x11）
         let mut q = [0u8; 4];
         q[0] = 0;
         q[1] = 4;
@@ -5654,7 +5557,7 @@ fn tf_reply(at478: u64, at479: u64, sz479: u64) {
         return;
     }
 
-    // ik<4：先 ERROR，等 modem 重试（避免早期 UFS/DATA 堵路径；365d1f4 前车）。
+    // ik<4：先 ERROR，等 modem 重试。
     if unsafe { RF_IOK } < 4 {
         if tf_send_err(at478, at479, tx_head, sz479, 1, b"file not found") {
             unsafe {
@@ -5669,8 +5572,8 @@ fn tf_reply(at478: u64, at479: u64, sz479: u64) {
         return;
     }
 
-    // 已有进行中的喂送：拒重入，ERROR。
-    if unsafe { TF_ST } == 1 || unsafe { TF_ST } == 2 || unsafe { TF_ST } == 8 || unsafe { TF_ST } == 9 {
+    // 进行中的 OACK 会话：拒重入。st==a（ACK0 已见）允许新 RRQ 再试。
+    if unsafe { TF_ST } == 8 || unsafe { TF_ST } == 9 {
         if tf_send_err(at478, at479, tx_head, sz479, 4, b"busy") {
             unsafe {
                 if TF_SEEN_N < 8 {
@@ -5722,7 +5625,6 @@ fn tf_reply(at478: u64, at479: u64, sz479: u64) {
     }
     let seek = unsafe { TF_SEEK };
     if seek >= xfer {
-        // 空传输：OACK + 立即短 DATA？简化：ERROR
         if tf_send_err(at478, at479, tx_head, sz479, 1, b"file not found") {
             unsafe {
                 TF_PEND = false;
@@ -5736,15 +5638,11 @@ fn tf_reply(at478: u64, at479: u64, sz479: u64) {
     unsafe {
         TF_CL = cl;
         TF_SZ = xfer;
-        TF_SOFF = 0; // 相对 seek 后的逻辑偏移；读文件时 +TF_SEEK
-        TF_BLK = 1;
         TF_ACKS = 0;
         TF_BSZ = TF_MAX_BSZ;
-        TF_CL_CUR = 0xffff_ffff;
-        // 实际文件读偏移 = TF_SEEK + TF_SOFF；把 seek 并进：改用 TF_SEEK 为基。
-        // 简化：把 seek 吃进起点——重定位 SOFF 基为 seek，SZ=xfer。
-        // 读用 TF_SEEK+TF_SOFF；这里 TF_SEEK 已存，TF_SOFF 从 0。
-        TF_ST = 8; // 先 OACK（modem RRQ 必带 options；经典 512 超帽）
+        TF_SPORT = 0; // 发 OACK 时再分配 ephemeral
+        TF_BLK = 0;
+        TF_ST = 8; // 仅 OACK；ACK0 后停在 a，永不 DATA
         if TF_SEEN_N < 8 {
             TF_SEEN[TF_SEEN_N as usize] = TF_OFF;
             TF_SEEN_N += 1;
@@ -9249,37 +9147,28 @@ fn scan_new_servers(fifo: u64, rh: u64) {
                         }
                     }
                 }
-                if typ == 1 && dst_node == 1 && dst_port == 0x11 && chunk >= 34 {
+                // TFTP：RRQ/WRQ 仍落服务口 0x11；OACK 会话 ACK 落 ephemeral TF_SPORT。
+                let tf_ack_port = unsafe { TF_SPORT };
+                let tf_on_svc = dst_port == 0x11;
+                let tf_on_eph = tf_ack_port != 0 && dst_port == tf_ack_port;
+                if typ == 1 && dst_node == 1 && (tf_on_svc || tf_on_eph) && chunk >= 34 {
                     let key = off as u32;
                     let op = ((rd8(fifo + off + 48) as u32) << 8) | (rd8(fifo + off + 49) as u32);
-                    // ACK：推进 OACK/DATA 会话（不占 TF_PEND）。
-                    if op == 4 && chunk >= 36 {
+                    // ACK0 → 记下后冻结（st=a）；本刀永不发 DATA。
+                    if op == 4 && chunk >= 36 && tf_on_eph {
                         let blk = ((rd8(fifo + off + 50) as u32) << 8)
                             | (rd8(fifo + off + 51) as u32);
                         unsafe {
                             if TF_ST == 9 && blk == 0 {
-                                // OACK 已确认 → 发 DATA block 1
                                 TF_ACKS = TF_ACKS.wrapping_add(1);
-                                TF_BLK = 1;
-                                TF_SOFF = 0;
-                                TF_ST = 1;
-                            } else if TF_ST == 2 && blk == TF_BLK {
-                                TF_ACKS = TF_ACKS.wrapping_add(1);
-                                let ntake = {
-                                    let left = TF_SZ.saturating_sub(TF_SOFF);
-                                    let b = TF_BSZ;
-                                    if left > b { b } else { left }
-                                };
-                                TF_SOFF = TF_SOFF.saturating_add(ntake);
-                                if TF_SOFF >= TF_SZ || ntake < TF_BSZ {
-                                    TF_ST = 3; // 完成（短块或写满）
-                                } else {
-                                    TF_BLK = TF_BLK.wrapping_add(1);
-                                    TF_ST = 1;
-                                }
+                                TF_ST = 0xa; // ACK0 已见，停
                             }
                         }
                     }
+                    // RRQ/WRQ 只在服务口受理。
+                    if !tf_on_svc {
+                        // ephemeral 上非 ACK 忽略
+                    } else {
                     let mut seen = false;
                     unsafe {
                         let mut i = 0u32;
@@ -9375,6 +9264,7 @@ fn scan_new_servers(fifo: u64, rh: u64) {
                             TF_PEND = true;
                         }
                     }
+                    } // else tf_on_svc
                 }
                 if chunk >= 52 && (typ == 4 || typ == 10) {
                     let svc = rd32((fifo + off + 52) as usize);

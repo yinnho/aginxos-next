@@ -1525,3 +1525,85 @@ Asia/Shanghai ~10:00）：flash+set_active a+reboot OK。en10 ECM UP
 单 4K 块。**勿**再抬 glink 帽。
 
 未推。
+
+### 本轮：离线对账 TFTP OACK/DATA 硬挂（不刷，2026-10-19 ~10:06 Asia/Shanghai）
+
+**禁令**：本轮 **不 flash**。设备仍挂在 `25df6d3`；复活镜像已在位
+`.local/device/redfin/boot-out/boot-s20-f73c9bb.img`（98304 B，无需重编）。
+
+#### 1) `f73c9bb` vs `25df6d3`：首包 RRQ 跑什么
+
+| | `f73c9bb`（活） | `25df6d3`（硬挂） |
+|--|--|--|
+| RRQ 非 SO / ik&lt;4 | ERROR | ERROR |
+| RRQ SO 且 ik≥4 | ERROR | `TF_ST=8` → **同拍发 OACK**（blksize=252,wsize=1,tsize=sz）→ st=9 等 ACK0 → 再 DATA |
+| WRQ | ACK0 | ACK0 |
+| glink 帽 | n≤256/total≤512 | **不变** |
+| UFS | 仅开机 `tf_boot_probe` | 探针 + DATA 热路径 `tf_read_bytes`/`TF_CL_BUF` |
+
+**首 RRQ 是否会单独发 OACK？会。** `TF_ST=8` 后立刻递归 `tf_reply`，在
+`RF_IOK≥4` 时 **OACK 先于任何 DATA** 上线。无法从「无 sm / ARP incomplete」
+区分是 OACK 本身堵死，还是 modem 已 ACK0 后首块 DATA/UFS 堵死——两者都在
+首轮交互窗口内。
+
+`365d1f4`（抬帽 + 512 DATA）与 `25df6d3`（不抬帽 + OACK 步进）同形硬挂 →
+**不是「块太大」单因**；嫌疑在「对 SO 真喂 / 进入传送态」本身。
+
+#### 2) Linux 怎么喂 `modem_pr` SO
+
+- **传输**：**QRTR，不是 UDP**。仓内 `rootfs/src/qcom/tqftpserv/tqftpserv.c`：
+  `qrtr_publish(fd, 4096, 1, 0)`；`handle_rrq` 里 **`qrtr_open(0)` 新套接字
+  + `connect` 到 modem 的 `sockaddr_qrtr`**，再在该 ephemeral 口上跑
+  OACK/DATA/ACK（TFTP TID = 新 QRTR port）。
+- **路径**：stock `tftp_server` 从 `/vendor/firmware_mnt`（bind = modem_a
+  vfat）读；服务名 QRTR **4096**，公告口常为 **0x11**（与裸机一致）。
+- **信道**：用户态 libqrtr → 内核 qrtr → **qrtr-smd / glink** 进 modem；
+  无独立「TFTP glink channel」，就是普通 QRTR data 帧。
+- **对照 stock 时序**（`radio-bringup`）：2023 modem 在 PIL 后 ~2.5s **自己**
+  从 `modem_wlan_region@8c000000` 拉 `wlan_pd`，常 **无** AP 侧 SO 拉载；
+  裸机现见 RRQ `549_38_0.mbn`（~963 KiB）+ PDR UNINIT，是缺环境时的
+  **TFTP 补段路径**，不是 stock 主路径。
+
+**与裸机差异（高嫌疑）**：tqftpserv **每 RRQ 换源口**；裸机 OACK/DATA 仍从
+服务口 **0x11** `glink_tx_payload` 回——可能把控制口与数据面叠死。
+
+#### 3) 下一刀（唯一推荐，禁止再 in-band 洪水）
+
+**OACK-only + 仿 tqftpserv ephemeral src port；永不 DATA。**
+
+- 基线：`f73c9bb`（RRQ ERROR、活、`tz=1.eb43c.1a67`）
+- 单变量：ik≥4 且 SO RRQ → 用 **非 0x11** 的固定试验 src port（或递增）发
+  **仅 OACK**（可带 blksize/wsize/tsize），`TF_ST` 停在等 ACK0 / 或 ACK 后
+  **故意不发 DATA**（必要时随后 ERROR）
+- sm：`tb=st.blk.acks`；活体判据 = ping/2323/`ik=4`
+- **不**：抬 glink 帽、TX intent、UFS 热读、分块 DATA、PAS 预灌本刀
+- 判读：挂 → OACK/错 TID 即毒；活且 `tb` 见 ACK0 → 下一刀才考虑 **单块
+  短 DATA（≤1）且长延迟**，仍非全文件洪水
+
+备选（本轮不选）：PAS/区域预置 SO、或回头补 ADSP/pm 环境让 modem **自拉**
+wlan_pd（stock 主路径）——更大、正交。
+
+#### 4) 复活镜像
+
+已存在，未重编：
+`/Users/sophiehe/Documents/aginxos-next/.local/device/redfin/boot-out/boot-s20-f73c9bb.img`
+
+未推。未刷。
+
+### 本轮：OACK-only + ephemeral QRTR 源口（未刷，2026-10-19 ~10:14 Asia/Shanghai）
+
+**禁令**：本刀 **不 flash**（等 `f73c9bb` 复活确认）。不推。
+
+**相对 `25df6d3`**：去掉全部 DATA/`TF_CL_BUF`/`tf_read_bytes`；SO RRQ 且
+`ik≥4` 时仅从 **ephemeral src port**（`0x1a00|seq`，≠0x11）发 OACK
+（blksize=252,wsize=1,tsize）；ACK0 → `TF_ST=0xa` 冻结，**永不 DATA**。
+WRQ/ERROR 仍走服务口 `0x11`。RX 在 `TF_SPORT` 收 ACK0。
+
+**sm**：`tb=st.sport.acks`（`TF_BLK` 复用为 sport）—— OACK 已发=`9.<sport>.0`，
+ACK0 已见=`a.<sport>.1`。
+
+**保留**：FAT 探针/`tz`、PDR（a5137f2 线）、不抬 glink 帽、不动 TX intent。
+
+镜像：`.local/device/redfin/boot-out/boot-s20.img` + 提交后 stamp
+`boot-s20-<sha>.img`。
+
