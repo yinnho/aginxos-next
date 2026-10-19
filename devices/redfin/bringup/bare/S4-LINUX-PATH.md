@@ -2110,7 +2110,7 @@ sr=1.7fffffff.0 pn=kernel/elf_loader.1.30 tz=1.eb43c.1a67`，无 `0x45`）。
 用例名：`MIN=0 / SVS2=1 / SVS=2 / NOMINAL=3 / TURBO=4`。阈值阈值
 `throughput-threshold = <310 600 1000>` 只影响事后升档，**boot PAS 前固定 SVS2**。
 
-##### RPMH/BCM 编码（机制已钉，**数值未钉**）
+##### RPMH/BCM 编码（机制已钉；数值见 I4 离线表 2026-10-19）
 
 ```
 cmd-db name "IP0"|"SH0"|"MC0"|"ACV"|"SN1"|"CN0"|"SH4"|…
@@ -2125,9 +2125,7 @@ TCS data = BCM_TCS_CMD(commit=1, valid=1, vote_x, vote_y)
 发：apps RSC（与裸机 `rpmh_cmd` 同路：drv-2 TCS0 @ `0x18220d00`）
 ```
 
-**blocker**：没有 slot-b 上实际聚合后的 `(bcm_name, addr, vote_x, vote_y)` 列表。
-NOC 路径会把五条向量摊到多个中间节点；只靠 DTS 手算易漏/错单位。
-`unit_size`/`width` 在 cmd-db aux，须现场读，**禁止猜**。
+**曾 blocker**：slot-b 无 live `Act_*` / 无 debugfs。**已缓解（离线）**：cmd-db `e4d9591` 读齐 addr/unit/width；用 DTS SVS2+`KBTOB`+终点几何算出 vote/TCS（见 `I4-VOTE-AGGREGATE.md`）。仍缺：live `dump_bcm_clients`、中间 NOC 全量、ACV width=0 活体确认。**禁止未审刷写**。
 
 #### 2) 裸机现有 helper（已搜）
 
@@ -2146,12 +2144,12 @@ NOC 路径会把五条向量摊到多个中间节点；只靠 DTS 手算易漏/�
 
 #### 3) 交付判定 → **BLOCKER**（非可编码实现计划）
 
-**不能**在本轮写出可刷的 BCM 投票刀。解锁清单：
+**可写审查用刀计划，仍不可未审 flash。** 解锁进度：
 
-1. 槽 b 抓到 client `ipa` 当前 usecase（应为 SVS2）及每条 path 的 ab/ib
-2. 抓到 **非零** BCM 客户端行：`bcm=<name> client=ipa act_ab=… act_ib=…`
-3. 对每个 name：cmd-db `addr` + aux `unit_size`/`width` + 算出的 `vote_x/y` + 最终 `TCS data`
-4. （并行）确认 SMMU SID 0x520/521/522 STE 在 PAS 前已写（或证明 PAS 不依赖 —— 现证据倾向依赖）
+1. ~~usecase=SVS2~~ DTS+probe 已钉；live Act=0 → 用 DTS 峰值并标 MED
+2. ~~非零 client 行~~ 未拿到（无 DEBUG_FS）— 用离线聚合代替并标 gap
+3. ~~addr/unit/width + vote/TCS~~ **OFFLINE-COMPLETE**（cmd-db + 公式）
+4. SMMU SID 已钉；**STE 裸机写法仍缺（I7）**
 
 齐了之后的 **实现计划骨架**（仍禁止在收据前编码）：
 
@@ -2232,11 +2230,25 @@ AOP/CDSP/TFTP 成功路径。
 | I1 | 逻辑序：ipa SVS2 vote → SMMU → `subsystem_get(ipa_fws)` | **DONE** |
 | I2 | SVS2 五路径 ab/ib + 终点 BCM 名（IP0/SH0/MC0/ACV/SN1/CN0/SH4） | **DONE**（拓扑） |
 | I3 | BCM TCS 位域 + cmd-db HW=5 + 聚合公式 | **DONE**（机制） |
-| I4 | 现场 `(name,addr,unit,width,vote_x,vote_y,data)` 表 | **BLOCKED** → 配方 §4 |
+| I4 | 现场 `(name,addr,unit,width,vote_x,vote_y,data)` 表 | **OFFLINE-COMPLETE** 2026-10-19：cmd-db `e4d9591` 填 addr/unit/width；vote/TCS 用 DTS SVS2+`KBTOB` 离线聚合（slot-b Act=0）。见 `.local/device/redfin/cmd-db-bcm-20261019-120213/I4-VOTE-AGGREGATE.md`。**未刷** |
 | I5 | 裸机 `rpmh_cmd` 可复用发 BCM | **DONE**（通路） |
 | I6 | 裸机 msm-bus 图 / 自动聚合 | **缺**（不需要若 I4 齐） |
-| I7 | SMMU SID 0x520/521/522 裸机写法 | **未做**（PAS 前第二前置） |
-| I8 | 早期 `pas_go(0xf)` | **BAN** 至 I4+I7 实证 |
+| I7 | SMMU SID 0x520/521/522 裸机写法 | **未做**（PAS 前第二前置；SID 已钉） |
+| I8 | 早期 `pas_go(0xf)` | **BAN** 至 I4 活体核对 + I7 实证 |
+
+##### I4 离线表摘要（SVS2 ACTIVE；勿当已刷）
+
+| bcm | addr | vote_x | vote_y | TCS |
+|---|---|---:|---:|---|
+| IP0 | `0x50070` | 0 | 2500 | `0x600009c4` |
+| SH0 | `0x50004` | 35 | 239 | `0x6008c0ef` |
+| MC0 | `0x50000` | 146 | 1365 | `0x60248555` |
+| ACV | `0x5007c` | 0 | 8 | `0x60000008` |
+| SN1 | `0x5002c` | 141 | 1320 | `0x60234528` |
+| CN0 | `0x50074` | 0 | 2560 | `0x60000a00` |
+| SH4 | `0x50014` | 0 | 18 | `0x60000012` |
+
+窄刀下一步（仍禁 PAS）：SMMU STE + 上表 ACTIVE `rpmh_cmd`；人审 G2/G3（中间 NOC、ACV width=0）后再议刷。
 
 flash-safe 仍 **`c38a6cd`**。禁区不变（TFTP OACK/DATA、TX intent、冷 CDSP、
-**冷 IPA PAS `ceeb6fd`**、猜写 RPMH/BCM）。未推。未刷。
+**冷 IPA PAS `ceeb6fd`**、未经审的 RPMH/BCM 刷写）。未推。未刷。
