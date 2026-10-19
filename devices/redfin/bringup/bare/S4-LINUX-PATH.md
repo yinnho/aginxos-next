@@ -1821,3 +1821,21 @@ tip 上 OACK（`8a761ad`）TFTP 已回退，main 与 f73c9bb TFTP 一致后再�
 
 基线：`f73c9bb`。未推。
 
+### 刷验（2026-10-19 ~10:50 Asia/Shanghai）— 软成功，无 0x45
+
+`c38a6cd` / `boot-s20.img`（98304 B）经 2323→fb GATE `13201FDD4001N8`
+`flash boot_a` + `set_active a` + reboot。ping ~32s；2323 OK。
+
+| 字段 | 值 |
+|---|---|
+| `me` | **`1.2.0`** — pub 写过；vout=2（含 `ipa`）；入向 inflags=0（435 无字面 `ipa`/`wlan` 名；`e=10002` 仍两入向，第二项为 slave-kernel） |
+| `ik` | `4.0` |
+| `tz` | `1.eb43c.1a67` |
+| `sr` | `1.7fffffff.0`（仍 UNINIT） |
+| `pn` | `kernel/elf_loader.1.30` — **仍走 TFTP 回退** |
+| `q` | `42.b401,2b.1202,f.1,33.201,15.1,33.b01,18.1,16.1001` — **无 `45.`** |
+
+**判读**：刀安全且生效（相对 `f73c9bb` 仅多 `me=` / 出向 `ipa`），**不足以**触发内存内自拉。假说「只缺 MPSS 出向 ipa」**证伪**。仍缺的更大环境差以 **CDSP ONLINE（禁冷 PAS）** 与/或 **真 IPA PAS+GSI** 为主；二者皆 early-write 高危，下一刀须另辟只读/延后路径，不得回 TFTP/intent。
+
+flash-safe 现可含 **`c38a6cd`**（行为 ⊇ `f73c9bb` + `me`）；复活仍可用 `boot-s20-f73c9bb.img`。未推。
+
