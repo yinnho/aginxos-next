@@ -2392,3 +2392,69 @@ pas-id **18**、区 **`0x87400000`/`0x1E00000`** 与 lito `qcom,turing` / stock 
 
 禁区不变：IPA-before-ADSP、TX intent、TFTP 成功路径、glink cap、冷 CDSP 无 IPA。
 Flash-safe restore 仍：`boot-s20-c38a6cd.img` / 或回 `b99c785`（IPA 绿基线）。未推。
+
+### 离线 CDSP mdt/ELF 审计（2026-10-19 ~13:10 Asia/Shanghai）— ffcffff1 / 无刀
+
+源：factory `vendor.img`（UP1A.231105.001.B2）`/firmware/cdsp.mdt`+`cdsp.b00`–`b12`，抽到
+`.local/device/redfin/cdsp-fw/`（gitignore，不进仓）。**未刷、未推、未碰设备**（仍 `dcbf8cf`）。
+
+#### ELF 摘要
+
+| 项 | 值 |
+|---|---|
+| mdt | 7660 B；ELF32 QDSP6；`e_phnum=13`；`e_entry=0x87400000` |
+| 段文件 | `b00`–`b12`（`b07`/`b10`/`b12` filesz=0 / BSS） |
+| hash | phdr[1]：`p_type=0`，`flags=0x2200000`（TYPE_HASH），`p_offset=0x1000`，`filesz=0x1c18`；**内容 packed 在 mdt[hdr_end=0x1d4:]**（= `b01`），与 ADSP/IPA 同形 |
+| nload | **11**（非 hash、PT_LOAD、memsz>0）≡ `cd st=0xb` |
+| min_pa / max_pa | **`0x87400000` / `0x89200000`** |
+| span | **`0x1E00000`** ≡ stock dmesg `8740→8920` ≡ DTS `pil_cdsp_region` |
+| bare `reloc` | **false**（地址窗判定：`min>=base && max<=base+size`） |
+| `QCOM_MDT_RELOCATABLE` (bit27) | load 段 flags 均带 `0x08000000`；Linux 会走 relocate 分支，但 carveout==min_pa 时 dest 与裸机 `pa` 直写 **等价**；`pas_go` 本就总做 MEM_SETUP(base,size) |
+| bXX↔filesz | **11 个 load 段全部一致**（无截断/错号） |
+
+phdr 表（略 flags 低 3 bit = PF）：
+
+| i | pa | filesz | memsz | note |
+|--:|---|--:|--:|---|
+| 0 | — | 0x1d4 | 0 | ELF+phdrs（=b00）；非 PT_LOAD |
+| 1 | 0x89200000 | 0x1c18 | 0x2000 | **HASH**（不装；p_paddr 落在 ADSP 基，同 ADSP hash 落区外惯例） |
+| 2 | 0x87400000 | 0x39878 | 0xb0000 | IN |
+| 3 | 0x874b0000 | 0x19dec | 0x1a000 | IN |
+| 4 | 0x874ca000 | 0x434 | 0x1000 | IN |
+| 5 | 0x874cb000 | 0x268b8c | 0x4b6000 | IN |
+| 6 | 0x87981000 | 0x14b9e | 0x15000 | IN |
+| 7 | 0x87996000 | 0 | 0x6a000 | BSS（整区 `write_bytes` 已清） |
+| 8 | 0x87a00000 | 0x80440 | 0xe6000 | IN |
+| 9 | 0x87ae6000 | 0xa88 | 0x1000 | IN |
+| 10 | 0x87ae7000 | 0 | 0x19000 | BSS |
+| 11 | 0x87b00000 | 0xe714 | 0x43000 | IN |
+| 12 | 0x87b43000 | 0 | 0x16bd000 | BSS（撑满到 0x89200000） |
+
+#### vs `load_adsp` / `load_ipa_fws` / `pas_go`
+
+| 步骤 | ADSP | IPA | CDSP (dcbf8cf) |
+|---|---|---|---|
+| 代理电源 | lcx/lmx TURBO，**硬失败**若 ≠`0x10101` | 无 | cx TURBO，**不校验** scx |
+| 整区零填 | 是 | 是 | 是 |
+| `.bXX` / mdt 内嵌 | 仅 bXX | bXX 或 mdt 内嵌 | 仅 bXX（与 ADSP 同） |
+| hash 跳过 | `flags` TYPE_HASH | 同 | 同 |
+| `pas_go` 前 dcache | 整区 civac | 同 | 同（共享 `pas_go`） |
+| `sfr_wipe` | **423** | 无 | **无 601** |
+| AOP load_state on | 有 | 无（DTS 无） | 有 |
+| msm-bus 向量 | `pil-lpass`（无完整 vectors） | `pil-ipa_fws` | **`pil-cdsp` `<154 821 0 0/1>`** |
+| 裸机 bus / `scm_pas_enable_bw` | 未做（仍 AUTH 绿） | 未做（仍绿） | **未做（AUTH `ffcffff1`）** |
+
+**证伪**：错 pas-id / 错基址长度 / bare reloc=true / phnum≠st / bXX 截断 / mdt 非 packed-hash（ADSP 同形已绿）→ **均否**。
+静态「段布局/哈希元数据形」与成功的 ADSP 同构；假说 1 的 **reloc/窗/漏段** 子项关掉。仍可能：运行时内容未进 TZ 可见点（总线/BW）、或 AUTH 复位侧条件。
+
+#### 结论 / 下一刀排序（仍无「唯一窄修复」）
+
+**不编修复刀、不出镜像。** 离线已完成 park 探针 #1。
+
+推荐单变量下一动作（**勿同刀**）：
+
+1. **AUTH 前 `pil-cdsp` bus vote（154→821）** — CDSP DTS 独有完整向量；相对 ADSP/IPA「裸机也没 BW 却绿」仍是最像的 CDSP 特有缺口。需 BCM/cmd-db 对 master/slave 名，或只读探针先报 vote sts。
+2. **`sfr_wipe(601)` + `scx==0x10101` 硬失败** — 对齐 ADSP 代理纪律；偏假说 3，与 bus 分开验。
+3. （可选、更窄只读）sm 增 `cdx=`/`cdr=`/`cdm=` — 离线已证 reloc/span/mdt；runtime 只剩 cx sts 有增量，优先 ring `cdsp cx=` 若还能捞。
+
+禁区不变。设备可继续停 `dcbf8cf`。Flash-safe：`boot-s20-c38a6cd.img` / `b99c785`。
