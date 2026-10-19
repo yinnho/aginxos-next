@@ -2740,3 +2740,48 @@ Flash-safe restore：先 `boot-s20-0433396.img`（本扩展基线，仍在 boot-
 或 `c38a6cd` / `b99c785` / `af0c6ff`。等硬复位进 fastboot：可直接刷本 tip stamp
 （覆盖 restore），或先刷 `0433396` 再刷 tip。
 
+### GSI CH7 setup park + RO `gc=`（2026-10-19 ~16:15 Asia/Shanghai）
+
+**活体基线**：`9830750` — `ig=1… .sm.r=.600.0` → **R=0**；`ch0=0`；`ca/cb≠deadbeef`；`iq=1.201`；无 hang。
+slot-b：EP=16 / `gsi_ch=7` / `platform=3`（`INIT-TLV-COMPUTED.md`）。
+
+#### 为何不做 allocate+config+start 写刀
+
+对照 Linux `ipa3_setup_sys_pipe` → `ipa_gsi_setup_channel`（`ipa_dp.c`）+ `gsi_alloc_channel`/`gsi_start_channel`（`gsi.c`）：
+
+| 参数 | vendor 来源 | 裸机状态 |
+|---|---|---|
+| EE | DTS `qcom,ee=<0>` | **已知** AP EE0 |
+| `ch_id` | EP map APPS_WAN_CONS → **7** | **已知** |
+| dir / prot | CONS → `FROM_GSI` / `GPI` | **已知** |
+| `re_size` | `GSI_CHAN_RE_SIZE_16B` | **已知** |
+| `ring_len` | `2 * desc_fifo_sz`；`desc_fifo_sz = wan_rx_desc_size * 8`；lito 无 `wan-rx-desc-size` → default **256** → ring **0x1000** | **尺寸公式已知** |
+| prefetch | EP map `GSI_ESCAPE_BUF_ONLY` thresh 0 | **已知** |
+| **ring DRAM PA** | `dma_alloc_coherent` via IPA SMMU AP | **未知** — 无固定 carveout；禁 invent |
+| **evt ring** | CONS 独占 EVT（同 ring_size）或 common 0x7C00 | **同缺 PA**；另需 `EV_CH_CMD` ALLOC |
+| **CH_CMD ALLOC/START** | 写 `GSI_EE_n_GSI_CH_CMD` 后 **IRQ completion** | 裸机 **无** GSI IRQ 状态机 |
+| **IPA EP16 cfg** | `ipa3_cfg_ep`（hdr/aggr/metadata） | 寄存器序未活体钉死；INIT 另议题 |
+| **RX TRE / buffers** | replenish 池；doorbell 前须铺 | 无缓冲 PA；**禁 doorbell** |
+| SMMU | rings 走 `ipa_smmu_ap` IOVA | I4 STE 仅 IPA FW SID；ring DRAM 映射未建 |
+
+裁定：**缺关键未知 → 禁 invent ring / 禁 doorbell / 禁 CH_CMD**。本刀 **不**实现写路径。
+
+#### 本 tip：只读子集 `gc=`（可刷观测，非 setup 写刀）
+
+与既有 `ig=` 同次、同门（IPA PAS 绿后一次）；**零写**。
+
+| 项 | 值 |
+|---|---|
+| sm | **`gc=st.c0.c1.c2.c3.irq.err`** |
+| `c0` | EE0 CH7 `CNTXT_0`（含 CHSTATE；ofs `0xf380`） |
+| `c1` | `CNTXT_1` R_LENGTH |
+| `c2`/`c3` | ring base LS/MS |
+| `irq` | `EE0 TYPE_IRQ` @`0x12080` |
+| `err` | `EE0 ERROR_LOG` @`0x12200`（**不** CLR） |
+| `ig=` | 路径保持（含 `.sm.r`） |
+| 不做 | 无 CH_CMD / doorbell / ring alloc / QMI INIT / CDSP·TFTP·TX 改 |
+
+判读：`c0` CHSTATE=0 且 `c1/c2=0` → CH7 仍未配（与 `9830750` ch0=0 一致）。写刀前提仍是：钉 ring DRAM PA（或 attested carveout）+ EVT + IRQ 完成路径 + EP cfg。
+
+Flash-safe restore：`boot-s20-9830750.img` / `0433396` / `c38a6cd`。
+**未 flash、未 push**（本轮 build+commit only）。

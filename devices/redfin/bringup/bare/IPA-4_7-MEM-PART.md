@@ -98,3 +98,8 @@ PAS 后、GSI 驱动前：通常 **不是** `deadbeef`（证未铺布局）。
 
 INIT 绝对地址 = 上表 ofst + `r`。`0433396` 已读未导出；tip 起 `ig=` 尾带 `.sm.r`。
 
+## GSI CH7（APPS_WAN_CONS）— park 写 / RO `gc=`
+
+已知：ee=0、ch=7、GPI FROM_GSI、re=16B、ring_len=2×(256×8)=0x1000（lito 默认 wan-rx-desc）。
+**未知 / 禁 invent**：ring+evt DRAM PA、CH_CMD IRQ 完成、EP16 cfg、RX TRE。
+裸机只读：`gc=st.c0.c1.c2.c3.irq.err`（与 `ig=` 同次）。详见 `S4-LINUX-PATH.md` park。
