@@ -2677,7 +2677,7 @@ INIT 仍 park（需 mem/EP）。基线 tip atop `7fc307e` / 活体 `cef1fd9`。
 |---|---|
 | 触发 | IPA PAS 绿（`IPA_ST` 高位 + p0..p2==0）后 **一次**；sm 幂等重入 |
 | 读 | IPA `VERSION`/`SHARED_MEM_SIZE`；GSI `CFG`/`EE0_STATUS`/`SW_VERSION`/`HW_PARAM_2`/`CH0_CNTXT_0`；SRAM canary @`0x684`/`0x284`（`ipa_4_7` modem_hdr−4 / v4_flt_hash−4） |
-| sm | **`ig=st.iver.gcfg.gstat.gver.hp2.ch0.ca.cb`**（`st=0` 未采 / `1` 已采；其余 `ffffffff` 至采完） |
+| sm | **`ig=st.iver.gcfg.gstat.gver.hp2.ch0.ca.cb.sm.r`**（`0433396` 九段；tip 尾加 `sm`/`r`。`st=0` 未采 / `1` 已采；其余 `ffffffff` 至采完） |
 | 不做 | **无** doorbell / CH_CMD / ring / QMI INIT / CDSP·TFTP·TX 改动 |
 | 离线 | `IPA-4_7-MEM-PART.md` — vendor `ipa_4_7_mem_part` 全表（INIT TLV 索引） |
 | 出件 | `boot-s20-<sha>.img`；**未 flash、未 push** |
@@ -2707,8 +2707,36 @@ Capture：`.local/device/redfin/slot-b-ipa-init-20261019-154055/`（`INIT-TLV-CO
 | route `num_indices` | **7** | `v*_modem_rt_index_hi` |
 | 活体 INIT | @49.21→49.31 | dmesg（无 IPAWANDBG TLV 行） |
 | qrtr | `0x31/0x201` + **`0x45/0x1`** | slot-b 有 WLFW；裸机仍无 0x45 |
-| `smem_restr` 活体 | **未采** | 无 debugfs / CONFIG_DEVMEM；`ig=` 读了未导出 |
+| `smem_restr` 活体 | **待刷采** | 无 debugfs / CONFIG_DEVMEM；下一刀 `ig=` 尾字段 `.sm.r` 导出 |
 
-debugfs 仍不可挂；`/dev/mem` mknod 后 ENXIO。mem TLV 仍 = `ipa_4_7_mem_part.ofst + R`（R 待下一刀 `sm=`/`ig=` 扩展）。
+debugfs 仍不可挂；`/dev/mem` mknod 后 ENXIO。mem TLV = `ipa_4_7_mem_part.ofst + R`（R=`ig=` 尾 `.r`）。
 
-**下一刀**：只读导出 `SHARED_MEM_SIZE`→R；**仍禁**空 INIT。GSI CH7 + SRAM canary 仍是写刀前提。
+**下一刀（本 tip）**：只读导出 `SHARED_MEM_SIZE`→R（扩展 `ig=`）；**仍禁**空 INIT。GSI CH7 + SRAM canary 仍是写刀前提。
+
+### ig= 扩展 SHARED_MEM→R（tip，未刷，2026-10-19 ~15:58 Asia/Shanghai）
+
+按 551ec4e park「下一刀」：**只读**导出 `IPA_SHARED_MEM_SIZE`→`smem_restricted_bytes`（R）。
+基线 tip `0433396` + docs `551ec4e`。Capture 上下文：`slot-b-ipa-init-20261019-154055`
+（EP=16 / gsi_ch=7 / platform=3）。设备仍停 Linux `_b`——**本刀未 flash**。
+
+| 项 | 值 |
+|---|---|
+| 触发 | 同 `0433396`：IPA PAS 绿后一次；sm 幂等 |
+| 读 | 既有 ig 九段 + **`IPA_SHARED_MEM_SIZE@cfg+0x54`** |
+| sm | **`ig=….sm.r`**：`sm`=SHARED_MEM 原字（baddr[31:16]\|size[15:0]，单位 8B）；**`r`=baddr×8=`smem_restricted_bytes`** |
+| INIT 用法 | 绝对地址 = `ipa_4_7_mem_part.ofst + r`（见 `IPA-4_7-MEM-PART.md` / `INIT-TLV-COMPUTED.md`） |
+| 不做 | **零写**；无 doorbell / ring / QMI INIT / CDSP·TFTP·TX 改动 |
+| 出件 | `boot-s20-<sha>.img`；**未 flash、未 push** |
+
+判读（刷后）：
+
+| 字段 | 含义 |
+|---|---|
+| `sm=ffffffff` / `r=ffffffff` | 未采到（IPA 未绿或未跑探针） |
+| `r=0` | restr=0 → TLV 绝对 = 表 ofst（常见冷启） |
+| `r≠0` | 用活体 R 重算 INIT mem TLV；仍禁空 INIT 直至 GSI CH7 + canary |
+
+Flash-safe restore：先 `boot-s20-0433396.img`（本扩展基线，仍在 boot-out），
+或 `c38a6cd` / `b99c785` / `af0c6ff`。等硬复位进 fastboot：可直接刷本 tip stamp
+（覆盖 restore），或先刷 `0433396` 再刷 tip。
+

@@ -1794,6 +1794,8 @@ fn ipa_gsi_ro_probe() {
         IG_CH0 = ch0;
         IG_CA = ca;
         IG_CB = cb;
+        IG_SMEM = smem;
+        IG_R = restr as u32;
         IG_ST = 1;
         IG_DONE = 1;
     }
@@ -3909,7 +3911,9 @@ static mut RFS_GNN: u8 = 0;
 static mut IPA_ST: u32 = 0;
 static mut IPA_P: [u32; 3] = [0xffff_ffff; 3];
 
-/// IPA/GSI 只读 MMIO 闩（PAS 绿后一次）。sm ig=st.iver.gcfg.gstat.gver.hp2.ch0.ca.cb
+/// IPA/GSI 只读 MMIO 闩（PAS 绿后一次）。
+/// sm ig=st.iver.gcfg.gstat.gver.hp2.ch0.ca.cb.sm.r
+/// sm=IPA_SHARED_MEM_SIZE 原字；r=restr_bytes=baddr*8（INIT 绝对地址偏量）。
 /// 零写：无 doorbell / 无 ring / 无 QMI INIT / 不改 CDSP·TFTP·TX。
 static mut IG_DONE: u32 = 0;
 /// st: 0 未跑 / 1 已采 / 2 IPA 未绿跳过（不应持久）
@@ -3923,6 +3927,10 @@ static mut IG_CH0: u32 = 0xffff_ffff;
 /// SRAM canary 字：ca=@modem_hdr-4 (0x684)；cb=@v4_flt_hash-4 (0x284)；未映=ffffffff
 static mut IG_CA: u32 = 0xffff_ffff;
 static mut IG_CB: u32 = 0xffff_ffff;
+/// IPA_SHARED_MEM_SIZE@cfg+0x54：baddr[31:16]|size[15:0]（单位 8B）
+static mut IG_SMEM: u32 = 0xffff_ffff;
+/// smem_restricted_bytes = baddr*8 — INIT TLV 绝对地址 = ofst + r
+static mut IG_R: u32 = 0xffff_ffff;
 
 /// CDSP（pas-id 18 @ 0x87400000 / 0x1E00000）。仅 IPA+ADSP 绿后、modem 前。
 /// sm cd=st.p0.p1.p2 — 同 ip=：st 高位|段数；p0/1/2 = INIT/MEM/AUTH x0。
@@ -10871,6 +10879,10 @@ fn ctrl_service(
                                 push_hex(&mut reply, &mut rn, unsafe { IG_CA } as u64);
                                 push_str(&mut reply, &mut rn, ".");
                                 push_hex(&mut reply, &mut rn, unsafe { IG_CB } as u64);
+                                push_str(&mut reply, &mut rn, ".");
+                                push_hex(&mut reply, &mut rn, unsafe { IG_SMEM } as u64);
+                                push_str(&mut reply, &mut rn, ".");
+                                push_hex(&mut reply, &mut rn, unsafe { IG_R } as u64);
                                 push_str(&mut reply, &mut rn, " x=");
                                 for i in 0..22 {
                                     if i != 0 {

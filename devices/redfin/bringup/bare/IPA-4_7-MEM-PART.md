@@ -86,3 +86,15 @@ PAS 后、GSI 驱动前：通常 **不是** `deadbeef`（证未铺布局）。
 | Q6_WAN_CONS | 14 | 7 | Q6 | 与 AP WAN_CONS 同 gsi_chan 号、不同 EE |
 
 `platform_type=3`。完整表：`.local/device/redfin/slot-b-ipa-init-20261019-154055/ipa47-ep-map.tsv`。
+
+## 活体 R（`ig=` 尾字段）
+
+`IPA_SHARED_MEM_SIZE` @ IPA cfg `+0x54`：`baddr[31:16] | size[15:0]`（单位 8B）。
+
+| sm 字段 | 含义 |
+|---|---|
+| `sm` | 寄存器原字 |
+| `r` | `smem_restricted_bytes = baddr × 8` |
+
+INIT 绝对地址 = 上表 ofst + `r`。`0433396` 已读未导出；tip 起 `ig=` 尾带 `.sm.r`。
+
