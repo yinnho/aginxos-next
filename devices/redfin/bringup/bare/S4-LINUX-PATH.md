@@ -1394,3 +1394,30 @@ early path；回 `92393f6` 基线或把 PDR 推迟到更晚 gate（如 RFS `ik=4
 
 用户回 fb 时刷序：先 `.local/device/redfin/boot-out/boot-s20-92393f6.img`
 复活，再刷本 tip `boot-s20.img`。本轮 **未刷未推**。
+
+### 本轮：a84360c 活体 + a5137f2 纠正刷验（2026-10-19 ~09:20–09:25 Asia/Shanghai）
+
+**根因（「坏 RESP」）**：不是帧格式/解析失败。`sr=1.7fffffff` 的
+`0x7fffffff` = CAF `SERVREG_NOTIF_SERVICE_STATE_UNINIT_V01`（真状态）。
+REGISTER TLV 布局（enable TLV01 + name TLV02 无内嵌长度）与 Linux
+`service-notifier-private.h` 一致；RESP TLV02=result、TLV10=curr_state
+也一致。旧逻辑把「state≠UP」一律 `RESTART_PD`，对 UNINIT 不对齐
+Linux（Linux 只听 IND，RESTART 仅显式 `pd_restart` / DOWN 恢复）。
+
+次要：RX 门槛 `chunk>=56` 会丢掉仅-result 的短 RESP（RESTART RESP
+chunk=48）；REGISTER 因带 state TLV 刚好 chunk=56 才过关。
+
+**刀 `a5137f2`**（保留 ik>=4 + node-0；不动 TX intent）：
+1. 仅 `DOWN(0x0FFFFFFF)` 才 `NEED_RP`；UNINIT 不 RESTART
+2. 听 `STATE_UPDATED` IND msgid `0x22` → 更新 state + `SET_ACK` `0x23`
+3. RX 门槛降至 `chunk>=48`；sm `sr=hit.state.res` + `si=ind_n`
+
+**刷验**：2323→fb，GATE `13201FDD4001N8`，`boot-s20.img` OK。
+未挂。sm×2（~09:24）：
+`ik=4.0 sr=1.7fffffff.0 si=0 sp=0.2 rp=0.ffffffff pm=0.0.0`
+`q=42.b401,2b.1202,...` — **无 `45`**。
+解读：REGISTER 成功（res=0）、state=UNINIT 可读、未误发 RESTART、
+尚无 IND。软成功（刀有效、PD 未起）。下一棒：env / PAS / ADSP 时序
+（为何 modem 不自拉 wlan_pd、无 STATE_UPDATED），非再砍 QMI 帧。
+
+未推。
