@@ -3274,6 +3274,21 @@ static mut TF_NAME_N: u8 = 0;
 static mut TZ_ST: u32 = 0;
 static mut TZ_SZ: u32 = 0;
 static mut TZ_CL: u32 = 0;
+/// TFTP 分块真喂（不抬 glink_tx 帽：n≤256/total≤512）。
+/// st: 0闲 1待发DATA 2等DATA-ACK 3完成 4未找到 5路径 6UFS 7无CTX 8待发OACK 9等OACK-ACK
+/// sm：tb=st.blk.acks；blksize 封顶 252（4+252=256）。
+const TF_MAX_BSZ: u32 = 252;
+static mut TF_ST: u32 = 0;
+static mut TF_SZ: u32 = 0;
+static mut TF_CL: u32 = 0;
+static mut TF_BLK: u32 = 0;
+static mut TF_SOFF: u32 = 0;
+static mut TF_ACKS: u32 = 0;
+static mut TF_BSZ: u32 = TF_MAX_BSZ;
+static mut TF_RSIZE: u32 = 0; // 0=整文件
+static mut TF_SEEK: u32 = 0;
+static mut TF_CL_CUR: u32 = 0xffff_ffff;
+static mut TF_CL_BUF: [u8; 16384] = [0; 16384];
 /// cx addr/sel/sts，mss addr/sel/sts，xo addr/data/sts。sel 0x100 没找到，
 /// 0x101 不是 ARC，0x102 aux 里没有 384。
 static mut PROXY: [u32; 9] = [0; 9];
@@ -5297,49 +5312,150 @@ fn tf_boot_probe(ufs: &mut Ufs) {
     }
 }
 
-/// tftp。RRQ 仍 ERROR；WRQ（modem server_check.txt 探针）回 ACK block0。
-fn tf_reply(at478: u64, at479: u64, sz479: u64) {
-    if unsafe { !TF_PEND } || at478 == 0 || at479 == 0 {
-        return;
-    }
-    let tx_head = rd32((at478 + 4) as usize) as u64;
-    let tx_tail = rd32(at478 as usize) as u64;
-    if tx_head != tx_tail {
-        return;
-    }
-    let op = unsafe { TF_OP };
-    let mut q = [0u8; 32];
-    let n = if op == 2 {
-        // ACK block 0 — 允许 WRQ 探针通过，不落盘。
-        q[0] = 0;
-        q[1] = 4;
-        q[2] = 0;
-        q[3] = 0;
-        4usize
+/// 剥 /readonly/firmware/ 前缀 → modem_a 相对路径。
+fn tf_strip_readonly(name: &[u8]) -> Option<&[u8]> {
+    const P: &[u8] = b"/readonly/firmware/";
+    if name.len() > P.len() && &name[..P.len()] == P {
+        Some(&name[P.len()..])
     } else {
-        let (code, text): (u16, &[u8]) = if op == 1 {
-            (1, b"file not found")
-        } else {
-            (4, b"bad op")
-        };
-        q[0] = 0;
-        q[1] = 5;
-        q[2] = (code >> 8) as u8;
-        q[3] = code as u8;
-        let mut n = 4usize;
-        let mut i = 0usize;
-        while i < text.len() && n < q.len() {
-            q[n] = text[i];
-            n += 1;
-            i += 1;
+        None
+    }
+}
+
+fn tf_is_so_rel(rel: &[u8]) -> bool {
+    let rel = fat_strip_tftp_suffix(rel);
+    rel == b"image/modem_pr/so/549_38_0.mbn" || rel == b"modem_pr/so/549_38_0.mbn"
+}
+
+fn tf_put_dec(q: &mut [u8], n: &mut usize, mut v: u32) {
+    let mut tmp = [0u8; 10];
+    let mut i = 0usize;
+    if v == 0 {
+        if *n < q.len() {
+            q[*n] = b'0';
+            *n += 1;
         }
-        if n < q.len() {
-            q[n] = 0;
-            n += 1;
+        return;
+    }
+    while v > 0 && i < 10 {
+        tmp[i] = b'0' + (v % 10) as u8;
+        v /= 10;
+        i += 1;
+    }
+    while i > 0 {
+        i -= 1;
+        if *n < q.len() {
+            q[*n] = tmp[i];
+            *n += 1;
         }
-        n
-    };
-    if glink_tx_payload(
+    }
+}
+
+fn tf_put_opt(q: &mut [u8], n: &mut usize, key: &[u8], val: u32) {
+    let mut i = 0usize;
+    while i < key.len() && *n < q.len() {
+        q[*n] = key[i];
+        *n += 1;
+        i += 1;
+    }
+    if *n < q.len() {
+        q[*n] = 0;
+        *n += 1;
+    }
+    tf_put_dec(q, n, val);
+    if *n < q.len() {
+        q[*n] = 0;
+        *n += 1;
+    }
+}
+
+fn tf_load_cluster(ufs: &mut Ufs, data_lba: u32, cl: u32) -> Result<(), u32> {
+    if unsafe { TF_CL_CUR } == cl {
+        return Ok(());
+    }
+    if cl < 2 || cl >= 0xfff8 {
+        return Err(0x59);
+    }
+    let lba = data_lba + (cl - 2) * 4;
+    let mut s = 0u32;
+    while s < 4 {
+        ufs.read10(lba + s, 1, DATA).map_err(|_| 0x56u32)?;
+        unsafe {
+            core::ptr::copy_nonoverlapping(
+                DATA as *const u8,
+                TF_CL_BUF.as_mut_ptr().add(s as usize * 4096),
+                4096,
+            );
+        }
+        s += 1;
+    }
+    unsafe { TF_CL_CUR = cl };
+    Ok(())
+}
+
+/// 从 start_cl+off 读 dst.len() 字节进 dst（簇缓存 TF_CL_BUF）。
+fn tf_read_bytes(
+    ufs: &mut Ufs,
+    data_lba: u32,
+    start_cl: u32,
+    off: u32,
+    dst: &mut [u8],
+) -> Result<(), u32> {
+    let mut done = 0usize;
+    while done < dst.len() {
+        let abs = off.saturating_add(done as u32);
+        let mut cl = start_cl;
+        let mut o = abs;
+        let mut guard = 0u32;
+        while o >= 16384 {
+            cl = fat_next(cl) as u32;
+            if cl < 2 || cl >= 0xfff8 {
+                return Err(0x59);
+            }
+            o -= 16384;
+            guard += 1;
+            if guard > 65536 {
+                return Err(0x59);
+            }
+        }
+        tf_load_cluster(ufs, data_lba, cl)?;
+        let room = 16384usize.saturating_sub(o as usize);
+        let take = (dst.len() - done).min(room);
+        unsafe {
+            core::ptr::copy_nonoverlapping(
+                TF_CL_BUF.as_ptr().add(o as usize),
+                dst.as_mut_ptr().add(done),
+                take,
+            );
+        }
+        done += take;
+    }
+    Ok(())
+}
+
+fn tf_send_err(
+    at478: u64,
+    at479: u64,
+    tx_head: u64,
+    sz479: u64,
+    code: u16,
+    text: &[u8],
+) -> bool {
+    let mut q = [0u8; 32];
+    q[0] = 0;
+    q[1] = 5;
+    q[2] = (code >> 8) as u8;
+    q[3] = code as u8;
+    let mut n = 4usize;
+    let mut i = 0usize;
+    while i < text.len() && n + 1 < q.len() {
+        q[n] = text[i];
+        n += 1;
+        i += 1;
+    }
+    q[n] = 0;
+    n += 1;
+    glink_tx_payload(
         at478,
         at479,
         tx_head,
@@ -5348,16 +5464,295 @@ fn tf_reply(at478: u64, at479: u64, sz479: u64) {
         unsafe { TF_NODE },
         unsafe { TF_PORT },
         &q[..n],
-    ) {
-        unsafe {
-            if TF_SEEN_N < 8 {
-                TF_SEEN[TF_SEEN_N as usize] = TF_OFF;
-                TF_SEEN_N += 1;
+    )
+}
+
+/// tftp。WRQ→ACK0；RRQ 对 SO 在 ik≥4 后 OACK(blksize≤252,wsize=1)+ACK 步进 DATA。
+/// **不**放宽 glink_tx_payload（仍 n≤256/total≤512）。经典 512 块不可行 → 必 OACK。
+fn tf_reply(at478: u64, at479: u64, sz479: u64) {
+    if at478 == 0 || at479 == 0 {
+        return;
+    }
+    let tx_head = rd32((at478 + 4) as usize) as u64;
+    let tx_tail = rd32(at478 as usize) as u64;
+    if tx_head != tx_tail {
+        return;
+    }
+
+    // 会话进行中：待发 OACK / DATA（ACK 由 RX 推进 st）。
+    let st = unsafe { TF_ST };
+    if st == 8 || st == 1 {
+        // OACK / DATA 也门控 ik≥4，避免早期堵路径。
+        if unsafe { RF_IOK } < 4 {
+            return;
+        }
+        let ufs = unsafe {
+            if CTX_UFS.is_null() {
+                TF_ST = 7;
+                return;
             }
-            TF_PEND = false;
-            TF_N += 1;
+            &mut *CTX_UFS
+        };
+        if st == 8 {
+            // OACK：blksize=TF_BSZ、wsize=1、tsize=TF_SZ（字节）。
+            let mut q = [0u8; 96];
+            q[0] = 0;
+            q[1] = 6; // OP_OACK
+            let mut n = 2usize;
+            tf_put_opt(&mut q, &mut n, b"blksize", unsafe { TF_BSZ });
+            tf_put_opt(&mut q, &mut n, b"wsize", 1);
+            tf_put_opt(&mut q, &mut n, b"tsize", unsafe { TF_SZ });
+            if n > 256 {
+                unsafe { TF_ST = 5 };
+                return;
+            }
+            if glink_tx_payload(
+                at478,
+                at479,
+                tx_head,
+                sz479,
+                0x11,
+                unsafe { TF_NODE },
+                unsafe { TF_PORT },
+                &q[..n],
+            ) {
+                unsafe {
+                    TF_ST = 9; // 等 ACK block 0
+                    TF_N = TF_N.wrapping_add(1);
+                }
+            }
+            return;
+        }
+        // st==1：发一块 DATA
+        let data_lba = MODEM_LBA + 17;
+        let bsz = unsafe { TF_BSZ } as usize;
+        let left = unsafe { TF_SZ.saturating_sub(TF_SOFF) };
+        let ntake = if left as usize > bsz { bsz } else { left as usize };
+        let mut q = [0u8; 260];
+        q[0] = 0;
+        q[1] = 3; // DATA
+        q[2] = (unsafe { TF_BLK } >> 8) as u8;
+        q[3] = unsafe { TF_BLK } as u8;
+        if ntake > 0 {
+            if let Err(e) = tf_read_bytes(
+                ufs,
+                data_lba,
+                unsafe { TF_CL },
+                unsafe { TF_SEEK.saturating_add(TF_SOFF) },
+                &mut q[4..4 + ntake],
+            ) {
+                unsafe { TF_ST = if e < 0x100 { e } else { 6 } };
+                return;
+            }
+        }
+        let pay = 4 + ntake;
+        if pay > 256 {
+            unsafe { TF_ST = 5 };
+            return;
+        }
+        if glink_tx_payload(
+            at478,
+            at479,
+            tx_head,
+            sz479,
+            0x11,
+            unsafe { TF_NODE },
+            unsafe { TF_PORT },
+            &q[..pay],
+        ) {
+            unsafe {
+                TF_ST = 2; // 等这块 ACK
+                TF_N = TF_N.wrapping_add(1);
+            }
+        }
+        return;
+    }
+
+    if unsafe { !TF_PEND } {
+        return;
+    }
+    let op = unsafe { TF_OP };
+    if op == 2 {
+        // ACK block 0 — WRQ 探针
+        let mut q = [0u8; 4];
+        q[0] = 0;
+        q[1] = 4;
+        if glink_tx_payload(
+            at478,
+            at479,
+            tx_head,
+            sz479,
+            0x11,
+            unsafe { TF_NODE },
+            unsafe { TF_PORT },
+            &q,
+        ) {
+            unsafe {
+                if TF_SEEN_N < 8 {
+                    TF_SEEN[TF_SEEN_N as usize] = TF_OFF;
+                    TF_SEEN_N += 1;
+                }
+                TF_PEND = false;
+                TF_N = TF_N.wrapping_add(1);
+            }
+        }
+        return;
+    }
+    if op != 1 {
+        if tf_send_err(at478, at479, tx_head, sz479, 4, b"bad op") {
+            unsafe {
+                if TF_SEEN_N < 8 {
+                    TF_SEEN[TF_SEEN_N as usize] = TF_OFF;
+                    TF_SEEN_N += 1;
+                }
+                TF_PEND = false;
+                TF_N = TF_N.wrapping_add(1);
+            }
+        }
+        return;
+    }
+
+    // RRQ
+    let namelen = unsafe { TF_NAME_N } as usize;
+    let mut name = [0u8; 64];
+    unsafe {
+        let mut i = 0;
+        while i < namelen && i < 64 {
+            name[i] = TF_NAME[i];
+            i += 1;
         }
     }
+    let rel = match tf_strip_readonly(&name[..namelen]) {
+        Some(r) => r,
+        None => {
+            if tf_send_err(at478, at479, tx_head, sz479, 1, b"file not found") {
+                unsafe {
+                    if TF_SEEN_N < 8 {
+                        TF_SEEN[TF_SEEN_N as usize] = TF_OFF;
+                        TF_SEEN_N += 1;
+                    }
+                    TF_PEND = false;
+                    TF_N = TF_N.wrapping_add(1);
+                }
+            }
+            return;
+        }
+    };
+
+    // 非目标 SO：仍 ERROR（不打开任意文件）。
+    if !tf_is_so_rel(rel) {
+        if tf_send_err(at478, at479, tx_head, sz479, 1, b"file not found") {
+            unsafe {
+                if TF_SEEN_N < 8 {
+                    TF_SEEN[TF_SEEN_N as usize] = TF_OFF;
+                    TF_SEEN_N += 1;
+                }
+                TF_PEND = false;
+                TF_N = TF_N.wrapping_add(1);
+            }
+        }
+        return;
+    }
+
+    // ik<4：先 ERROR，等 modem 重试（避免早期 UFS/DATA 堵路径；365d1f4 前车）。
+    if unsafe { RF_IOK } < 4 {
+        if tf_send_err(at478, at479, tx_head, sz479, 1, b"file not found") {
+            unsafe {
+                if TF_SEEN_N < 8 {
+                    TF_SEEN[TF_SEEN_N as usize] = TF_OFF;
+                    TF_SEEN_N += 1;
+                }
+                TF_PEND = false;
+                TF_N = TF_N.wrapping_add(1);
+            }
+        }
+        return;
+    }
+
+    // 已有进行中的喂送：拒重入，ERROR。
+    if unsafe { TF_ST } == 1 || unsafe { TF_ST } == 2 || unsafe { TF_ST } == 8 || unsafe { TF_ST } == 9 {
+        if tf_send_err(at478, at479, tx_head, sz479, 4, b"busy") {
+            unsafe {
+                if TF_SEEN_N < 8 {
+                    TF_SEEN[TF_SEEN_N as usize] = TF_OFF;
+                    TF_SEEN_N += 1;
+                }
+                TF_PEND = false;
+                TF_N = TF_N.wrapping_add(1);
+            }
+        }
+        return;
+    }
+
+    // 优先用开机探针几何，避免 RRQ 热路径再 walk FAT。
+    let (cl, sz) = if unsafe { TZ_ST } == 1 && unsafe { TZ_SZ } > 0 && unsafe { TZ_CL } >= 2 {
+        (unsafe { TZ_CL }, unsafe { TZ_SZ })
+    } else {
+        let ufs = unsafe {
+            if CTX_UFS.is_null() {
+                TF_ST = 7;
+                TF_PEND = false;
+                return;
+            }
+            &mut *CTX_UFS
+        };
+        match fat_path_open(ufs, fat_strip_tftp_suffix(rel)) {
+            Ok(v) => v,
+            Err(e) => {
+                unsafe { TF_ST = if (e & 0xff) == 0x57 { 4 } else { 5 } };
+                if tf_send_err(at478, at479, tx_head, sz479, 1, b"file not found") {
+                    unsafe {
+                        if TF_SEEN_N < 8 {
+                            TF_SEEN[TF_SEEN_N as usize] = TF_OFF;
+                            TF_SEEN_N += 1;
+                        }
+                        TF_PEND = false;
+                        TF_N = TF_N.wrapping_add(1);
+                    }
+                }
+                return;
+            }
+        }
+    };
+
+    let mut xfer = sz;
+    let rsz = unsafe { TF_RSIZE };
+    if rsz > 0 && rsz < xfer {
+        xfer = rsz;
+    }
+    let seek = unsafe { TF_SEEK };
+    if seek >= xfer {
+        // 空传输：OACK + 立即短 DATA？简化：ERROR
+        if tf_send_err(at478, at479, tx_head, sz479, 1, b"file not found") {
+            unsafe {
+                TF_PEND = false;
+                TF_N = TF_N.wrapping_add(1);
+            }
+        }
+        return;
+    }
+    xfer -= seek;
+
+    unsafe {
+        TF_CL = cl;
+        TF_SZ = xfer;
+        TF_SOFF = 0; // 相对 seek 后的逻辑偏移；读文件时 +TF_SEEK
+        TF_BLK = 1;
+        TF_ACKS = 0;
+        TF_BSZ = TF_MAX_BSZ;
+        TF_CL_CUR = 0xffff_ffff;
+        // 实际文件读偏移 = TF_SEEK + TF_SOFF；把 seek 并进：改用 TF_SEEK 为基。
+        // 简化：把 seek 吃进起点——重定位 SOFF 基为 seek，SZ=xfer。
+        // 读用 TF_SEEK+TF_SOFF；这里 TF_SEEK 已存，TF_SOFF 从 0。
+        TF_ST = 8; // 先 OACK（modem RRQ 必带 options；经典 512 超帽）
+        if TF_SEEN_N < 8 {
+            TF_SEEN[TF_SEEN_N as usize] = TF_OFF;
+            TF_SEEN_N += 1;
+        }
+        TF_PEND = false;
+    }
+    // 同拍尝试发出 OACK。
+    tf_reply(at478, at479, sz479);
 }
 
 /// pm-service / SSREQ（QRTR 0x35）：对账 vendor pm-service 内嵌 IDL。
@@ -8856,6 +9251,35 @@ fn scan_new_servers(fifo: u64, rh: u64) {
                 }
                 if typ == 1 && dst_node == 1 && dst_port == 0x11 && chunk >= 34 {
                     let key = off as u32;
+                    let op = ((rd8(fifo + off + 48) as u32) << 8) | (rd8(fifo + off + 49) as u32);
+                    // ACK：推进 OACK/DATA 会话（不占 TF_PEND）。
+                    if op == 4 && chunk >= 36 {
+                        let blk = ((rd8(fifo + off + 50) as u32) << 8)
+                            | (rd8(fifo + off + 51) as u32);
+                        unsafe {
+                            if TF_ST == 9 && blk == 0 {
+                                // OACK 已确认 → 发 DATA block 1
+                                TF_ACKS = TF_ACKS.wrapping_add(1);
+                                TF_BLK = 1;
+                                TF_SOFF = 0;
+                                TF_ST = 1;
+                            } else if TF_ST == 2 && blk == TF_BLK {
+                                TF_ACKS = TF_ACKS.wrapping_add(1);
+                                let ntake = {
+                                    let left = TF_SZ.saturating_sub(TF_SOFF);
+                                    let b = TF_BSZ;
+                                    if left > b { b } else { left }
+                                };
+                                TF_SOFF = TF_SOFF.saturating_add(ntake);
+                                if TF_SOFF >= TF_SZ || ntake < TF_BSZ {
+                                    TF_ST = 3; // 完成（短块或写满）
+                                } else {
+                                    TF_BLK = TF_BLK.wrapping_add(1);
+                                    TF_ST = 1;
+                                }
+                            }
+                        }
+                    }
                     let mut seen = false;
                     unsafe {
                         let mut i = 0u32;
@@ -8867,8 +9291,7 @@ fn scan_new_servers(fifo: u64, rh: u64) {
                             i += 1;
                         }
                     }
-                    if !seen && unsafe { !TF_PEND } {
-                        let op = ((rd8(fifo + off + 48) as u32) << 8) | (rd8(fifo + off + 49) as u32);
+                    if !seen && unsafe { !TF_PEND } && (op == 1 || op == 2) {
                         let mut name = [0u8; 64];
                         let mut nn = 0usize;
                         let max = chunk - 32;
@@ -8880,6 +9303,66 @@ fn scan_new_servers(fifo: u64, rh: u64) {
                             name[nn] = b;
                             nn += 1;
                         }
+                        // 跳过 mode\0，粗解析 rsize/seek（十进制）；blksize 服务端封顶。
+                        let mut rsize = 0u32;
+                        let mut seek = 0u32;
+                        let mut p = 50 + nn as u64 + 1; // after name NUL
+                        // mode
+                        while p < 48 + max && rd8(fifo + off + p) != 0 {
+                            p += 1;
+                        }
+                        if p < 48 + max {
+                            p += 1; // mode NUL
+                        }
+                        while p + 1 < 48 + max {
+                            // opt
+                            let opt_at = p;
+                            while p < 48 + max && rd8(fifo + off + p) != 0 {
+                                p += 1;
+                            }
+                            if p >= 48 + max {
+                                break;
+                            }
+                            let opt_len = (p - opt_at) as usize;
+                            p += 1;
+                            let val_at = p;
+                            while p < 48 + max && rd8(fifo + off + p) != 0 {
+                                p += 1;
+                            }
+                            if p >= 48 + max {
+                                break;
+                            }
+                            let val_len = (p - val_at) as usize;
+                            p += 1;
+                            let mut dec = 0u32;
+                            let mut vi = 0usize;
+                            while vi < val_len {
+                                let d = rd8(fifo + off + val_at + vi as u64);
+                                if d < b'0' || d > b'9' {
+                                    dec = 0;
+                                    break;
+                                }
+                                dec = dec.saturating_mul(10).saturating_add((d - b'0') as u32);
+                                vi += 1;
+                            }
+                            // 比 opt 名
+                            let is_rsize = opt_len == 5
+                                && rd8(fifo + off + opt_at) == b'r'
+                                && rd8(fifo + off + opt_at + 1) == b's'
+                                && rd8(fifo + off + opt_at + 2) == b'i'
+                                && rd8(fifo + off + opt_at + 3) == b'z'
+                                && rd8(fifo + off + opt_at + 4) == b'e';
+                            let is_seek = opt_len == 4
+                                && rd8(fifo + off + opt_at) == b's'
+                                && rd8(fifo + off + opt_at + 1) == b'e'
+                                && rd8(fifo + off + opt_at + 2) == b'e'
+                                && rd8(fifo + off + opt_at + 3) == b'k';
+                            if is_rsize {
+                                rsize = dec;
+                            } else if is_seek {
+                                seek = dec;
+                            }
+                        }
                         unsafe {
                             TF_NODE = rd32((fifo + off + 24) as usize);
                             TF_PORT = rd32((fifo + off + 28) as usize);
@@ -8887,6 +9370,8 @@ fn scan_new_servers(fifo: u64, rh: u64) {
                             TF_OFF = key;
                             TF_NAME = name;
                             TF_NAME_N = nn as u8;
+                            TF_RSIZE = rsize;
+                            TF_SEEK = seek;
                             TF_PEND = true;
                         }
                     }
@@ -9478,6 +9963,12 @@ fn ctrl_service(
                                 push_hex(&mut reply, &mut rn, unsafe { TZ_SZ } as u64);
                                 push_str(&mut reply, &mut rn, ".");
                                 push_hex(&mut reply, &mut rn, unsafe { TZ_CL } as u64);
+                                push_str(&mut reply, &mut rn, " tb=");
+                                push_hex(&mut reply, &mut rn, unsafe { TF_ST } as u64);
+                                push_str(&mut reply, &mut rn, ".");
+                                push_hex(&mut reply, &mut rn, unsafe { TF_BLK } as u64);
+                                push_str(&mut reply, &mut rn, ".");
+                                push_hex(&mut reply, &mut rn, unsafe { TF_ACKS } as u64);
                                 push_str(&mut reply, &mut rn, " ad=");
                                 push_hex(&mut reply, &mut rn, unsafe { ADSP_ST } as u64);
                                 push_str(&mut reply, &mut rn, ".");
