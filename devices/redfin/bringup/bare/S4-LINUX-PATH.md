@@ -1455,3 +1455,18 @@ chunk=48）；REGISTER 因带 state TLV 刚好 chunk=56 才过关。
 **不**放宽 `glink_tx_payload`——先证文件存在与几何，再谈真喂。
 
 未推。
+
+### 本轮：开机一次 FAT 探针（不真喂，2026-10-19 Asia/Shanghai）
+
+**基线**：`a5137f2`（PDR OK、UNINIT、无 45）。**不**从 `365d1f4` 真喂路径叠加。
+
+**刀（单变量）**：
+1. `load_modem_segs` 成功后开机一次 `tf_boot_probe`：modem_a 查
+   `image/modem_pr/so/549_38_0.mbn`，写 `TZ_SZ`/`TZ_CL`（命中 st=1；未找到 st=4）
+2. sm 增 `tz=sz.cl`（失败则 `0.<errcode>`）
+3. **RRQ 仍 ERROR**（`tf_reply` 不变）；**不** DATA 真喂；**不**放宽
+   `glink_tx_payload`（仍 n≤256/total≤512）；**不**在 `smem_scan` 读 UFS
+
+**成功判据**：`tz` 见非零 sz + 合理 cl；设备仍活（ping/2323/`ik=4`）。硬成功仍要 `45.`——本刀只证文件几何。
+
+未推。未刷（设备仍挂在 365d1f4；复活先刷 `boot-s20-a5137f2.img`）。
