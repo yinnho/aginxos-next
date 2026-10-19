@@ -2526,3 +2526,66 @@ modem PAS 本就在 CDSP 块之后无条件执行，且 RFS 已证 AUTH——缺
 未推。未刷。Flash-safe：`boot-s20-c38a6cd.img` / 活体可停 `ec81a77`。等硬复位再刷 stamp。
 
 **若刷后仍 elf_loader**：按 `ce=` 分流——ONLINE 且无 fatal → CDSP 非充分（另排 GSI/其它）；超时/无 bit1 → 再议 negotiate/wait；fatal+ready → 放宽 wait。
+
+### af0c6ff 后：CDSP ONLINE 证伪充分性 → 自拉 0x45 缺口（离线，2026-10-19 ~13:55 Asia/Shanghai）
+
+**活体**：`af0c6ff` / capture
+`.local/device/redfin/cdsp-sfr-af0c6ff-20261019-135156/`。
+
+| 键 | 值 | 判读 |
+|---|---|---|
+| `ce=` | `1.6.32` | **CDSP ONLINE**（rdy bit1）；wt=50ms |
+| `cz=` | `2.0` | sfr_wipe(601) **miss**（st=2 没有这项）— 观测刀，ONLINE 不依赖 wipe |
+| `cd=` / `cb=` | `8000000b.0.0.0` / `3` | AUTH 仍绿；CO2+CO0 仍 |
+| `ip=` / `ste=` / `bv=` | 绿 | I4+IPA PAS 仍 |
+| `ik=` / `me=` | `4.0` / `1.2.0` | RFS + MPSS 出向 `ipa` 名 |
+| `sr=` | `1.7fffffff.0` | PDR REGISTER OK，**wlan_pd UNINIT** |
+| `pn` / `tf` | `tms/pddump_disabled…` / `…549_38_0.mbn…` | 环滚过 `elf_loader`；**TFTP 路径仍在** |
+| `q=` | 无 `45.` | **无 WLFW** |
+| ECM | ping+sm OK | **无挂**；**勿再叠 CDSP-only** |
+
+#### 相对 slot-b（自拉成功）差什么
+
+slot-b `TIMELINE.md` / `dmesg-raw`（同日）：
+
+| t | Linux | 裸机 af0c6ff |
+|--:|---|---|
+| 40.9 | IPA FW + **GSI register** | PAS+STE+BCM **有**；**无** GSI/uC 驱动态 |
+| 47–48.4 | adsp→cdsp→modem | **有**（CDSP ONLINE 已证） |
+| 48.42 / 49.09 | IPA-WAN **BEFORE/AFTER_POWERUP**（`ipa3_proxy_clk_vote` = ACTIVE 保票） | BCM ACTIVE 已有（`bv=7f`）；无 SSR notifier 语义 |
+| 49.09 | RFS OPEN/ALLOC/IOVEC；**0 命中** tftp/elf_loader | RFS 绿 → **仍** SO RRQ 回退 |
+| **49.30–49.39** | **`QMI_IPA_INIT_MODEM_DRIVER_REQ_V01`** ↔ RESP | **无** IPA QMI 栈；`q=` **无** `31.*` |
+| 50.21 | **wlan_pd ONLINE** → `0x45@0:88` | UNINIT；无 `0x45` |
+
+slot-b `qrtr-lookup`：**`0x31/0x201@0:29`（modem Q6）** + **`0x31/0x101@1:16404`（AP A5）** + **`0x45/0x1@0:88`**。
+裸机 `q=` 窗（最多 8 对）：`42.b401,2b.1202,f.1,33.201,15.1,33.b01,18.1,16.1001` — **无 31、无 45**。
+
+#### 假说排序（冲自拉；禁区内已关）
+
+| # | 假说 | 裁定 |
+|--:|---|---|
+| 1 | **缺 IPA 客户端后半栈**：PAS 后无 GSI/uC 握手 → modem **不**公告 Q6 `0x31/0x201` → 无 `INIT_MODEM_DRIVER` → 环境仍像「无 IPA」→ elf_loader 回退 | **主缺口**（时序钉在 49.30→50.21；与「CDSP 非充分」一致） |
+| 2 | 只缺 AP→modem 发 INIT（表项齐全） | **次**；无 Q6 NEW_SERVER 则无处可发；全量 req 含 mem partition/ep — **非**低危单变量 |
+| 3 | WLFW/MSA/「SSA」路径 | **关**：`icnss` IND/MSA/**五路电在 0x45 之后**；不造 spawn |
+| 4 | 再叠 CDSP / sfr / bus | **关**：ONLINE 已证仍 elf_loader |
+| 5 | mss_pil proxy / MPSS 出向名 / PDR REGISTER | **已齐或证伪**（cx/mss/xo；`me=1.2.0`；`sr` UNINIT 不 RESTART） |
+| 6 | TFTP 真喂 / TX intent / glink cap / IPA-before-ADSP | **禁令** |
+
+`ipa3_proxy_clk_vote` = `IPA_ACTIVE_CLIENTS_INC`（保 BCM），**不是**新 RPMH 字；`bv=7f` 已近似。BEFORE_POWERUP 不单独成刀。
+
+#### 下一刀（唯一；**doc park — 不实现 / 不刷**）
+
+**推荐：sm-only latch `iq=`（IPA QMI 目击），零写。**
+
+| 项 | 值 |
+|---|---|
+| 做什么 | `scan_new_servers` 见 svc **`0x31`** 时闩 `IQ_SEEN=1`、`IQ_INST=inst_word`（不限首 8 窗）；sm 增 **`iq=seen.inst`**（如 `0.0` / `1.201`） |
+| 不做 | 不公告 A5 `0x31`（史：modem `ql` 空）；不发 INIT；不摸 GSI/IPA MMIO；不改 TFTP/intent/PDR/PAS |
+| 门 | 无；只读扫描 |
+| 成功判据 | 设备仍 ping/`ik=4`；`iq=` 可读 |
+| 分流 | `iq` 长时 `0.0` → 证实 modem Q6 IPA 未起 → **下一写刀**须先 GSI/uC（高危，另开收据）；`iq=1.201` → 才议窄 INIT（仍大，勿与 GSI 同刀） |
+| 禁 | CDSP-only 叠刀；IPA-before-ADSP；TX intent；TFTP 成功；glink cap |
+
+**本轮不编 tip、不出镜像、不 flash、不 push。** 活体可停 **`af0c6ff`**（健康）。
+Flash-safe restore 仍：`boot-s20-c38a6cd.img` / 绿 IPA 基线 `b99c785`。
+hard-reset：**不需要**（无刷）。
