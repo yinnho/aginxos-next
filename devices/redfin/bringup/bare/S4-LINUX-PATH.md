@@ -2458,3 +2458,22 @@ phdr 表（略 flags 低 3 bit = PF）：
 3. （可选、更窄只读）sm 增 `cdx=`/`cdr=`/`cdm=` — 离线已证 reloc/span/mdt；runtime 只剩 cx sts 有增量，优先 ring `cdsp cx=` 若还能捞。
 
 禁区不变。设备可继续停 `dcbf8cf`。Flash-safe：`boot-s20-c38a6cd.img` / `b99c785`。
+
+### 单变量刀：AUTH 前 pil-cdsp bus（CO2+CO0）— 未刷
+
+基线 `dcbf8cf`（AUTH `ffcffff1`）+ 离线 mdt 审计 `1119769`。**仅**加 DTS
+`pil-cdsp` 路径票，**不**合 `sfr_wipe(601)` / cx 硬失败。
+
+| 项 | 值 |
+|---|---|
+| DTS | `lito.dtsi` `qcom,msm-bus,name="pil-cdsp"`：`<154 821 0 0>` / `<154 821 0 1>` |
+| master | `154` = `MSM_BUS_MASTER_NPU` → `mas_qnm_npu` bcm **CO2** |
+| slave | `821` = `MSM_BUS_SLAVE_CDSP_GEM_NOC` → `slv_qns_cdsp_gem_noc` bcm **CO0** |
+| case1 | ab=0 ib=1 KBps → keepalive；`BCM_TCS_CMD(1,1,0,1)` = **`0x60000001`** |
+| 发法 | `cmd_db_hit("CO2"/"CO0")` → `rpmh_cmd(addr, 0x60000001)`；无 fallback 盲写 |
+| 时机 | IPA+ADSP 门内；`load_cdsp` 成功后、**`pas_go(18)` 前** |
+| sm | 保留 `cd=`；增 **`cb=`**（bit0=CO2 bit1=CO0 成功） |
+| 禁 | 同刀不加 sfr_wipe/cx；IPA-before-ADSP / TX intent / TFTP / glink / 冷 CDSP |
+
+未推。未刷。Flash-safe restore：`boot-s20-c38a6cd.img` / `b99c785`。等硬复位进 fastboot 再刷 stamp。
+

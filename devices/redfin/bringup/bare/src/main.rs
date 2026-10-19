@@ -1753,6 +1753,37 @@ fn ipa_i4_once(freq: u32) {
     ipa_bcm_vote(freq);
 }
 
+/// AUTH 前 pil-cdsp bus vote（单变量；勿与 sfr_wipe/cx 同刀）。
+/// DTS `qcom,msm-bus,name = "pil-cdsp"`：`<154 821 0 0>` / `<154 821 0 1>`。
+/// master 154=`MSM_BUS_MASTER_NPU` → `mas_qnm_npu` bcm **CO2**；
+/// slave 821=`MSM_BUS_SLAVE_CDSP_GEM_NOC` → `slv_qns_cdsp_gem_noc` bcm **CO0**。
+/// case1 ab=0 ib=1 KBps → KBTOB+div64 保底 vote_y=1 → TCS commit|valid|0|1。
+const CDSP_BUS_TCS: u32 = 0x6000_0001;
+const CDSP_BUS_NAMES: [&[u8; 8]; 2] = [b"CO2\0\0\0\0\0", b"CO0\0\0\0\0\0"];
+
+fn cdsp_bus_vote(freq: u32) {
+    unsafe { CDSP_CB = 0 };
+    if rd32(CMD_DB + 4) != CMD_DB_MAGIC {
+        dcache_ivac(CMD_DB as u64, CMD_DB_BYTES as u64);
+    }
+    let mut i = 0usize;
+    while i < 2 {
+        let Some(hit) = cmd_db_hit(CDSP_BUS_NAMES[i]) else {
+            i += 1;
+            continue;
+        };
+        if (hit.addr >> 16) & 7 != CMD_DB_HW_BCM {
+            i += 1;
+            continue;
+        }
+        let sts = rpmh_cmd(hit.addr, CDSP_BUS_TCS, freq);
+        if sts & 0x8000_0000 == 0 {
+            unsafe { CDSP_CB |= 1 << i };
+        }
+        i += 1;
+    }
+}
+
 fn proxy_vote(_ufs: &mut Ufs, _freq: u32, _t: &mut [u8; 96]) {
     if rd32(CMD_DB + 4) != CMD_DB_MAGIC {
         dcache_ivac(CMD_DB as u64, CMD_DB_BYTES as u64);
@@ -3823,6 +3854,8 @@ static mut IPA_P: [u32; 3] = [0xffff_ffff; 3];
 /// sm cd=st.p0.p1.p2 — 同 ip=：st 高位|段数；p0/1/2 = INIT/MEM/AUTH x0。
 static mut CDSP_ST: u32 = 0;
 static mut CDSP_P: [u32; 3] = [0xffff_ffff; 3];
+/// pil-cdsp bus：bit0=CO2 bit1=CO0 ACTIVE 成功；0=未跑/全 miss。
+static mut CDSP_CB: u32 = 0;
 /// SMP2P 出向分配码 / 入向 slave / 等待毫秒（环用，不进 sm）。
 static mut CDSP_PUB: u32 = 0xffff_ffff;
 static mut CDSP_RDY: u32 = 0x8000_0000;
@@ -10450,6 +10483,8 @@ fn ctrl_service(
                                 push_hex(&mut reply, &mut rn, unsafe { CDSP_P[1] } as u64);
                                 push_str(&mut reply, &mut rn, ".");
                                 push_hex(&mut reply, &mut rn, unsafe { CDSP_P[2] } as u64);
+                                push_str(&mut reply, &mut rn, " cb=");
+                                push_hex(&mut reply, &mut rn, unsafe { CDSP_CB } as u64);
                                 push_str(&mut reply, &mut rn, " ad=");
                                 push_hex(&mut reply, &mut rn, unsafe { ADSP_ST } as u64);
                                 push_str(&mut reply, &mut rn, ".");
@@ -12019,7 +12054,7 @@ extern "C" fn rust_main() -> ! {
 
     // CDSP-before-modem：仅当 IPA PAS 绿（高位 + p0..p2==0）。
     // ADSP 绿是 IPA 门前提，故隐含。IPA skip/fail → 不跑，防 8d88cd5 冷挂重放。
-    // 序：smp2p 出向 → AOP cdsp on → load_cdsp → pas_go(18) → 等 err-ready → 再 modem。
+    // 序：smp2p → AOP cdsp on → load_cdsp → pil-cdsp bus(CO2+CO0) → pas_go(18) → err-ready → modem。
     if unsafe { IPA_ST } & 0x8000_0000 != 0
         && unsafe { IPA_P[0] } == 0
         && unsafe { IPA_P[1] } == 0
@@ -12047,6 +12082,10 @@ extern "C" fn rust_main() -> ! {
                 Ok(n) => {
                     unsafe { CDSP_ST = 0x8000_0000 | n as u32 };
                     let txt = hex_text(&mut t, unsafe { RING.seq }, " cdsp n=0x", n as u64);
+                    ring_put(&mut ufs, freq, logring::LVL_INFO, txt);
+                    // AUTH 前 pil-cdsp ACTIVE（CO2+CO0，TCS 0x60000001）；单变量。
+                    cdsp_bus_vote(freq);
+                    let txt = hex_text(&mut t, unsafe { RING.seq }, " cdsp cb=0x", unsafe { CDSP_CB } as u64);
                     ring_put(&mut ufs, freq, logring::LVL_INFO, txt);
                     let (p0, p1, p2) = pas_go(18, 0x8740_0000, 0x01E0_0000);
                     unsafe {
