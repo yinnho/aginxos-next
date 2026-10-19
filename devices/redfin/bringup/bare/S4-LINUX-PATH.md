@@ -2589,3 +2589,19 @@ slot-b `qrtr-lookup`：**`0x31/0x201@0:29`（modem Q6）** + **`0x31/0x101@1:164
 **本轮不编 tip、不出镜像、不 flash、不 push。** 活体可停 **`af0c6ff`**（健康）。
 Flash-safe restore 仍：`boot-s20-c38a6cd.img` / 绿 IPA 基线 `b99c785`。
 hard-reset：**不需要**（无刷）。
+
+### iq= sm-only latch 实现（tip，未刷，2026-10-19 ~14:00 Asia/Shanghai）
+
+按上节 park：**只读闩**，零写。
+
+| 项 | 值 |
+|---|---|
+| 代码 | `scan_new_servers`：`typ==4 && svc==0x31` → 首见闩 `IQ_SEEN=1`/`IQ_INST=inst`（**不**受 `SMEM_NSVC<8` 限制；不随扫描清零） |
+| sm | **`iq=seen.inst`**（`0.0` 未目击 / `1.201` 等 = modem Q6）紧挨 `q=` 后 |
+| 不做 | 不公告 A5 `0x31`；不发 `INIT_MODEM_DRIVER`；不摸 GSI/IPA MMIO；不改 TFTP/intent/PDR/PAS/CDSP |
+| 基线 | tip atop `97b8056` docs / 活体 `af0c6ff` |
+| 出件 | `boot-s20-<sha>.img`；**未 flash、未 push** |
+| 刷后分流 | `iq=0.0` 长时 → 下一写刀先 GSI/uC；`iq=1.201` → 再议窄 INIT（勿与 GSI 同刀） |
+
+Flash-safe restore 仍：`boot-s20-c38a6cd.img` / `b99c785` / 活体可停 `af0c6ff`。
+等硬复位进 fastboot 再刷 stamp。

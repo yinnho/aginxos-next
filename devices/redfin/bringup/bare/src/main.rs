@@ -3699,6 +3699,9 @@ static mut SMEM_RX: [u32; 22] = [0; 22];
 /// NEW_SERVER 的服务号、实例，最多 8 对。
 static mut SMEM_SVC: [u32; 16] = [0; 16];
 static mut SMEM_NSVC: u32 = 0;
+/// IPA QMI（svc 0x31）NEW_SERVER 目击闩：sm iq=seen.inst（零写，不限首 8 窗）。
+static mut IQ_SEEN: u32 = 0;
+static mut IQ_INST: u32 = 0;
 /// NEW_LOOKUP（类型 10）的服务号、实例字，最多 8 对。
 static mut SMEM_LOOK: [u32; 16] = [0; 16];
 static mut SMEM_NLOOK: u32 = 0;
@@ -9853,6 +9856,15 @@ fn scan_new_servers(fifo: u64, rh: u64) {
                                 SMEM_NSVC = n + 1;
                             }
                         }
+                        // sm-only iq=：首见 QMI IPA svc 0x31 即闩（不限 8 窗；零写）。
+                        if svc == 0x31 {
+                            unsafe {
+                                if IQ_SEEN == 0 {
+                                    IQ_SEEN = 1;
+                                    IQ_INST = inst;
+                                }
+                            }
+                        }
                         // modem SERVREG_NOTIF：记下 node:port，供 PDR REGISTER。
                         // modem QRTR node 常见为 0（AP 才是 1）；只拒 port==0。
                         if svc == SR_SVC && inst == SR_INST && chunk >= 52 {
@@ -10763,6 +10775,11 @@ fn ctrl_service(
                                         unsafe { SMEM_SVC[i as usize * 2 + 1] } as u64,
                                     );
                                 }
+                                // iq=seen.inst — IPA QMI 0x31 NEW_SERVER 闩（零写）
+                                push_str(&mut reply, &mut rn, " iq=");
+                                push_hex(&mut reply, &mut rn, unsafe { IQ_SEEN } as u64);
+                                push_str(&mut reply, &mut rn, ".");
+                                push_hex(&mut reply, &mut rn, unsafe { IQ_INST } as u64);
                                 push_str(&mut reply, &mut rn, " x=");
                                 for i in 0..22 {
                                     if i != 0 {
