@@ -2806,3 +2806,30 @@ Flash-safe restore：`boot-s20-9830750.img` / `0433396` / `c38a6cd`。
 
 Flash-safe restore：`boot-s20-9830750.img` / `2419bdf` / `0433396`。
 **本 tip build+commit；未 flash、未 push。**
+
+
+### GSI CH7 config/start tip（2026-10-19 ~16:30 Asia/Shanghai）
+
+**基线 live**：`67d685c` — `gr=1.9d800000.9d801000.9d802000.200000` MATCH；`gc` CHSTATE 全 0；capture
+`gsi-carveout-67d685c-20261019-162125/`。
+
+**本刀**：在划区 PA 上做 EV0+CH7 ALLOC/CNTXT/最小 TRE/START（见 `IPA-4_7-MEM-PART.md`）。
+无 QMI INIT、无 EP16。TRE 公式来自 `gsi.h` `struct gsi_tre` + `ipa_dp.c` replenish
+（EOT|EOB|BEI、XFER）；Linux 在 START 前 replenish，故本刀填 4 颗再 doorbell。
+
+| 项 | 值 |
+|---|---|
+| 超时 | ALLOC/START 各 **5s** 轮询 CNTXT0.CHSTATE（不依赖 GIC 投递） |
+| sm | `gc=` 刀后重读（st/CHSTATE）；`gr=` 不变 |
+| 出件 | `boot-s20-<sha>.img`；**未 flash、未 push** |
+
+判读（刷后）：
+
+| `gc` | 含义 |
+|---|---|
+| `st=1` 且 `c0` CHSTATE=2 | START 绿 |
+| `st=2/3/4` | EV/CH ALLOC 或 START 超时；看 `c0`/`err` |
+| `ca/cb` 仍非 deadbeef | 预期 — 未铺 INIT/SRAM canary |
+
+下一刀候选：EP16 cfg 或 INIT（仍要 canary）；本刀只证 GSI CH 起。
+Flash-safe restore：`67d685c` / `9830750` / `2419bdf`。

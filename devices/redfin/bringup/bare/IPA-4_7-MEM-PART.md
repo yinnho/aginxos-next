@@ -98,22 +98,32 @@ PAS 后、GSI 驱动前：通常 **不是** `deadbeef`（证未铺布局）。
 
 INIT 绝对地址 = 上表 ofst + `r`。`0433396` 已读未导出；tip 起 `ig=` 尾带 `.sm.r`。
 
-## GSI CH7（APPS_WAN_CONS）— 划区 `gr=` / 写仍 park
+## GSI CH7（APPS_WAN_CONS）— 划区 `gr=` + tip config/start
 
 已知：ee=0、ch=7、GPI FROM_GSI、re=16B、ring_len=2×(256×8)=**0x1000**（lito 默认 wan-rx-desc=256）。
 EVT：WAN_CONS 专用 dedicated EVT = **同 0x1000**（非 `IPA_COMMON_EVENT_RING_SIZE=0x7C00`；common 仅 `use_comm_evt_ring`）。
 
-### 裸机 DRAM 划区（allocate-only，已钉）
+### 裸机 DRAM 划区（`67d685c` 已钉）
 
 | 区 | PA | size | 来源 |
 |---|---:|---:|---|
-| **基址** | **`0x9D800000`** | **`0x200000`** | modem_wlan PAS 尾（DTS `0x8c000000+0x11800000`）→ RFS `0x9E000000` 前 **8MiB 空洞**；DTS 无 no-map；不碰 RFS/SH0..3（止于 `0x9EC80000`） |
+| **基址** | **`0x9D800000`** | **`0x200000`** | modem_wlan PAS 尾 → RFS 前 8MiB 空洞 |
 | CH ring | `0x9D800000` | `0x1000` | `ring_size = 2 * desc_fifo_sz` |
-| EVT ring | `0x9D801000` | `0x1000` | dedicated EVT |
-| RX pool | `0x9D802000` | `0x1FE000` | 预留 ≈ `IPA_GENERIC_RX_POOL_SZ(192)×8KiB` + slack；**未**铺 TRE |
+| EVT ring | `0x9D801000` | `0x1000` | dedicated EVT（EV0） |
+| RX pool | `0x9D802000` | `0x1FE000` | tip 起铺 **4×8KiB** 最小 TRE（`IPA_GENERIC_RX_BUFF_BASE_SZ`） |
 
-**SMMU**：I4 STE SID `0x520/521/522` → USB_CB，L1 已恒等 `0x80000000–0xBFFFFFFF`。本划区落在窗内 → **无需新 STE/CD**。
+**SMMU**：I4 STE 恒等已覆盖。sm：`gr=`（划区）+ `gc=`（CHSTATE 后读）。
 
-sm：`gr=st.ch.evt.rx.sz`（PAS 绿后清零+civac 一次）。`gc=` 仍只读 CNTXT。
+### tip config/start（无 QMI INIT / 无 EP16）
 
-**仍禁 / 写刀前提**：CH_CMD ALLOC/START + IRQ 完成、EP16 `ipa3_cfg_ep`、RX TRE 填充、doorbell。详见 `S4-LINUX-PATH.md`。
+对照 `gsi_alloc_evt_ring` → `gsi_alloc_channel` → replenish → `gsi_start_channel`：
+
+1. IRQ 面：TYPE_MSK CH_CTRL|EV_CTRL；SRC mask CH7+EV0；INTSET=IRQ
+2. EV0 ALLOC → poll CHSTATE=ALLOCATED（超时 **5s**）→ program EVT CNTXT → prime DB
+3. CH7 ALLOC → poll → program CNTXT（GPI FROM_GSI erindex=0 re=16 ring@carve）+ QOS v2.5 ESCAPE_BUF_ONLY
+4. 写 4 颗 GPI TRE（`struct gsi_tre`：EOT|EOB|BEI、XFER）→ CH/EVT doorbell
+5. CH7 START → poll STARTED（超时 **5s**）→ DB MSB
+
+`gc=st`：1=STARTED；2=EV ALLOC 超时；3=CH ALLOC 超时；4=START 超时。`c0` 含 CHSTATE。
+
+**仍禁**：QMI INIT、EP16 `ipa3_cfg_ep`、满池 replenish、WLAN/`0x45`。
