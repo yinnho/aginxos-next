@@ -1607,3 +1607,101 @@ ACK0 已见=`a.<sport>.1`。
 镜像：`.local/device/redfin/boot-out/boot-s20.img` + 提交后 stamp
 `boot-s20-<sha>.img`。
 
+
+### 本轮：离线对账 — 禁 TFTP 真喂后改打自拉 wlan_pd（不刷，2026-10-19 ~10:20 Asia/Shanghai）
+
+**禁令（early ECM 硬挂，已钉死）**
+- TX intent pick / BUSY / RR / INTENT_REQ
+- TFTP **DATA** 真喂、**OACK**（含 ephemeral 源口）、抬 `glink_tx_payload` 帽
+- tip `8a761ad`（OACK-only）已证：只要离开「SO RRQ→ERROR」就会 ARP incomplete
+
+**复活基线（未动设备）**
+`f73c9bb`：FAT 几何 OK（`tz=1.eb43c.1a67`）、RRQ 仍 ERROR、PDR REGISTER
+成功且 state=**UNINIT**（`sr=1.7fffffff.0`）、`ik=4`、**无 `0x45`**。
+镜像已在：`.local/device/redfin/boot-out/boot-s20-f73c9bb.img`（98304 B）。
+本轮 **不 flash、不 push**。
+
+#### 1) bare PAS / modem_wlan_mem / MSA vs Linux pil-tz
+
+| 项 | Linux `subsys-pil-tz` + icnss | 裸机现状（`f73c9bb` 线） |
+|---|---|---|
+| modem pas-id | **4**，`firmware-name=modem` | 同：`pas_init_image` → INIT/MEM_SETUP/AUTH |
+| MEM_SETUP 窗 | ELF 可重定位跨度经 `dma_alloc`；dts `modem_wlan_mem@8c000000` 只标 **`0xF800000`**，驱动**不读**该 length | 固定 **`0x8C000000` + `0x11800000`**（= ELF `0x8C…–0x9D80…`）；`pas2/3/4/5=0` 已绿 |
+| 段装载 | `modem.mdt`+`bXX` → region | 同：FAT 抄 30 段，`ld=0x1e` |
+| hyp_assign 镜像区 | 本机 `subsys_vmid=0` → **不做** | 同：不做 |
+| MSA `pil_wlan_fw@8BA00000` / `0x200000` | **仅** `0x45` `server_arrive` 后 `msa_mem_info` + `ICNSS_MSA_PERM` | **未做**（正确：MSA 在 WLFW 之后，不是 spawn 前置） |
+| ADSP | stock ~3.5s ONLINE，**先于** modem | 已先 PAS（pas-id **1** @`0x89200000`/`0x2800000`），settle 3s 再 modem；但 ready 后常 **err-fatal**（`sar.cc:27:chre_utils fatal`，`ae=1.7.32`→slave 含 bit0） |
+| **CDSP** | stock ~3.5s ONLINE，**先于** modem（pas-id **18**，mem **`0x87400000`/`0x1E00000`**，smp2p smem **94/432**，remote-pid 5） | **完全没有**：无 CDSP 装段、无 PAS、无 smp2p、无 AOP `cdsp on` |
+| RFS / 公告 | qrtr-ns + patched rmt_storage + tftp + pd-mapper（含 `modemuw.jsn`）PIL 前 listen | RFS `ik=4`；公告齐；pd-mapper Dom 含 `kernel/elf_loader`→`msm/modem/wlan_pd` inst 180（与 jsn 一致） |
+| PDR | icnss 对 `0x42@inst180` REGISTER；听 IND | REGISTER OK → **UNINIT**；UNINIT **不** RESTART（`a5137f2`） |
+
+结论：modem **root PD 已认证跑起来**（QRTR/`0x42`/`ik=4`）。缺的不是再抄一段进 `0x8C000000`，也不是提前 MSA。
+
+#### 2) 缺口（gap）：自拉 vs TFTP 回退
+
+Stock / radio-bringup（2023 modem + 同 EFS）：
+
+- PIL 后 ~2.5s modem **自己**从 **`modem_wlan_region@8c000000` 已装段**拉起 `wlan_pd`
+- **无** AP 侧 SO 拉载 → QRTR 直接 `NEW_SERVER 0x45@0:88`
+- 前提是 AP 环境（ADSP/CDSP 先于 modem、早期 radio 栈）；环境不对时同镜像会 `SERVICE_NOT_FOUND` / 不 spawn
+
+裸机活体（`a5137f2`/`f73c9bb`）走的是 **回退链**，不是主路径：
+
+1. `pn=kernel/elf_loader.1.30` — root PD 向 pd-mapper 要 elf_loader，命中 `wlan_pd`
+2. `tf=…/modem_pr/so/549_38_0.mbn…` — TFTP RRQ 要 SO（实长 `0xEB43C`，探针已证）
+3. 我们 **ERROR**（禁令下唯一安全应答）→ PD 停在 **UNINIT** → **无 `0x45`**
+
+`modemuw.jsn` 在 Linux/裸机 Dom 表里**一样**（elf_loader∈wlan_pd）。故缺口 **不是** jsn/Dom 答错，而是：**root PD 没走「内存内自拉」**，改走「elf_loader + TFTP 远程装 PD」。TFTP 真喂/OACK 已三挂，这条回退 **禁继续挖**。
+
+相对 stock 仍缺、且与「自拉」文档直接相关的单点：**CDSP 从未 ONLINE**（ADSP fatal 为次要嫌疑，已多次无法靠 GLINK/SSR 刀消掉）。
+
+#### 3) 下一刀（唯一推荐，禁 TFTP 成功路径）
+
+**单变量：CDSP PAS 插在 ADSP settle 之后、modem AOP/PAS 之前。**
+
+对齐 `lito.dtsi` / radio-bringup：
+
+1. AOP：`{class: image, res: load_state, name: cdsp, val: on}`
+2. 从 vendor 装 `cdsp.mdt`+`b*` → `0x87400000`（region `0x1E00000`）
+3. `pas_go(18, 0x87400000, 0x1E00000)`（INIT/MEM_SETUP/AUTH，复用现有 `pas_go`）
+4. 写 CDSP smp2p 出向（smem **432** / remote-pid **5** / IPCC CDSP），等入向 **94** 的 err-ready（bit1，bit0 清），超时失败只打环、**仍可**继续 modem（与 ADSP 失败策略同类，便于判读）
+5. **然后**才现有 modem AOP + `pas_init_image`
+
+**明确不改**：TFTP（SO RRQ 仍 ERROR）、TX intent、glink 帽、PDR 逻辑、MSA、Dom/jsn。
+
+**sm 信号**
+
+- `cd=st.pas.rdy` — st: 0未跑 1装段 2PAS ok 3ready 4超时/失败；pas=AUTH x0；rdy=slave-kernel 低字节
+- 软成功（环境刀生效、仍无自拉）：`cd` 见 ready，且 `pn`/`tf` **不再**出现 elf_loader→SO RRQ（或明显推迟），`sr` 仍 UNINIT，`q` 仍无 45
+- 硬成功：`q=` 含 **`45.`**（或 `45.1`），`sr` 离 UNINIT（UP/`1FFFFFFF` 或 IND）
+- 失败：`cd` 失败且行为与 `f73c9bb` 相同（仍 SO RRQ + UNINIT）；或 early ECM 无 ping → **整段回退**，刷回 `boot-s20-f73c9bb.img`
+
+**不选的备选（本轮不写代码）**
+
+- SO RRQ 静默丢弃（不 ERROR）：可能只把 UNINIT 拖死，且与 stock「根本不 RRQ」不对齐
+- 把 Dom 里 `elf_loader` 改成 0 命中：与 stock jsn **故意偏离**，属症状刀
+- 提前 MSA hyp_assign：Linux 顺序在 `0x45` 之后，早做是发明顺序
+
+#### 4) 复活镜像确认
+
+`.local/device/redfin/boot-out/boot-s20-f73c9bb.img` 存在（98304 B，`f73c9bb`）。
+tip 仍为 `8a761ad`（OACK-only，**勿刷**）。用户硬复位进 fb 时只刷 `f73c9bb` 复活。
+
+未推。未刷。未改 `main.rs`。
+
+## 2026-10-19：CDSP-before-modem 刀（未刷）
+
+基线代码：`f73c9bb`（FAT 探针 + PDR UNINIT；SO RRQ→ERROR）。
+tip 上 OACK（`8a761ad`）TFTP 已回退，main 与 f73c9bb TFTP 一致后再加本刀。
+
+**单变量**：ADSP settle 之后、modem AOP/PAS 之前：
+1. CDSP smp2p 出向（smem **432** / host 0↔5 / IPCC CDSP=6）
+2. AOP `{name: cdsp, val: on}`
+3. vendor 装 `cdsp.mdt`+`b*` → `0x87400000` / `0x1E00000`
+4. `pas_go(18, …)` → 等入向 **94** err-ready（bit1，bit0 清）；超时/失败只打环，仍开 modem
+
+**sm**：`cd=st.pas.rdy`（0未跑/1装段/2PAS/3ready/4失败）
+
+**不改**：TFTP（仍 ERROR）、TX intent、glink 帽、PDR、MSA、Dom。
+
+刷序：先 `boot-s20-f73c9bb.img` 复活 → 再本刀。未推。未刷。
