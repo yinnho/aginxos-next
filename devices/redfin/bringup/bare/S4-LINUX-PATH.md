@@ -2055,3 +2055,174 @@ ad-hoc/BCM: vote client "ipa" ≥ SVS2
   （sha256 `64f54992731f20bac64415c0e8d63f58b5bab1391a27b38a9631b15a8cc48ba9`，98304 B）
 - 禁区扩：早期 PAS（CDSP-before、**IPA-before-ADSP `ceeb6fd`**）、TFTP OACK/DATA、TX intent
 - **未刷、未推**
+
+### 离线：IPA interconnect/BCM 投票序列钉死（2026-10-19 ~11:45 Asia/Shanghai）
+
+**范围**：不刷、不推、不猜写 RPMH。目标 = 抽出 Linux 在 `subsystem_get("ipa_fws")`
+之前的 **确切** 带宽票路径；对照裸机 helper；给出可编码计划 **或** 明确 blocker
++ 下次槽 b 抓取配方。活体仍 **`c38a6cd`**（本轮 `sm`：`me=1.2.0 ik=4.0
+sr=1.7fffffff.0 pn=kernel/elf_loader.1.30 tz=1.eb43c.1a67`，无 `0x45`）。
+
+#### 1) Linux 逻辑序列（源码 + slot-b dmesg，已钉）
+
+源：`lito.dtsi` `ipa_hw` / `qcom,ipa_fws`；`ipa_v3/ipa.c`
+（`ipa3_enable_clks` / `ipa3_load_ipa_fw`）；`msm_bus_fabric_rpmh.c`；
+`lito-bus.dtsi`；slot-b `dmesg-raw.txt` ~40.85–40.90s。
+
+| 序 | 谁 | 做什么 |
+|--:|---|---|
+| 0 | DTS | `qcom,bandwidth-vote-for-ipa` → **无** `core_clk`；开钟 = bus vote |
+| 1 | `ipa` probe | `msm_bus_scale_register_client`（name **`ipa`**）；dmesg `Client handle 27 ipa` @40.858 |
+| 2 | probe | `curr_ipa_clk_rate = ipa_clk_rate_svs2` → **`update_request(hdl, idx=1)` = SVS2** |
+| 3 | `ipa3_enable_clks` | 同上 bus vote + `_ipa_enable_clks_v3_0`（bw-vote 模式下 clk 指针为 NULL） |
+| 4 | PROXY / active-client | `IPA_ACTIVE_CLIENTS_INC` 保票（load 路径再 INC 一次） |
+| 5 | SMMU | attach SID **0x520 / 0x521 / 0x522**（ap/wlan/uc）+ additional maps |
+| 6 | 才 | `subsystem_get("ipa_fws")` → PIL pas-id **0xf** @ `0x8BC00000` |
+
+**重要**：`qcom,ipa_fws` 节点只有 `qcom,msm-bus,name = "pil-ipa_fws"`，
+**没有** `num-cases` / `vectors-KBps`。PIL 侧不贡献向量；**真票在 IPA HW
+驱动 client `ipa`**。`ceeb6fd` 冷 `pas_go` 跳过了 1–5。
+
+##### SVS2 用例（`lito.dtsi`，idx=1；avg/peak 单位 KBps）
+
+| # | master → slave | avg (ab) | peak (ib) | 拓扑上挂的 BCM（`lito-bus.dtsi`） |
+|--:|---|--:|--:|---|
+| 1 | `MSM_BUS_MASTER_IPA`(90) → `SLAVE_LLCC` | 150000 | 500000 | 路径经 a2noc→…→ `slv_qns_llcc` → **`bcm_sh0` (SH0)**；mas 另有 node-qos **`bcm_ip0`** `<7035 0 1>` |
+| 2 | `MASTER_LLCC` → `SLAVE_EBI_CH0` | 150000 | 700000 | `slv_ebi` → **`bcm_mc0` (MC0)** + **`bcm_acv` (ACV)** |
+| 3 | `MASTER_IPA` → `SLAVE_OCIMEM` | 75000 | 700000 | `slv_qxs_imem` → **`bcm_sn1` (SN1)** |
+| 4 | `MASTER_AMPSS_M0` → `SLAVE_IPA_CFG` | 0 | 76800 | `slv_qhs_ipa` → **`bcm_cn0` (CN0)**；AMPSS mas → **`bcm_sh4` (SH4)** |
+| 5 | `MASTER_IPA_CORE` → `SLAVE_IPA_CORE` | 0 | 100 | `slv_ipa_core_slave` → **`bcm_ip0` (IP0)**（核心“开钟”票） |
+
+用例名：`MIN=0 / SVS2=1 / SVS=2 / NOMINAL=3 / TURBO=4`。阈值阈值
+`throughput-threshold = <310 600 1000>` 只影响事后升档，**boot PAS 前固定 SVS2**。
+
+##### RPMH/BCM 编码（机制已钉，**数值未钉**）
+
+```
+cmd-db name "IP0"|"SH0"|"MC0"|"ACV"|"SN1"|"CN0"|"SH4"|…
+  → addr = cmd_db_read_addr(name)   # HW type CMD_DB_HW_BCM = 5
+  → aux  = struct bcm_db { unit_size:u32, width:u16, clk_domain:u8 }
+agg:  ab' = ab * width / (buswidth * num_aggports)
+      ib' = ib * width / buswidth
+      vote_x = ab' / unit_size     # → vec_a
+      vote_y = ib' / unit_size     # → vec_b
+TCS data = BCM_TCS_CMD(commit=1, valid=1, vote_x, vote_y)
+         = (1<<30) | (1<<29) | ((vote_x & 0x3FFF)<<14) | (vote_y & 0x3FFF)
+发：apps RSC（与裸机 `rpmh_cmd` 同路：drv-2 TCS0 @ `0x18220d00`）
+```
+
+**blocker**：没有 slot-b 上实际聚合后的 `(bcm_name, addr, vote_x, vote_y)` 列表。
+NOC 路径会把五条向量摊到多个中间节点；只靠 DTS 手算易漏/错单位。
+`unit_size`/`width` 在 cmd-db aux，须现场读，**禁止猜**。
+
+#### 2) 裸机现有 helper（已搜）
+
+| 能力 | 位置 | 够不够 |
+|---|---|---|
+| cmd-db 查找（8 字节名 → addr + aux） | `cmd_db_hit` / `cmd_db_find` | 可读 **IP0** 等 BCM 名 |
+| apps RSC ACTIVE 单命令 | `rpmh_cmd(addr, data, freq)` @ `RSC_TCS0=0x18220d00` | **物理上能发 BCM 写** |
+| ARC 代理票 | `cx.lvl`/`mss.lvl`/`xo.lvl`/`lcx`/`lmx` | 与 IPA 无关 |
+| VRM USB 轨 | `rpmh_vrm` | 无关 |
+| interconnect / msm-bus 图 / BCM 聚合 | **无** | 缺 |
+| apps_smmu STE 写（SID 0x520…） | USB 用过 SMR/S2CR 扫槽；**无** IPA SID 绑定 | 缺专用路径 |
+| IPA PAS | `ceeb6fd` 已禁 | — |
+
+结论：mailbox/寄存器级 **发送通路已有**；缺的是 **投什么**（BCM 列表+编码后的 data）
+和 **SMMU 前置**。不得用现有 `rpmh_cmd` 对 IP0 猜一个 SVS2 data。
+
+#### 3) 交付判定 → **BLOCKER**（非可编码实现计划）
+
+**不能**在本轮写出可刷的 BCM 投票刀。解锁清单：
+
+1. 槽 b 抓到 client `ipa` 当前 usecase（应为 SVS2）及每条 path 的 ab/ib
+2. 抓到 **非零** BCM 客户端行：`bcm=<name> client=ipa act_ab=… act_ib=…`
+3. 对每个 name：cmd-db `addr` + aux `unit_size`/`width` + 算出的 `vote_x/y` + 最终 `TCS data`
+4. （并行）确认 SMMU SID 0x520/521/522 STE 在 PAS 前已写（或证明 PAS 不依赖 —— 现证据倾向依赖）
+
+齐了之后的 **实现计划骨架**（仍禁止在收据前编码）：
+
+```
+1. cmd_db_hit("IP0\0\0\0\0") … 校验 HW=BCM(5)，读 aux
+2. 按收据表 rpmh_cmd(addr, BCM_TCS_CMD(1,1,x,y), freq) 逐个 BCM（ACTIVE）
+3. 只读 sm：`ib=n.ok`（发出条数/COMPL）
+4. 另刀：apps_smmu 写 SID 0x520/521/522（对账 USB SMR 路径）
+5. 两步都 sm 绿且设备仍 ping 后，才允许再议 pas_go(0xf)——本轮仍禁 PAS
+```
+
+#### 4) 下次槽 b 抓取配方（不猜；对齐已有 timeline 目录习惯）
+
+前置：硬复位 → `set_active b` → adb `aginxosredfin`（与
+`slot-b-timeline-20261019-110320` 同流程）；**先**确认 `qrtr-lookup` 有
+`0x45`，再采 bus（保证采到的是“能出 WLFW”的那次环境）。
+
+```sh
+# 0. 收据目录
+STAMP=$(date +%Y%m%d-%H%M%S)
+DIR=/data/local/tmp/ipa-bcm-$STAMP   # 或主机侧 .local/device/redfin/…
+mkdir -p "$DIR"
+
+# 1. 确认 debugfs
+mount | grep debugfs || mount -t debugfs none /sys/kernel/debug
+ls /sys/kernel/debug/msm-bus-dbg/
+
+# 2. client 向量（应有文件名 ipa；有则 cat）
+ls /sys/kernel/debug/msm-bus-dbg/client-data/
+cat /sys/kernel/debug/msm-bus-dbg/client-data/ipa \
+  > "$DIR/client-ipa.txt" 2>&1
+# 触发 trace/ERR 转储（驱动把当前票打到 dmesg/trace）
+echo 1 > /sys/kernel/debug/msm-bus-dbg/dump_clients
+echo 1 > /sys/kernel/debug/msm-bus-dbg/dump_bcm_clients
+dmesg | grep -E 'bcm=|client=ipa|Client handle.*ipa|update_request' \
+  > "$DIR/dmesg-bcm.txt"
+
+# 3. sysfs bw（节点设备上的 DEVICE_ATTR bw）
+# 典型路径因 uevent 而异；扫一遍：
+find /sys/devices -name bw 2>/dev/null | while read f; do
+  echo "=== $f ==="; cat "$f"
+done > "$DIR/sysfs-bw-all.txt"
+# 若能定位 label，优先：
+#   *ipa-core* / *qns-llcc* / *ebi* / *imem* / *qhs-ipa* / *bcm-ip0*
+
+# 4. ftrace（可选，镜像若开 CONFIG_MSM_BUS_DBG）
+echo 0 > /sys/kernel/debug/tracing/tracing_on
+echo > /sys/kernel/debug/tracing/trace
+echo 1 > /sys/kernel/debug/tracing/events/msm_bus/enable 2>/dev/null \
+  || echo 1 > /sys/kernel/debug/tracing/events/bus/enable 2>/dev/null
+# 轻踢一票：读 /dev/ipa 或 `echo 1 >/dev/ipa` 前先 snapshot；不要乱 unload PIL
+echo 1 > /sys/kernel/debug/tracing/tracing_on
+sleep 2
+echo 0 > /sys/kernel/debug/tracing/tracing_on
+cat /sys/kernel/debug/tracing/trace > "$DIR/trace-bus.txt"
+
+# 5. SMMU 对照（PAS 前也应在）
+dmesg | grep -E 'ipa_smmu|0x052|group 1[345]' > "$DIR/smmu-ipa.txt"
+find /sys/kernel/debug -iname '*smmu*' 2>/dev/null | head
+
+# 6. 时间线锚点（复用旧脚本）
+dmesg | grep -E 'ipa_fws|register_client_adhoc:Client handle.*ipa|Brought out of reset' \
+  > "$DIR/timeline-ipa.txt"
+qrtr-lookup > "$DIR/qrtr-lookup.txt"
+```
+
+**最低合格收据**：`dmesg-bcm.txt` 里至少一行
+`bcm=IP0 client=ipa act_ab=… act_ib=…`（或 dump 等价），外加能从 cmd-db /
+`/sys/kernel/debug` 对上 `IP0` 的 addr。有 IP0 + SH0/MC0/SN1/CN0 更佳。
+
+**明确不要**：在收据前对 `rpmh_cmd` 写 BCM；不要再刷 `ceeb6fd`；不要
+AOP/CDSP/TFTP 成功路径。
+
+#### 5) Checklist（相对 S4 开放项）
+
+| ID | 项 | 状态 |
+|---|---|---|
+| I1 | 逻辑序：ipa SVS2 vote → SMMU → `subsystem_get(ipa_fws)` | **DONE** |
+| I2 | SVS2 五路径 ab/ib + 终点 BCM 名（IP0/SH0/MC0/ACV/SN1/CN0/SH4） | **DONE**（拓扑） |
+| I3 | BCM TCS 位域 + cmd-db HW=5 + 聚合公式 | **DONE**（机制） |
+| I4 | 现场 `(name,addr,unit,width,vote_x,vote_y,data)` 表 | **BLOCKED** → 配方 §4 |
+| I5 | 裸机 `rpmh_cmd` 可复用发 BCM | **DONE**（通路） |
+| I6 | 裸机 msm-bus 图 / 自动聚合 | **缺**（不需要若 I4 齐） |
+| I7 | SMMU SID 0x520/521/522 裸机写法 | **未做**（PAS 前第二前置） |
+| I8 | 早期 `pas_go(0xf)` | **BAN** 至 I4+I7 实证 |
+
+flash-safe 仍 **`c38a6cd`**。禁区不变（TFTP OACK/DATA、TX intent、冷 CDSP、
+**冷 IPA PAS `ceeb6fd`**、猜写 RPMH/BCM）。未推。未刷。
