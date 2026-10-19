@@ -2693,3 +2693,22 @@ INIT 仍 park（需 mem/EP）。基线 tip atop `7fc307e` / 活体 `cef1fd9`。
 
 Flash-safe restore：`boot-s20-c38a6cd.img` / `b99c785` / 活体可停 `cef1fd9`。
 等硬复位进 fastboot 再刷 stamp。
+
+
+### slot-b harvest IPA INIT/EP（2026-10-19 ~15:50 Asia/Shanghai）
+
+Capture：`.local/device/redfin/slot-b-ipa-init-20261019-154055/`（`INIT-TLV-COMPUTED.md`）。
+
+| 钉死 | 值 | 来源 |
+|---|---|---|
+| `ctrl_comm_dest_end_pt` | **16** | `ipa3_ep_mapping[IPA_4_7][APPS_WAN_CONS].ipa_ep_num` |
+| APPS_WAN_CONS `gsi_chan` | **7** | 同行 `ipa_gsi_chan_num` |
+| `platform_type` | **3** (MSM_ANDROID) | `rmnet_ipa.c` |
+| route `num_indices` | **7** | `v*_modem_rt_index_hi` |
+| 活体 INIT | @49.21→49.31 | dmesg（无 IPAWANDBG TLV 行） |
+| qrtr | `0x31/0x201` + **`0x45/0x1`** | slot-b 有 WLFW；裸机仍无 0x45 |
+| `smem_restr` 活体 | **未采** | 无 debugfs / CONFIG_DEVMEM；`ig=` 读了未导出 |
+
+debugfs 仍不可挂；`/dev/mem` mknod 后 ENXIO。mem TLV 仍 = `ipa_4_7_mem_part.ofst + R`（R 待下一刀 `sm=`/`ig=` 扩展）。
+
+**下一刀**：只读导出 `SHARED_MEM_SIZE`→R；**仍禁**空 INIT。GSI CH7 + SRAM canary 仍是写刀前提。

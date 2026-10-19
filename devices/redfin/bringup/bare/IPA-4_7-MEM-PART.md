@@ -71,3 +71,18 @@ SRAM 直映（v4.5+）：
 | `cb` | 0x284（v4_flt_hash−4） | `0xdeadbeef` |
 
 PAS 后、GSI 驱动前：通常 **不是** `deadbeef`（证未铺布局）。
+
+
+## EP map（IPA_4_7，INIT `ctrl_comm`）
+
+| client | ipa_ep_num | gsi_chan | ee | 备注 |
+|---|---:|---:|---|---|
+| **APPS_WAN_CONS** | **16** | **7** | AP | INIT `ctrl_comm_dest_end_pt` |
+| APPS_WAN_COAL_CONS | 15 | 6 | AP | |
+| APPS_WAN_PROD | 2 | 2 | AP | |
+| APPS_LAN_CONS | 9 | 14 | AP | |
+| APPS_CMD_PROD | 7 | 5 | AP | |
+| Q6_WAN_PROD | 5 | 0 | Q6 | |
+| Q6_WAN_CONS | 14 | 7 | Q6 | 与 AP WAN_CONS 同 gsi_chan 号、不同 EE |
+
+`platform_type=3`。完整表：`.local/device/redfin/slot-b-ipa-init-20261019-154055/ipa47-ep-map.tsv`。
