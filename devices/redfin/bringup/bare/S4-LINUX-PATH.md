@@ -1443,3 +1443,15 @@ chunk=48）；REGISTER 因带 state TLV 刚好 chunk=56 才过关。
 **成功判据**：`tz` 见 sz/cl 且 st→3；硬成功 `q=` 含 `45.`；软成功文件喂通仍 UNINIT。
 
 未推。待 GATE 刷验。
+
+**刷验（365d1f4，GATE `13201FDD4001N8`，Asia/Shanghai ~09:33）**：`flash boot_a` +
+`set_active a` + reboot OK。en10 ECM UP（host `02:00:00:00:00:01`），但对
+`169.254.1.1` **ARP incomplete** ≥3 min，无 ping / 无 2323。**无 sm。硬挂**
+（与 TX-intent / 过早 PDR 同类：链路在、IP 不应答）。
+
+**处置**：勿再叠加。需硬复位进 fb → 刷 `.local/device/redfin/boot-out/boot-s20-a5137f2.img`
+（或 `boot-s20-92393f6.img`）复活。tip `365d1f4` 保留代码供收窄；**下一刀**应改为
+开机后一次性 FAT 探针（只写 `tz=`，RRQ 仍 ERROR），**不**在 `smem_scan` 热路径读 UFS、
+**不**放宽 `glink_tx_payload`——先证文件存在与几何，再谈真喂。
+
+未推。
