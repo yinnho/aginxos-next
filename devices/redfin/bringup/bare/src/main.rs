@@ -3269,7 +3269,8 @@ static mut TF_SEEN_N: u32 = 0;
 static mut TF_N: u32 = 0;
 static mut TF_NAME: [u8; 64] = [0; 64];
 static mut TF_NAME_N: u8 = 0;
-/// 开机一次 FAT 探针结果（不真喂）。0=未跑 1=命中；失败时 TZ_SZ=0、TZ_CL=errcode。
+/// 开机一次 FAT 探针结果（不真喂）。0=未跑 1=命中；失败 TZ_ST=4/errcode，TZ_CL=errcode(|depth<<8)。
+/// sm：tz=st.sz.cl
 static mut TZ_ST: u32 = 0;
 static mut TZ_SZ: u32 = 0;
 static mut TZ_CL: u32 = 0;
@@ -4955,6 +4956,7 @@ fn fat83_eq(ent: &[u8], name: &[u8], ext: &[u8]) -> bool {
 }
 
 fn fat_split83(comp: &[u8]) -> ([u8; 8], [u8; 3]) {
+    // 只按「最后一个」点拆 8.3，避免 549_38_0.mbn.1.32 把 ext 弄成 "1.3"。
     let mut name = [b' '; 8];
     let mut ext = [b' '; 3];
     let mut dot = None;
@@ -4962,7 +4964,6 @@ fn fat_split83(comp: &[u8]) -> ([u8; 8], [u8; 3]) {
     while i < comp.len() {
         if comp[i] == b'.' {
             dot = Some(i);
-            break;
         }
         i += 1;
     }
@@ -4970,6 +4971,7 @@ fn fat_split83(comp: &[u8]) -> ([u8; 8], [u8; 3]) {
         Some(d) => (&comp[..d], &comp[d + 1..]),
         None => (comp, &comp[0..0]),
     };
+    // 若 stem 仍含点（少见），8.3 截断到 8；LFN 路径另比全名。
     let mut i = 0usize;
     while i < npart.len() && i < 8 {
         let c = npart[i];
@@ -4979,13 +4981,109 @@ fn fat_split83(comp: &[u8]) -> ([u8; 8], [u8; 3]) {
     i = 0;
     while i < epart.len() && i < 3 {
         let c = epart[i];
+        // ext 遇点即停（.1.32 残留）
+        if c == b'.' {
+            break;
+        }
         ext[i] = if c >= b'a' && c <= b'z' { c - 32 } else { c };
         i += 1;
     }
     (name, ext)
 }
 
-/// 在 root 或子目录簇链里找 8.3 名。返回 (cluster, size, is_dir)。
+/// 去掉 TFTP 会话后缀 `.digits.digits`（如 .1.32）。
+fn fat_strip_tftp_suffix(name: &[u8]) -> &[u8] {
+    let mut end = name.len();
+    // 两段：.NUM.NUM
+    let mut dots = 0usize;
+    let mut i = name.len();
+    while i > 0 {
+        i -= 1;
+        let c = name[i];
+        if c == b'.' {
+            dots += 1;
+            if dots == 2 {
+                // 确认两段都是纯数字
+                let mut ok = true;
+                let mut j = i + 1;
+                let mut seen_digit = false;
+                let mut stage = 0u8;
+                while j < name.len() {
+                    let d = name[j];
+                    if d == b'.' {
+                        if stage != 0 || !seen_digit {
+                            ok = false;
+                            break;
+                        }
+                        stage = 1;
+                        seen_digit = false;
+                    } else if d >= b'0' && d <= b'9' {
+                        seen_digit = true;
+                    } else {
+                        ok = false;
+                        break;
+                    }
+                    j += 1;
+                }
+                if ok && seen_digit && stage == 1 {
+                    end = i;
+                }
+                break;
+            }
+        } else if !(c >= b'0' && c <= b'9') && dots < 2 {
+            // 非数字打断后缀扫描
+            if dots == 0 {
+                return name;
+            }
+        }
+    }
+    &name[..end]
+}
+
+fn fat_upc(b: u8) -> u8 {
+    if b >= b'a' && b <= b'z' {
+        b - 32
+    } else {
+        b
+    }
+}
+
+/// 从 LFN 槽取 UCS-2 字符（只认 ASCII 低字节；高字节非 0 当 0xFF）。
+fn lfn_chars(ent: &[u8], out: &mut [u8; 13]) -> usize {
+    // offsets: 1..10 (5), 14..25 (6), 28..31 (2) — 13 UTF-16LE chars
+    const OFF: [usize; 13] = [1, 3, 5, 7, 9, 14, 16, 18, 20, 22, 24, 28, 30];
+    let mut n = 0usize;
+    for &o in &OFF {
+        if o + 1 >= ent.len() {
+            break;
+        }
+        let lo = ent[o];
+        let hi = ent[o + 1];
+        if lo == 0 && hi == 0 {
+            break;
+        }
+        out[n] = if hi == 0 { lo } else { 0xFF };
+        n += 1;
+    }
+    n
+}
+
+fn lfn_eq_comp(lfn: &[u8], lfn_n: usize, comp: &[u8]) -> bool {
+    if lfn_n != comp.len() {
+        return false;
+    }
+    let mut i = 0usize;
+    while i < lfn_n {
+        if fat_upc(lfn[i]) != fat_upc(comp[i]) {
+            return false;
+        }
+        i += 1;
+    }
+    true
+}
+
+/// 在 root 或子目录簇链里找 8.3 或 LFN。返回 (cluster, size, is_dir)。
+/// `comp` 是原始路径分量（用于 LFN 全名比对）；name/ext 是 8.3。
 fn fat_dir_find(
     ufs: &mut Ufs,
     data_lba: u32,
@@ -4994,6 +5092,7 @@ fn fat_dir_find(
     root_secs: u32,
     name: &[u8],
     ext: &[u8],
+    comp: &[u8],
 ) -> Result<(u32, u32, bool), u32> {
     let (name8, ext3) = {
         let mut n = [0u8; 8];
@@ -5002,24 +5101,88 @@ fn fat_dir_find(
         e.copy_from_slice(ext);
         (n, e)
     };
+    // 累积 LFN（逆序槽）；最多 20 槽 × 13 = 260，够用。
+    let mut lfn_buf = [0u8; 260];
+    let mut lfn_n = 0usize;
+    let mut lfn_expect: u8 = 0;
+    let mut scan_block = |b: &[u8]| -> Option<Result<(u32, u32, bool), u32>> {
+        let mut off = 0usize;
+        while off + 32 <= b.len() {
+            let ent = &b[off..off + 32];
+            if ent[0] == 0 {
+                return Some(Err(0x57));
+            }
+            if ent[0] == 0xe5 {
+                lfn_n = 0;
+                lfn_expect = 0;
+                off += 32;
+                continue;
+            }
+            let attr = ent[11];
+            if attr & 0x0f == 0x0f {
+                // LFN 槽。seq = bit0-4；bit6=last。
+                let seq = ent[0];
+                let ord = seq & 0x1f;
+                if ord == 0 {
+                    lfn_n = 0;
+                    lfn_expect = 0;
+                    off += 32;
+                    continue;
+                }
+                let mut chars = [0u8; 13];
+                let cn = lfn_chars(ent, &mut chars);
+                if seq & 0x40 != 0 {
+                    lfn_n = 0;
+                    lfn_expect = ord;
+                }
+                if lfn_expect == 0 || ord != lfn_expect {
+                    // 失序，丢弃
+                    lfn_n = 0;
+                    lfn_expect = 0;
+                    off += 32;
+                    continue;
+                }
+                // 槽按倒序出现：先 last(高序号) 后 1。拼到缓冲前端位置 (ord-1)*13。
+                let base = (ord as usize - 1) * 13;
+                if base + cn <= lfn_buf.len() {
+                    let mut i = 0usize;
+                    while i < cn {
+                        lfn_buf[base + i] = chars[i];
+                        i += 1;
+                    }
+                    if seq & 0x40 != 0 {
+                        lfn_n = base + cn;
+                    } else if base + cn > lfn_n {
+                        lfn_n = base + cn;
+                    }
+                }
+                lfn_expect = ord.wrapping_sub(1);
+                off += 32;
+                continue;
+            }
+            // 普通 8.3 / 目录项。先比 8.3，再比累积 LFN。
+            let hit83 = fat83_eq(ent, &name8, &ext3);
+            let hitlfn = lfn_n > 0 && lfn_expect == 0 && lfn_eq_comp(&lfn_buf[..lfn_n], lfn_n, comp);
+            lfn_n = 0;
+            lfn_expect = 0;
+            if hit83 || hitlfn {
+                let c2 = u16::from_le_bytes([ent[26], ent[27]]) as u32
+                    | ((u16::from_le_bytes([ent[20], ent[21]]) as u32) << 16);
+                // size 在 28..32；目录项常为 0，文件应为实长。
+                let sz = u32::from_le_bytes([ent[28], ent[29], ent[30], ent[31]]);
+                return Some(Ok((c2, sz, attr & 0x10 != 0)));
+            }
+            off += 32;
+        }
+        None
+    };
     if dir_cl == 0 {
         let mut s = 0u32;
         while s < root_secs {
             ufs.read10(root_lba + s, 1, DATA).map_err(|_| 0x56u32)?;
             let b = unsafe { core::slice::from_raw_parts(DATA as *const u8, 4096) };
-            let mut off = 0usize;
-            while off + 32 <= 4096 {
-                let ent = &b[off..off + 32];
-                if ent[0] == 0 {
-                    return Err(0x57);
-                }
-                if ent[0] != 0xe5 && ent[11] & 0x0f != 0x0f && fat83_eq(ent, &name8, &ext3) {
-                    let cl = u16::from_le_bytes([ent[26], ent[27]]) as u32
-                        | ((u16::from_le_bytes([ent[20], ent[21]]) as u32) << 16);
-                    let sz = u32::from_le_bytes([ent[28], ent[29], ent[30], ent[31]]);
-                    return Ok((cl, sz, ent[11] & 0x10 != 0));
-                }
-                off += 32;
+            if let Some(r) = scan_block(b) {
+                return r;
             }
             s += 1;
         }
@@ -5034,19 +5197,8 @@ fn fat_dir_find(
         while s < 4 {
             ufs.read10(lba + s, 1, DATA).map_err(|_| 0x56u32)?;
             let b = unsafe { core::slice::from_raw_parts(DATA as *const u8, 4096) };
-            let mut off = 0usize;
-            while off + 32 <= 4096 {
-                let ent = &b[off..off + 32];
-                if ent[0] == 0 {
-                    return Err(0x57);
-                }
-                if ent[0] != 0xe5 && ent[11] & 0x0f != 0x0f && fat83_eq(ent, &name8, &ext3) {
-                    let c2 = u16::from_le_bytes([ent[26], ent[27]]) as u32
-                        | ((u16::from_le_bytes([ent[20], ent[21]]) as u32) << 16);
-                    let sz = u32::from_le_bytes([ent[28], ent[29], ent[30], ent[31]]);
-                    return Ok((c2, sz, ent[11] & 0x10 != 0));
-                }
-                off += 32;
+            if let Some(r) = scan_block(b) {
+                return r;
             }
             s += 1;
         }
@@ -5056,6 +5208,7 @@ fn fat_dir_find(
 }
 
 /// 相对 modem 根的路径，如 image/modem_pr/so/549_38_0.mbn。
+/// 失败码：0x57 未找到；高字节 = 失败分量下标+1（tz 可辨）。
 fn fat_path_open(ufs: &mut Ufs, rel: &[u8]) -> Result<(u32, u32), u32> {
     // 优先 BPB；对不上已知 data=+17/spc=4 时回退：reserved1 + 2×FAT6 + root4 = 17。
     let (root_lba, root_secs, data_lba) = match modem_fat_geom(ufs) {
@@ -5065,24 +5218,36 @@ fn fat_path_open(ufs: &mut Ufs, rel: &[u8]) -> Result<(u32, u32), u32> {
     let mut dir_cl = 0u32;
     let mut start = 0usize;
     let mut i = 0usize;
+    let mut depth = 0u32;
     while i <= rel.len() {
         if i == rel.len() || rel[i] == b'/' {
             if i > start {
-                let comp = &rel[start..i];
+                let raw = &rel[start..i];
                 let last = i == rel.len();
+                let comp = if last {
+                    fat_strip_tftp_suffix(raw)
+                } else {
+                    raw
+                };
                 let (n8, e3) = fat_split83(comp);
-                let (cl, sz, is_dir) =
-                    fat_dir_find(ufs, data_lba, dir_cl, root_lba, root_secs, &n8, &e3)?;
-                if last {
-                    if is_dir {
-                        return Err(0x58);
+                match fat_dir_find(ufs, data_lba, dir_cl, root_lba, root_secs, &n8, &e3, comp) {
+                    Ok((cl, sz, is_dir)) => {
+                        if last {
+                            if is_dir {
+                                return Err(0x58 | ((depth + 1) << 8));
+                            }
+                            return Ok((cl, sz));
+                        }
+                        if !is_dir {
+                            return Err(0x58 | ((depth + 1) << 8));
+                        }
+                        dir_cl = cl;
                     }
-                    return Ok((cl, sz));
+                    Err(e) => {
+                        return Err((e & 0xff) | ((depth + 1) << 8));
+                    }
                 }
-                if !is_dir {
-                    return Err(0x58);
-                }
-                dir_cl = cl;
+                depth += 1;
             }
             start = i + 1;
         }
@@ -5091,29 +5256,44 @@ fn fat_path_open(ufs: &mut Ufs, rel: &[u8]) -> Result<(u32, u32), u32> {
     Err(0x57)
 }
 
-/// 开机一次：查 modem_a 上 image/modem_pr/so/549_38_0.mbn，只写 tz=sz.cl。
+/// 开机一次：查 modem_a 上 SO，只写 tz=st.sz.cl。
 /// 不进 smem_scan；不改 glink_tx 上限；RRQ 仍 ERROR（不 DATA 真喂）。
+/// 候选路径：image/… 与根上 modem_pr/…（部分机把 modem_pr 放根）。
 fn tf_boot_probe(ufs: &mut Ufs) {
     if unsafe { TZ_ST } != 0 {
         return;
     }
-    match fat_path_open(ufs, b"image/modem_pr/so/549_38_0.mbn") {
-        Ok((cl, sz)) => unsafe {
-            TZ_CL = cl;
-            TZ_SZ = sz;
-            TZ_ST = 1;
-        },
-        Err(e) => unsafe {
-            TZ_SZ = 0;
-            TZ_CL = e;
-            TZ_ST = if e == 0x57 {
-                4
-            } else if e < 0x100 {
-                e
-            } else {
-                5
-            };
-        },
+    const CANDS: &[&[u8]] = &[
+        b"image/modem_pr/so/549_38_0.mbn",
+        b"modem_pr/so/549_38_0.mbn",
+        b"image/modem_pr/so/549_38_0.mbn.1.32",
+    ];
+    let mut last_err = 0x57u32;
+    for &p in CANDS {
+        match fat_path_open(ufs, p) {
+            Ok((cl, sz)) => unsafe {
+                TZ_CL = cl;
+                TZ_SZ = sz;
+                // st=1 命中；若 sz==0 仍标 1（上层看 sz 判空文件/错解析）
+                TZ_ST = 1;
+                return;
+            },
+            Err(e) => {
+                last_err = e;
+            }
+        }
+    }
+    unsafe {
+        TZ_SZ = 0;
+        TZ_CL = last_err;
+        let low = last_err & 0xff;
+        TZ_ST = if low == 0x57 {
+            4
+        } else if low < 0x100 {
+            low
+        } else {
+            5
+        };
     }
 }
 
@@ -9293,6 +9473,8 @@ fn ctrl_service(
                                 push_str(&mut reply, &mut rn, ".");
                                 push_hex(&mut reply, &mut rn, unsafe { TF_N } as u64);
                                 push_str(&mut reply, &mut rn, " tz=");
+                                push_hex(&mut reply, &mut rn, unsafe { TZ_ST } as u64);
+                                push_str(&mut reply, &mut rn, ".");
                                 push_hex(&mut reply, &mut rn, unsafe { TZ_SZ } as u64);
                                 push_str(&mut reply, &mut rn, ".");
                                 push_hex(&mut reply, &mut rn, unsafe { TZ_CL } as u64);

@@ -1470,3 +1470,25 @@ chunk=48）；REGISTER 因带 state TLV 刚好 chunk=56 才过关。
 **成功判据**：`tz` 见非零 sz + 合理 cl；设备仍活（ping/2323/`ik=4`）。硬成功仍要 `45.`——本刀只证文件几何。
 
 未推。未刷（设备仍挂在 365d1f4；复活先刷 `boot-s20-a5137f2.img`）。
+
+### 本轮：FAT size=0 / tz=0.57 澄清 + LFN 命中（2026-10-19 Asia/Shanghai）
+
+**活体（8a3f32d）误读**：`tz=0.57` 不是「簇 0x57、size 0」，而是
+`Err(0x57)` **未找到**（旧 sm 只打 `tz=sz.cl`，失败时 sz=0、cl=errcode，
+与命中空文件同形）。本地无 modem_a 全盘 dump；enchilada 树仅有
+`modem_pr/mcfg`、无 `so/`。
+
+**刀**：
+1. sm 改为 `tz=st.sz.cl`（st=1 命中；st=4 未找到）
+2. `fat_split83` 按**最后**一个点拆；末分量剥 TFTP `.digits.digits`
+3. `fat_dir_find` 认 LFN（UCS-2 ASCII）+ 8.3；失败码高字节=分量深度
+4. 探针候选：`image/modem_pr/so/549_38_0.mbn`、根上 `modem_pr/so/…`、带 `.1.32`
+5. **仍不 DATA 真喂**；不放宽 `glink_tx_payload`（文件 ≫ 256/512）
+
+**刷验**（GATE `13201FDD4001N8`，2323→fb）：未挂。
+`tz=1.eb43c.1a67` → 命中，**实长 0xEB43C = 963132 B（~941 KiB）**，
+簇 `0x1A67`。本 boot 早期 `ik=0` / `q=` 空、`s=107`（sensor EF 旧症），
+无 `45.`——与「几何已证」正交。下一刀：按现有 glink 帽做分块 RRQ
+（勿盲目抬 total），最好 defer 到 `ik>=4`；本刀保持 RRQ ERROR。
+
+未推。
