@@ -1875,3 +1875,87 @@ flash-safe 现可含 **`c38a6cd`**（行为 ⊇ `f73c9bb` + `me`）；复活仍�
 有收据后再开 **单一** 刀：优先「有 before-modem 实证的最窄写」（例如仅 IPA fws PAS，或仅 CDSP 且有 stock 时序），仍禁 TFTP 成功与 TX intent。
 
 flash-safe 仍 **`c38a6cd`**（⊇ `f73c9bb`）；复活 `boot-s20-f73c9bb.img` / `boot-s20-c38a6cd.img`。未推。
+
+### 槽 b 时序抓取 — ABORT（2026-10-19 ~11:00 Asia/Shanghai）
+
+意图：`set_active b`（不覆写 `boot_b`）→ adb `aginxosredfin` 采 dmesg 时序
+（CDSP ONLINE / modem PIL / `0x45` / IPA fws / TFTP `549_38_0` / SMP2P ipa·wlan），
+再刷回 `boot-s20-c38a6cd.img` + `set_active a`。
+
+**阻断**：活体仍 `c38a6cd`（ping/ARP/ECM OK），但 **TCP 2323 软死**
+（RST→Timeout→Refused），无法 `fb` 进 fastboot；`fastboot`/`adb` 皆空。
+未切槽、未刷、无 timeline。收据目录
+`.local/device/redfin/slot-b-timeline-20261019-105839/ABORT.txt`。
+
+**下一步**：人工硬复位进 fb（GATE `13201FDD4001N8`）后重跑；restore 镜像
+已在 `.local/device/redfin/boot-out/boot-s20-c38a6cd.img`。
+
+未推。
+
+### Linux 槽时间线抓包（Asia/Shanghai 2026-10-19 ~11:03–11:05）
+
+`set_active b`（未刷 `boot_b`）→ adb `aginxosredfin` ~31s。收据：
+`.local/device/redfin/slot-b-timeline-20261019-110320/`（`dmesg-raw.txt`、`qrtr-lookup.txt`、`TIMELINE.md`）。
+
+PIL 顺序（内核秒）：
+
+| t | 事件 |
+|--:|------|
+| 40.88–40.90 | **ipa_fws** load / out of reset |
+| 47.09–47.37 | **adsp** load / out of reset / Power-Clock；icnss probe |
+| 48.32–48.40 | **cdsp** load / out of reset / Power-Clock |
+| 48.42–49.08 | **modem** load / out of reset / Power-Clock（IPA BEFORE→AFTER_POWERUP） |
+| 49.09 | rmt_storage OPEN/ALLOC/IOVEC（无 TFTP） |
+| 50.21 | **wlan_pd ONLINE** `0x1fffffff` → **icnss QMI Connected** |
+
+`qrtr-lookup`：**`svc=0x45 inst=0x1 at 0:88`**（WLFW 在）。dmesg 对 `tftp`/`549_38`/`elf_loader` **0 命中**。
+
+对裸机：顺序是 **ipa → adsp → cdsp → modem**，不是单独冷启 CDSP；Linux 不靠 TFTP 起 wlan_pd。
+
+恢复：trampoline 软 `reboot bootloader` 无效，**待硬复位进 fb** 后刷 `boot-s20-c38a6cd.img` → `boot_a` + `set_active a`。未推。
+
+
+### 下一刀设计：IPA-before-ADSP PAS（slot-b 解锁，未刷）
+
+**收据**：`.local/device/redfin/slot-b-timeline-20261019-110320/TIMELINE.md`
+（内核秒）`ipa_fws@40.9 → adsp@47 → cdsp@48.3 → modem@48.4 → wlan_pd/0x45@50.2`；
+**无 TFTP**。
+
+**裸机现况（`c38a6cd` / tip park）**：ADSP + modem PAS；MPSS 出向已有 `ipa` 名
+（`me=1.2.0`）；**无** `ipa_fws` PAS；**无** CDSP（冷启已禁）。
+
+#### 与禁区 CDSP-before-modem（`8d88cd5`）的差别
+
+| | 挂掉的 CDSP 刀 | 本刀 IPA fws |
+|--|--|--|
+| 链位置 | ADSP settle **后**、modem **前**（跳过 IPA） | **链首**，在 ADSP **之前**（对齐 stock） |
+| AOP | 需要 `cdsp on` | **无** signal-aop（lito DTS） |
+| 区大小 | `0x87400000` / **30 MiB** | `0x8BC00000` / **64 KiB**（实装 ~0x6000） |
+| SMP2P | 出向 432 / 入向 94 等待 | **无** |
+| pas-id | 18 | **0xf** |
+
+假说：modem 自拉 `wlan_pd`（不走 elf_loader/TFTP）依赖 stock 链前缀；
+仅冷启 CDSP 切错了位置且缺 IPA。本刀只补 **最小缺失前缀** = IPA fws。
+
+#### 实现（单变量）
+
+1. `load_ipa_fws`：vendor_a 上找 `ipa_fws.mdt`（+`.bXX`，无则 mdt 内嵌段）
+2. `pas_go(0xf, 0x8BC00000, 0x10000)` — INIT/MEM/AUTH，**无 AOP**
+3. 插入点：`smem_scan` 之后、LPASS/ADSP **之前**
+4. 失败只打环，ADSP/modem 照旧
+5. `sm if=st.p0.p1.p2`
+
+**不做**：CDSP、TFTP 成功、TX intent、改 glink 帽、改 PDR。
+
+**风险**：仍是早期 PAS；Linux 在 PIL 前有 IPA SMMU/时钟投票，裸机未仿。
+若 ARP incomplete 硬挂 → 整段 IPA PAS 入禁令，刷回 `c38a6cd`。
+
+**备选阶段（若本刀挂）**：仅 vendor 探针（`if=` 找文件/段数，不写 `0x8bc`、不 SMC）—
+本轮直接做 PAS，因 slot-b 已给 before-modem 实证。
+
+**刷序（用户硬复位进 fb 后）**：
+1. 先 restore：`boot-s20-c38a6cd.img` → `boot_a` + `set_active a` + reboot，确认 ping/`sm`
+2. 再刷本刀 stamp：`boot-s20-<sha>.img`（或 tip `boot-s20.img`）
+3. 采 `if=` / `ik=` / `q=` / 有无 `0x45`；硬挂则立刻回 `c38a6cd`
+
+**本轮未刷**（设备仍在 Linux slot b）。未推。
