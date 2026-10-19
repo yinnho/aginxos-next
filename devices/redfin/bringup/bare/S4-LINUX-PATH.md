@@ -1705,3 +1705,73 @@ tip 上 OACK（`8a761ad`）TFTP 已回退，main 与 f73c9bb TFTP 一致后再�
 **不改**：TFTP（仍 ERROR）、TX intent、glink 帽、PDR、MSA、Dom。
 
 刷序：先 `boot-s20-f73c9bb.img` 复活 → 再本刀。未推。未刷。
+
+### 本轮：CDSP-before-modem 已刷 → 硬挂（2026-10-19 ~10:30 Asia/Shanghai）
+
+`8d88cd5` / `boot-s20.img`（102400 B）在 `f73c9bb` 复活后刷上。
+症状同既有 early hang：**ECM 链路在，`169.254.1.1` ARP incomplete，无 ping / 无 2323**。
+无可用 `sm`（含预期 `cd=`）。**整段 CDSP-before-modem 打入禁令。**
+
+---
+
+## S4 状态收束（2026-10-19 ~10:35 Asia/Shanghai）— 不刷 / 不实现
+
+### Living tip（唯一可刷）
+
+| 项 | 值 |
+|---|---|
+| **flash-safe sha** | **`f73c9bb`** |
+| 镜像 | `.local/device/redfin/boot-out/boot-s20-f73c9bb.img`（98304 B） |
+| 活体 | `ik=4.0`；FAT `tz=1.eb43c.1a67`（`549_38_0.mbn` 实长）；PDR REGISTER 成功且 state=**UNINIT**（`0x7fffffff`）；SO RRQ→**ERROR**；**无 `0x45`** |
+| tip 策略 | tip **不得**停在 `8d88cd5` / `8a761ad` / `25df6d3` / `365d1f4`；`main.rs` 回到 `f73c9bb`；其后只许 **docs/notes** 提交。`boot-s20.img` 应与 `boot-s20-f73c9bb.img` 一致，避免误刷 |
+
+### 禁令（early hang = ECM up / ARP incomplete）
+
+已钉死，**禁止再编进可刷 tip**：
+
+1. **glink TX 侧**：intent 池 pick / BUSY / RR / INTENT_REQ / 抬 `glink_tx_payload` 帽 / 飞行锁
+2. **TFTP 成功路径**：任何 **DATA**、任何 **OACK**（含 ephemeral QRTR 源口、`blksize=252`）
+3. **CDSP-before-modem 冷启**（`8d88cd5`）：刚硬挂 — 与 TFTP 成功同形
+
+仍允许（且活体依赖）：SO RRQ→**ERROR**；PDR REGISTER @ node-0，**仅 ik≥4 后**；UNINIT **不** RESTART；FAT 只读探针（`tz`）。
+
+### 今日已成（保留）
+
+- RFS 同 txn 多路 OPEN → ALLOC + IOVEC 大读（`ik=4`）
+- PDR REGISTER 真 RESP：state=**UNINIT**（非坏帧）
+- FAT LFN 几何：`549_38_0.mbn` → `0xeb43c` @ cluster 探针
+- ADSP up；modem **root PD** up（服务变多，仍无 `0x45`）
+
+### 开放假说：stock 为何不靠 TFTP 自拉 `wlan_pd`
+
+裸机停在 **elf_loader → TFTP 要 SO → 我们 ERROR → UNINIT**，是回退链。stock 主路径应是 root PD **内存内自 spawn** `msm/modem/wlan_pd` → 发 WLFW **`0x45`**。未证伪的缺口：
+
+| # | 假说 | 现况 | 怎么证 |
+|---|---|---|---|
+| A | **CDSP 时序**：stock CDSP ONLINE 先于 modem；裸机无 CDSP | `8d88cd5` **before** 已硬挂 → 「冷 before」否；**after settle** 未试 | 见下一刀；再挂则整条 CDSP PAS 入禁令 |
+| B | **缺 IPA / 互联时钟门**：wlan_pd 要 IPA 资源才 spawn | 裸机未起 IPA | 只读查 IPA clock/GCC 位（无写） |
+| C | **modem PAS mem 不完整**：`modem_wlan_mem` 区/认证与 pil-tz 差一段 | root PD 已起，但 PD 表可能缺段 | 对账 PIL 段 vs bare 装入长度（只读） |
+| D | **Dom / jsn 环境**：`modemuw.jsn` elf_loader∈wlan_pd | 与 Linux Dom **一致** → 低嫌疑 | 除非找到第二份 region 表 |
+| E | **ADSP fatal / SSR 残态** 逼 modem 走 TFTP | ADSP「up」但 fatal 史未清 | sm 已有；不优先再动 GLINK |
+| F | **缺 AOP/其他 image load_state**（非 cdsp） | 只明确缺 CDSP AOP | 对账 stock AOP 序列（离线） |
+
+### 下一刀（唯一；**未实现 / 未刷**）
+
+**推荐：park CDSP PAS，改做零新流量观测刀（sm-only）。**
+
+- **做什么**：在 `f73c9bb` 活体上只加 **只读** `sm` 字段——例如 CDSP 入向 smem **94** 原始 bit、出向 **432**、（若安全）IPA/GCC 门控只读影子；**不** AOP、**不** `pas_go(18)`、**不** 新 QRTR、TFTP 仍 ERROR。
+- **为何不是 CDSP-after-ik4**：after 仍是 PAS 写路径；before 已同形硬挂，after 一次失败成本高。先用只读判「CDSP 位是否本就与 wlan 无关 / 是否已被别人拉起」。
+- **成功判据**：设备仍 ping/`ik=4`；`sm` 多出只读字段；行为与 `f73c9bb` 同（仍 SO RRQ + UNINIT + 无 45）即软成功。
+- **若只读刀都挂**：立即 park 整段，只做离线 Linux 抓取（假说 B/C/F）。
+- **明确不选（本轮）**：CDSP-after-ik4（留作只读证伪 A 之后的候选）；任何 TFTP 成功；改 Dom elf_loader；提前 MSA。
+
+### 误刷护栏
+
+| sha / 镜像 | 状态 |
+|---|---|
+| **`f73c9bb`** / `boot-s20-f73c9bb.img` | **唯一 flash-safe** |
+| `a5137f2` / `a84360c` | 次选复活（PDR OK、无 FAT tz）；优先仍 `f73c9bb` |
+| `8d88cd5` `8a761ad` `25df6d3` `365d1f4` `206821a` `1119de1` | **禁刷**（early hang） |
+| tip `boot-s20.img` | 须 = `f73c9bb` 产物，勿留 CDSP/OACK 体积 |
+
+未推。本段只文档 + tip 护栏；**不实现下一刀；不 flash。**
