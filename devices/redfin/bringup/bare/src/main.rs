@@ -2964,201 +2964,6 @@ fn load_adsp(ufs: &mut Ufs, freq: u32, t: &mut [u8; 96]) -> Result<u16, u32> {
     Ok(nload)
 }
 
-
-/// qcom,ipa_fws：pas-id 0xf，固件名 ipa_fws，内存 0x8BC00000 / 0x10000。
-/// DTS 无 signal-aop / 无 SMP2P；stock 在 ADSP 前 ~7s 出复位（slot-b 40.9s）。
-/// 与禁区 CDSP-before-modem 的差别：接在链首（IPA→ADSP→…），不冷插 CDSP，无 AOP。
-fn load_ipa_fws(ufs: &mut Ufs, freq: u32, t: &mut [u8; 96]) -> Result<u16, u32> {
-    let _ = freq;
-    let base = vendor_lba(ufs)?;
-    ufs.read10(base, 1, DATA).map_err(|_| 0x14u32)?;
-    let mag = unsafe { le_u32(core::slice::from_raw_parts(DATA as *const u8, 4096), 1024) };
-    let ext4m = unsafe {
-        let b = core::slice::from_raw_parts(DATA as *const u8, 4096);
-        b[1080] as u32 | (b[1081] as u32) << 8
-    };
-    let txt = hex_text(t, unsafe { RING.seq }, " ipa v=0x", (mag as u64) << 32 | ext4m as u64);
-    ring_put(ufs, freq, logring::LVL_INFO, txt);
-    let dev = UfsDev { ufs, base };
-    let mut fs = ext4::Fs::open(dev, unsafe { &mut *core::ptr::addr_of_mut!(SC1) }).map_err(|e| {
-        0x1400u32
-            | match e {
-                ext4::Bad::Io => 1,
-                ext4::Bad::Magic => 2,
-                ext4::Bad::BlockSize => 3,
-                ext4::Bad::InodeSize => 4,
-                ext4::Bad::NoExtent => 5,
-                ext4::Bad::BadExtent => 6,
-                ext4::Bad::TooDeep => 7,
-                ext4::Bad::NoSuchInode => 8,
-                ext4::Bad::NotDir => 9,
-                ext4::Bad::BadDirent => 10,
-                ext4::Bad::NotFound => 11,
-            }
-    })?;
-    const MDTS: [&str; 4] = [
-        "/firmware/ipa_fws.mdt",
-        "/firmware/image/ipa_fws.mdt",
-        "/etc/firmware/ipa_fws.mdt",
-        "/vendor/firmware/ipa_fws.mdt",
-    ];
-    let mut which = 0xffu32;
-    let mut ino = 0u32;
-    for (i, path) in MDTS.iter().enumerate() {
-        match fs.resolve(path, unsafe { &mut *core::ptr::addr_of_mut!(SC2) }) {
-            Ok(n) => {
-                which = i as u32;
-                ino = n;
-                break;
-            }
-            Err(_) => {}
-        }
-    }
-    if which == 0xff {
-        return Err(0x15);
-    }
-    let mut got = 0usize;
-    loop {
-        if got >= 12288 {
-            return Err(0x16);
-        }
-        let n = {
-            let dst = unsafe { &mut PAS_META.raw[got..] };
-            let sc = unsafe { &mut *core::ptr::addr_of_mut!(SC2) };
-            fs.read_file(ino, got as u64, dst, sc).map_err(|_| 0x17u32)?
-        };
-        if n == 0 {
-            break;
-        }
-        got += n;
-    }
-    if got < 52 {
-        return Err(0x18);
-    }
-    let mdt = unsafe { &PAS_META.raw[..got] };
-    if mdt[0] != 0x7f || mdt[1] != b'E' || mdt[2] != b'L' || mdt[3] != b'F' || mdt[4] != 1 {
-        return Err(0x19);
-    }
-    let phoff = elf_u32(mdt, 28) as usize;
-    let phentsize = u16::from_le_bytes([mdt[42], mdt[43]]) as usize;
-    let phnum = u16::from_le_bytes([mdt[44], mdt[45]]) as usize;
-    if phentsize < 32 || phnum == 0 || phnum > 64 || phoff + phnum * phentsize > got {
-        return Err(0x1a);
-    }
-    let mut min_pa = u32::MAX;
-    let mut max_pa = 0u32;
-    let mut nload = 0u16;
-    for i in 0..phnum {
-        let o = phoff + i * phentsize;
-        let ty = elf_u32(mdt, o);
-        let flags = elf_u32(mdt, o + 24);
-        let memsz = elf_u32(mdt, o + 20);
-        let pa = elf_u32(mdt, o + 12);
-        if ty != 1 || memsz == 0 || flags & (7 << 24) == (2 << 24) {
-            continue;
-        }
-        min_pa = min_pa.min(pa);
-        let end = pa.saturating_add(memsz);
-        if end > max_pa {
-            max_pa = end;
-        }
-        nload += 1;
-    }
-    if nload == 0 || min_pa == u32::MAX {
-        return Err(0x1b);
-    }
-    const IPA_BASE: u64 = 0x8BC0_0000;
-    const IPA_SIZE: u64 = 0x0001_0000;
-    let reloc = min_pa < IPA_BASE as u32 || max_pa > (IPA_BASE + IPA_SIZE) as u32;
-    unsafe {
-        core::ptr::write_bytes(IPA_BASE as *mut u8, 0, IPA_SIZE as usize);
-    }
-    let prefix: &str = match which {
-        0 => "/firmware/ipa_fws.b",
-        1 => "/firmware/image/ipa_fws.b",
-        2 => "/etc/firmware/ipa_fws.b",
-        _ => "/vendor/firmware/ipa_fws.b",
-    };
-    for i in 0..phnum {
-        let o = phoff + i * phentsize;
-        let ty = elf_u32(mdt, o);
-        let flags = elf_u32(mdt, o + 24);
-        let filesz = elf_u32(mdt, o + 16) as usize;
-        let fileoff = elf_u32(mdt, o + 4) as usize;
-        let pa = elf_u32(mdt, o + 12);
-        if ty != 1 || elf_u32(mdt, o + 20) == 0 || flags & (7 << 24) == (2 << 24) {
-            continue;
-        }
-        if filesz == 0 {
-            continue;
-        }
-        let dest = if reloc {
-            IPA_BASE + (pa - min_pa) as u64
-        } else {
-            pa as u64
-        };
-        if dest < IPA_BASE || dest + filesz as u64 > IPA_BASE + IPA_SIZE {
-            return Err(0x20 + i as u32);
-        }
-        // 优先 .bXX；没有则尝试 mdt 内嵌（小固件常见）。
-        let mut name = [0u8; 48];
-        let pb = prefix.as_bytes();
-        name[..pb.len()].copy_from_slice(pb);
-        name[pb.len()] = b'0' + (i / 10) as u8;
-        name[pb.len() + 1] = b'0' + (i % 10) as u8;
-        let name = core::str::from_utf8(&name[..pb.len() + 2]).unwrap_or("");
-        match fs.resolve(name, unsafe { &mut *core::ptr::addr_of_mut!(SC2) }) {
-            Ok(sino) => {
-                let mut off = 0usize;
-                while off < filesz {
-                    let n = {
-                        let chunk = filesz - off;
-                        let take = chunk.min(65536);
-                        let out = unsafe { &mut E2BUF[..take] };
-                        let sc = unsafe { &mut *core::ptr::addr_of_mut!(SC2) };
-                        fs.read_file(sino, off as u64, out, sc).map_err(|e| {
-                            let k = match e {
-                                ext4::Bad::Io => 1,
-                                ext4::Bad::NotDir => 2,
-                                ext4::Bad::BadExtent => 3,
-                                ext4::Bad::TooDeep => 4,
-                                ext4::Bad::NoExtent => 5,
-                                _ => 6,
-                            };
-                            0x4000 + (i as u32) * 16 + k
-                        })?
-                    };
-                    if n == 0 {
-                        return Err(0x50 + i as u32);
-                    }
-                    unsafe {
-                        core::ptr::copy_nonoverlapping(
-                            E2BUF.as_ptr(),
-                            (dest + off as u64) as *mut u8,
-                            n,
-                        );
-                    }
-                    off += n;
-                }
-            }
-            Err(_) => {
-                if fileoff + filesz > got {
-                    return Err(0x30 + i as u32);
-                }
-                unsafe {
-                    core::ptr::copy_nonoverlapping(
-                        mdt[fileoff..].as_ptr(),
-                        dest as *mut u8,
-                        filesz,
-                    );
-                }
-            }
-        }
-    }
-    let _ = which;
-    Ok(nload)
-}
-
 fn pas_go(pas_id: u64, addr: u64, size: u64) -> (i64, i64, i64) {
     let pa = core::ptr::addr_of!(PAS_META) as u64;
     dcache_civac(pa, 12288);
@@ -3421,11 +3226,6 @@ static mut GPT_ENTRIES: usize = 0;
 /// 扫到的 EFS 相关 GPT 名（拼接，供 sm gn=）。
 static mut RFS_GN: [u8; 64] = [0; 64];
 static mut RFS_GNN: u8 = 0;
-
-/// IPA fws（pas-id 0xf @ 0x8BC00000 / 0x10000）。插在 ADSP 之前（stock 链首）。
-/// sm if=st.p0.p1.p2 — st 同 ADSP（高位置位=段数）；p0/1/2 = INIT/MEM/AUTH x0。
-static mut IPA_ST: u32 = 0;
-static mut IPA_P: [u32; 3] = [0xffff_ffff; 3];
 
 /// ADSP 加载码。0x80000000 以上是段数，其余是失败码。p0/p1/p2 是 PAS 三步的 x0。
 static mut ADSP_ST: u32 = 0;
@@ -9704,15 +9504,6 @@ fn ctrl_service(
                                 push_hex(&mut reply, &mut rn, unsafe { TZ_SZ } as u64);
                                 push_str(&mut reply, &mut rn, ".");
                                 push_hex(&mut reply, &mut rn, unsafe { TZ_CL } as u64);
-                                // if=st.p0.p1.p2 — IPA fws PAS（链首，ADSP 前）
-                                push_str(&mut reply, &mut rn, " if=");
-                                push_hex(&mut reply, &mut rn, unsafe { IPA_ST } as u64);
-                                push_str(&mut reply, &mut rn, ".");
-                                push_hex(&mut reply, &mut rn, unsafe { IPA_P[0] } as u64);
-                                push_str(&mut reply, &mut rn, ".");
-                                push_hex(&mut reply, &mut rn, unsafe { IPA_P[1] } as u64);
-                                push_str(&mut reply, &mut rn, ".");
-                                push_hex(&mut reply, &mut rn, unsafe { IPA_P[2] } as u64);
                                 // me=pub.vout.inflags — MPSS SMP2P ipa 刀
                                 push_str(&mut reply, &mut rn, " me=");
                                 push_hex(&mut reply, &mut rn, unsafe { MPSS_PUB } as u64);
@@ -11125,32 +10916,6 @@ extern "C" fn rust_main() -> ! {
         " s20 smk=0x",
         unsafe { SMEM_SNAP.k } as u64,
     );
-    // stock 链首：ipa_fws（pas-id 0xf）先于 ADSP。无 AOP / 无 SMP2P 等待。
-    // 失败只落环，ADSP/modem 照旧（与 ADSP 失败策略同类）。
-    match load_ipa_fws(&mut ufs, freq, &mut t) {
-        Err(code) => {
-            unsafe { IPA_ST = code };
-            let txt = hex_text(&mut t, unsafe { RING.seq }, " ipa e=0x", code as u64);
-            ring_put(&mut ufs, freq, logring::LVL_INFO, txt);
-        }
-        Ok(n) => {
-            unsafe { IPA_ST = 0x8000_0000 | n as u32 };
-            let txt = hex_text(&mut t, unsafe { RING.seq }, " ipa n=0x", n as u64);
-            ring_put(&mut ufs, freq, logring::LVL_INFO, txt);
-            let (p0, p1, p2) = pas_go(0xf, 0x8BC0_0000, 0x0001_0000);
-            unsafe {
-                IPA_P[0] = p0 as u32;
-                IPA_P[1] = p1 as u32;
-                IPA_P[2] = p2 as u32;
-            }
-            let txt = hex_text(&mut t, unsafe { RING.seq }, " ipa p0=0x", p0 as u64);
-            ring_put(&mut ufs, freq, logring::LVL_INFO, txt);
-            let txt = hex_text(&mut t, unsafe { RING.seq }, " ipa p1=0x", p1 as u64);
-            ring_put(&mut ufs, freq, logring::LVL_INFO, txt);
-            let txt = hex_text(&mut t, unsafe { RING.seq }, " ipa p2=0x", p2 as u64);
-            ring_put(&mut ufs, freq, logring::LVL_INFO, txt);
-        }
-    }
     // LPASS 出向项 429 要在 PAS 之前写好。ADSP 认的是 slave-kernel 的 bit1，
     // 不是 PAS_AUTH 的返回值。分区是 host 0/2，IPCC 是 client 3 signal 2。
     let (pk, slv0, _part) = lpass_edge(true);

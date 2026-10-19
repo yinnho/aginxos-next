@@ -1986,3 +1986,72 @@ fastboot 空；USB 串口节点无。**硬挂**（比 ARP-incomplete 更重：ga
 Linux 在 `ipa_fws` PIL 前的 SMMU/时钟投票，链首 PAS 仍过早堵死。
 
 未推。
+
+### 离线：`ipa_fws` PAS 前置（slot-b dmesg + kernel-src，2026-10-19 ~11:28 Asia/Shanghai）
+
+**范围**：`ceeb6fd` 硬挂后，**不刷**。对账 Linux 在 `pas_go(ipa_fws)`
+**之前**必须就绪的时钟/互联/SMMU；抽出「不是再冷 PAS」的最小序列。
+源：`.local/device/redfin/slot-b-timeline-20261019-110320/` +
+`kernel-src/redbull`（`lito.dtsi`、`ipa_v3/ipa.c`、`subsys-pil-tz`）。
+
+#### Linux 在 AUTH 前实际做了什么（内核秒 ≈40.85–40.88）
+
+| 序 | 事件 | 证据 |
+|--:|------|------|
+| 1 | `apps_smmu` 已起；IPA 三 CB 挂 consumer | dmesg `soc:ipa_smmu_{ap,wlan,uc}` → `15000000.apps-smmu` |
+| 2 | IPA 驱动 probe：`qcom,bandwidth-vote-for-ipa` → **无 `core_clk`** | `ipa.c` `use_bw_vote`；`ipa3_get_clks` 直接返回 |
+| 3 | `ipa3_enable_clks` = **msm-bus / ad-hoc 投票**（client `ipa`） | dmesg `register_client_adhoc:Client handle 27 ipa` |
+| 4 | IOMMU group：SID **0x520 / 0x521 / 0x522**（ap/wlan/uc）+ fastmap | DTS `iommus = <&apps_smmu 0x052{0,1,2} 0x0>`；dmesg groups 13–15 |
+| 5 | 附加 map：ap→IMEM `0x146a9000/0x2000`；wlan→`0x1ea0000/0x80000`（ipa-uc ram） | `lito.dtsi` `qcom,additional-mapping` |
+| 6 | `IPA_ACTIVE_CLIENTS_INC`（保票）→ `ipa3_attach_to_smmu` → `subsystem_get("ipa_fws")` | `ipa3_load_ipa_fw` 6330–6350 行 |
+| 7 | 其后才 PIL：`0x8bc00000`–`0x8bc06000` / Brought out of reset | dmesg 40.882 / 40.901 |
+
+`qcom,ipa_fws` 节点本身：**无** `clocks`、**无** proxy-reg、**无** `signal-aop`——
+只有 `pas-id=<0xf>`、`memory-region=pil_ipa_fw_mem`、`qcom,msm-bus,name="pil-ipa_fws"`。
+时钟不在 PIL 节点上，而在 **IPA HW 驱动的 bus vote** 里。
+
+GCC：`gcc-lito.c` / `qcom,gcc-lito.h` **无** 可 enable 的 `gcc_ipa_*`；
+`debugcc-lito` 的 `measure_only_ipa_2x_clk` 只是测频 dummy，**不是**上电路径。
+真「开钟」= 互联向量（DTS `MSM_BUS_MASTER_IPA*` / `SLAVE_IPA_CFG` /
+`IPA_CORE→IPA_CORE`）经 RPMH/BCM，至少 SVS2。
+
+#### 前置清单（PAS 前必须，缺一可 NoC 挂死）
+
+1. **互联投票**：client `ipa`（及 PIL 侧 `pil-ipa_fws`），路径含
+   IPA→LLCC、LLCC→EBI、IPA→OCIMEM、AP→IPA_CFG、**IPA_CORE→IPA_CORE**
+2. **apps_smmu** 已初始化；三 CB STE/SID **0x520/0x521/0x522** 已 attach
+3. **additional-mapping**（至少 wlan CB → `0x1ea0000`）
+4. **保留内存** `pil_ipa_fw@8bc00000`（64KiB）+ `pil_ipa_gsi@8bc10000` 已隔离
+5. （驱动内）IPA/GSI MMIO 映射与 active-client 票 — 只读 `0x1e00000` 而无票
+   亦可能堵 NoC（与 `ceeb6fd`「无 ECM」同型）
+
+#### 非「再冷 pas_go」的最小对齐序列（概念）
+
+```
+ad-hoc/BCM: vote client "ipa" ≥ SVS2
+  → apps_smmu: attach SID 0x520/521/522 (+ additional maps)
+  → (optional) sm-probe 只读 GCC/互联状态寄存器，禁止摸 IPA MMIO
+  → 仍禁止 pas_go(0xf) 直到上两项有裸机实证
+```
+
+裸机今日 **没有** 可刷的 BCM/RPMH 投票实现；`ceeb6fd` 证明「只 PAS、
+跳过 1–3」= 无 ECM 硬挂。
+
+#### 下一刀抉择
+
+| 选项 | 内容 | 判定 |
+|------|------|------|
+| (a) sm-only 开钟 | 只打互联/时钟票 + `sm` 探针，**无** PAS / **无** IPA MMIO | **不做** — 无已验证的 BCM 地址/序列；猜写 RPMH 与冷 PAS 同档风险；且 `d1e0197` 已否决「ipa CLK 预置位」 |
+| (b) **park** | tip 回 flash-safe；清单给人/后轮 | **采用** |
+
+后轮解锁条件（任一）：(1) 从 stock 抽出 IPA bus-vote 的具体 RPMH/BCM
+命令字与顺序；(2) 证明裸机已有等价互联票且 sm-probe 只读安全；(3) 改打
+「modem 为何走 elf_loader」的非 PAS 差（env/smem），仍禁早期 PAS。
+
+#### tip flash-safe
+
+- `main.rs` 已从 tip 去掉 `load_ipa_fws` / 链首 PAS（回 **`c38a6cd`** 内容）
+- `.local/device/redfin/boot-out/boot-s20.img` = `boot-s20-c38a6cd.img`
+  （sha256 `64f54992731f20bac64415c0e8d63f58b5bab1391a27b38a9631b15a8cc48ba9`，98304 B）
+- 禁区扩：早期 PAS（CDSP-before、**IPA-before-ADSP `ceeb6fd`**）、TFTP OACK/DATA、TX intent
+- **未刷、未推**
