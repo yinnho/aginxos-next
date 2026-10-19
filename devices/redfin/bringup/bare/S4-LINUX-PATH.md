@@ -1492,3 +1492,36 @@ chunk=48）；REGISTER 因带 state TLV 刚好 chunk=56 才过关。
 （勿盲目抬 total），最好 defer 到 `ik>=4`；本刀保持 RRQ ERROR。
 
 未推。
+
+### 本轮：TFTP 分块真喂（OACK blksize=252，不抬帽，2026-10-19 ~09:58 Asia/Shanghai）
+
+**基线**：`f73c9bb`（`tz=1.eb43c.1a67` 命中、RRQ 仍 ERROR、活）。
+**禁令**：不抬 `glink_tx_payload`（仍 n≤256/total≤512）；不动 TX intent pick；
+保留 PDR ik≥4 + node-0 + UNINIT-no-RESTART。
+
+**对账**：modem RRQ 带 `blksize=7680 wsize=10 tsize`（见 in-repo `tqftpserv`/
+README 样例）。经典 TFTP 512 块 → payload 516 > 256 帽，且短块=EOF，
+故必须 OACK 协商小块。
+
+**刀（`25df6d3`）**：
+1. ik≥4 后对 SO 路径：OACK `blksize=252`（4+252=256）、`wsize=1`、`tsize=文件长`
+2. ACK 步进：一 DATA 未 ACK 不发下一块；读 modem_a 簇缓存 16KiB
+3. ik<4 的 RRQ 仍 ERROR（等重试），避免早期 UFS/DATA
+4. sm：`tz=st.sz.cl` 保留探针；新增 `tb=st.blk.acks`
+5. **不**改 `glink_tx_payload` 上限
+
+**刷验**（GATE `13201FDD4001N8`，2323→fb，`boot-s20.img`/`25df6d3`，
+Asia/Shanghai ~10:00）：flash+set_active a+reboot OK。en10 ECM UP
+（host 得新 link-local），但对 `169.254.1.1` **ARP incomplete** ≥90s，
+无 ping / 无 2323。**硬挂**（与 `365d1f4` 抬帽真喂同形：链路在、IP 不应答）。
+无 sm / 无 `tb` / 无 `45`。
+
+**处置**：停。需硬复位进 fb → 刷
+`.local/device/redfin/boot-out/boot-s20-f73c9bb.img` 或
+`boot-s20-a5137f2.img` 复活。tip `25df6d3` 保留；下一刀应收窄——
+疑点优先：（a）RRQ 热路径 UFS 簇读仍过早；（b）16KiB `TF_CL_BUF`/镜像变大；
+（c）OACK 后立刻 DATA 仍可能在 RFS 刚绿时抢 early path。可试：只发 OACK
+不 DATA、或把真喂推迟到 `HOST_ADV>=4` 且 sm 已采过一拍、或去掉簇缓存改
+单 4K 块。**勿**再抬 glink 帽。
+
+未推。
