@@ -3177,14 +3177,20 @@ const SR_SVC: u32 = 0x42;
 const SR_INST: u32 = 0xb401;
 const SR_QRTR_PORT: u32 = 0x14;
 const SR_NAME: &[u8] = b"msm/modem/wlan_pd";
+/// CAF：UP=0x1FFFFFFF DOWN=0x0FFFFFFF UNINIT=0x7FFFFFFF。
 const SR_STATE_UP: u32 = 0x1fff_ffff;
+const SR_STATE_DOWN: u32 = 0x0fff_ffff;
+const SR_STATE_UNINIT: u32 = 0x7fff_ffff;
 static mut SR_NODE: u32 = 0;
 static mut SR_PORT: u32 = 0;
 static mut SR_HAVE: bool = false;
 /// REGISTER_LISTENER 成功发出次数（sm sr= 左）。
 static mut SR_HIT: u32 = 0;
-/// RESP TLV 0x10 curr_state；无 TLV / 未回 = 0xffffffff。
+/// RESP/IND curr_state；无 TLV / 未回 = 0xffffffff。
+/// 0x7fffffff = UNINIT（真状态，不是哨兵）。
 static mut SR_STATE: u32 = 0xffff_ffff;
+/// REGISTER RESP TLV 0x02 result|error；未回 = ffffffff。
+static mut SR_RES: u32 = 0xffff_ffff;
 static mut SR_TXN: u32 = 1;
 static mut SR_PEND: bool = false;
 static mut SR_NEED_RP: bool = false;
@@ -3192,6 +3198,10 @@ static mut SR_NEED_RP: bool = false;
 static mut SR_RP_N: u32 = 0;
 static mut SR_RP_ERR: u32 = 0xffff_ffff;
 static mut SR_RP_PEND: bool = false;
+/// STATE_UPDATED IND(0x22) → SET_ACK(0x23) 待发。
+static mut SR_ACK_PEND: bool = false;
+static mut SR_ACK_TXN: u16 = 0;
+static mut SR_IND_N: u32 = 0;
 /// LOOKUP 待回 NEW_SERVER：svc|inst<<16；0=无。
 static mut LOOK_PEND: u32 = 0;
 static mut LOOK_N: u32 = 0;
@@ -4668,6 +4678,30 @@ fn qmi_tlv_u32(fifo: u64, off: u64, chunk: u64, want: u8) -> Option<u32> {
     None
 }
 
+fn qmi_tlv_u16(fifo: u64, off: u64, chunk: u64, want: u8) -> Option<u16> {
+    let w1 = rd32((fifo + off + 52) as usize);
+    let msglen = ((w1 >> 8) & 0xffff) as u64;
+    if chunk < 32 || msglen < 3 || 7 + msglen > chunk - 32 || msglen > 256 {
+        return None;
+    }
+    let base = fifo + off + 55;
+    let mut p = 0u64;
+    while p + 3 <= msglen {
+        let t = rd8(base + p);
+        let ln = rd8(base + p + 1) as u64 | ((rd8(base + p + 2) as u64) << 8);
+        p += 3;
+        if p + ln > msglen {
+            return None;
+        }
+        if t == want && ln == 2 {
+            let v = rd8(base + p) as u16 | ((rd8(base + p + 1) as u16) << 8);
+            return Some(v);
+        }
+        p += ln;
+    }
+    None
+}
+
 fn rfs_caller(name: &[u8]) -> Option<u32> {
     let mut i = 0usize;
     while i < RFS_PATHS.len() {
@@ -4940,10 +4974,11 @@ fn pm_reply(at478: u64, at479: u64, sz479: u64) {
     let _ = glink_tx_payload(at478, at479, tx_head, sz479, PM_QRTR_PORT, node, port, &ind[..in_]);
 }
 
-/// SERVREG_NOTIF PDR：REGISTER_LISTENER(0x20) → 可选一笔 RESTART_PD(0x24)。
+/// SERVREG_NOTIF PDR：REGISTER_LISTENER(0x20) → IND ACK → 仅 DOWN 时 RESTART_PD。
 /// 对齐 Linux service-notifier；不改 TX intent pick/parse/BUSY/RR。
 /// 门控：HOST_ADV>=4 且 RFS IOVEC 已绿（RF_IOK>=4 ≡ sm ik=4.x），避免
 /// node-0 放行后过早 REGISTER/RESTART 堵 early path（206821a 硬挂）。
+/// UNINIT(0x7fffffff) 是真状态：只听 IND，不对 UNINIT 发 RESTART。
 fn sr_tick(at478: u64, at479: u64, sz479: u64) {
     if at478 == 0 || at479 == 0 || unsafe { HOST_ADV } < 4 || !unsafe { HAVE_IID } {
         return;
@@ -4993,7 +5028,39 @@ fn sr_tick(at478: u64, at479: u64, sz479: u64) {
         }
         return;
     }
-    // RESP 已回且需重启：一笔 RESTART_PD。
+    // STATE_UPDATED IND → SET_ACK（msgid 0x23），对齐 Linux。
+    if unsafe { SR_ACK_PEND } && !unsafe { SR_PEND } && !unsafe { SR_RP_PEND } {
+        let txn = unsafe { SR_TXN };
+        let ack_tid = unsafe { SR_ACK_TXN };
+        let mut q = [0u8; 80];
+        let mut n = 7usize;
+        put_u8(&mut q, &mut n, 1);
+        put_u16(&mut q, &mut n, SR_NAME.len() as u16);
+        for &b in SR_NAME {
+            put_u8(&mut q, &mut n, b);
+        }
+        put_u8(&mut q, &mut n, 2);
+        put_u16(&mut q, &mut n, 2);
+        put_u16(&mut q, &mut n, ack_tid);
+        qmi_finish_typed(&mut q, n, 0, txn, 0x23);
+        if glink_tx_payload(
+            at478,
+            at479,
+            tx_head,
+            sz479,
+            SR_QRTR_PORT,
+            unsafe { SR_NODE },
+            unsafe { SR_PORT },
+            &q[..n],
+        ) {
+            unsafe {
+                SR_ACK_PEND = false;
+                SR_TXN = SR_TXN.wrapping_add(1);
+            }
+        }
+        return;
+    }
+    // 仅 DOWN 才 RESTART_PD（Linux pd_restart 路径）；不对 UNINIT。
     if unsafe { SR_NEED_RP } && unsafe { SR_RP_N } == 0 && !unsafe { SR_RP_PEND } && !unsafe { SR_PEND }
     {
         let txn = unsafe { SR_TXN };
@@ -8316,7 +8383,8 @@ fn scan_new_servers(fifo: u64, rh: u64) {
                         }
                     }
                 }
-                if typ == 1 && dst_node == 1 && dst_port == SR_QRTR_PORT && chunk >= 56 {
+                // chunk：QRTR32+QMI；RESTART RESP 仅 result → chunk=48，旧门槛 56 会丢。
+                if typ == 1 && dst_node == 1 && dst_port == SR_QRTR_PORT && chunk >= 48 {
                     let w = rd32((fifo + off + 48) as usize);
                     let w1 = rd32((fifo + off + 52) as usize);
                     let qtype = w & 0xff;
@@ -8326,12 +8394,11 @@ fn scan_new_servers(fifo: u64, rh: u64) {
                         let res = qmi_tlv_u32(fifo, off, chunk, 0x02).unwrap_or(0xffff_ffff);
                         unsafe {
                             SR_STATE = st;
+                            SR_RES = res;
                             SR_PEND = false;
-                            // state≠UP / 无 state / result 失败 → 一刀 RESTART_PD。
-                            if st != SR_STATE_UP || (res & 0xffff) != 0 {
-                                if SR_RP_N == 0 {
-                                    SR_NEED_RP = true;
-                                }
+                            // 仅 DOWN 才 RESTART；UNINIT(0x7fffffff) 听 IND（对齐 Linux）。
+                            if st == SR_STATE_DOWN && st != SR_STATE_UNINIT && SR_RP_N == 0 {
+                                SR_NEED_RP = true;
                             }
                         }
                     }
@@ -8340,6 +8407,20 @@ fn scan_new_servers(fifo: u64, rh: u64) {
                         unsafe {
                             SR_RP_ERR = res;
                             SR_RP_PEND = false;
+                        }
+                    }
+                    // STATE_UPDATED IND：TLV01=state TLV03=txn → SET_ACK。
+                    if qtype == 4 && msgid == 0x22 {
+                        let st = qmi_tlv_u32(fifo, off, chunk, 0x01).unwrap_or(0xffff_ffff);
+                        let tid = qmi_tlv_u16(fifo, off, chunk, 0x03).unwrap_or(0);
+                        unsafe {
+                            SR_STATE = st;
+                            SR_IND_N = SR_IND_N.wrapping_add(1);
+                            SR_ACK_TXN = tid;
+                            SR_ACK_PEND = true;
+                            if st == SR_STATE_DOWN && SR_RP_N == 0 {
+                                SR_NEED_RP = true;
+                            }
                         }
                     }
                 }
@@ -8899,6 +8980,10 @@ fn ctrl_service(
                                 push_hex(&mut reply, &mut rn, unsafe { SR_HIT } as u64);
                                 push_str(&mut reply, &mut rn, ".");
                                 push_hex(&mut reply, &mut rn, unsafe { SR_STATE } as u64);
+                                push_str(&mut reply, &mut rn, ".");
+                                push_hex(&mut reply, &mut rn, unsafe { SR_RES } as u64);
+                                push_str(&mut reply, &mut rn, " si=");
+                                push_hex(&mut reply, &mut rn, unsafe { SR_IND_N } as u64);
                                 push_str(&mut reply, &mut rn, " sp=");
                                 if unsafe { SR_HAVE } {
                                     push_hex(&mut reply, &mut rn, unsafe { SR_NODE } as u64);
