@@ -2233,7 +2233,7 @@ AOP/CDSP/TFTP 成功路径。
 | I4 | 现场 `(name,addr,unit,width,vote_x,vote_y,data)` 表 | **OFFLINE-COMPLETE** 2026-10-19：cmd-db `e4d9591` 填 addr/unit/width；vote/TCS 用 DTS SVS2+`KBTOB` 离线聚合（slot-b Act=0）。见 `.local/device/redfin/cmd-db-bcm-20261019-120213/I4-VOTE-AGGREGATE.md`。**未刷** |
 | I5 | 裸机 `rpmh_cmd` 可复用发 BCM | **DONE**（通路） |
 | I6 | 裸机 msm-bus 图 / 自动聚合 | **缺**（不需要若 I4 齐） |
-| I7 | SMMU SID 0x520/521/522 裸机写法 | **未做**（PAS 前第二前置；SID 已钉） |
+| I7 | SMMU SID 0x520/521/522 裸机写法 | **刀码**（复用 USB CB + SMR/S2CR；`ste=`；未刷） |
 | I8 | 早期 `pas_go(0xf)` | **BAN** 至 I4 活体核对 + I7 实证 |
 
 ##### I4 离线表摘要（SVS2 ACTIVE；勿当已刷）
@@ -2248,7 +2248,9 @@ AOP/CDSP/TFTP 成功路径。
 | CN0 | `0x50074` | 0 | 2560 | `0x60000a00` |
 | SH4 | `0x50014` | 0 | 18 | `0x60000012` |
 
-窄刀下一步（仍禁 PAS）：SMMU STE + 上表 ACTIVE `rpmh_cmd`；人审 G2/G3（中间 NOC、ACV width=0）后再议刷。
+### I4 窄刀（review-scoped，2026-10-19）：STE + ACTIVE vote
 
-flash-safe 仍 **`c38a6cd`**。禁区不变（TFTP OACK/DATA、TX intent、冷 CDSP、
-**冷 IPA PAS `ceeb6fd`**、未经审的 RPMH/BCM 刷写）。未推。未刷。
+首次 `sm`：`ipa_smmu_ste`（SID `0x520/521/522` → USB CB，写法同 `fastrpc_smmu`）
+→ 七笔 ACTIVE `rpmh_cmd`（上表 TCS）。sm：`ste=mask.s0.s1.s2`、`bv=` 七位成功位图。
+**无** `pas_go` / 无 TFTP 成功服 / 无 TX intent / 无 glink cap / 无 CDSP-before。
+人审 G2/G3 后再议刷。禁区不变。未推。

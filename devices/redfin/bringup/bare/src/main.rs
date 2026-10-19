@@ -1544,7 +1544,7 @@ fn proxy_xo() {
 /// 只解析档位，不写 RPMh，也不落环。魔数已在缓存里就不再 ivac 整段。
 
 /// IPA SVS2 路径终点 BCM 名（固定序，sm bc= 同序）。
-/// 只 cmd_db_hit + 读 aux：不 rpmh_cmd、不 pas_go、不 SMMU、不 TFTP。
+/// bcm_probe 只读 cmd-db；ACTIVE vote / SMMU STE 在 ipa_i4_once（仍禁 pas_go）。
 const BCM_NAMES: [&[u8; 8]; 7] = [
     b"IP0\0\0\0\0\0",
     b"SH0\0\0\0\0\0",
@@ -1607,6 +1607,150 @@ fn bcm_probe() {
         }
         i += 1;
     }
+}
+
+/// IPA SMMU SIDs（slot-b groups 13/14/15）。SMR+S2CR 写法同 `fastrpc_smmu`：
+/// 复用 USB 已装好的 CB 恒等映射；不新开 CB、不写 PAS。
+const IPA_SIDS: [u32; 3] = [0x520, 0x521, 0x522];
+/// ste 每 SID：<128 = SMR 槽；fb=USB_CB 未装；fe=无空槽；fc=SID 被他槽盖住；fd=写回失败；ffffffff=未跑
+static mut IPA_STE: [u32; 3] = [0xffff_ffff; 3];
+/// bits 0..2：SID 0x520/521/522 绑定成功。
+static mut IPA_STE_MASK: u32 = 0;
+/// I4 SVS2 ACTIVE TCS（commit|valid|vote_x|vote_y）— 见 I4-VOTE-AGGREGATE.md。
+const BCM_TCS: [u32; 7] = [
+    0x6000_09c4, // IP0
+    0x6008_c0ef, // SH0
+    0x6024_8555, // MC0
+    0x6000_0008, // ACV（enable bit；与 MC0 同批）
+    0x6023_4528, // SN1
+    0x6000_0a00, // CN0
+    0x6000_0012, // SH4
+];
+/// cmd-db 未命中时用的地址（与 e4d9591 bc= 一致；高半字低 3 位=HW_BCM=5）。
+const BCM_FALLBACK_ADDR: [u32; 7] = [
+    0x0005_0070, 0x0005_0004, 0x0005_0000, 0x0005_007c, 0x0005_002c, 0x0005_0074,
+    0x0005_0014,
+];
+/// rpmh_cmd 原始返回（bit31=失败）。
+static mut BCM_VOTE_ST: [u32; 7] = [0; 7];
+/// bits 0..6：七笔 ACTIVE vote 完成且无超时。
+static mut BCM_BV: u32 = 0;
+/// 1 = 本开机已跑过 STE+vote（只发一次）。
+static mut IPA_I4_DONE: u32 = 0;
+
+fn smmu_slot_taken(slot: usize) -> bool {
+    if slot == 4 {
+        return true;
+    }
+    let fp = unsafe { FP_SMR };
+    if fp < 128 && slot == fp as usize {
+        return true;
+    }
+    let mut i = 0usize;
+    while i < 3 {
+        let s = unsafe { IPA_STE[i] };
+        if s < 128 && slot == s as usize {
+            return true;
+        }
+        i += 1;
+    }
+    false
+}
+
+/// 单 SID：先 S2CR 再 SMR（arm_smmu_write_sme）。TYPE=translation → USB_CB。
+fn ipa_smmu_bind_one(sid: u32) -> u32 {
+    let cb = unsafe { USB_CB };
+    if cb == 0xffff_ffff || cb > 0xff {
+        return 0xffff_fffb;
+    }
+    let base = SMMU_BASE;
+    let nsmr = (rd32(base + 0x20) & 0xff) as usize;
+    if nsmr == 0 || nsmr > 128 {
+        return 0xffff_fffe;
+    }
+    let mut free: Option<usize> = None;
+    let mut i = 0usize;
+    while i < nsmr {
+        let smr = rd32(base + 0x800 + i * 4);
+        if smr & (1 << 31) == 0 {
+            if free.is_none() && !smmu_slot_taken(i) {
+                free = Some(i);
+            }
+            i += 1;
+            continue;
+        }
+        let id = smr & 0x7fff;
+        let mask = (smr >> 16) & 0x7fff;
+        if ((sid ^ id) & !mask) == 0 {
+            let s2 = rd32(base + 0xc00 + i * 4);
+            if mask == 0 && id == sid && (s2 >> 16) & 3 == 0 && (s2 & 0xff) == cb {
+                return i as u32;
+            }
+            return 0xffff_fffc;
+        }
+        i += 1;
+    }
+    let Some(slot) = free else {
+        return 0xffff_fffe;
+    };
+    // SHCFG=NSH（bit9:8=3），同 fastrpc_smmu。
+    let s2_val = cb | (3 << 8);
+    wr32(base + 0xc00 + slot * 4, s2_val);
+    wr32(base + 0x800 + slot * 4, (1 << 31) | sid);
+    let sb = rd32(base + 0xc00 + slot * 4);
+    let sm = rd32(base + 0x800 + slot * 4);
+    if (sb >> 16) & 3 == 0
+        && (sb & 0xff) == cb
+        && sm & (1 << 31) != 0
+        && (sm & 0x7fff) == sid
+    {
+        return slot as u32;
+    }
+    0xffff_fffd
+}
+
+fn ipa_smmu_ste() {
+    let mut i = 0usize;
+    while i < 3 {
+        if unsafe { IPA_STE[i] } != 0xffff_ffff {
+            i += 1;
+            continue;
+        }
+        let r = ipa_smmu_bind_one(IPA_SIDS[i]);
+        unsafe { IPA_STE[i] = r };
+        if r < 128 {
+            unsafe { IPA_STE_MASK |= 1 << i };
+        }
+        i += 1;
+    }
+}
+
+/// 七笔 ACTIVE BCM vote。无 pas_go。addr 优先 cmd-db，否则 fallback。
+fn ipa_bcm_vote(freq: u32) {
+    let mut i = 0usize;
+    while i < 7 {
+        let addr = if unsafe { BCM_ST[i] } == 1 {
+            unsafe { BCM_ADDR[i] }
+        } else {
+            BCM_FALLBACK_ADDR[i]
+        };
+        let sts = rpmh_cmd(addr, BCM_TCS[i], freq);
+        unsafe { BCM_VOTE_ST[i] = sts };
+        if sts & 0x8000_0000 == 0 {
+            unsafe { BCM_BV |= 1 << i };
+        }
+        i += 1;
+    }
+}
+
+/// 首次 sm：STE（0x520/521/522）→ 七笔 ACTIVE rpmh_cmd。禁 PAS。
+fn ipa_i4_once(freq: u32) {
+    if unsafe { IPA_I4_DONE } != 0 {
+        return;
+    }
+    unsafe { IPA_I4_DONE = 1 };
+    ipa_smmu_ste();
+    ipa_bcm_vote(freq);
 }
 
 fn proxy_vote(_ufs: &mut Ufs, _freq: u32, _t: &mut [u8; 96]) {
@@ -9601,6 +9745,18 @@ fn ctrl_service(
                                         bi += 1;
                                     }
                                 }
+                                // I4 窄刀：STE + ACTIVE votes（一次）；sm ste=/bv=；无 pas_go
+                                ipa_i4_once(freq);
+                                push_str(&mut reply, &mut rn, " ste=");
+                                push_hex(&mut reply, &mut rn, unsafe { IPA_STE_MASK } as u64);
+                                push_str(&mut reply, &mut rn, ".");
+                                push_hex(&mut reply, &mut rn, unsafe { IPA_STE[0] } as u64);
+                                push_str(&mut reply, &mut rn, ".");
+                                push_hex(&mut reply, &mut rn, unsafe { IPA_STE[1] } as u64);
+                                push_str(&mut reply, &mut rn, ".");
+                                push_hex(&mut reply, &mut rn, unsafe { IPA_STE[2] } as u64);
+                                push_str(&mut reply, &mut rn, " bv=");
+                                push_hex(&mut reply, &mut rn, unsafe { BCM_BV } as u64);
                                 push_str(&mut reply, &mut rn, " ad=");
                                 push_hex(&mut reply, &mut rn, unsafe { ADSP_ST } as u64);
                                 push_str(&mut reply, &mut rn, ".");
