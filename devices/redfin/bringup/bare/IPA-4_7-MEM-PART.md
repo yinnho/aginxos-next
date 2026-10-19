@@ -98,8 +98,22 @@ PAS 后、GSI 驱动前：通常 **不是** `deadbeef`（证未铺布局）。
 
 INIT 绝对地址 = 上表 ofst + `r`。`0433396` 已读未导出；tip 起 `ig=` 尾带 `.sm.r`。
 
-## GSI CH7（APPS_WAN_CONS）— park 写 / RO `gc=`
+## GSI CH7（APPS_WAN_CONS）— 划区 `gr=` / 写仍 park
 
-已知：ee=0、ch=7、GPI FROM_GSI、re=16B、ring_len=2×(256×8)=0x1000（lito 默认 wan-rx-desc）。
-**未知 / 禁 invent**：ring+evt DRAM PA、CH_CMD IRQ 完成、EP16 cfg、RX TRE。
-裸机只读：`gc=st.c0.c1.c2.c3.irq.err`（与 `ig=` 同次）。详见 `S4-LINUX-PATH.md` park。
+已知：ee=0、ch=7、GPI FROM_GSI、re=16B、ring_len=2×(256×8)=**0x1000**（lito 默认 wan-rx-desc=256）。
+EVT：WAN_CONS 专用 dedicated EVT = **同 0x1000**（非 `IPA_COMMON_EVENT_RING_SIZE=0x7C00`；common 仅 `use_comm_evt_ring`）。
+
+### 裸机 DRAM 划区（allocate-only，已钉）
+
+| 区 | PA | size | 来源 |
+|---|---:|---:|---|
+| **基址** | **`0x9D800000`** | **`0x200000`** | modem_wlan PAS 尾（DTS `0x8c000000+0x11800000`）→ RFS `0x9E000000` 前 **8MiB 空洞**；DTS 无 no-map；不碰 RFS/SH0..3（止于 `0x9EC80000`） |
+| CH ring | `0x9D800000` | `0x1000` | `ring_size = 2 * desc_fifo_sz` |
+| EVT ring | `0x9D801000` | `0x1000` | dedicated EVT |
+| RX pool | `0x9D802000` | `0x1FE000` | 预留 ≈ `IPA_GENERIC_RX_POOL_SZ(192)×8KiB` + slack；**未**铺 TRE |
+
+**SMMU**：I4 STE SID `0x520/521/522` → USB_CB，L1 已恒等 `0x80000000–0xBFFFFFFF`。本划区落在窗内 → **无需新 STE/CD**。
+
+sm：`gr=st.ch.evt.rx.sz`（PAS 绿后清零+civac 一次）。`gc=` 仍只读 CNTXT。
+
+**仍禁 / 写刀前提**：CH_CMD ALLOC/START + IRQ 完成、EP16 `ipa3_cfg_ep`、RX TRE 填充、doorbell。详见 `S4-LINUX-PATH.md`。

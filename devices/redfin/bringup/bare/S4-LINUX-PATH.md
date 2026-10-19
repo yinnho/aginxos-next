@@ -2785,3 +2785,24 @@ slot-b：EP=16 / `gsi_ch=7` / `platform=3`（`INIT-TLV-COMPUTED.md`）。
 
 Flash-safe restore：`boot-s20-9830750.img` / `0433396` / `c38a6cd`。
 **未 flash、未 push**（本轮 build+commit only）。
+
+### GSI CH7 DRAM 划区 `gr=`（allocate-only，2026-10-19 ~16:25 Asia/Shanghai）
+
+离线对账（本 tip；**未 flash**）：
+
+| 项 | 值 |
+|---|---|
+| CH ring | **0x1000** = `2 * (256 * IPA_FIFO_ELEMENT_SIZE)`；`IPA_WWAN_CONS_DESC_FIFO_SZ=256`（lito 无 `wan-rx-desc-size`） |
+| EVT ring | **0x1000** dedicated（WAN_CONS：`use_comm_evt_ring` 默认 false → `ipa_gsi_setup_event_ring(ring_size)`；非 common `0x7C00`） |
+| RX pool 预留 | **0x1FE000** @ `+0x2000`（≈192×8KiB；`IPA_GENERIC_RX_POOL_SZ` / `IPA_GENERIC_RX_BUFF_BASE_SZ`）— **未**写 TRE |
+| **carveout** | **`0x9D800000` + `0x200000`** |
+| 空洞收据 | DTS `modem_wlan_mem` 止于 `0x9D800000`；裸机 RFS=`0x9E000000`/`0x280000` + SH0..3 → `0x9EC80000`；`cdsp_sec@0x9F400000`。中间 `0x9D80…–0x9E00…` **无** reserved no-map |
+| SMMU | I4 STE→USB_CB 恒等 `0x80000000–0xBFFFFFFF` 已覆盖；**不**新开 CB / **不** invent IOVA |
+| sm | **`gr=st.ch.evt.rx.sz`**（与 `ig=`/`gc=` 同门：IPA PAS 绿后一次清零+`dcache_civac`） |
+| 做 | 只 `write_bytes(0)` + civac + 闩 PA |
+| **不做** | 无 CH_CMD / doorbell / CNTXT 写 / EP16 cfg / QMI INIT / CDSP·TFTP·TX 改 |
+
+判读：`gr=1.9d800000.9d801000.9d802000.200000` → 划区就绪；`gc=` CHSTATE 仍应 0（未 ALLOC）。下一写刀仍须 IRQ 完成路径 + EP cfg + TRE，**勿**与本刀叠 doorbell。
+
+Flash-safe restore：`boot-s20-9830750.img` / `2419bdf` / `0433396`。
+**本 tip build+commit；未 flash、未 push。**
