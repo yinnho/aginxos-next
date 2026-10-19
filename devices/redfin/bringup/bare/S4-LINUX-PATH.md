@@ -1421,3 +1421,25 @@ chunk=48）；REGISTER 因带 state TLV 刚好 chunk=56 才过关。
 （为何 modem 不自拉 wlan_pd、无 STATE_UPDATED），非再砍 QMI 帧。
 
 未推。
+
+### 本轮：TFTP 真喂 modem_pr SO（冲 UNINIT，2026-10-19 ~09:32 Asia/Shanghai）
+
+**活体证据（a5137f2 / tip e310cd1）**：`ik=4.0 sr=1.7fffffff.0 si=0`
+`pn=kernel/elf_loader.1.30` — modem 已向 pd-mapper 要 elf_loader→wlan_pd；
+`tf=/readonly/firmware/image/modem_pr/so/549_38_0.mbn.1.32` — **RRQ 在飞**，旧逻辑一律
+`ERROR file not found`（TF_N=0x32 次级重试）。PDR REGISTER 成功但 state=UNINIT、
+无 IND、**无 0x45**。
+
+**对账 Linux**：`tftp_server` 从 `/vendor/firmware_mnt`（=modem_a vfat）喂
+`/readonly/firmware/...`；wlan_pd 自拉依赖 elf_loader + 该 SO。ADSP 本轮
+`ad=80000020 ae=1.7.32`（PAS 过、ready 过；后有 sensor EF，非「ADSP 从未 ONLINE」）。
+`q=` 相对槽 b 缺的仍是 **`45.*`**（其余 root-PD 服务已见）。
+
+**刀（单变量，不动 TX intent / 不提前 PDR）**：
+1. RRQ 路径若前缀 `/readonly/firmware/` → modem_a FAT16 8.3 查找
+2. 命中则 512B TFTP DATA + ACK 推进；`glink_tx_payload` 放宽到 n≤520/total≤640
+3. sm 增 `tz=st.sz.cl.blk.soff`（st: 1待发 2等ACK 3完成 4未找到 5几何 6UFS 7无CTX）
+
+**成功判据**：`tz` 见 sz/cl 且 st→3；硬成功 `q=` 含 `45.`；软成功文件喂通仍 UNINIT。
+
+未推。待 GATE 刷验。
