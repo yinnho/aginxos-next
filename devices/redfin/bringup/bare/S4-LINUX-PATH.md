@@ -1964,3 +1964,25 @@ PIL 顺序（内核秒）：
 - tip / 待刷：`.local/device/redfin/boot-out/boot-s20.img`（102400 B）
 - stamp：`.local/device/redfin/boot-out/boot-s20-ceeb6fd.img`
 - restore 仍：`.local/device/redfin/boot-out/boot-s20-c38a6cd.img`
+
+### 本轮：IPA-before-ADSP PAS 硬挂（`ceeb6fd`，2026-10-19 ~11:24 Asia/Shanghai）
+
+**基线 restore**：`c38a6cd` 刷验 OK（GATE `13201FDD4001N8`，~11:21 flash →
+ping ~11:23）。`sm`：`ik=4.0` `sr=1.7fffffff.0` `sp=0.2` `me=1.2.0`
+`pn=kernel/elf_loader.1.30` `tf=.../549_38_0.mbn` `tz=1.eb43c.1a67`
+`q=42.b401,2b.1202,...`（**无 `0x45`**）。
+
+**刀刷**：2323 `fb` → `boot-s20-ceeb6fd.img`（= tip `boot-s20.img`，102400 B）
+→ `boot_a` + `set_active a` + reboot OK（~11:24:47）。
+
+**刷验**：≥90s **无 ping**；host **无 ECM/RNDIS 网卡**（en7–en10 皆无，
+无 `169.254` 址）；`arp 169.254.1.1` incomplete（落在 en0）；无 2323；
+fastboot 空；USB 串口节点无。**硬挂**（比 ARP-incomplete 更重：gadget
+未起来）。无 `sm` / 无 `if=` / 无 `0x45`。
+
+**处置**：停。勿再冷刷 IPA PAS。需硬复位进 fb → 刷
+`.local/device/redfin/boot-out/boot-s20-c38a6cd.img` 复活。
+`ceeb6fd` 入禁区（与 CDSP-before / TFTP 回包同档）。假说：裸机缺
+Linux 在 `ipa_fws` PIL 前的 SMMU/时钟投票，链首 PAS 仍过早堵死。
+
+未推。
