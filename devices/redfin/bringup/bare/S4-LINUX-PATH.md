@@ -2268,7 +2268,8 @@ AOP/CDSP/TFTP 成功路径。
 
 **sm**：保留 `ste=` / `bv=` / `bc=`；新增 `ip=st.p0.p1.p2`。
 
-**禁区不变**：IPA-before-ADSP（`ceeb6fd`）、CDSP-before-modem（`8d88cd5`）、TX intent、TFTP OACK/DATA 成功路径、glink cap bump。Flash-safe restore：`boot-s20-c38a6cd.img`。
+**禁区不变**：IPA-before-ADSP（`ceeb6fd`）、TX intent、TFTP OACK/DATA 成功路径、glink cap bump。
+**CDSP-before-modem**：**条件解禁**——仅当 ADSP+IPA 绿之后（见下刀）；冷启无 IPA 前缀仍禁（`8d88cd5` 重放）。Flash-safe restore：`boot-s20-c38a6cd.img`。
 
 ### b99c785 刷验（2026-10-19 ~12:37 Asia/Shanghai）— IPA PAS 绿，无 0x45
 
@@ -2301,23 +2302,22 @@ capture：`.local/device/redfin/ipa-after-adsp-b99c785-20261019-123709/`。
 
 Linux 同次启动 **0 命中** tftp/elf_loader/`549_38`。裸机停在回退链，说明环境仍不像 stock 前缀。
 
-#### 下一刀抉择（2026-10-19，**文档 only / 不编 / 不刷**）
+#### 下一刀：CDSP-before-modem（**条件解禁**，未刷）
 
-禁区：`IPA-before-ADSP`、`CDSP-before-modem`、TX intent、TFTP OACK/DATA、glink cap bump。
-候选审查：
+**为何解禁**：`8d88cd5` 冷挂时 IPA 环境缺失。现活体 `b99c785`：`ste=7 bv=7f ip=80000003.0.0.0` ADSP OK。
+slot-b 序 `ipa→adsp→cdsp→modem→wlan`；目标自拉 `wlan_pd` / `0x45`，不靠 elf_loader。
 
-| 候选 | 为何本轮不做 |
-|---|---|
-| **CDSP-before-modem**（stock 序，IPA+ADSP 已绿） | **仍在禁区**（`8d88cd5` 冷挂同名）。即便现有 IPA 前缀「更像 slot-b」，未获解禁不得写 PAS/AOP。 |
-| **CDSP-after-modem**（禁令字面允许） | 对自拉：radio-bringup「modem 先起则事后永不 spawn」已钉（ADSP 同类）；且仍是 PAS 写路径，`8d88cd5` 同形硬挂风险 → **非低危**。 |
-| **IPA client/QMI/GSI after PAS** | 大刀（MMIO/GSI/0x31）；IPA PAS 刚证伪为自拉充分条件 → 期望值低、挂风险高。 |
-| **跳过 elf_loader Dom**（IPA 绿则不公告） | 发明顺序；Linux Dom 表含 elf_loader∈wlan_pd；易把 PDR/回退弄乱。 |
+**门**：仅当 `IPA_ST` 高位且 `IPA_P[0..2]==0`（ADSP 绿是 IPA 门前提）。
+IPA skip/fail → **不**跑 CDSP-before-modem，fall through 旧 modem-only，防 `8d88cd5` 重放。
 
-**本轮交付**：解析收据 + 上表缺口 + park。**不实现刀、不 build、不 flash、不硬复位。**
-活体保持 **`b99c785`**（健康）。flash-safe restore 仍 `boot-s20-c38a6cd.img`。
+**调用序**：
+1. 既有：ADSP PAS → ONLINE/settle → I4 STE+七票 → IPA `pas_go(0xf)`
+2. **新（门内）**：CDSP smp2p（smem 432/94，remote-pid 5）→ AOP `cdsp on` → `load_cdsp` → `pas_go(18 @ 0x87400000/0x1E00000)` → 等 err-ready
+3. 既有：EFS seed → modem AOP → `pas_init_image`
 
-**若日后解禁「CDSP-before-modem」且限定为 IPA+ADSP 绿之后**：唯一对齐 slot-b 的窄写是
-`CDSP smp2p → AOP cdsp on → load_cdsp → pas_go(18 @ 0x87400000/0x1E00000) → err-ready`，
-插在现有 IPA PAS 成功之后、modem AOP/PAS **之前**；超时失败只打环仍续 modem（与 ADSP 失败策略同类）。解禁前禁止编码。
+**sm**：保留 `ste=` / `bv=` / `bc=` / `ip=`；新增 `cd=st.p0.p1.p2`（同 `ip=` 形）。
 
-未推。
+**仍禁**：IPA-before-ADSP（`ceeb6fd`）、TX intent、TFTP OACK/DATA 成功路径、glink cap bump。
+**冷启无 IPA 前缀的 CDSP-before-modem** 仍禁。Flash-safe restore：`boot-s20-c38a6cd.img`。
+
+未推。未刷（等硬复位进 fastboot 再刷）。
