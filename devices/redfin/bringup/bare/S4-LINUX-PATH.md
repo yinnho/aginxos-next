@@ -1775,3 +1775,17 @@ tip 上 OACK（`8a761ad`）TFTP 已回退，main 与 f73c9bb TFTP 一致后再�
 | tip `boot-s20.img` | 须 = `f73c9bb` 产物，勿留 CDSP/OACK 体积 |
 
 未推。本段只文档 + tip 护栏；**不实现下一刀；不 flash。**
+
+### 复活确认 + park（2026-10-19 ~10:42 Asia/Shanghai）
+
+`boot-s20-f73c9bb.img` 已刷并起来（ping ~10:41:35）。`sm`：
+
+| 字段 | 值 |
+|---|---|
+| `ik` | `4.0` |
+| `tz` | `1.eb43c.1a67` |
+| `sr` | `1.7fffffff.0`（REGISTER 成功，state=**UNINIT**） |
+| `q` | `42.b401,2b.1202,f.1,33.201,15.1,33.b01,18.1,16.1001` — **无 `45.`** |
+| `tf` | SO 路径仍在；RRQ→ERROR |
+
+**未实现 / 未刷** sm-only（host **0/5** 项 **94/432**）：活体 tip 从未走过该分区；TOC/新分区误读有冻核史；本轮按「宁可 park 也不再挂」跳过。开放假说 A–F 仍成立；下一刀仍是零写 sm-only 或离线证 B/C/F。flash-safe 仍只有 **`f73c9bb`**。未推。
