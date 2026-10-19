@@ -1959,3 +1959,8 @@ PIL 顺序（内核秒）：
 3. 采 `if=` / `ik=` / `q=` / 有无 `0x45`；硬挂则立刻回 `c38a6cd`
 
 **本轮未刷**（设备仍在 Linux slot b）。未推。
+
+**提交 / 镜像（未刷未推）**：`ceeb6fd`
+- tip / 待刷：`.local/device/redfin/boot-out/boot-s20.img`（102400 B）
+- stamp：`.local/device/redfin/boot-out/boot-s20-ceeb6fd.img`
+- restore 仍：`.local/device/redfin/boot-out/boot-s20-c38a6cd.img`
