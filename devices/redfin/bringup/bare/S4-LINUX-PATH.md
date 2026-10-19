@@ -1874,6 +1874,20 @@ flash-safe 现可含 **`c38a6cd`**（行为 ⊇ `f73c9bb` + `me`）；复活仍�
 
 有收据后再开 **单一** 刀：优先「有 before-modem 实证的最窄写」（例如仅 IPA fws PAS，或仅 CDSP 且有 stock 时序），仍禁 TFTP 成功与 TX intent。
 
+
+### 只读刀：cmd-db BCM dump（sm `bc=`，未刷）
+
+在 flash-safe `c38a6cd` / tip `11cfc4c` 基线上加 `bcm_probe()`：对
+IP0/SH0/MC0/ACV/SN1/CN0/SH4 只做 `cmd_db_hit` + 读 `struct bcm_db`
+（unit_size/width）。**无** `rpmh_cmd` / **无** `pas_go` / **无** SMMU STE /
+**无** TFTP 回包。
+
+`sm` 字段：`bc=NAME.st.addr.unit.width,...`（逗号分隔，序同上）。
+`st`：0 miss / 1 ok(HW=BCM,aux≥8) / 2 hit但HW≠5 / 3 aux短 / 4 magic坏。
+
+用途：刷后一眼对上 I4 缺的 addr/unit/width；**不**代替 slot-b 抓 vote 向量。
+恢复镜像仍 `boot-s20-c38a6cd.img`。未推。未刷。
+
 flash-safe 仍 **`c38a6cd`**（⊇ `f73c9bb`）；复活 `boot-s20-f73c9bb.img` / `boot-s20-c38a6cd.img`。未推。
 
 ### 槽 b 时序抓取 — ABORT（2026-10-19 ~11:00 Asia/Shanghai）

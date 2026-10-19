@@ -1421,6 +1421,8 @@ fn rpmh_vrm(addr: u32, mv: u32, mode: u32, freq: u32) -> u64 {
 
 /// cmd-db.h：ARC 加速器是 3。地址高半字的低 3 位是这个类型。
 const CMD_DB_HW_ARC: u32 = 3;
+/// cmd-db.h：BCM 是 5（IPA bus vote 终点）。
+const CMD_DB_HW_BCM: u32 = 5;
 /// rpmh-regulator-levels.h。ARC 写进 RPMh 的是 aux 表里的下标，不是 384。
 const ARC_TURBO: u16 = 384;
 /// clk-rpmh.c lito：`xo.lvl` 打开时数据就是 0x3，不走电压档映射。
@@ -1540,6 +1542,73 @@ fn proxy_xo() {
 }
 
 /// 只解析档位，不写 RPMh，也不落环。魔数已在缓存里就不再 ivac 整段。
+
+/// IPA SVS2 路径终点 BCM 名（固定序，sm bc= 同序）。
+/// 只 cmd_db_hit + 读 aux：不 rpmh_cmd、不 pas_go、不 SMMU、不 TFTP。
+const BCM_NAMES: [&[u8; 8]; 7] = [
+    b"IP0\0\0\0\0\0",
+    b"SH0\0\0\0\0\0",
+    b"MC0\0\0\0\0\0",
+    b"ACV\0\0\0\0\0",
+    b"SN1\0\0\0\0\0",
+    b"CN0\0\0\0\0\0",
+    b"SH4\0\0\0\0\0",
+];
+/// sm 标签（与 BCM_NAMES 同序）。
+const BCM_TAGS: [&str; 7] = ["IP0", "SH0", "MC0", "ACV", "SN1", "CN0", "SH4"];
+/// st: 0 miss / 1 ok(HW=BCM,aux>=8) / 2 hit但HW≠BCM / 3 HW=BCM但aux短 / 4 cmd-db magic 坏
+static mut BCM_ST: [u32; 7] = [0; 7];
+static mut BCM_ADDR: [u32; 7] = [0; 7];
+static mut BCM_UNIT: [u32; 7] = [0; 7];
+static mut BCM_WIDTH: [u32; 7] = [0; 7];
+
+fn bcm_probe() {
+    if rd32(CMD_DB + 4) != CMD_DB_MAGIC {
+        dcache_ivac(CMD_DB as u64, CMD_DB_BYTES as u64);
+    }
+    let magic_ok = rd32(CMD_DB + 4) == CMD_DB_MAGIC;
+    let mut i = 0usize;
+    while i < 7 {
+        unsafe {
+            BCM_ST[i] = 0;
+            BCM_ADDR[i] = 0;
+            BCM_UNIT[i] = 0;
+            BCM_WIDTH[i] = 0;
+        }
+        if !magic_ok {
+            unsafe { BCM_ST[i] = 4 };
+            i += 1;
+            continue;
+        }
+        let Some(hit) = cmd_db_hit(BCM_NAMES[i]) else {
+            i += 1;
+            continue;
+        };
+        unsafe { BCM_ADDR[i] = hit.addr };
+        if (hit.addr >> 16) & 7 != CMD_DB_HW_BCM {
+            unsafe { BCM_ST[i] = 2 };
+            i += 1;
+            continue;
+        }
+        if hit.len < 8
+            || (hit.aux as usize) < 144
+            || (hit.aux as usize).saturating_add(8) > CMD_DB_BYTES
+        {
+            unsafe { BCM_ST[i] = 3 };
+            i += 1;
+            continue;
+        }
+        let unit = rd32(CMD_DB + hit.aux as usize);
+        let width = rd32(CMD_DB + hit.aux as usize + 4) & 0xffff;
+        unsafe {
+            BCM_UNIT[i] = unit;
+            BCM_WIDTH[i] = width;
+            BCM_ST[i] = 1;
+        }
+        i += 1;
+    }
+}
+
 fn proxy_vote(_ufs: &mut Ufs, _freq: u32, _t: &mut [u8; 96]) {
     if rd32(CMD_DB + 4) != CMD_DB_MAGIC {
         dcache_ivac(CMD_DB as u64, CMD_DB_BYTES as u64);
@@ -9511,6 +9580,27 @@ fn ctrl_service(
                                 push_hex(&mut reply, &mut rn, unsafe { MPSS_VOUT } as u64);
                                 push_str(&mut reply, &mut rn, ".");
                                 push_hex(&mut reply, &mut rn, unsafe { MPSS_IN } as u64);
+                                // bc=NAME.st.addr.unit.width,... — IPA BCM cmd-db 只读（序：IP0 SH0 MC0 ACV SN1 CN0 SH4）
+                                bcm_probe();
+                                push_str(&mut reply, &mut rn, " bc=");
+                                {
+                                    let mut bi = 0usize;
+                                    while bi < 7 {
+                                        if bi != 0 {
+                                            push_str(&mut reply, &mut rn, ",");
+                                        }
+                                        push_str(&mut reply, &mut rn, BCM_TAGS[bi]);
+                                        push_str(&mut reply, &mut rn, ".");
+                                        push_hex(&mut reply, &mut rn, unsafe { BCM_ST[bi] } as u64);
+                                        push_str(&mut reply, &mut rn, ".");
+                                        push_hex(&mut reply, &mut rn, unsafe { BCM_ADDR[bi] } as u64);
+                                        push_str(&mut reply, &mut rn, ".");
+                                        push_hex(&mut reply, &mut rn, unsafe { BCM_UNIT[bi] } as u64);
+                                        push_str(&mut reply, &mut rn, ".");
+                                        push_hex(&mut reply, &mut rn, unsafe { BCM_WIDTH[bi] } as u64);
+                                        bi += 1;
+                                    }
+                                }
                                 push_str(&mut reply, &mut rn, " ad=");
                                 push_hex(&mut reply, &mut rn, unsafe { ADSP_ST } as u64);
                                 push_str(&mut reply, &mut rn, ".");
