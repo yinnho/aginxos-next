@@ -2667,3 +2667,29 @@ IDL（`ipa_qmi_service_v01.h`）：`ipa_init_modem_driver_req_msg_v01` **全部 
 **本轮不编 tip、不出镜像、不 flash、不 push。** 活体可停 **`cef1fd9`**（健康，`iq=1.201`）。
 Flash-safe restore 仍：`boot-s20-c38a6cd.img` / `b99c785` / 绿 CDSP 基线 `af0c6ff`。
 hard-reset：**不需要**（无刷）。等 #1/#2 只读收据后再开 GSI 刀。
+
+### ig= IPA/GSI 只读 MMIO 刀（tip，未刷，2026-10-19 ~14:20 Asia/Shanghai）
+
+按 7fc307e park #2：**裸机只读** IPA@`0x1e00000` / GSI@`0x1e04000`。
+INIT 仍 park（需 mem/EP）。基线 tip atop `7fc307e` / 活体 `cef1fd9`。
+
+| 项 | 值 |
+|---|---|
+| 触发 | IPA PAS 绿（`IPA_ST` 高位 + p0..p2==0）后 **一次**；sm 幂等重入 |
+| 读 | IPA `VERSION`/`SHARED_MEM_SIZE`；GSI `CFG`/`EE0_STATUS`/`SW_VERSION`/`HW_PARAM_2`/`CH0_CNTXT_0`；SRAM canary @`0x684`/`0x284`（`ipa_4_7` modem_hdr−4 / v4_flt_hash−4） |
+| sm | **`ig=st.iver.gcfg.gstat.gver.hp2.ch0.ca.cb`**（`st=0` 未采 / `1` 已采；其余 `ffffffff` 至采完） |
+| 不做 | **无** doorbell / CH_CMD / ring / QMI INIT / CDSP·TFTP·TX 改动 |
+| 离线 | `IPA-4_7-MEM-PART.md` — vendor `ipa_4_7_mem_part` 全表（INIT TLV 索引） |
+| 出件 | `boot-s20-<sha>.img`；**未 flash、未 push** |
+
+判读（刷后）：
+
+| `ig=` | 含义 |
+|---|---|
+| `st=0` / 全 f | IPA 未绿或未跑到探针 |
+| `gcfg` bit0=0 且 `ca/cb≠deadbeef` | PAS 后 GSI 驱动未起、SRAM 未铺 — 与 park「无空 INIT」一致 |
+| `ca/cb=deadbeef` | 意外已有布局（冷残/他路径）→ 再议 |
+| hang | 回 `cef1fd9`；禁叠写刀 |
+
+Flash-safe restore：`boot-s20-c38a6cd.img` / `b99c785` / 活体可停 `cef1fd9`。
+等硬复位进 fastboot 再刷 stamp。

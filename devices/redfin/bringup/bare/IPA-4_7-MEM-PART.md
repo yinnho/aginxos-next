@@ -1,0 +1,73 @@
+# IPA v4.7 `ipa_4_7_mem_part`（lito / redfin）
+
+来源：vendor kernel
+`.local/device/redfin/kernel-src/redbull/drivers/platform/msm/ipa/ipa_v3/ipa_utils.c`
+（`ipa3_init_mem_partition(IPA_HW_v4_7)` → `&ipa_4_7_mem_part`）。
+
+DTS：`qcom,ipa@1e00000`，`qcom,ipa-hw-ver = <18>`（IPAv4.7），
+`reg = <0x1e00000 0x84000>, <0x1e04000 0x23000>`（ipa-base / gsi-base），
+`qcom,ee = <0>`。GSI 版本映射：`ipa3_get_gsi_ver(IPA_HW_v4_7) = GSI_VER_2_7`。
+
+**用途**：stock `QMI_IPA_INIT_MODEM_DRIVER_REQ_V01` 的 mem TLV 取自本表
++ `smem_restricted_bytes`（`IPA_SHARED_MEM_SIZE` 的 baddr×8）。
+**裸抄 offset 而不铺 SRAM canary / 表 = 假地址**；本文件仅离线收据，
+供日后 GSI 写刀 + INIT，不构成 INIT 刀授权。
+
+Canary 值：`IPA_MEM_CANARY_VAL = 0xdeadbeef`（`ipa3_sram_set_canary` 写在
+section offset−4；部分 section 另写 offset−8）。
+
+SRAM 直映（v4.5+）：
+`phys = ipa_wrapper(0x1e00000) + reg_base(0x40000) + SW_AREA(0x10000) + smem_restr_bytes`。
+
+## 表（offset / size，字节）
+
+| 字段 | ofst | size | 备注 |
+|---|---:|---:|---|
+| uc_info | 0x80 | 0x200 | |
+| ofst_start | 0x280 | — | SW 分区起点标记 |
+| v4_flt_hash | 0x288 | 0x78 | ddr size 0x4000 |
+| v4_flt_nhash | 0x308 | 0x78 | |
+| v6_flt_hash | 0x388 | 0x78 | |
+| v6_flt_nhash | 0x408 | 0x78 | |
+| v4_rt_hash | 0x488 | 0x78 | v4_rt_num_index=0xf；modem lo..hi 0..7；apps 8..e |
+| v4_rt_nhash | 0x508 | 0x78 | |
+| v6_rt_hash | 0x588 | 0x78 | 同 v4 index 切分 |
+| v6_rt_nhash | 0x608 | 0x78 | |
+| modem_hdr | 0x688 | 0x240 | INIT `hdr_tbl_info` |
+| apps_hdr | 0x8c8 | 0x200 | ddr 0x800 |
+| modem_hdr_proc_ctx | 0xad0 | 0xAC0 | INIT `hdr_proc_ctx_tbl_info` |
+| apps_hdr_proc_ctx | 0x1590 | 0x200 | |
+| nat_tbl | 0x17A0 | 0xd00 | |
+| pdn_config | 0x24A8 | 0x50 | |
+| stats_quota_q6 | 0x2500 | 0x30 | INIT hw_stats_quota |
+| stats_quota_ap | 0x2530 | 0x48 | |
+| stats_tethering | 0x2578 | 0x238 | |
+| stats_flt/rt v4/v6 | 0 | 0 | 本版空 |
+| stats_fnr | 0x27B0 | 0 | |
+| stats_drop | 0x27B0 | 0x20 | INIT hw_drop_stats |
+| modem_comp_decomp | 0 | 0 | |
+| **modem** | **0x27D8** | **0x800** | INIT `modem_mem_info` |
+| apps_* flt/rt hash（本版） | 0x27B0 | 0 | 占位 |
+| uc_descriptor_ram | 0x3000 | 0 | |
+| **end_ofst** | **0x3000** | — | `smem_reqd_sz` |
+
+## INIT 相关快速索引
+
+| TLV | 表字段 |
+|---|---|
+| hdr_tbl_info | modem_hdr_ofst/size + smem_restr |
+| v4/v6_route_tbl_info | v*_rt_nhash_ofst + v*_modem_rt_index_hi |
+| v4/v6_filter_tbl_start_addr | v*_flt_nhash_ofst |
+| modem_mem_info | modem_ofst / modem_size |
+| hdr_proc_ctx_tbl_info | modem_hdr_proc_ctx_* |
+| hw_stats_quota / hw_drop_stats | stats_quota_q6_* / stats_drop_* |
+| ctrl_comm_dest_end_pt | **非本表** — `ipa_get_ep_mapping(APPS_WAN_CONS)`（需 GSI EP） |
+
+## 只读刀 canary 位点（`ig=` ca/cb）
+
+| sm | SRAM 相对 ofst | 期望（driver 铺过） |
+|---|---:|---|
+| `ca` | 0x684（modem_hdr−4） | `0xdeadbeef` |
+| `cb` | 0x284（v4_flt_hash−4） | `0xdeadbeef` |
+
+PAS 后、GSI 驱动前：通常 **不是** `deadbeef`（证未铺布局）。

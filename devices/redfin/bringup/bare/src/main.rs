@@ -1743,6 +1743,62 @@ fn ipa_bcm_vote(freq: u32) {
     }
 }
 
+/// IPA wrapper / GSI EE0 只读（lito DTS：ipa@1e00000 + gsi@1e04000；IPAv4.7→GSI 2.7）。
+/// 基址：IPA=0x1e00000 reg_base=0x40000；GSI=0x1e04000。无 doorbell / 无 CH_CMD。
+const IPA_WRAP: usize = 0x01e0_0000;
+const IPA_REG_BASE_OFST: usize = 0x0004_0000;
+const IPA_VER_OFF: usize = 0x34;
+const IPA_SMEM_OFF: usize = 0x54;
+const IPA_SW_RAM_OFF: usize = 0x1_0000; // v4.5+ IPA_SW_AREA_RAM_DIRECT_ACCESS_n
+const GSI_BASE: usize = 0x01e0_4000;
+const GSI_CFG_OFF: usize = 0x0;
+const GSI_EE0_STATUS: usize = 0x1_2000;
+const GSI_EE0_HW_PARAM2: usize = 0x1_2040; // GSI 2.5/2.7
+const GSI_EE0_SW_VER: usize = 0x1_2044;
+const GSI_EE0_CH0_CNTXT0: usize = 0xf000;
+/// ipa_4_7_mem_part canary 位点（相对 SW SRAM；canary 在 section-4）
+const IPA47_CA_OFF: usize = 0x684; // modem_hdr_ofst(0x688)-4
+const IPA47_CB_OFF: usize = 0x284; // v4_flt_hash_ofst(0x288)-4
+
+fn ipa_gsi_ro_probe() {
+    if unsafe { IG_DONE } != 0 {
+        return;
+    }
+    let ipa_ok = unsafe { IPA_ST } & 0x8000_0000 != 0
+        && unsafe { IPA_P[0] } == 0
+        && unsafe { IPA_P[1] } == 0
+        && unsafe { IPA_P[2] } == 0;
+    if !ipa_ok {
+        return;
+    }
+    let ipa_mmio = IPA_WRAP + IPA_REG_BASE_OFST;
+    let iver = rd32(ipa_mmio + IPA_VER_OFF);
+    let smem = rd32(ipa_mmio + IPA_SMEM_OFF);
+    let gcfg = rd32(GSI_BASE + GSI_CFG_OFF);
+    let gstat = rd32(GSI_BASE + GSI_EE0_STATUS);
+    let gver = rd32(GSI_BASE + GSI_EE0_SW_VER);
+    let hp2 = rd32(GSI_BASE + GSI_EE0_HW_PARAM2);
+    let ch0 = rd32(GSI_BASE + GSI_EE0_CH0_CNTXT0);
+    // SHARED_MEM_SIZE：baddr[31:16]/size[15:0]，单位 8B → restr_bytes = baddr*8
+    let baddr_u = (smem >> 16) & 0xffff;
+    let restr = (baddr_u as usize).saturating_mul(8);
+    let sram = ipa_mmio + IPA_SW_RAM_OFF + restr;
+    let ca = rd32(sram + IPA47_CA_OFF);
+    let cb = rd32(sram + IPA47_CB_OFF);
+    unsafe {
+        IG_IVER = iver;
+        IG_GCFG = gcfg;
+        IG_GSTAT = gstat;
+        IG_GVER = gver;
+        IG_HP2 = hp2;
+        IG_CH0 = ch0;
+        IG_CA = ca;
+        IG_CB = cb;
+        IG_ST = 1;
+        IG_DONE = 1;
+    }
+}
+
 /// STE（0x520/521/522）→ 七笔 ACTIVE rpmh_cmd。开机 ADSP 后 / 首次 sm 各最多一次。
 fn ipa_i4_once(freq: u32) {
     if unsafe { IPA_I4_DONE } != 0 {
@@ -3852,6 +3908,21 @@ static mut RFS_GNN: u8 = 0;
 /// sm ip=st.p0.p1.p2 — st 同 ADSP（高位置位=段数）；p0/1/2 = INIT/MEM/AUTH x0。
 static mut IPA_ST: u32 = 0;
 static mut IPA_P: [u32; 3] = [0xffff_ffff; 3];
+
+/// IPA/GSI 只读 MMIO 闩（PAS 绿后一次）。sm ig=st.iver.gcfg.gstat.gver.hp2.ch0.ca.cb
+/// 零写：无 doorbell / 无 ring / 无 QMI INIT / 不改 CDSP·TFTP·TX。
+static mut IG_DONE: u32 = 0;
+/// st: 0 未跑 / 1 已采 / 2 IPA 未绿跳过（不应持久）
+static mut IG_ST: u32 = 0;
+static mut IG_IVER: u32 = 0xffff_ffff;
+static mut IG_GCFG: u32 = 0xffff_ffff;
+static mut IG_GSTAT: u32 = 0xffff_ffff;
+static mut IG_GVER: u32 = 0xffff_ffff;
+static mut IG_HP2: u32 = 0xffff_ffff;
+static mut IG_CH0: u32 = 0xffff_ffff;
+/// SRAM canary 字：ca=@modem_hdr-4 (0x684)；cb=@v4_flt_hash-4 (0x284)；未映=ffffffff
+static mut IG_CA: u32 = 0xffff_ffff;
+static mut IG_CB: u32 = 0xffff_ffff;
 
 /// CDSP（pas-id 18 @ 0x87400000 / 0x1E00000）。仅 IPA+ADSP 绿后、modem 前。
 /// sm cd=st.p0.p1.p2 — 同 ip=：st 高位|段数；p0/1/2 = INIT/MEM/AUTH x0。
@@ -10780,6 +10851,26 @@ fn ctrl_service(
                                 push_hex(&mut reply, &mut rn, unsafe { IQ_SEEN } as u64);
                                 push_str(&mut reply, &mut rn, ".");
                                 push_hex(&mut reply, &mut rn, unsafe { IQ_INST } as u64);
+                                // ig= — IPA/GSI 只读 MMIO（PAS 绿后一次；零写）
+                                ipa_gsi_ro_probe();
+                                push_str(&mut reply, &mut rn, " ig=");
+                                push_hex(&mut reply, &mut rn, unsafe { IG_ST } as u64);
+                                push_str(&mut reply, &mut rn, ".");
+                                push_hex(&mut reply, &mut rn, unsafe { IG_IVER } as u64);
+                                push_str(&mut reply, &mut rn, ".");
+                                push_hex(&mut reply, &mut rn, unsafe { IG_GCFG } as u64);
+                                push_str(&mut reply, &mut rn, ".");
+                                push_hex(&mut reply, &mut rn, unsafe { IG_GSTAT } as u64);
+                                push_str(&mut reply, &mut rn, ".");
+                                push_hex(&mut reply, &mut rn, unsafe { IG_GVER } as u64);
+                                push_str(&mut reply, &mut rn, ".");
+                                push_hex(&mut reply, &mut rn, unsafe { IG_HP2 } as u64);
+                                push_str(&mut reply, &mut rn, ".");
+                                push_hex(&mut reply, &mut rn, unsafe { IG_CH0 } as u64);
+                                push_str(&mut reply, &mut rn, ".");
+                                push_hex(&mut reply, &mut rn, unsafe { IG_CA } as u64);
+                                push_str(&mut reply, &mut rn, ".");
+                                push_hex(&mut reply, &mut rn, unsafe { IG_CB } as u64);
                                 push_str(&mut reply, &mut rn, " x=");
                                 for i in 0..22 {
                                     if i != 0 {
@@ -12085,6 +12176,10 @@ extern "C" fn rust_main() -> ! {
                 ring_put(&mut ufs, freq, logring::LVL_INFO, txt);
                 let txt = hex_text(&mut t, unsafe { RING.seq }, " ipa p2=0x", p2 as u64);
                 ring_put(&mut ufs, freq, logring::LVL_INFO, txt);
+                // PAS 绿后一次：只读 IPA/GSI MMIO（ig=）；无 doorbell/INIT。
+                if p0 == 0 && p1 == 0 && p2 == 0 {
+                    ipa_gsi_ro_probe();
+                }
             }
         }
     }
