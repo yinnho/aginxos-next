@@ -1839,3 +1839,39 @@ tip 上 OACK（`8a761ad`）TFTP 已回退，main 与 f73c9bb TFTP 一致后再�
 
 flash-safe 现可含 **`c38a6cd`**（行为 ⊇ `f73c9bb` + `me`）；复活仍可用 `boot-s20-f73c9bb.img`。未推。
 
+### 本轮：候选刀离线对账 → park（2026-10-19 ~10:55 Asia/Shanghai）
+
+活体仍挂 **`c38a6cd`**（`me=1.2.0` / `ik=4` / `sr=1.7fffffff.0` / `pn=kernel/elf_loader.1.30`，无 `0x45`）。
+本轮 **未改 main.rs、未刷、未推**。采 sm 时 2323 一度 RST（ping+ARP peer MAC 仍好）—
+软退化，非 ARP-incomplete 硬挂；不因此换镜像。
+
+#### 候选逐条否决
+
+| 候选 | 相对 `c38a6cd` | 裁定 |
+|---|---|---|
+| **延迟 CDSP @ ik≥4**（PAS/AOP/装段） | 时序不同于 before-modem | **不做**。radio-bringup：「modem 先起则事后永不 spawn wlan_pd」对 ADSP 已钉死；CDSP 同类。且仍是 PAS 写路径，before 已同形硬挂——**非**「强不同」。 |
+| **AOP-only `cdsp on`（无 pas_go）** | 比 `8d88cd5` 窄 | **禁区**：用户/收束条写明 `CDSP-before-modem cold PAS/AOP`；before-modem AOP 落在同一禁令。after-ik4 则时序无效（见上）。 |
+| **IPA fws 轻量 PAS**（pas-id `0xf` @ `0x8BC00000` / 64KiB，无 signal-aop） | 比 CDSP 小、无 AOP | **本轮不做**。仍是早期 PAS 写；CDSP 挂因未拆到「非 AOP」单变量，一次失败成本高。且 S4 记 IPA 主要为 **0x45 之后** qcacld SMMU，非自拉充分条件。 |
+| **出向 `ipa` value 预置 CLK 位**（`IPA_SMP2P_OUT_*` → value=`0x3`） | 同 smem 写，零 PAS | **弱假说，不做**。Linux 仅在 modem **入向查询 IRQ** / panic 时 `freeze_clock_vote`；开机 spawn 窗口 value 常为 0。活体 `me=1.2.0` 入向尚无字面 `ipa`/`wlan`——无查询可应答。预置位 = 发明顺序。 |
+| **入向 `wlan` smp2p** | — | **AP 无法预建**。435 由 modem 分配；`wlan` 名随 wlan_pd 起。鸡生蛋。 |
+| **改 Dom/jsn 藏 elf_loader** | — | **症状刀**；与 stock `modemuw.jsn` 故意偏离。 |
+| **再动 TFTP / TX intent / glink 帽** | — | **禁令**。 |
+
+#### IPA SMP2P 补钉（相对 `c38a6cd` 软成功）
+
+`ipa_v3`：出向 bit0=`CLK_RSP_CMPLT`、bit1=`CLK_VOTE`，**只在** modem 入向 query 时置位。
+故「有名 value=0」对齐 Linux 开机初态；**证伪的是「只补名」**，不是「IPA 整栈无关」。
+真 IPA 栈（fws PAS + GSI + 应答 query）仍是更大刀子，需先有 Linux 时序收据再开。
+
+#### 下一棒（精确离线索取 — 槽 b / 一次能出 `0x45` 的 radio-bringup）
+
+请抓 **带时间戳** 的一段（`dmesg -T` 或 `/var/radio.log` + `qrtr-lookup`），明确回答：
+
+1. **CDSP ONLINE** 相对 **modem PIL** 与首条 **WLFW/`0x45`** 的先后（是否 before modem）。
+2. **`ipa_fws` / `printf 1 >/dev/ipa`** 完成相对 modem PIL / `0x45` 的先后。
+3. 同一次能出 `0x45` 的启动里，是否出现 **`modem_pr/so/549_38_0.mbn`**（或任何 `tqftp`/`tftp` RRQ）——有则自拉≠「永不 TFTP」，无则裸机 elf_loader 链仍是环境回退。
+4. 入向 SMP2P（debugfs / 日志）何时出现名 **`ipa` / `wlan`**（相对 `0x45`）。
+
+有收据后再开 **单一** 刀：优先「有 before-modem 实证的最窄写」（例如仅 IPA fws PAS，或仅 CDSP 且有 stock 时序），仍禁 TFTP 成功与 TX intent。
+
+flash-safe 仍 **`c38a6cd`**（⊇ `f73c9bb`）；复活 `boot-s20-f73c9bb.img` / `boot-s20-c38a6cd.img`。未推。
