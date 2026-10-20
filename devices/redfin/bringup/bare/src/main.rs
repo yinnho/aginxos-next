@@ -4568,6 +4568,11 @@ static mut TF_RQ2_PORT: u32 = 0;
 /// 正是 (1,CTRL)→客户端 这个源址形状且客户端据此找上门；若它只认这种源址，
 /// 副本一收住它就有反应（tf 冻结或 rx 现形）。
 static mut TF_CTRL_PROBE: u32 = 0;
+/// 刀 G3：本笔（最新刷到的）RRQ 客户端地址的捕获时刻（CNTVCT）。
+/// rd= OACK 时刻减它 = 回信时延，对赌客户端 ~1s 的 socket 存活窗。
+static mut TF_RQ_AT: u64 = 0;
+/// seen 表环形游标。满 8 后不再冻结：永远记最新 8 个偏移。
+static mut TF_SEEN_I: u32 = 0;
 static mut TF_OP: u32 = 0;
 static mut TF_OFF: u32 = 0;
 static mut TF_SEEN: [u32; 8] = [0xffff_ffff; 8];
@@ -6774,8 +6779,10 @@ fn tf_boot_probe(ufs: &mut Ufs) {
 
 fn tf_drop_pend() {
     unsafe {
+        // 刀 G3：环形写。旧代码满 8 冻结，首个 8 偏移永久误杀环复用位上的新包。
+        TF_SEEN[TF_SEEN_I as usize] = TF_OFF;
+        TF_SEEN_I = (TF_SEEN_I + 1) & 7;
         if TF_SEEN_N < 8 {
-            TF_SEEN[TF_SEEN_N as usize] = TF_OFF;
             TF_SEEN_N += 1;
         }
         TF_PEND = false;
@@ -11533,6 +11540,26 @@ fn scan_new_servers(fifo: u64, rh: u64) {
                     if op0 == 4 || op0 == 5 {
                         tf_note_ack(off, fifo);
                     }
+                    // 刀 G3：地址刷新先于一切闸。客户端口逐笔换新（0x22→0x23 实测），
+                    // pend 占用或 seen 命中也不能让回信地址陈旧——每见一笔发往
+                    // 0x11 的请求（RRQ/WRQ/stat）就把回信地址与捕获时刻刷成最新。
+                    // 陈旧地址投给已关 socket，modem 路由器静默丢：tt 消费、rx 恒零、
+                    // tf 无限爬的合并根因。
+                    if op0 != 4 && op0 != 5 {
+                        unsafe {
+                            let sn = rd32((fifo + off + 24) as usize);
+                            let sp = rd32((fifo + off + 28) as usize);
+                            if TF_RQ_NODE != sn || TF_RQ_PORT != sp {
+                                TF_RQ2_NODE = TF_RQ_NODE;
+                                TF_RQ2_PORT = TF_RQ_PORT;
+                                TF_RQ_NODE = sn;
+                                TF_RQ_PORT = sp;
+                            }
+                            TF_NODE = sn;
+                            TF_PORT = sp;
+                            TF_RQ_AT = time::cntvct();
+                        }
+                    }
                     let key = off as u32;
                     let mut seen = false;
                     unsafe {
@@ -11559,12 +11586,6 @@ fn scan_new_servers(fifo: u64, rh: u64) {
                             nn += 1;
                         }
                         unsafe {
-                            TF_NODE = rd32((fifo + off + 24) as usize);
-                            TF_PORT = rd32((fifo + off + 28) as usize);
-                            TF_RQ2_NODE = TF_RQ_NODE;
-                            TF_RQ2_PORT = TF_RQ_PORT;
-                            TF_RQ_NODE = TF_NODE;
-                            TF_RQ_PORT = TF_PORT;
                             TF_OP = op;
                             TF_OFF = key;
                             TF_NAME = name;
@@ -12261,6 +12282,21 @@ fn ctrl_service(
                                 push_hex(&mut reply, &mut rn, unsafe { TF_RQ2_PORT } as u64);
                                 push_str(&mut reply, &mut rn, " cp=");
                                 push_hex(&mut reply, &mut rn, unsafe { TF_CTRL_PROBE } as u64);
+                                // 刀 G3：rd=OACK 发出距最新 RRQ 捕获的毫秒（对赌客户端
+                                // ~1s 的 socket 存活窗）；tm=RRQ 请求的 timeoutms。
+                                push_str(&mut reply, &mut rn, " rd=");
+                                let freq3 = time::freq_or(FREQ_FALLBACK as u32) as u64;
+                                let d3 = if freq3 > 0
+                                    && unsafe { TF_RQ_AT } != 0
+                                    && unsafe { TF_OACK_AT } > unsafe { TF_RQ_AT }
+                                {
+                                    (unsafe { TF_OACK_AT } - unsafe { TF_RQ_AT }) * 1000 / freq3
+                                } else {
+                                    0
+                                };
+                                push_hex(&mut reply, &mut rn, d3);
+                                push_str(&mut reply, &mut rn, " tm=");
+                                push_hex(&mut reply, &mut rn, unsafe { TF_REQ_TMO } as u64);
                                 // me=pub.vout.inflags — MPSS SMP2P ipa 刀
                                 push_str(&mut reply, &mut rn, " me=");
                                 push_hex(&mut reply, &mut rn, unsafe { MPSS_PUB } as u64);
