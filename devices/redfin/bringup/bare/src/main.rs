@@ -1808,6 +1808,68 @@ const GSI_CMD_TIMEOUT_MS: u64 = 5000;
 /// ipa_4_7_mem_part canary 位点（相对 SW SRAM；canary 在 section-4）
 const IPA47_CA_OFF: usize = 0x684; // modem_hdr_ofst(0x688)-4
 const IPA47_CB_OFF: usize = 0x284; // v4_flt_hash_ofst(0x288)-4
+const IPA_CANARY: u32 = 0xdeadbeef;
+
+/// `_ipa_init_sram_v3`：`sram[(offset-4)/4] = 0xdeadbeef`。
+fn ipa_sram_canary(sram: usize, offset: usize) {
+    if offset >= 4 {
+        wr32(sram + offset - 4, IPA_CANARY);
+    }
+}
+
+/// IPA 4.7（hw >= 4.5）的 canary 位点。不 START GSI，不写 doorbell。
+fn ipa_sram_canaries(sram: usize) {
+    let pair = [
+        0x288usize, 0x308, 0x388, 0x408, 0x488, 0x508, 0x588, 0x608, 0x688, 0xad0,
+    ];
+    let mut i = 0usize;
+    while i < pair.len() {
+        ipa_sram_canary(sram, pair[i] - 4);
+        ipa_sram_canary(sram, pair[i]);
+        i += 1;
+    }
+    ipa_sram_canary(sram, 0x17a0 - 12);
+    ipa_sram_canary(sram, 0x2500 - 12);
+    ipa_sram_canary(sram, 0x27d8 - 4);
+    ipa_sram_canary(sram, 0x27d8);
+    ipa_sram_canary(sram, 0x3000);
+    unsafe {
+        core::arch::asm!("dsb sy", options(nostack));
+    }
+}
+
+/// `ipa3_init_smem_region` 把这几段写成 0。这里用 SRAM 直写，不走立即命令。
+fn ipa_sram_zero(sram: usize, off: usize, size: usize) {
+    let mut i = 0usize;
+    while i < size {
+        wr32(sram + off + i, 0);
+        i += 4;
+    }
+}
+
+/// 开机不写。第一次 sm 之后写，并刷新 ig 的 ca/cb。
+fn ipa_canary_late() {
+    if unsafe { CAN_DONE } != 0 || unsafe { CFG_ARM } == 0 {
+        return;
+    }
+    let ipa_ok = unsafe { IPA_ST } & 0x8000_0000 != 0
+        && unsafe { IPA_P[0] } == 0
+        && unsafe { IPA_P[1] } == 0
+        && unsafe { IPA_P[2] } == 0;
+    if !ipa_ok {
+        return;
+    }
+    let ipa_mmio = IPA_WRAP + IPA_REG_BASE_OFST;
+    let smem = rd32(ipa_mmio + IPA_SMEM_OFF);
+    let restr = (((smem >> 16) & 0xffff) as usize).saturating_mul(8);
+    let sram = ipa_mmio + IPA_SW_RAM_OFF + restr;
+    ipa_sram_canaries(sram);
+    unsafe {
+        IG_CA = rd32(sram + IPA47_CA_OFF);
+        IG_CB = rd32(sram + IPA47_CB_OFF);
+        CAN_DONE = 1;
+    }
+}
 
 fn ipa_gsi_ro_probe() {
     if unsafe { IG_DONE } != 0 {
@@ -1839,6 +1901,11 @@ fn ipa_gsi_ro_probe() {
     let baddr_u = (smem >> 16) & 0xffff;
     let restr = (baddr_u as usize).saturating_mul(8);
     let sram = ipa_mmio + IPA_SW_RAM_OFF + restr;
+    // 先清 modem_hdr / proc_ctx / modem，再写 canary。对照 ipa3_init_q6_smem。
+    ipa_sram_zero(sram, 0x688, 0x240);
+    ipa_sram_zero(sram, 0xad0, 0xac0);
+    ipa_sram_zero(sram, 0x27d8, 0x800);
+    ipa_sram_canaries(sram);
     let ca = rd32(sram + IPA47_CA_OFF);
     let cb = rd32(sram + IPA47_CB_OFF);
     unsafe {
@@ -4084,6 +4151,10 @@ static mut SMEM_RX: [u32; 22] = [0; 22];
 /// NEW_SERVER 的服务号、实例，最多 8 对。
 static mut SMEM_SVC: [u32; 16] = [0; 16];
 static mut SMEM_NSVC: u32 = 0;
+/// WLFW（svc 0x45）目击闩。扫描每轮只留 8 个 NEW_SERVER，槽 b 的
+/// `0x45` 在 node 0 端口 88，排在这 8 个之后，`q=` 看不住它。
+/// 高位 1 = 见过；低 31 位是实例字。不随扫描清掉。
+static mut SAW_45: u32 = 0;
 /// IPA QMI（svc 0x31）NEW_SERVER 目击闩：sm iq=seen.inst（零写，不限首 8 窗）。
 /// tip：另闩 node:port（偏 inst 0x201），供 INIT_MODEM_DRIVER 单发。
 static mut IQ_SEEN: u32 = 0;
@@ -4092,14 +4163,57 @@ static mut IQ_NODE: u32 = 0;
 static mut IQ_PORT: u32 = 0;
 /// IPA QMI 客户端口（本机 node1）；避开 0x10/11/12/14。
 const IPA_QRTR_PORT: u32 = 0x15;
+/// AP 侧 IPA 服务端。和客户端口分开。
+const IPA_SVC_PORT: u32 = 0x16;
+/// qmi_send_new_server 写 version | (instance << 8)。
+/// qmi_add_server(0x31, vers 1, instance 1) → 0x101。slot-b 是 0x31/0x101。
+const IPA_A5_INST: u32 = 0x101;
+/// 服务端口上第一笔和最近一笔 QMI 请求的 msgid。0 表示还没见到。
+static mut IPA_REQ: u32 = 0;
+static mut IPA_LAST: u32 = 0;
+/// QMI_IPA_CONFIG_REQ（0x27）。内核回 TLV 0x02 result 成功。
+static mut CFG_PEND: bool = false;
+static mut CFG_TXN: u32 = 0;
+static mut CFG_NODE: u32 = 0;
+static mut CFG_PORT: u32 = 0;
+static mut CFG_SENT: u32 = 0;
+static mut CFG_DONE_TXN: u32 = 0xffff_ffff;
+static mut CFG_DONE_PORT: u32 = 0xffff_ffff;
+/// 成功的 CONFIG 应答会在几秒内弄掉 USB。先不回，只留请求前 4 个字。
+static mut CFG_ARM: u8 = 0;
+static mut CAN_DONE: u8 = 0;
+static mut CFG_CAP: [u32; 4] = [0; 4];
+static mut CFG_CAP_N: u32 = 0;
+/// 0x20 登记。应答成功后，若 INIT 已完成，再发 0x22。
+static mut IR_PEND: bool = false;
+static mut IR_TXN: u32 = 0;
+static mut IR_NODE: u32 = 0;
+static mut IR_PORT: u32 = 0;
+static mut IR_DONE: u8 = 0;
+static mut IND_SENT: u8 = 0;
+/// 0x15/0x16 上第一笔不是 0x27 的包：port<<16 | qtype<<8 | msgid。
+static mut JX_OTHER: u32 = 0;
 /// QMI_IPA_INIT_MODEM_DRIVER_REQ_V01。
 const IPA_INIT_MSGID: u32 = 0x0021;
 /// sm ii=st.txn.res — st:0未跑 1已发待RESP 2RESP到 3TX失败 4缺前置；res=TLV02 或 ffffffff。
 static mut II_ST: u32 = 0;
+/// 最近一次没发出的原因：1无环 2已发 3无口 4实例不对 5 GSI/ig 未绿 6发送环忙 7 TX 失败。
+static mut II_WHY: u32 = 0;
+/// why=6 时发送环 head/tail，以及 tail 上 8 个字（头、intent、长度、源口、大小、目的、QMI）。
+static mut II_HX: u32 = 0;
+static mut II_TL: u32 = 0;
+static mut II_PK: [u32; 8] = [0; 8];
 static mut II_TXN: u32 = 0;
 static mut II_RES: u32 = 0xffff_ffff;
 static mut II_PEND: bool = false;
 static mut II_SENT: u32 = 0;
+/// modem 的 INIT_MODEM_DRIVER_CMPLT（msgid 0x35）请求。ic=见到次数.已回次数。
+static mut IC_PEND: bool = false;
+static mut IC_TXN: u32 = 0;
+static mut IC_NODE: u32 = 0;
+static mut IC_PORT: u32 = 0;
+static mut IC_N: u32 = 0;
+static mut IC_SENT: u32 = 0;
 /// NEW_LOOKUP（类型 10）的服务号、实例字，最多 8 对。
 static mut SMEM_LOOK: [u32; 16] = [0; 16];
 static mut SMEM_NLOOK: u32 = 0;
@@ -4115,6 +4229,12 @@ static mut HOST_ADV: u32 = 0;
 static mut LISTEN_TICK: u32 = 0;
 static mut LAST_IID: u32 = 0;
 static mut LAST_ISZ: u32 = 0;
+/// 两次活体：HELLO 的 DATA 一次是 lcid 1（0x10009），一次是 lcid 2（0x20009）。
+fn qrtr_lcid(lcid: u32) -> bool {
+    lcid == 1 || lcid == 2
+}
+/// 对端通道上见过的最大 intent，不论够不够 52。
+static mut SEEN_ISZ: u32 = 0;
 static mut HAVE_IID: bool = false;
 /// 已经归还过 intent 的接收偏移。qcom_glink_rx_done 每个 TX_DATA 只还一次。
 static mut RX_VIS: u64 = 0;
@@ -4137,6 +4257,8 @@ static mut HELLO_VIS: u64 = 0;
 static mut HELLO_RX: u32 = 0;
 static mut PD_NAME: [u8; 64] = [0; 64];
 static mut PD_NAME_N: u8 = 0;
+/// 任一笔 GET_DOMAIN_LIST 要过 kernel/elf_loader 就记 1。pn 只留最后一次。
+static mut PD_SAW_ELF: u8 = 0;
 /// 上次编进应答的命中数，以及 QMI 载荷长度（不含 7 字节头）。
 static mut PD_HITS: u8 = 0;
 static mut PD_QLEN: u16 = 0;
@@ -4147,7 +4269,7 @@ static mut PD_PORT: u32 = 0;
 static mut PD_SEEN: [u32; 8] = [0xffff_ffff; 8];
 static mut PD_SEEN_N: u32 = 0;
 static mut PD_N: u32 = 0;
-/// rmtfs（端口 0x10）和 tftp（端口 0x11）各留一个未答的请求。
+/// rmtfs 队列非空。tftp 仍是单槽。同一次 FIFO 里的 OPEN/ALLOC 都要留下。
 static mut RF_PEND: bool = false;
 static mut RF_TXN: u32 = 0;
 static mut RF_NODE: u32 = 0;
@@ -4165,9 +4287,9 @@ static mut RF_ID: u32 = 0xffff_ffff;
 static mut RF_SZ: u32 = 0;
 /// hyp_assign 的 x0。0xffffffff 还没叫。
 static mut RF_AS: u32 = 0xffff_ffff;
-/// 打到 0x10 的请求次数（含因 PEND/seen 丢掉的）。
+/// 打到 0x10 并收进队列的次数。
 static mut RF_HIT: u32 = 0;
-/// 丢掉次数：bit0=seen bit1=pend。
+/// 丢掉：bit0=seen，bit1=队列满。
 static mut RF_DROP: u32 = 0;
 /// 最近 8 次 msgid（低 8 位）| txn<<8。
 static mut RF_HIST: [u32; 8] = [0; 8];
@@ -4178,6 +4300,31 @@ static mut RF_IFAIL: u32 = 0;
 /// 上一笔 OPEN 应答前 12 字节（对账 wire）。
 static mut RF_RSP: [u8; 12] = [0; 12];
 static mut RF_RSP_N: u8 = 0;
+/// 活体 ik=4.0 时单槽就够。8 深队列是过期任务加回来的，已收成 1。
+const RF_Q_CAP: usize = 1;
+#[derive(Copy, Clone)]
+struct RfSlot {
+    txn: u32,
+    node: u32,
+    port: u32,
+    msg: u32,
+    off: u64,
+    fifo: u64,
+    path: [u8; 64],
+    path_n: u8,
+}
+static mut RF_Q: [RfSlot; RF_Q_CAP] = [RfSlot {
+    txn: 0,
+    node: 0,
+    port: 0,
+    msg: 0,
+    off: 0,
+    fifo: 0,
+    path: [0; 64],
+    path_n: 0,
+}; RF_Q_CAP];
+static mut RF_QH: u32 = 0;
+static mut RF_QN: u32 = 0;
 /// 任意打到本机 node1 的 DATA：port|msgid<<8|qtype<<16，最近 8 条。
 static mut QP_HIST: [u32; 8] = [0; 8];
 static mut QP_HIST_N: u32 = 0;
@@ -4204,6 +4351,9 @@ const SR_NAME: &[u8] = b"msm/modem/wlan_pd";
 static mut MPSS_PUB: u32 = 0xffff_ffff;
 static mut MPSS_VOUT: u32 = 0;
 static mut MPSS_IN: u32 = 0;
+/// 出向 ipa 条目的 value 地址。应答时钟查询时写成 bit0|bit1。
+static mut IPA_SMP_VAL: u64 = 0;
+static mut IPA_SMP_SENT: u8 = 0;
 
 /// CAF：UP=0x1FFFFFFF DOWN=0x0FFFFFFF UNINIT=0x7FFFFFFF。
 const SR_STATE_UP: u32 = 0x1fff_ffff;
@@ -4363,6 +4513,37 @@ static mut ADSP_SFR: Sfr = Sfr {
     w: [0; 32],
 };
 static mut TF_PEND: bool = false;
+/// 0 空闲，1 已发 OACK，2 已发 DATA，3 短块送完，9 对端 ERROR。
+static mut TF_ST: u8 = 0;
+/// 对 ota_firewall/ruleset 回过几次 file-not-found，以及最后一次用的源端口。
+static mut TF_REJ: u32 = 0;
+static mut TF_REJ_PORT: u32 = 0;
+/// 每次拒绝换一个口，从 0x1000 起，避开服务口。
+static mut TF_TID: u32 = 0x1000;
+static mut TF_HASOPT: u8 = 0;
+/// 请求里出现过 rsize 键。值为 0 是 stat，不是“按整文件送”。
+static mut TF_HAS_RS: u8 = 0;
+static mut TF_RSIZE: u32 = 0;
+/// RRQ 里的选项。OACK 只回请求里有的项，再加 tqftpserv 总会回的 timeoutms。
+/// wsize 缺省 0：请求没带就不写进 OACK。
+static mut TF_REQ_BLK: u32 = 512;
+static mut TF_REQ_WSZ: u32 = 0;
+static mut TF_REQ_TMO: u32 = 1000;
+static mut TF_HAS_TS: u8 = 0;
+static mut TF_BLKNO: u16 = 0;
+static mut TF_ACK_BLK: u16 = 0;
+static mut TF_ACK_OFF: u32 = 0xffff_ffff;
+static mut TF_ACK_PEND: bool = false;
+/// 旧的固定数据口。SO 的这次传输改用 TF_XFER_PORT。
+const TF_DATA_PORT: u32 = 0x21;
+/// 这次 SO 传输的源端口。0 表示还没发 OACK。
+static mut TF_XFER_PORT: u32 = 0;
+/// OACK 之后看到的第一包：目的端口，以及节点和 TFTP 操作码。
+static mut TF_RX_HIT: u8 = 0;
+static mut TF_RX_PORT: u32 = 0;
+static mut TF_RX_META: u32 = 0;
+const TF_BLK: u32 = 252;
+static mut TF_BLKBUF: [u8; 256] = [0; 256];
 static mut TF_NODE: u32 = 0;
 static mut TF_PORT: u32 = 0;
 static mut TF_OP: u32 = 0;
@@ -4377,6 +4558,10 @@ static mut TF_NAME_N: u8 = 0;
 static mut TZ_ST: u32 = 0;
 static mut TZ_SZ: u32 = 0;
 static mut TZ_CL: u32 = 0;
+/// 文件头。TZ_MAG 是前 4 字节小端（ELF 为 0x464c457f）。
+/// TZ_EH 低 16 位 e_type，高 16 位 e_machine。Hexagon 是 164（0xa4）。
+static mut TZ_MAG: u32 = 0;
+static mut TZ_EH: u32 = 0;
 /// cx addr/sel/sts，mss addr/sel/sts，xo addr/data/sts。sel 0x100 没找到，
 /// 0x101 不是 ARC，0x102 aux 里没有 384。
 static mut PROXY: [u32; 9] = [0; 9];
@@ -4912,7 +5097,7 @@ fn sfr_walk(base: u64, part_sz: u32, cacheline: u32, want: u16) -> Sfr {
 
 /// 先解开 SError，再读头两个字。区尾 TOC 整页用 NC 读：
 /// 这一页的 WB 读会把核冻死。只找 host 0/1 的分区偏移，不走进分区。
-fn smem_scan(do_glink: bool) {
+fn smem_scan(ufs: &mut Ufs, do_glink: bool) {
     unsafe {
         core::arch::asm!("msr daifclr, #8", "isb", options(nostack));
     }
@@ -5058,12 +5243,17 @@ fn smem_scan(do_glink: bool) {
                     pd_reply(at478, at479, sz479);
                     let before = unsafe { RF_N };
                     rf_reply(at478, at479, sz479);
-                    tf_reply(at478, at479, sz479);
+                    tf_reply(ufs, at478, at479, sz479);
                     pm_reply(at478, at479, sz479);
                     sr_tick(at478, at479, sz479);
                     ipa_init_tick(at478, at479, sz479);
+                    ipa_cmplt_tick(at478, at479, sz479);
+                    ipa_cfg_tick(at478, at479, sz479);
+                    ipa_ir_tick(at478, at479, sz479);
+                    ipa_ind_tick(at478, at479, sz479);
                     round += 1;
-                    // Linux：fs1/fs2/fsg 连续 OPEN 后再 ALLOC；同轮多吞几笔。
+                    // Linux：fs1/fs2/fsg/fsc 连续 OPEN 后再 ALLOC。
+                    // 发送环不空就停；没答的留在队列里，接收 tail 不推过队头。
                     if unsafe { RF_N } == before || round >= 8 {
                         break;
                     }
@@ -5236,7 +5426,8 @@ fn glink_open_ack(at478: u64, at479: u64, sz479: u64, at480: u64, sz480: u64) ->
     }
     let rx_tail = rd32((at478 + 8) as usize) as u64;
     let rx_head = rd32((at478 + 12) as usize) as u64;
-    if rx_head <= rx_tail || rx_head > sz480 || rx_head > 0x80 {
+    // 活体 rx_head 已经是 0x2b0。超过 0x80 就直接返回的话，OPEN_ACK 永远不会做。
+    if rx_head <= rx_tail || rx_head > sz480 {
         return 0;
     }
     let mut rcid = [0u32; 4];
@@ -5339,7 +5530,10 @@ fn glink_hello(at478: u64, at479: u64, sz479: u64, at480: u64, sz480: u64) -> u3
             let count = rd32((at480 + off + 4) as usize);
             let size = rd32((at480 + off + 8) as usize);
             let id = rd32((at480 + off + 12) as usize);
-            if lcid == 2 && count >= 1 && size >= 52 && (!found || size > unsafe { LAST_ISZ }) {
+            if qrtr_lcid(lcid) && count >= 1 && size > unsafe { SEEN_ISZ } {
+                unsafe { SEEN_ISZ = size; }
+            }
+            if qrtr_lcid(lcid) && count >= 1 && size >= 52 && (!found || size > unsafe { LAST_ISZ }) {
                 iid = id;
                 found = true;
                 unsafe {
@@ -5404,8 +5598,9 @@ fn glink_hello(at478: u64, at479: u64, sz479: u64, at480: u64, sz480: u64) -> u3
             }
             unsafe { LOOK_PEND = 0; }
         }
-        if unsafe { HOST_ADV } < 4 {
+        if unsafe { HOST_ADV } < 5 {
             // qrtr.c：对方 HELLO 之后推本机服务。一次一包（一 intent）；0x35 打头。
+            // 第五个是 0x31，实例字 0x101。TCP 已能连第二次。
             if unsafe { HELLO_RX } > 0 {
                 glink_announce(at478, at479, tx_head, sz479, use_id);
             }
@@ -5470,7 +5665,7 @@ fn glink_hello(at478: u64, at479: u64, sz479: u64, at480: u64, sz480: u64) -> u3
 /// 再 rmtfs 14、tftp 4096、pd-mapper 64。一次一包。节点 1。
 fn glink_announce(at478: u64, at479: u64, head: u64, sz479: u64, iid: u32) {
     let n = unsafe { HOST_ADV };
-    if n >= 4 || head + 72 > sz479 {
+    if n >= 5 || head + 72 > sz479 {
         return;
     }
     let (svc, inst, port) = if n == 0 {
@@ -5480,8 +5675,12 @@ fn glink_announce(at478: u64, at479: u64, head: u64, sz479: u64, iid: u32) {
         (14, 1, 0x10)
     } else if n == 2 {
         (4096, 1, 0x11)
-    } else {
+    } else if n == 3 {
         (64, 257, 0x12)
+    } else {
+        // qmi_send_new_server：version | (instance << 8) = 0x101。
+        // slot-b 在发 INIT 的同一时刻已经收到 INDICATION_REGISTER。
+        (0x31, IPA_A5_INST, IPA_SVC_PORT)
     };
     glink_tx_qrtr(at478, at479, head, iid, 4, svc, inst, 1, port);
     unsafe { HOST_ADV = n + 1; }
@@ -5498,6 +5697,8 @@ fn host_svc_port(svc: u32, inst: u32) -> Option<(u32, u32)> {
         Some((1, 0x11))
     } else if svc == 64 && (inst == 0 || inst == 257) {
         Some((257, 0x12))
+    } else if svc == 0x31 && (inst == 0 || inst == 1 || inst == IPA_A5_INST) {
+        Some((IPA_A5_INST, IPA_SVC_PORT))
     } else {
         None
     }
@@ -5852,12 +6053,125 @@ fn put_result(q: &mut [u8], n: &mut usize, fail: bool) {
     put_u16(q, n, if fail { 1 } else { 0 });
 }
 
+fn rf_queued(skey: u32) -> bool {
+    unsafe {
+        let mut i = 0u32;
+        while i < RF_QN {
+            let idx = ((RF_QH + i) % RF_Q_CAP as u32) as usize;
+            let s = &RF_Q[idx];
+            if ((s.port << 16) | (s.txn & 0xffff)) == skey {
+                return true;
+            }
+            i += 1;
+        }
+    }
+    false
+}
+
+fn rf_enqueue(
+    fifo: u64,
+    off: u64,
+    chunk: u64,
+    txn: u32,
+    node: u32,
+    port: u32,
+    msgid: u32,
+) -> bool {
+    unsafe {
+        if RF_QN >= RF_Q_CAP as u32 {
+            return false;
+        }
+        let idx = ((RF_QH + RF_QN) % RF_Q_CAP as u32) as usize;
+        let mut name = [0u8; 64];
+        let mut nn = 0usize;
+        if msgid == 1 && chunk >= 32 {
+            let w1 = rd32((fifo + off + 52) as usize);
+            let msglen = ((w1 >> 8) & 0xffff) as u64;
+            if msglen >= 3 && 7 + msglen <= chunk - 32 && msglen <= 96 {
+                let base = fifo + off + 55;
+                let mut p = 0u64;
+                while p + 3 <= msglen {
+                    let t = rd8(base + p);
+                    let ln = rd8(base + p + 1) as u64 | ((rd8(base + p + 2) as u64) << 8);
+                    p += 3;
+                    if p + ln > msglen {
+                        break;
+                    }
+                    if t == 1 {
+                        let mut k = 0u64;
+                        while k < ln && nn < 64 {
+                            let b = rd8(base + p + k);
+                            if b == 0 {
+                                break;
+                            }
+                            name[nn] = b;
+                            nn += 1;
+                            k += 1;
+                        }
+                        break;
+                    }
+                    p += ln;
+                }
+            }
+        }
+        RF_Q[idx].txn = txn;
+        RF_Q[idx].node = node;
+        RF_Q[idx].port = port;
+        RF_Q[idx].msg = msgid;
+        RF_Q[idx].off = off;
+        RF_Q[idx].fifo = fifo;
+        RF_Q[idx].path = name;
+        RF_Q[idx].path_n = nn as u8;
+        RF_HIT = RF_HIT.wrapping_add(1);
+        let hslot = (RF_HIST_N % 8) as usize;
+        RF_HIST[hslot] = (msgid & 0xff) | ((txn & 0xffff) << 8) | ((port & 0xff) << 24);
+        RF_HIST_N = RF_HIST_N.wrapping_add(1);
+        RF_QN += 1;
+        RF_PEND = true;
+    }
+    true
+}
+
+fn rf_bind_head() {
+    unsafe {
+        if RF_QN == 0 {
+            RF_PEND = false;
+            return;
+        }
+        let idx = (RF_QH % RF_Q_CAP as u32) as usize;
+        let slot = &RF_Q[idx];
+        RF_TXN = slot.txn;
+        RF_NODE = slot.node;
+        RF_PORT = slot.port;
+        RF_MSG = slot.msg;
+        RF_OFF = slot.off;
+        RF_FIFO = slot.fifo;
+        RF_PATH = slot.path;
+        RF_PATH_N = slot.path_n;
+        RF_PEND = true;
+    }
+}
+
+fn rf_pop() {
+    unsafe {
+        if RF_QN == 0 {
+            RF_PEND = false;
+            return;
+        }
+        RF_QH = (RF_QH + 1) % RF_Q_CAP as u32;
+        RF_QN -= 1;
+        RF_PEND = RF_QN != 0;
+    }
+}
+
 /// rmtfs。OPEN 对得上 storage.c 的路径就回 caller_id。
 /// ALLOC 的 buff_size 0 按 rmt_storage_alloc_buff_cb 回窗口物理地址，并改走偏移。
+/// 只答队头，编码与单槽相同。发送环不空就留着。
 fn rf_reply(at478: u64, at479: u64, sz479: u64) {
-    if unsafe { !RF_PEND } || at478 == 0 || at479 == 0 {
+    if unsafe { RF_QN } == 0 || at478 == 0 || at479 == 0 {
         return;
     }
+    rf_bind_head();
     let tx_head = rd32((at478 + 4) as usize) as u64;
     let tx_tail = rd32(at478 as usize) as u64;
     if tx_head != tx_tail {
@@ -5935,10 +6249,10 @@ fn rf_reply(at478: u64, at479: u64, sz479: u64) {
         unsafe {
             if RF_SEEN_N < 32 {
                 RF_SEEN[RF_SEEN_N as usize] =
-                    (unsafe { RF_PORT } << 16) | (txn & 0xffff);
+                    (RF_PORT << 16) | (txn & 0xffff);
                 RF_SEEN_N += 1;
             }
-            RF_PEND = false;
+            rf_pop();
         }
         return;
     }
@@ -5969,7 +6283,7 @@ fn rf_reply(at478: u64, at479: u64, sz479: u64) {
                     (RF_PORT << 16) | (txn & 0xffff);
                 RF_SEEN_N += 1;
             }
-            RF_PEND = false;
+            rf_pop();
             RF_N += 1;
         }
     }
@@ -6362,7 +6676,23 @@ fn fat_path_open(ufs: &mut Ufs, rel: &[u8]) -> Result<(u32, u32), u32> {
     Err(0x57)
 }
 
-/// 开机一次：查 modem_a 上 SO，只写 tz=st.sz.cl。
+/// 簇 2 起，每簇 4 个 4K 块。只读文件第一块的 ELF 头，不发给 modem。
+fn fat_file_hdr(ufs: &mut Ufs, cl: u32) -> (u32, u32) {
+    if cl < 2 {
+        return (0, 0);
+    }
+    let lba = MODEM_LBA + 17 + (cl - 2) * 4;
+    if ufs.read10(lba, 1, DATA).is_err() {
+        return (0, 0);
+    }
+    let b = unsafe { core::slice::from_raw_parts(DATA as *const u8, 20) };
+    let mag = u32::from_le_bytes([b[0], b[1], b[2], b[3]]);
+    let et = u16::from_le_bytes([b[16], b[17]]) as u32;
+    let em = u16::from_le_bytes([b[18], b[19]]) as u32;
+    (mag, et | (em << 16))
+}
+
+/// 开机一次：查 modem_a 上 SO，写 tz= 和 th=。
 /// 不进 smem_scan；不改 glink_tx 上限；RRQ 仍 ERROR（不 DATA 真喂）。
 /// 候选路径：image/… 与根上 modem_pr/…（部分机把 modem_pr 放根）。
 fn tf_boot_probe(ufs: &mut Ufs) {
@@ -6377,13 +6707,18 @@ fn tf_boot_probe(ufs: &mut Ufs) {
     let mut last_err = 0x57u32;
     for &p in CANDS {
         match fat_path_open(ufs, p) {
-            Ok((cl, sz)) => unsafe {
-                TZ_CL = cl;
-                TZ_SZ = sz;
-                // st=1 命中；若 sz==0 仍标 1（上层看 sz 判空文件/错解析）
-                TZ_ST = 1;
+            Ok((cl, sz)) => {
+                let (mag, eh) = fat_file_hdr(ufs, cl);
+                unsafe {
+                    TZ_CL = cl;
+                    TZ_SZ = sz;
+                    TZ_MAG = mag;
+                    TZ_EH = eh;
+                    // st=1 命中；若 sz==0 仍标 1（上层看 sz 判空文件/错解析）
+                    TZ_ST = 1;
+                }
                 return;
-            },
+            }
             Err(e) => {
                 last_err = e;
             }
@@ -6403,9 +6738,323 @@ fn tf_boot_probe(ufs: &mut Ufs) {
     }
 }
 
-/// tftp。RRQ 仍 ERROR；WRQ（modem server_check.txt 探针）回 ACK block0。
-fn tf_reply(at478: u64, at479: u64, sz479: u64) {
-    if unsafe { !TF_PEND } || at478 == 0 || at479 == 0 {
+fn tf_drop_pend() {
+    unsafe {
+        if TF_SEEN_N < 8 {
+            TF_SEEN[TF_SEEN_N as usize] = TF_OFF;
+            TF_SEEN_N += 1;
+        }
+        TF_PEND = false;
+        TF_N += 1;
+    }
+}
+
+fn tf_name_has(pat: &[u8]) -> bool {
+    let n = unsafe { TF_NAME_N } as usize;
+    if n < pat.len() {
+        return false;
+    }
+    let start = n - pat.len();
+    let mut i = 0usize;
+    while i < pat.len() {
+        if unsafe { TF_NAME[start + i] } != pat[i] {
+            return false;
+        }
+        i += 1;
+    }
+    true
+}
+
+fn tf_is_so() -> bool {
+    tf_name_has(b"549_38_0.mbn")
+}
+
+fn tf_is_ruleset() -> bool {
+    tf_name_has(b"ota_firewall/ruleset")
+}
+
+fn tf_new_port() -> u32 {
+    unsafe {
+        let p = TF_TID;
+        TF_TID = TF_TID.wrapping_add(1);
+        if TF_TID < 0x1000 {
+            TF_TID = 0x1000;
+        }
+        p
+    }
+}
+
+fn tf_put_dec(q: &mut [u8], n: &mut usize, mut v: u32) {
+    let mut tmp = [0u8; 10];
+    let mut k = 0usize;
+    if v == 0 {
+        if *n < q.len() {
+            q[*n] = b'0';
+            *n += 1;
+        }
+        return;
+    }
+    while v > 0 && k < tmp.len() {
+        tmp[k] = b'0' + (v % 10) as u8;
+        k += 1;
+        v /= 10;
+    }
+    while k > 0 {
+        k -= 1;
+        if *n < q.len() {
+            q[*n] = tmp[k];
+            *n += 1;
+        }
+    }
+}
+
+fn tf_put_cstr(q: &mut [u8], n: &mut usize, s: &[u8]) {
+    let mut i = 0usize;
+    while i < s.len() && *n < q.len() {
+        q[*n] = s[i];
+        *n += 1;
+        i += 1;
+    }
+    if *n < q.len() {
+        q[*n] = 0;
+        *n += 1;
+    }
+}
+
+/// RRQ 载荷里有没有选项，有没有 rsize 键，以及 rsize 的值。
+/// 键不存在时值为 0，和“键存在且值为 0”分开记。
+fn tf_rrq_rsize(fifo: u64, off: u64, chunk: u64) -> (bool, bool, u32) {
+    let size = rd32((fifo + off + 36) as usize) as u64;
+    if size < 4 || 48 + size > 16 + chunk {
+        return (false, false, 0);
+    }
+    let base = fifo + off + 48;
+    let mut p = 2u64;
+    let mut skipped = 0u32;
+    while skipped < 2 && p < size {
+        let b = rd8(base + p);
+        p += 1;
+        if b == 0 {
+            skipped += 1;
+        }
+    }
+    let has = p < size;
+    let mut saw_rs = false;
+    let mut rsize = 0u32;
+    while p < size {
+        let ks = p;
+        while p < size && rd8(base + p) != 0 {
+            p += 1;
+        }
+        let ke = p;
+        if p < size {
+            p += 1;
+        }
+        let vs = p;
+        while p < size && rd8(base + p) != 0 {
+            p += 1;
+        }
+        let ve = p;
+        if p < size {
+            p += 1;
+        }
+        if ke - ks == 5
+            && rd8(base + ks) == b'r'
+            && rd8(base + ks + 1) == b's'
+            && rd8(base + ks + 2) == b'i'
+            && rd8(base + ks + 3) == b'z'
+            && rd8(base + ks + 4) == b'e'
+        {
+            saw_rs = true;
+            let mut v = 0u32;
+            let mut i = vs;
+            while i < ve {
+                let c = rd8(base + i);
+                if c < b'0' || c > b'9' {
+                    break;
+                }
+                v = v.saturating_mul(10).saturating_add((c - b'0') as u32);
+                i += 1;
+            }
+            rsize = v;
+        }
+    }
+    (has, saw_rs, rsize)
+}
+
+static mut TF_OPTBUF: [u8; 192] = [0; 192];
+static mut TF_OPTLEN: u8 = 0;
+
+/// 只把 SO 的 RRQ 载荷抄进 BSS。选项等到第一次 sm 之后再解析。
+fn tf_save_so(fifo: u64, off: u64, chunk: u64) {
+    if !tf_is_so() {
+        return;
+    }
+    let size = rd32((fifo + off + 36) as usize) as usize;
+    let room = if chunk > 48 { chunk as usize - 48 } else { 0 };
+    let n = size.min(room).min(192);
+    unsafe {
+        let mut i = 0usize;
+        while i < n {
+            TF_OPTBUF[i] = rd8(fifo + off + 48 + i as u64);
+            i += 1;
+        }
+        TF_OPTLEN = n as u8;
+    }
+}
+
+fn tf_apply_saved() {
+    unsafe {
+        TF_REQ_BLK = 512;
+        TF_REQ_WSZ = 0;
+        TF_REQ_TMO = 1000;
+        TF_HAS_TS = 0;
+    }
+    let n = unsafe { TF_OPTLEN } as usize;
+    if n < 4 {
+        return;
+    }
+    let mut p = 2usize;
+    let mut skipped = 0u32;
+    while skipped < 2 && p < n {
+        let b = unsafe { TF_OPTBUF[p] };
+        p += 1;
+        if b == 0 {
+            skipped += 1;
+        }
+    }
+    while p < n {
+        let ks = p;
+        while p < n && unsafe { TF_OPTBUF[p] } != 0 {
+            p += 1;
+        }
+        let ke = p;
+        if p < n {
+            p += 1;
+        }
+        let vs = p;
+        while p < n && unsafe { TF_OPTBUF[p] } != 0 {
+            p += 1;
+        }
+        let ve = p;
+        if p < n {
+            p += 1;
+        }
+        let mut v = 0u32;
+        let mut i = vs;
+        let mut digits = ve > vs;
+        while i < ve {
+            let c = unsafe { TF_OPTBUF[i] };
+            if c < b'0' || c > b'9' {
+                digits = false;
+                break;
+            }
+            v = v.saturating_mul(10).saturating_add((c - b'0') as u32);
+            i += 1;
+        }
+        if !digits {
+            continue;
+        }
+        let klen = ke - ks;
+        let k0 = unsafe { TF_OPTBUF[ks] };
+        unsafe {
+            if klen == 7 && k0 == b'b' {
+                // RFC 2348 降议：请求块大于发送环上限（glink 载荷 ≤256，DATA 头 4 字节）时
+                // OACK 回 TF_BLK。OACK 值、ACK 后的 >TF_BLK 闸、DATA 切块三处同源此值。
+                TF_REQ_BLK = if v > TF_BLK { TF_BLK } else { v };
+            } else if klen == 5 && k0 == b'w' {
+                TF_REQ_WSZ = v;
+            } else if klen == 9 && k0 == b't' {
+                TF_REQ_TMO = v;
+            } else if klen == 5 && k0 == b't' {
+                TF_HAS_TS = 1;
+            }
+        }
+    }
+}
+
+fn tf_note_ack(off: u64, fifo: u64) {
+    if unsafe { TF_ACK_OFF } == off as u32 {
+        return;
+    }
+    let op = ((rd8(fifo + off + 48) as u32) << 8) | (rd8(fifo + off + 49) as u32);
+    if op == 4 {
+        let blk = ((rd8(fifo + off + 50) as u32) << 8) | (rd8(fifo + off + 51) as u32);
+        unsafe {
+            TF_ACK_OFF = off as u32;
+            TF_ACK_BLK = blk as u16;
+            TF_ACK_PEND = true;
+        }
+    } else if op == 5 {
+        let code = ((rd8(fifo + off + 50) as u32) << 8) | (rd8(fifo + off + 51) as u32);
+        unsafe {
+            TF_ACK_OFF = off as u32;
+            // 9 = End of Transfer。tqftpserv 日志里 stat（rsize=0）的 OACK 之后就是它。
+            TF_ST = if code == 9 && TF_ST == 1 { 4 } else { 9 };
+            TF_ACK_PEND = false;
+        }
+    }
+}
+
+/// 从 SO 的簇链读 `n` 字节到 `TF_BLKBUF[4..]`。簇 16KiB，FAT 已在 `MODEM_FAT`。
+fn so_read(ufs: &mut Ufs, off: u32, n: usize) -> usize {
+    let sz = unsafe { TZ_SZ };
+    if n == 0 || off >= sz {
+        return 0;
+    }
+    let n = n.min((sz - off) as usize).min(252);
+    let mut cl = unsafe { TZ_CL };
+    let mut skip = off / 16384;
+    while skip > 0 {
+        let nxt = fat_next(cl) as u32;
+        if nxt < 2 || nxt >= 0xfff8 {
+            return 0;
+        }
+        cl = nxt;
+        skip -= 1;
+    }
+    let within = (off % 16384) as usize;
+    let sec = (within / 4096) as u32;
+    let bo = within % 4096;
+    let lba = MODEM_LBA + 17 + (cl - 2) * 4 + sec;
+    if ufs.read10(lba, 1, DATA).is_err() {
+        return 0;
+    }
+    let avail = 4096 - bo;
+    let take = n.min(avail);
+    unsafe {
+        core::ptr::copy_nonoverlapping(
+            (DATA as *const u8).add(bo),
+            TF_BLKBUF.as_mut_ptr().add(4),
+            take,
+        );
+    }
+    if take == n {
+        return n;
+    }
+    let rest = n - take;
+    let lba2 = if sec + 1 < 4 {
+        lba + 1
+    } else {
+        let nxt = fat_next(cl) as u32;
+        if nxt < 2 || nxt >= 0xfff8 {
+            return take;
+        }
+        MODEM_LBA + 17 + (nxt - 2) * 4
+    };
+    if ufs.read10(lba2, 1, DATA).is_err() {
+        return take;
+    }
+    unsafe {
+        core::ptr::copy_nonoverlapping(DATA as *const u8, TF_BLKBUF.as_mut_ptr().add(4 + take), rest);
+    }
+    take + rest
+}
+
+/// tftp。WRQ 仍在监听口回 ACK block 0。
+/// SO 的 RRQ 等第一次 `sm` 之后发 OACK。rsize 键存在且值为 0 时不发 DATA，等 code 9。
+fn tf_reply(ufs: &mut Ufs, at478: u64, at479: u64, sz479: u64) {
+    if at478 == 0 || at479 == 0 {
         return;
     }
     let tx_head = rd32((at478 + 4) as usize) as u64;
@@ -6413,29 +7062,123 @@ fn tf_reply(at478: u64, at479: u64, sz479: u64) {
     if tx_head != tx_tail {
         return;
     }
+    let armed = unsafe { SM_ARMED };
+    let st = unsafe { TF_ST };
+    if armed && (st == 1 || st == 2) && unsafe { TF_ACK_PEND } {
+        let ack = unsafe { TF_ACK_BLK };
+        let expect = unsafe { TF_BLKNO };
+        if ack != expect {
+            unsafe { TF_ACK_PEND = false };
+            return;
+        }
+        // stat：rsize 键在，值为 0。停在状态 1，等 opcode 5 code 9。不发 DATA。
+        if unsafe { TF_HAS_RS } != 0 && unsafe { TF_RSIZE } == 0 {
+            unsafe { TF_ACK_PEND = false };
+            return;
+        }
+        // 对方要的块比发送环大。先记下 ACK，不发短块（短块会被当成文件结束）。
+        if unsafe { TF_REQ_BLK } > TF_BLK {
+            unsafe {
+                TF_ST = 7;
+                TF_ACK_PEND = false;
+            }
+            return;
+        }
+        let off = (ack as u32).saturating_mul(TF_BLK);
+        let limit = {
+            let sz = unsafe { TZ_SZ };
+            let rs = unsafe { TF_RSIZE };
+            if rs > 0 { rs.min(sz) } else { sz }
+        };
+        if off >= limit {
+            unsafe {
+                TF_ST = 3;
+                TF_ACK_PEND = false;
+            }
+            return;
+        }
+        let mut want = TF_BLK as usize;
+        if off + TF_BLK > limit {
+            want = (limit - off) as usize;
+        }
+        let n = so_read(ufs, off, want);
+        if n == 0 {
+            unsafe {
+                TF_ST = 8;
+                TF_ACK_PEND = false;
+            }
+            return;
+        }
+        let blk = ack.wrapping_add(1);
+        unsafe {
+            TF_BLKBUF[0] = 0;
+            TF_BLKBUF[1] = 3;
+            TF_BLKBUF[2] = (blk >> 8) as u8;
+            TF_BLKBUF[3] = blk as u8;
+        }
+        let pkt = unsafe { &TF_BLKBUF[..4 + n] };
+        if glink_tx_payload(
+            at478,
+            at479,
+            tx_head,
+            sz479,
+            unsafe { TF_XFER_PORT },
+            unsafe { TF_NODE },
+            unsafe { TF_PORT },
+            pkt,
+        ) {
+            unsafe {
+                TF_BLKNO = blk;
+                TF_ST = if n < TF_BLK as usize || off + n as u32 >= limit {
+                    3
+                } else {
+                    2
+                };
+                TF_ACK_PEND = false;
+                TF_N += 1;
+            }
+        }
+        return;
+    }
+    if unsafe { !TF_PEND } {
+        return;
+    }
     let op = unsafe { TF_OP };
-    let mut q = [0u8; 32];
-    let n = if op == 2 {
-        // ACK block 0 — 允许 WRQ 探针通过，不落盘。
+    if op == 2 {
+        let mut q = [0u8; 4];
         q[0] = 0;
         q[1] = 4;
-        q[2] = 0;
-        q[3] = 0;
-        4usize
-    } else {
-        let (code, text): (u16, &[u8]) = if op == 1 {
-            (1, b"file not found")
-        } else {
-            (4, b"bad op")
-        };
+        if glink_tx_payload(
+            at478,
+            at479,
+            tx_head,
+            sz479,
+            0x11,
+            unsafe { TF_NODE },
+            unsafe { TF_PORT },
+            &q,
+        ) {
+            tf_drop_pend();
+        }
+        return;
+    }
+    // tqftpserv：请求一到就换一个新口回 ERROR 1。不等 sm。
+    // INIT 完成前不发：早发 ERROR 会把发送环卡住。
+    if op == 1 && tf_is_ruleset() {
+        if unsafe { II_ST } != 2 {
+            return;
+        }
+        let sport = tf_new_port();
+        let mut q = [0u8; 20];
+        let msg = b"file not found";
         q[0] = 0;
         q[1] = 5;
-        q[2] = (code >> 8) as u8;
-        q[3] = code as u8;
+        q[2] = 0;
+        q[3] = 1;
         let mut n = 4usize;
         let mut i = 0usize;
-        while i < text.len() && n < q.len() {
-            q[n] = text[i];
+        while i < msg.len() && n < q.len() {
+            q[n] = msg[i];
             n += 1;
             i += 1;
         }
@@ -6443,26 +7186,91 @@ fn tf_reply(at478: u64, at479: u64, sz479: u64) {
             q[n] = 0;
             n += 1;
         }
-        n
-    };
+        if glink_tx_payload(
+            at478,
+            at479,
+            tx_head,
+            sz479,
+            sport,
+            unsafe { TF_NODE },
+            unsafe { TF_PORT },
+            &q[..n],
+        ) {
+            unsafe {
+                TF_REJ = TF_REJ.wrapping_add(1);
+                TF_REJ_PORT = sport;
+            }
+            tf_drop_pend();
+        }
+        return;
+    }
+    // 状态 1 且还没送出 DATA：旧端口的 OACK 没人 ACK。新 RRQ 换端口再发一次。
+    // 状态 4：stat 的 End of Transfer 已经收到，下一笔 SO 重新 OACK。
+    let st_now = unsafe { TF_ST };
+    let retarget = st_now == 1 && unsafe { TF_BLKNO } == 0;
+    let fresh = st_now == 0 || st_now == 4;
+    // 游标不再回头。sm 之前把 SO 请求丢掉，后面就没有第二次机会。
+    if op == 1 && !armed && tf_is_so() && unsafe { TZ_ST } == 1 && fresh {
+        return;
+    }
+    if op != 1 || !armed || (!retarget && !fresh) || !tf_is_so() || unsafe { TZ_ST } != 1 {
+        tf_drop_pend();
+        return;
+    }
+    tf_apply_saved();
+    let mut q = [0u8; 96];
+    let mut n = 0usize;
+    q[0] = 0;
+    q[1] = 6;
+    n = 2;
+    // 顺序跟 tqftpserv tftp_send_oack：blksize、timeoutms、tsize、wsize。
+    tf_put_cstr(&mut q, &mut n, b"blksize");
+    tf_put_dec(&mut q, &mut n, unsafe { TF_REQ_BLK });
+    if n < q.len() {
+        q[n] = 0;
+        n += 1;
+    }
+    tf_put_cstr(&mut q, &mut n, b"timeoutms");
+    tf_put_dec(&mut q, &mut n, unsafe { TF_REQ_TMO });
+    if n < q.len() {
+        q[n] = 0;
+        n += 1;
+    }
+    if unsafe { TF_HAS_TS } != 0 {
+        tf_put_cstr(&mut q, &mut n, b"tsize");
+        tf_put_dec(&mut q, &mut n, unsafe { TZ_SZ });
+        if n < q.len() {
+            q[n] = 0;
+            n += 1;
+        }
+    }
+    if unsafe { TF_REQ_WSZ } > 0 {
+        tf_put_cstr(&mut q, &mut n, b"wsize");
+        tf_put_dec(&mut q, &mut n, unsafe { TF_REQ_WSZ });
+        if n < q.len() {
+            q[n] = 0;
+            n += 1;
+        }
+    }
+    let sport = tf_new_port();
     if glink_tx_payload(
         at478,
         at479,
         tx_head,
         sz479,
-        0x11,
+        sport,
         unsafe { TF_NODE },
         unsafe { TF_PORT },
         &q[..n],
     ) {
         unsafe {
-            if TF_SEEN_N < 8 {
-                TF_SEEN[TF_SEEN_N as usize] = TF_OFF;
-                TF_SEEN_N += 1;
-            }
-            TF_PEND = false;
-            TF_N += 1;
+            TF_XFER_PORT = sport;
+            TF_ST = 1;
+            TF_BLKNO = 0;
+            TF_ACK_PEND = false;
+            TF_ACK_OFF = 0xffff_ffff;
         }
+        tf_drop_pend();
     }
 }
 
@@ -6634,26 +7442,48 @@ fn sr_tick(at478: u64, at479: u64, sz479: u64) {
 /// sm ii=st.txn.res。不改 CDSP/TFTP/TX/glink intent。
 fn ipa_init_tick(at478: u64, at479: u64, sz479: u64) {
     if at478 == 0 || at479 == 0 || !unsafe { HAVE_IID } {
+        unsafe { II_WHY = 1 };
         return;
     }
     // 已发或已回：不再发。
     if unsafe { II_SENT } != 0 || unsafe { II_PEND } || unsafe { II_ST } == 2 {
+        unsafe { II_WHY = 2 };
         return;
     }
     // 前置：iq 0x31/0x201 + port；GSI CH7 STARTED；ig 已采（拿 R）。
     if unsafe { IQ_SEEN } == 0 || unsafe { IQ_PORT } == 0 {
+        unsafe { II_WHY = 3 };
         return;
     }
     // stock qrtr：0x31 inst 0x201；无精确实例则等偏置闩。
     if unsafe { IQ_INST } != 0x201 {
+        unsafe { II_WHY = 4 };
         return;
     }
     if unsafe { GC_ST } != 1 || unsafe { IG_ST } != 1 || unsafe { IG_R } == 0xffff_ffff {
+        unsafe { II_WHY = 5 };
         return;
     }
     let tx_head = rd32((at478 + 4) as usize) as u64;
     let tx_tail = rd32(at478 as usize) as u64;
     if tx_head != tx_tail {
+        unsafe {
+            II_WHY = 6;
+            II_HX = tx_head as u32;
+            II_TL = tx_tail as u32;
+            // 0 cmd, 1 intent, 2 chunk, 7 src_port, 9 size, 10 dst_node, 11 dst_port, 12 qmi
+            let pick = [0u64, 1, 2, 7, 9, 10, 11, 12];
+            let mut k = 0usize;
+            while k < 8 {
+                let off = tx_tail + pick[k] * 4;
+                II_PK[k] = if at479 != 0 && off + 4 <= sz479 {
+                    rd32((at479 + off) as usize)
+                } else {
+                    0
+                };
+                k += 1;
+            }
+        }
         return;
     }
     let r = unsafe { IG_R };
@@ -6693,7 +7523,7 @@ fn ipa_init_tick(at478: u64, at479: u64, sz479: u64) {
     put_u16(&mut q, &mut n, 8);
     put_u32(&mut q, &mut n, 0x27d8 + r);
     put_u32(&mut q, &mut n, 0x800);
-    // 0x17 ctrl_comm_dest_end_pt = 16 (APPS_WAN_CONS)
+    // 0x17 去掉后端点 16 后，ping 一通就掉，没读到 sm。先加回。
     put_u8(&mut q, &mut n, 0x17);
     put_u16(&mut q, &mut n, 4);
     put_u32(&mut q, &mut n, 16);
@@ -6746,6 +7576,7 @@ fn ipa_init_tick(at478: u64, at479: u64, sz479: u64) {
         &q[..n],
     ) {
         unsafe {
+            II_WHY = 0;
             II_TXN = txn;
             II_PEND = true;
             II_SENT = 1;
@@ -6754,9 +7585,140 @@ fn ipa_init_tick(at478: u64, at479: u64, sz479: u64) {
         }
     } else {
         unsafe {
+            II_WHY = 7;
             II_ST = 3;
             II_SENT = 1;
         }
+    }
+}
+
+/// 回 INIT_MODEM_DRIVER_CMPLT_RESP：只有 TLV 0x02 result 成功。
+fn ipa_cmplt_tick(at478: u64, at479: u64, sz479: u64) {
+    if !unsafe { IC_PEND } || at478 == 0 || at479 == 0 || !unsafe { HAVE_IID } {
+        return;
+    }
+    let tx_head = rd32((at478 + 4) as usize) as u64;
+    let tx_tail = rd32(at478 as usize) as u64;
+    if tx_head != tx_tail {
+        return;
+    }
+    let txn = unsafe { IC_TXN };
+    let mut q = [0u8; 32];
+    let mut n = 7usize;
+    put_result(&mut q, &mut n, false);
+    qmi_finish_typed(&mut q, n, 2, txn, 0x35);
+    if glink_tx_payload(
+        at478,
+        at479,
+        tx_head,
+        sz479,
+        IPA_QRTR_PORT,
+        unsafe { IC_NODE },
+        unsafe { IC_PORT },
+        &q[..n],
+    ) {
+        unsafe {
+            IC_PEND = false;
+            IC_SENT = IC_SENT.wrapping_add(1);
+        }
+    }
+}
+
+/// QMI_IPA_CONFIG_RESP：只有 TLV 0x02 result 成功。从服务端口 0x16 回。
+fn ipa_cfg_tick(at478: u64, at479: u64, sz479: u64) {
+    if unsafe { CFG_ARM } == 0 || !unsafe { CFG_PEND } || at478 == 0 || at479 == 0 || !unsafe { HAVE_IID }
+    {
+        return;
+    }
+    let tx_head = rd32((at478 + 4) as usize) as u64;
+    let tx_tail = rd32(at478 as usize) as u64;
+    if tx_head != tx_tail {
+        return;
+    }
+    let txn = unsafe { CFG_TXN };
+    let mut q = [0u8; 32];
+    let mut n = 7usize;
+    put_result(&mut q, &mut n, false);
+    qmi_finish_typed(&mut q, n, 2, txn, 0x27);
+    if glink_tx_payload(
+        at478,
+        at479,
+        tx_head,
+        sz479,
+        IPA_SVC_PORT,
+        unsafe { CFG_NODE },
+        unsafe { CFG_PORT },
+        &q[..n],
+    ) {
+        unsafe {
+            CFG_DONE_TXN = txn;
+            CFG_DONE_PORT = CFG_PORT;
+            CFG_PEND = false;
+            CFG_SENT = CFG_SENT.wrapping_add(1);
+        }
+    }
+}
+
+/// INDICATION_REGISTER_RESP：TLV 0x02 成功。
+fn ipa_ir_tick(at478: u64, at479: u64, sz479: u64) {
+    if !unsafe { IR_PEND } || at478 == 0 || at479 == 0 || !unsafe { HAVE_IID } {
+        return;
+    }
+    let tx_head = rd32((at478 + 4) as usize) as u64;
+    let tx_tail = rd32(at478 as usize) as u64;
+    if tx_head != tx_tail {
+        return;
+    }
+    let txn = unsafe { IR_TXN };
+    let mut q = [0u8; 32];
+    let mut n = 7usize;
+    put_result(&mut q, &mut n, false);
+    qmi_finish_typed(&mut q, n, 2, txn, 0x20);
+    if glink_tx_payload(
+        at478,
+        at479,
+        tx_head,
+        sz479,
+        IPA_SVC_PORT,
+        unsafe { IR_NODE },
+        unsafe { IR_PORT },
+        &q[..n],
+    ) {
+        unsafe {
+            IR_PEND = false;
+            IR_DONE = 1;
+        }
+    }
+}
+
+/// INIT 已完成且 0x20 已回：MASTER_DRIVER_INIT_COMPLETE 指示，qtype 4，msgid 0x22。
+fn ipa_ind_tick(at478: u64, at479: u64, sz479: u64) {
+    if unsafe { IR_DONE } == 0 || unsafe { IND_SENT } != 0 || unsafe { II_ST } != 2 {
+        return;
+    }
+    if at478 == 0 || at479 == 0 || !unsafe { HAVE_IID } {
+        return;
+    }
+    let tx_head = rd32((at478 + 4) as usize) as u64;
+    let tx_tail = rd32(at478 as usize) as u64;
+    if tx_head != tx_tail {
+        return;
+    }
+    let mut q = [0u8; 32];
+    let mut n = 7usize;
+    put_result(&mut q, &mut n, false);
+    qmi_finish_typed(&mut q, n, 4, 0, 0x22);
+    if glink_tx_payload(
+        at478,
+        at479,
+        tx_head,
+        sz479,
+        IPA_SVC_PORT,
+        unsafe { IR_NODE },
+        unsafe { IR_PORT },
+        &q[..n],
+    ) {
+        unsafe { IND_SENT = 1; }
     }
 }
 
@@ -6941,6 +7903,7 @@ fn smp_publish(base: u64, free_u: u32, g: u32, boff: u32, b0: u32, b1: u32) -> (
     wr32((data + 32) as usize, 0x6c);
     // entries[1] "ipa" @ +40；value @ +56 = 0（已在上面清零）
     wr32((data + 40) as usize, 0x0061_7069);
+    unsafe { IPA_SMP_VAL = data + 56; }
     unsafe {
         core::arch::asm!("dsb sy", options(nostack));
     }
@@ -6959,6 +7922,21 @@ fn smp_publish(base: u64, free_u: u32, g: u32, boff: u32, b0: u32, b1: u32) -> (
         MPSS_VOUT = 2;
     }
     (1, new_free, cached)
+}
+
+/// modem 建了 ipa 入向之后，按 ipa3_smp2p_modem_clk_query_isr 回 bit0|bit1。
+fn ipa_smp_clk() {
+    let addr = unsafe { IPA_SMP_VAL };
+    if addr == 0 || unsafe { IPA_SMP_SENT } != 0 || unsafe { MPSS_IN } & 1 == 0 {
+        return;
+    }
+    wr32(addr as usize, 3);
+    unsafe {
+        core::arch::asm!("dsb sy", options(nostack));
+    }
+    dcache_civac(addr, 4);
+    wr32(0x4080_0c, (2 << 16) | 2);
+    unsafe { IPA_SMP_SENT = 1; }
 }
 
 /// slave-kernel 的值里，bit1 是 ONLINE。高位 0x80000000 是「还没读到条目」。
@@ -10029,6 +11007,7 @@ fn smem_payloads(
             }
         }
     }
+    // 干净机器上回答之后，TFTP 换成 ota_firewall，约 6 秒 USB 掉。先不回。
     let mut d0 = 0u32;
     let mut d1 = 0u32;
     let mut d2 = 0u32;
@@ -10113,6 +11092,21 @@ fn pd_take_name(fifo: u64, off: u64, chunk: u64, w1: u32) -> bool {
                     i += 1;
                 }
                 PD_NAME_N = n as u8;
+                let elf = b"kernel/elf_loader";
+                if n == elf.len() {
+                    let mut same = true;
+                    let mut i = 0usize;
+                    while i < n {
+                        if PD_NAME[i] != elf[i] {
+                            same = false;
+                            break;
+                        }
+                        i += 1;
+                    }
+                    if same {
+                        PD_SAW_ELF = 1;
+                    }
+                }
             }
             return true;
         }
@@ -10137,9 +11131,13 @@ fn scan_new_servers(fifo: u64, rh: u64) {
     if rh < unsafe { QP_VIS } {
         unsafe { QP_VIS = 0; }
     }
-    let mut off = 0u64;
+    if rh < unsafe { RX_PARSED } {
+        unsafe { RX_PARSED = 0; }
+    }
+    // 从上次停的地方继续。每次从 0 重扫、最多 200 个包，ACK 落在后面就永远看不见。
+    let mut off = unsafe { RX_PARSED };
     let mut guard = 0u32;
-    while off + 8 <= rh && guard < 200 {
+    while off + 8 <= rh && guard < 4000 {
         guard += 1;
         let w0 = rd32((fifo + off) as usize);
         let cmd = w0 & 0xffff;
@@ -10164,10 +11162,15 @@ fn scan_new_servers(fifo: u64, rh: u64) {
             16
         } else if cmd == 9 {
             let chunk = rd32((fifo + off + 8) as usize) as u64;
-            if chunk > 512 || off + 16 + chunk > rh + 16 {
+            if chunk == 0 || off + 16 + chunk > rh + 16 {
                 break;
             }
             let step = (16 + chunk + 7) & !7;
+            // 大于 512 的包不解析，但不要把后面的 ACK 截掉。
+            if chunk > 512 {
+                off += step;
+                continue;
+            }
             // 公告发完再还。只还本机发出的 1..=10，通道 2。不推接收尾。
             let lcid = w0 >> 16;
             let liid = rd32((fifo + off + 4) as usize);
@@ -10175,7 +11178,7 @@ fn scan_new_servers(fifo: u64, rh: u64) {
                 // 不限 intent id：OPEN 可能用掉 >10 的 id，不还则 modem 发不出 ALLOC。
                 if GLINK_INTENTS
                     && HOST_ADV >= 4
-                    && lcid == 2
+                    && qrtr_lcid(lcid)
                     && liid != 0
                     && off >= RX_VIS
                     && RX_LIID_N < 16
@@ -10183,6 +11186,26 @@ fn scan_new_servers(fifo: u64, rh: u64) {
                     RX_LIID[RX_LIID_N as usize] = liid;
                     RX_LIID_N += 1;
                     RX_VIS = off + step;
+                }
+            }
+            if chunk >= 36 {
+                let typ = rd32((fifo + off + 20) as usize);
+                let dst_node = rd32((fifo + off + 40) as usize);
+                let dst_port = rd32((fifo + off + 44) as usize);
+                let xfer_port = unsafe { TF_XFER_PORT };
+                let on_xfer = xfer_port != 0 && dst_port == xfer_port;
+                if typ == 1 && (dst_port == TF_DATA_PORT || on_xfer) {
+                    tf_note_ack(off, fifo);
+                }
+                if typ == 1 && chunk >= 52 && unsafe { TF_ST } >= 1 && unsafe { TF_RX_HIT } == 0 {
+                    let op = ((rd8(fifo + off + 48) as u32) << 8) | (rd8(fifo + off + 49) as u32);
+                    if on_xfer || op == 4 || op == 5 {
+                        unsafe {
+                            TF_RX_HIT = 1;
+                            TF_RX_PORT = dst_port;
+                            TF_RX_META = dst_node | (op << 16);
+                        }
+                    }
                 }
             }
             if chunk >= 40 {
@@ -10276,63 +11299,10 @@ fn scan_new_servers(fifo: u64, rh: u64) {
                     if qtype == 0 && msgid >= 1 && msgid <= 5 && seen {
                         unsafe { RF_DROP |= 1 };
                     }
-                    if qtype == 0 && msgid >= 1 && msgid <= 5 && !seen && unsafe { RF_PEND } {
-                        unsafe { RF_DROP |= 2 };
-                    }
-                    if qtype == 0 && msgid >= 1 && msgid <= 5 && !seen && unsafe { !RF_PEND } {
-                        unsafe {
-                            RF_HIT = RF_HIT.wrapping_add(1);
-                            let slot = (RF_HIST_N % 8) as usize;
-                            // msgid|txn<<8|sport<<24（sport 低 8 位）
-                            RF_HIST[slot] = (msgid & 0xff)
-                                | ((txn & 0xffff) << 8)
-                                | ((sport & 0xff) << 24);
-                            RF_HIST_N = RF_HIST_N.wrapping_add(1);
-                        }
-                        if msgid == 1 {
-                            let msglen = ((w1 >> 8) & 0xffff) as u64;
-                            let mut name = [0u8; 64];
-                            let mut nn = 0usize;
-                            if chunk >= 32 && msglen >= 3 && 7 + msglen <= chunk - 32 && msglen <= 96 {
-                                let base = fifo + off + 55;
-                                let mut p = 0u64;
-                                while p + 3 <= msglen {
-                                    let t = rd8(base + p);
-                                    let ln = rd8(base + p + 1) as u64
-                                        | ((rd8(base + p + 2) as u64) << 8);
-                                    p += 3;
-                                    if p + ln > msglen {
-                                        break;
-                                    }
-                                    if t == 1 {
-                                        let mut k = 0u64;
-                                        while k < ln && nn < 64 {
-                                            let b = rd8(base + p + k);
-                                            if b == 0 {
-                                                break;
-                                            }
-                                            name[nn] = b;
-                                            nn += 1;
-                                            k += 1;
-                                        }
-                                        break;
-                                    }
-                                    p += ln;
-                                }
-                            }
-                            unsafe {
-                                RF_PATH = name;
-                                RF_PATH_N = nn as u8;
-                            }
-                        }
-                        unsafe {
-                            RF_TXN = txn;
-                            RF_NODE = rd32((fifo + off + 24) as usize);
-                            RF_PORT = rd32((fifo + off + 28) as usize);
-                            RF_MSG = msgid;
-                            RF_OFF = off;
-                            RF_FIFO = fifo;
-                            RF_PEND = true;
+                    if qtype == 0 && msgid >= 1 && msgid <= 5 && !seen && !rf_queued(skey) {
+                        let node = rd32((fifo + off + 24) as usize);
+                        if !rf_enqueue(fifo, off, chunk, txn, node, sport, msgid) {
+                            unsafe { RF_DROP |= 2 };
                         }
                     }
                 }
@@ -10395,7 +11365,11 @@ fn scan_new_servers(fifo: u64, rh: u64) {
                     }
                 }
                 // IPA INIT_MODEM_DRIVER RESP（msgid 0x0021）→ ii=
-                if typ == 1 && dst_node == 1 && dst_port == IPA_QRTR_PORT && chunk >= 48 {
+                if typ == 1
+                    && dst_node == 1
+                    && (dst_port == IPA_QRTR_PORT || dst_port == IPA_SVC_PORT)
+                    && chunk >= 48
+                {
                     let w = rd32((fifo + off + 48) as usize);
                     let w1 = rd32((fifo + off + 52) as usize);
                     let qtype = w & 0xff;
@@ -10408,8 +11382,71 @@ fn scan_new_servers(fifo: u64, rh: u64) {
                             II_ST = 2;
                         }
                     }
+                    if qtype == 0 && dst_port == IPA_SVC_PORT {
+                        unsafe {
+                            if IPA_REQ == 0 {
+                                IPA_REQ = msgid;
+                            }
+                            IPA_LAST = msgid;
+                        }
+                    }
+                    if msgid != 0x27 && unsafe { JX_OTHER } == 0 {
+                        unsafe {
+                            JX_OTHER = (dst_port << 16) | ((qtype as u32) << 8) | msgid;
+                        }
+                    }
+                    // INDICATION_REGISTER_REQ。内核回 TLV 0x02，INIT 已完成再发 0x22。
+                    if qtype == 0 && msgid == 0x20 && !unsafe { IR_PEND } && unsafe { IR_DONE } == 0
+                    {
+                        unsafe {
+                            IR_TXN = (w >> 8) & 0xffff;
+                            IR_NODE = rd32((fifo + off + 24) as usize);
+                            IR_PORT = rd32((fifo + off + 28) as usize);
+                            IR_PEND = true;
+                        }
+                    }
+                    // QMI_IPA_CONFIG_REQ。内核 ipa_mhi_handle_ipa_config_req 返回 0，
+                    // 应答只有 TLV 0x02 成功。
+                    if qtype == 0 && msgid == 0x27 && dst_port == IPA_SVC_PORT && !unsafe { CFG_PEND }
+                    {
+                        let txn = (w >> 8) & 0xffff;
+                        let port = rd32((fifo + off + 28) as usize);
+                        // 同一笔停在接收环里时不要每轮再回。
+                        if unsafe { txn != CFG_DONE_TXN || port != CFG_DONE_PORT } {
+                            unsafe {
+                                CFG_TXN = txn;
+                                CFG_NODE = rd32((fifo + off + 24) as usize);
+                                CFG_PORT = port;
+                                if CFG_CAP_N == 0 {
+                                    let mut k = 0usize;
+                                    while k < 4 {
+                                        CFG_CAP[k] = rd32((fifo + off + 48 + (k as u64) * 4) as usize);
+                                        k += 1;
+                                    }
+                                    CFG_CAP_N = 1;
+                                }
+                                // TLV 0x10 值 3 是 PCIE，不是 USB。第一次 sm 之后才回成功。
+                                CFG_PEND = true;
+                            }
+                        }
+                    }
+                    // modem → AP：INIT_MODEM_DRIVER_CMPLT_REQ，msgid 0x35。
+                    if qtype == 0 && msgid == 0x35 && !unsafe { IC_PEND } {
+                        let txn = (w >> 8) & 0xffff;
+                        unsafe {
+                            IC_N = IC_N.wrapping_add(1);
+                            IC_TXN = txn;
+                            IC_NODE = rd32((fifo + off + 24) as usize);
+                            IC_PORT = rd32((fifo + off + 28) as usize);
+                            IC_PEND = true;
+                        }
+                    }
                 }
                 if typ == 1 && dst_node == 1 && dst_port == 0x11 && chunk >= 34 {
+                    let op0 = ((rd8(fifo + off + 48) as u32) << 8) | (rd8(fifo + off + 49) as u32);
+                    if op0 == 4 || op0 == 5 {
+                        tf_note_ack(off, fifo);
+                    }
                     let key = off as u32;
                     let mut seen = false;
                     unsafe {
@@ -10422,8 +11459,8 @@ fn scan_new_servers(fifo: u64, rh: u64) {
                             i += 1;
                         }
                     }
-                    if !seen && unsafe { !TF_PEND } {
-                        let op = ((rd8(fifo + off + 48) as u32) << 8) | (rd8(fifo + off + 49) as u32);
+                    if op0 != 4 && op0 != 5 && !seen && unsafe { !TF_PEND } {
+                        let op = op0;
                         let mut name = [0u8; 64];
                         let mut nn = 0usize;
                         let max = chunk - 32;
@@ -10443,6 +11480,13 @@ fn scan_new_servers(fifo: u64, rh: u64) {
                             TF_NAME = name;
                             TF_NAME_N = nn as u8;
                             TF_PEND = true;
+                            if op == 1 {
+                                let (has, saw_rs, rsz) = tf_rrq_rsize(fifo, off, chunk);
+                                TF_HASOPT = if has { 1 } else { 0 };
+                                TF_HAS_RS = if saw_rs { 1 } else { 0 };
+                                TF_RSIZE = rsz;
+                                tf_save_so(fifo, off, chunk);
+                            }
                         }
                     }
                 }
@@ -10451,6 +11495,9 @@ fn scan_new_servers(fifo: u64, rh: u64) {
                     let inst = rd32((fifo + off + 56) as usize);
                     if typ == 4 {
                         let n = unsafe { SMEM_NSVC };
+                        if svc == 0x45 {
+                            unsafe { SAW_45 = 0x8000_0000 | (inst & 0x7fff_ffff) };
+                        }
                         if n < 8 {
                             unsafe {
                                 SMEM_SVC[n as usize * 2] = svc;
@@ -10523,7 +11570,9 @@ fn scan_new_servers(fifo: u64, rh: u64) {
         }
         off += step;
     }
-    unsafe { RX_PARSED = off; }
+    unsafe {
+        RX_PARSED = off;
+    }
 }
 
 /// 对方的发送 FIFO 就是这块。head 是它写到的位置，tail 是我们消费到的位置。
@@ -10815,7 +11864,8 @@ fn ctrl_service(
                                 None => push_str(&mut reply, &mut rn, "bat\n"),
                             },
                             8 => {
-                                smem_scan(true);
+                                smem_scan(ufs, true);
+                                unsafe { CFG_ARM = 1; }
                                 let s = unsafe { &SMEM_SNAP };
                                 push_str(&mut reply, &mut rn, "sm i=");
                                 push_hex(&mut reply, &mut rn, s.init as u64);
@@ -10849,6 +11899,10 @@ fn ctrl_service(
                                 push_hex(&mut reply, &mut rn, unsafe { CF_N } as u64);
                                 push_str(&mut reply, &mut rn, " hh=");
                                 push_hex(&mut reply, &mut rn, unsafe { HELLO_RX } as u64);
+                                push_str(&mut reply, &mut rn, " iz=");
+                                push_hex(&mut reply, &mut rn, unsafe { SEEN_ISZ } as u64);
+                                push_str(&mut reply, &mut rn, " ga=");
+                                push_hex(&mut reply, &mut rn, if unsafe { GLINK_ACKED } { 1 } else { 0 });
                                 push_str(&mut reply, &mut rn, " rl=");
                                 push_hex(&mut reply, &mut rn, unsafe { GLINK_RXLEN });
                                 push_str(&mut reply, &mut rn, " b=");
@@ -10922,6 +11976,8 @@ fn ctrl_service(
                                 push_hex(&mut reply, &mut rn, unsafe { PD_HITS } as u64);
                                 push_str(&mut reply, &mut rn, ".");
                                 push_hex(&mut reply, &mut rn, unsafe { PD_QLEN } as u64);
+                                push_str(&mut reply, &mut rn, " pe=");
+                                push_hex(&mut reply, &mut rn, unsafe { PD_SAW_ELF } as u64);
                                 push_str(&mut reply, &mut rn, " rf=");
                                 push_hex(&mut reply, &mut rn, unsafe { RF_MSG } as u64);
                                 push_str(&mut reply, &mut rn, ".");
@@ -11053,6 +12109,33 @@ fn ctrl_service(
                                 push_hex(&mut reply, &mut rn, unsafe { TZ_SZ } as u64);
                                 push_str(&mut reply, &mut rn, ".");
                                 push_hex(&mut reply, &mut rn, unsafe { TZ_CL } as u64);
+                                // tb=st.blk — 0 空闲 1 OACK 2 DATA 3 送完 8 读失败 9 对端 ERROR
+                                push_str(&mut reply, &mut rn, " tb=");
+                                push_hex(&mut reply, &mut rn, unsafe { TF_ST } as u64);
+                                push_str(&mut reply, &mut rn, ".");
+                                push_hex(&mut reply, &mut rn, unsafe { TF_BLKNO } as u64);
+                                push_str(&mut reply, &mut rn, ".");
+                                push_hex(&mut reply, &mut rn, unsafe { TF_XFER_PORT } as u64);
+                                push_str(&mut reply, &mut rn, " rx=");
+                                push_hex(&mut reply, &mut rn, unsafe { TF_RX_PORT } as u64);
+                                push_str(&mut reply, &mut rn, ".");
+                                push_hex(&mut reply, &mut rn, unsafe { TF_RX_META } as u64);
+                                // ob=blk.wsz.ts — 写进 OACK 的数。wsz=0 表示请求没带 wsize。
+                                // rs=有键.值。rs=1.0 是 stat。
+                                push_str(&mut reply, &mut rn, " ob=");
+                                push_hex(&mut reply, &mut rn, unsafe { TF_REQ_BLK } as u64);
+                                push_str(&mut reply, &mut rn, ".");
+                                push_hex(&mut reply, &mut rn, unsafe { TF_REQ_WSZ } as u64);
+                                push_str(&mut reply, &mut rn, ".");
+                                push_hex(&mut reply, &mut rn, unsafe { TF_HAS_TS } as u64);
+                                push_str(&mut reply, &mut rn, " rs=");
+                                push_hex(&mut reply, &mut rn, unsafe { TF_HAS_RS } as u64);
+                                push_str(&mut reply, &mut rn, ".");
+                                push_hex(&mut reply, &mut rn, unsafe { TF_RSIZE } as u64);
+                                push_str(&mut reply, &mut rn, " tr=");
+                                push_hex(&mut reply, &mut rn, unsafe { TF_REJ } as u64);
+                                push_str(&mut reply, &mut rn, ".");
+                                push_hex(&mut reply, &mut rn, unsafe { TF_REJ_PORT } as u64);
                                 // me=pub.vout.inflags — MPSS SMP2P ipa 刀
                                 push_str(&mut reply, &mut rn, " me=");
                                 push_hex(&mut reply, &mut rn, unsafe { MPSS_PUB } as u64);
@@ -11060,6 +12143,8 @@ fn ctrl_service(
                                 push_hex(&mut reply, &mut rn, unsafe { MPSS_VOUT } as u64);
                                 push_str(&mut reply, &mut rn, ".");
                                 push_hex(&mut reply, &mut rn, unsafe { MPSS_IN } as u64);
+                                push_str(&mut reply, &mut rn, " mv=");
+                                push_hex(&mut reply, &mut rn, unsafe { IPA_SMP_SENT } as u64);
                                 // bc=NAME.st.addr.unit.width,... — IPA BCM cmd-db 只读（序：IP0 SH0 MC0 ACV SN1 CN0 SH4）
                                 bcm_probe();
                                 push_str(&mut reply, &mut rn, " bc=");
@@ -11374,6 +12459,8 @@ fn ctrl_service(
                                         unsafe { SMEM_LOOK[i as usize * 2 + 1] } as u64,
                                     );
                                 }
+                                push_str(&mut reply, &mut rn, " w45=");
+                                push_hex(&mut reply, &mut rn, unsafe { SAW_45 } as u64);
                                 push_str(&mut reply, &mut rn, " q=");
                                 let nsvc = unsafe { SMEM_NSVC }.min(8);
                                 for i in 0..nsvc {
@@ -11393,10 +12480,13 @@ fn ctrl_service(
                                 push_hex(&mut reply, &mut rn, unsafe { IQ_SEEN } as u64);
                                 push_str(&mut reply, &mut rn, ".");
                                 push_hex(&mut reply, &mut rn, unsafe { IQ_INST } as u64);
+                                push_str(&mut reply, &mut rn, ".");
+                                push_hex(&mut reply, &mut rn, unsafe { IQ_NODE } as u64);
+                                push_str(&mut reply, &mut rn, ".");
+                                push_hex(&mut reply, &mut rn, unsafe { IQ_PORT } as u64);
                                 // ig= — IPA/GSI 只读 MMIO（PAS 绿后一次；零写）
                                 ipa_gsi_ro_probe();
                                 ipa_gsi_ring_carve();
-                                ipa_gsi_ch7_cfg();
                                 push_str(&mut reply, &mut rn, " ig=");
                                 push_hex(&mut reply, &mut rn, unsafe { IG_ST } as u64);
                                 push_str(&mut reply, &mut rn, ".");
@@ -11452,6 +12542,58 @@ fn ctrl_service(
                                 push_hex(&mut reply, &mut rn, unsafe { II_TXN } as u64);
                                 push_str(&mut reply, &mut rn, ".");
                                 push_hex(&mut reply, &mut rn, unsafe { II_RES } as u64);
+                                push_str(&mut reply, &mut rn, ".");
+                                push_hex(&mut reply, &mut rn, unsafe { II_WHY } as u64);
+                                push_str(&mut reply, &mut rn, ".");
+                                push_hex(&mut reply, &mut rn, unsafe { II_HX } as u64);
+                                push_str(&mut reply, &mut rn, ".");
+                                push_hex(&mut reply, &mut rn, unsafe { II_TL } as u64);
+                                push_str(&mut reply, &mut rn, ".");
+                                let mut pk = 0usize;
+                                while pk < 8 {
+                                    if pk != 0 {
+                                        push_str(&mut reply, &mut rn, ".");
+                                    }
+                                    push_hex(&mut reply, &mut rn, unsafe { II_PK[pk] } as u64);
+                                    pk += 1;
+                                }
+                                push_str(&mut reply, &mut rn, " ic=");
+                                push_hex(&mut reply, &mut rn, unsafe { IC_N } as u64);
+                                push_str(&mut reply, &mut rn, ".");
+                                push_hex(&mut reply, &mut rn, unsafe { IC_SENT } as u64);
+                                push_str(&mut reply, &mut rn, " im=");
+                                push_hex(&mut reply, &mut rn, unsafe { IPA_REQ } as u64);
+                                push_str(&mut reply, &mut rn, ".");
+                                push_hex(&mut reply, &mut rn, unsafe { IPA_LAST } as u64);
+                                push_str(&mut reply, &mut rn, ".");
+                                push_hex(&mut reply, &mut rn, unsafe { CFG_SENT } as u64);
+                                push_str(&mut reply, &mut rn, " cg=");
+                                if unsafe { CFG_CAP_N } == 0 {
+                                    push_str(&mut reply, &mut rn, "-");
+                                } else {
+                                    let mut k = 0usize;
+                                    while k < 4 {
+                                        if k != 0 {
+                                            push_str(&mut reply, &mut rn, ".");
+                                        }
+                                        push_hex(&mut reply, &mut rn, unsafe { CFG_CAP[k] } as u64);
+                                        k += 1;
+                                    }
+                                }
+                                push_str(&mut reply, &mut rn, " jx=");
+                                if unsafe { JX_OTHER } == 0 {
+                                    push_str(&mut reply, &mut rn, "-");
+                                } else {
+                                    push_hex(&mut reply, &mut rn, (unsafe { JX_OTHER } >> 16) as u64);
+                                    push_str(&mut reply, &mut rn, ".");
+                                    push_hex(&mut reply, &mut rn, ((unsafe { JX_OTHER } >> 8) & 0xff) as u64);
+                                    push_str(&mut reply, &mut rn, ".");
+                                    push_hex(&mut reply, &mut rn, (unsafe { JX_OTHER } & 0xff) as u64);
+                                }
+                                push_str(&mut reply, &mut rn, " ir=");
+                                push_hex(&mut reply, &mut rn, unsafe { IR_DONE } as u64);
+                                push_str(&mut reply, &mut rn, ".");
+                                push_hex(&mut reply, &mut rn, unsafe { IND_SENT } as u64);
                                 push_str(&mut reply, &mut rn, " x=");
                                 for i in 0..22 {
                                     if i != 0 {
@@ -11723,8 +12865,17 @@ fn ctrl_service(
             }
             queued
         }
+        // 只有一个套接字。停在 LastAck 上时，下一笔 SYN 会被 smoltcp RST，
+        // 第二次 2323 之后 ping 也没了。直接 abort 再听。
         State::CloseWait | State::LastAck | State::FinWait1 | State::FinWait2 | State::TimeWait => {
-            sock.close();
+            sock.abort();
+            let _ = sock.listen(CTRL_PORT);
+            unsafe {
+                CTRL_GREETED = false;
+                CTRL_LINE_N = 0;
+                CTRL_OVERFLOW = false;
+                TCP_SYN_AT = 0;
+            }
             false
         }
         State::Closed => {
@@ -12591,7 +13742,7 @@ extern "C" fn rust_main() -> ! {
     let txt = hex_text(&mut t, unsafe { RING.seq }, " o248=0x", v);
     ring_put(&mut ufs, freq, logring::LVL_INFO, txt);
     // 出向 SMP2P 必须在 modem 拉起来之前放好。晚写的话它不再回头看。
-    smem_scan(false);
+    smem_scan(&mut ufs, false);
     s20_keep(
         &mut ufs,
         freq,
@@ -12761,7 +13912,7 @@ extern "C" fn rust_main() -> ! {
                 if p0 == 0 && p1 == 0 && p2 == 0 {
                     ipa_gsi_ro_probe();
                     ipa_gsi_ring_carve();
-                    ipa_gsi_ch7_cfg();
+                    // CH7 START 之后 INIT 被应答，USB 随即掉线。先不 START。
                 }
             }
         }
@@ -12923,12 +14074,22 @@ extern "C" fn rust_main() -> ! {
             unsafe {
                 LISTEN_TICK = LISTEN_TICK.wrapping_add(1);
                 // HELLO 之后把三包公告赶在 modem 的 RFS 客户超时之前。
-                let every = if GLINK_HELLO && HOST_ADV < 4 { 5 } else { 200 };
+                // 传输中每 2 圈扫一次，ACK 要在 timeoutms 里回来。
+                let xfer = TF_ST == 1 || TF_ST == 2 || (TF_PEND && TF_OP == 1 && tf_is_ruleset());
+                let every = if GLINK_HELLO && HOST_ADV < 4 {
+                    5
+                } else if xfer {
+                    2
+                } else {
+                    200
+                };
                 if LISTEN_TICK >= every {
                     LISTEN_TICK = 0;
                     lpass_glink();
-                    smem_scan(true);
                 }
+            }
+            if unsafe { LISTEN_TICK } == 0 {
+                smem_scan(&mut ufs, true);
             }
             fb_tick(&arb, freq, &mut ufs, &mut t);
             let slice = time::cntvct() + freq as u64 / 1000;
