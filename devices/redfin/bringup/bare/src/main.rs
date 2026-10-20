@@ -4549,8 +4549,8 @@ static mut TF_OACK_AT: u64 = 0;
 static mut TF_RX_LOG_P: [u32; 4] = [0; 4];
 static mut TF_RX_LOG_O: [u32; 4] = [0; 4];
 static mut TF_RX_LOG_N: u32 = 0;
-const TF_BLK: u32 = 252;
-static mut TF_BLKBUF: [u8; 256] = [0; 256];
+/// DATA 缓冲。8200 = 4 字节 TFTP 头 + 8192 上限（so_read 单发双扇区 4096×2）。
+static mut TF_BLKBUF: [u8; 8200] = [0; 8200];
 static mut TF_NODE: u32 = 0;
 static mut TF_PORT: u32 = 0;
 static mut TF_OP: u32 = 0;
@@ -5921,11 +5921,23 @@ fn glink_tx_payload(
     let chunk = 32 + padded;
     let total = (16 + chunk + 7) & !7;
     let isz = unsafe { LAST_ISZ } as usize;
-    if !unsafe { HAVE_IID } || n > 256 || chunk > isz || total > 512 || tx_head + total as u64 > sz479
-    {
+    // 扩容刀：载荷上限 7684（TFTP 4 头+7680 块），整包 8192。
+    // 真协议闸是 isz（对端批的 intent）与环界；这两个帽只是本方缓冲界。
+    if !unsafe { HAVE_IID } || n > 7684 || chunk > isz || total > 8192 {
         return false;
     }
-    let p = at479 + tx_head;
+    // 环尾放不下时回卷。各发送者都守 head==tail 单飞纪律，到这必是整环已排空。
+    let mut head = tx_head;
+    if head + total as u64 > sz479 {
+        let tail = rd32(at478 as usize) as u64;
+        if head == tail {
+            head = 0;
+        }
+        if head + total as u64 > sz479 {
+            return false;
+        }
+    }
+    let p = at479 + head;
     let mut i = 0usize;
     while i < total {
         wr32((p + i as u64) as usize, 0);
@@ -5964,7 +5976,7 @@ fn glink_tx_payload(
     unsafe {
         core::arch::asm!("dsb sy", options(nostack));
     }
-    wr32((at478 + 4) as usize, (tx_head + total as u64) as u32);
+    wr32((at478 + 4) as usize, (head + total as u64) as u32);
     if at478 < 0x80A0_0000 {
         dcache_civac(at478, 16);
     }
@@ -6966,9 +6978,9 @@ fn tf_apply_saved() {
         let k0 = unsafe { TF_OPTBUF[ks] };
         unsafe {
             if klen == 7 && k0 == b'b' {
-                // RFC 2348 降议：请求块大于发送环上限（glink 载荷 ≤256，DATA 头 4 字节）时
-                // OACK 回 TF_BLK。OACK 值、ACK 后的 >TF_BLK 闸、DATA 切块三处同源此值。
-                TF_REQ_BLK = if v > TF_BLK { TF_BLK } else { v };
+                // 原样收。降议刀已死（客户端对值≠请求的 OACK 整体停车，连 DATA 都不 ACK），
+                // 唯一活路=按请求的 7680 发，glink TX 侧扩容承接。
+                TF_REQ_BLK = v;
             } else if klen == 5 && k0 == b'w' {
                 TF_REQ_WSZ = v;
             } else if klen == 9 && k0 == b't' {
@@ -7009,7 +7021,7 @@ fn so_read(ufs: &mut Ufs, off: u32, n: usize) -> usize {
     if n == 0 || off >= sz {
         return 0;
     }
-    let n = n.min((sz - off) as usize).min(252);
+    let n = n.min((sz - off) as usize).min(8192);
     let mut cl = unsafe { TZ_CL };
     let mut skip = off / 16384;
     while skip > 0 {
@@ -7099,15 +7111,17 @@ fn tf_reply(ufs: &mut Ufs, at478: u64, at479: u64, sz479: u64) {
             unsafe { TF_ACK_PEND = false };
             return;
         }
-        // 对方要的块比发送环大。先记下 ACK，不发短块（短块会被当成文件结束）。
-        if unsafe { TF_REQ_BLK } > TF_BLK {
+        // 对方要的块超过本方缓冲/环上限（8192）才拒。7680 是本机实测请求值，
+        // TX 扩容刀后 glink 按 isz(8320 intent) 与环界双闸放行。
+        if unsafe { TF_REQ_BLK } > 8192 {
             unsafe {
                 TF_ST = 7;
                 TF_ACK_PEND = false;
             }
             return;
         }
-        let off = (ack as u32).saturating_mul(TF_BLK);
+        let blk_sz = unsafe { TF_REQ_BLK } as usize;
+        let off = (ack as u32).saturating_mul(blk_sz as u32);
         let limit = {
             let sz = unsafe { TZ_SZ };
             let rs = unsafe { TF_RSIZE };
@@ -7120,8 +7134,8 @@ fn tf_reply(ufs: &mut Ufs, at478: u64, at479: u64, sz479: u64) {
             }
             return;
         }
-        let mut want = TF_BLK as usize;
-        if off + TF_BLK > limit {
+        let mut want = blk_sz;
+        if off + blk_sz as u32 > limit {
             want = (limit - off) as usize;
         }
         let n = so_read(ufs, off, want);
@@ -7152,7 +7166,7 @@ fn tf_reply(ufs: &mut Ufs, at478: u64, at479: u64, sz479: u64) {
         ) {
             unsafe {
                 TF_BLKNO = blk;
-                TF_ST = if n < TF_BLK as usize || off + n as u32 >= limit {
+                TF_ST = if n < blk_sz || off + n as u32 >= limit {
                     3
                 } else {
                     2
