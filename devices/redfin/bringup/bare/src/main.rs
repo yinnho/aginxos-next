@@ -4541,6 +4541,9 @@ const TF_DATA_PORT: u32 = 0x21;
 const TF_SVC_PORT: u32 = 0x11;
 /// 这次 SO 传输的源端口。0 表示还没发 OACK。
 static mut TF_XFER_PORT: u32 = 0;
+/// OACK 发出时刻（CNTVCT）。宽限刀用：OACK 后 2s 无 ACK-0 就合成 ack=0 直发 DATA 块 1
+/// （非规客户端 OACK 后不 ACK 只等数据的假设 E）。0 = 未发。
+static mut TF_OACK_AT: u64 = 0;
 /// OACK 之后收包滚动备忘：最近 4 包的 (dst_port, TFTP op)，时间序旧→新。
 /// 单发闩被 servreg 包（0x12 口 QMI 头 00 04 撞 ACK 码）吃掉的教训。
 static mut TF_RX_LOG_P: [u32; 4] = [0; 4];
@@ -7068,6 +7071,22 @@ fn tf_reply(ufs: &mut Ufs, at478: u64, at479: u64, sz479: u64) {
     }
     let armed = unsafe { SM_ARMED };
     let st = unsafe { TF_ST };
+    // 宽限刀（假设 E）：OACK 已发、ACK-0 未到、块 0 未动，满 2s 合成 ack=0，
+    // 落进下面的正常分支直发 DATA 块 1。若期间真 ACK-0 已到则此门不进。
+    if armed
+        && st == 1
+        && !unsafe { TF_ACK_PEND }
+        && unsafe { TF_BLKNO } == 0
+        && unsafe { TF_OACK_AT } != 0
+    {
+        let freq = time::freq_or(FREQ_FALLBACK as u32) as u64;
+        if time::cntvct().wrapping_sub(unsafe { TF_OACK_AT }) > freq * 2 {
+            unsafe {
+                TF_ACK_PEND = true;
+                TF_ACK_BLK = 0;
+            }
+        }
+    }
     if armed && (st == 1 || st == 2) && unsafe { TF_ACK_PEND } {
         let ack = unsafe { TF_ACK_BLK };
         let expect = unsafe { TF_BLKNO };
@@ -7273,6 +7292,7 @@ fn tf_reply(ufs: &mut Ufs, at478: u64, at479: u64, sz479: u64) {
             TF_BLKNO = 0;
             TF_ACK_PEND = false;
             TF_ACK_OFF = 0xffff_ffff;
+            TF_OACK_AT = time::cntvct();
         }
         tf_drop_pend();
     }
