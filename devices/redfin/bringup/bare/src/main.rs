@@ -7299,7 +7299,11 @@ fn tf_reply(ufs: &mut Ufs, at478: u64, at479: u64, sz479: u64) {
             n += 1;
         }
     }
-    let sport = tf_new_port();
+    // 刀 G1：从已播报的服务口 0x11 发（不再用未注册临时口）。tt 证据链：modem 的
+    // glink 层完整消费了 OACK+7680 块 1（tail 精确跟进），但客户端层零感知仍在
+    // 重发 RRQ——断点=modem qrtr 路由层。裸世界无内核 qrtr 登记 temp 口，路由器
+    // 只认 NEW_SERVER 播报过的口。ACK 也落 0x11：刀二的监听+入册正好闭环。
+    let sport = TF_SVC_PORT;
     if glink_tx_payload(
         at478,
         at479,
