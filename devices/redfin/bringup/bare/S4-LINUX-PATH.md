@@ -2833,3 +2833,663 @@ Flash-safe restore：`boot-s20-9830750.img` / `2419bdf` / `0433396`。
 
 下一刀候选：EP16 cfg 或 INIT（仍要 canary）；本刀只证 GSI CH 起。
 Flash-safe restore：`67d685c` / `9830750` / `2419bdf`。
+
+## 2026-10-19 INIT 未发：发送环不空（why=6）
+
+活体 `ii=0.0.ffffffff.6`，`iq=1.201.0.1d`，`gc` st=1。
+IPA 服务在 node 0、port `0x1d`、实例 `0x201`。GSI CH7 已 START。
+`INIT_MODEM_DRIVER` 没发，因为 modem GLINK 发送环 head 一直不等于 tail。
+
+随后一张把环上的 head/tail/首字也打进 `ii=`。同一镜像里混进了过期任务改的
+rmtfs 8 深队列，刷后 ping 没回来。队列已从树上撤掉。
+
+只带原因码的这张已刷。约 33 秒，以及之后再读，都是
+`ii=0.0.ffffffff.6.16f0.1658.20009`。head `0x16f0`、tail `0x1658`
+不动，差 `0x98` = 152 字节。tail 第一字 `0x20009` = TX_DATA、lcid 2
+（IPCRTR）。`iq=1.201.0.1d`。`q` 仍无 `0x45`。
+
+再拆 8 个字：`20009.1e.34.11.13.0.2b.1000500`。
+intent `0x1e`，chunk `0x34`，源口 `0x11`，长度 `0x13`，
+目的 node 0 port `0x2b`。QMI/TFTP 头 `00 05 00 01` =
+opcode 5、code 1，加上 `file not found` 正好 19 字节。
+这就是 RRQ 的 ERROR。它停在 tail 上，后面的 `INIT` 等不到空环。
+
+下一张：RRQ 只记账，不把这包 ERROR 写进发送环。WRQ 仍 ACK。
+
+这张已刷。约 33 秒 `ii=2.1.0`：`INIT_MODEM_DRIVER` 的 RESP
+result 是 0。随后 ping 和 2323 都掉了，`q=` 没再采到。
+没有 `0x45` 的新证据。
+
+CH7 只 START、不发 INIT 的上一张是活的。INIT 被答应之后
+机器死。下一张仍发 INIT，但不调用 `ipa_gsi_ch7_cfg`。
+
+这张已刷。ping 和 2323 都在。`ii=2.1.0`，`gc` 的通道上下文是 0
+（没有 START）。`ik=4.0`，`sr=1.7fffffff.0`。`q` 仍是
+`42.b401,2b.1202,f.1,33.201,15.1,33.b01,18.1,16.1001`，没有 `0x45`。
+
+内核在 INIT 成功之后还要回 modem 的
+`INIT_MODEM_DRIVER_CMPLT_REQ`（msgid `0x35`）：RESP 只有 TLV 0x02
+result 成功。`ic=` 是见到次数和已回次数。
+
+这张已刷。ping 和 2323 都在。`ii=2.1.0`，`ic=0.0`：modem 没有把
+msgid `0x35` 发到本机端口 `0x15`。`sr=1.7fffffff.0`。`q` 仍无 `0x45`。
+本机 `host_svc_port` 不公告服务 `0x31`，modem 没有可投递的 IPA 服务端。
+
+下一张按内核 `qmi_add_server(0x31, vers, instance 1)` 在端口 `0x16`
+公告 IPA 服务端，完成请求改在 `0x15` 或 `0x16` 上收。
+
+这张已刷。`lk=0.0.4`：调用处在 `HOST_ADV < 4` 就停，第五个
+`0x31` 没发出去。`ic=0.0`，`ii=2.1.0`，`q` 仍无 `0x45`。
+门槛改成 `< 5` 之后已刷。`lk=0.0.5`：第五个服务发出去了。
+`ic=0.0`：端口 `0x15` 和 `0x16` 上都没有 msgid `0x35`。
+`ii=2.1.0`，`sr=1.7fffffff.0`。`q` 仍无 `0x45`。ping 和 2323 都在。
+
+## 2026-10-19 rmtfs 突发只闩一笔（过期任务，已撤，勿刷）
+
+`fr` 前 32 字节仍是 `dog_hal_common.c:180:[tmr_slave3`。这是 modem
+DOG 的定时从端，不是一条 QMI。`radio-bringup` 写明：开机时
+`qrtr-ns`、`pd-mapper`、`tftp_server`、`rmt_storage` 没有真在服务，
+DOG 每 65.7 秒判初始化卡住。commaai/agnos-kernel-sdm845 PR 120 的
+恢复日志里，servreg 实例 180 连上之后、`wlan_pd` 变成 `0x1fffffff`
+之前，rmt_storage 连续 OPEN `/boot/modem_fs1`、`modem_fs2`、
+`modem_fsg`、`modem_fsc`，然后 `ALLOC_BUFF`，然后 Read iovec。
+`tmr_slave3` 等的就是这条初始化走完。EFS 没被真正 IOVEC 服务时，
+看门狗先响，`0x45` 不会出现。
+
+`rootfs/src/qcom/rmtfs/rmtfs.c` 的 `handle_rmtfs` 对每次 `recvfrom`
+都按 msgid 应答（OPEN 1、CLOSE 2、IOVEC 3、ALLOC 4、DEV_ERROR 5）。
+没有「只留一笔」的槽。
+
+裸机扫描不是这样。`scan_new_servers` 一次把接收 FIFO 从 0 走到 head。
+端口 `0x10`、msgid 1..=5 里，只有 `RF_PEND` 为假的第一笔被闩上。
+同一趟里后面的请求只做 `RF_DROP |= 2`，不进 `RF_SEEN`。
+`smem_scan` 里的 8 轮循环要等 `rf_reply` 把 `RF_N` 加上去才再扫。
+`rf_reply` 在发送 head 不等于 tail 时直接返回，不增加 `RF_N`。
+刚发出的那笔应答还占着发送环，循环马上停。然后
+`glink_rx_advance` 把接收 tail 推到这次走完的 `RX_PARSED`，
+没答的 OPEN/ALLOC 一起被消费掉。modem 不重发。所以四次 OPEN 加
+一次 ALLOC 落在同一次 FIFO 里时，会被单槽闩丢掉。这是代码错误，
+不是缺一种新的 QMI。
+
+改动只在闩：8 深队列，按 FIFO 顺序把每笔未见过的请求整包抄下来
+（GLINK 头加 chunk，扫描上限 512）。`rf_reply` 仍用原来的
+`put_result` / `qmi_finish` / `glink_tx_payload`，发送环空了才答
+队头，答完才出队。环不空就留在队列里，下一拍再答。队列满才记
+`RF_DROP` bit1。
+
+`./build-bare.sh --s18` 已出
+`.local/device/redfin/boot-out/boot-s18.img`。fastboot 上没有设备，
+没刷。`q=` 还没有 `0x45` 的新数。
+
+## 2026-10-19 IPA 公告实例字改成 0x101（已编，未刷）
+
+`qmi_interface.c` 的 `qmi_send_new_server` 把实例字写成
+`version | (instance << 8)`。`ipa_qmi_service.c` 调
+`qmi_add_server(0x31, IPA_A5_SVC_VERS=1, IPA_A5_SERVICE_INS_ID=1)`，
+线上是 `0x101`。slot-b `qrtr-lookup` 是 `0x31/0x101@1:16404`。
+modem 自己的 Q6 是 `0x201`（版本 1、实例 2），活体 `iq=1.201` 对得上。
+上一张第五个 `NEW_SERVER` 把实例字写成了 `1`，对不上 `0x101`。
+`lk=0.0.5` 只说明包发出去了，`ic=0.0` 是没有客户连上。
+
+这张只改这一处：公告和 LOOKUP 回包的实例字都用 `0x101`，端口仍是
+`0x16`。服务端口上第一笔 QMI 请求的 msgid 记在 `im=`，先不回
+`INDICATION_REGISTER`（`0x20`）。不 START CH7，不喂 TFTP DATA。
+
+`./build-bare.sh --s20` 已出
+`.local/device/redfin/boot-out/boot-s20.img`（106496 字节，LZ4
+roundtrip exact）。当时 ping `169.254.1.1` 通，2323 连接超时，
+fastboot `device_count 0`。没刷。
+
+随后这张已刷：闸门 device_count 1、product redfin、不是 enchilada，
+`boot_a` / `set_active a` / reboot 都是 0。约第 11 次探测 ping 通。
+2323 连了 8 次都超时，没有 `sm`。再等约 90 秒，ping 也不回，
+fastboot `device_count 0`。ARP 里还留着 `02:00:00:00:00:02`。
+`im=` / `ic=` / `q=` 都没采到。上一张实例字是 `1` 时 ping 和 2323
+一直在。这张只改了实例字 `0x101`。
+
+`rmnet_ipa.c` 里 `ipa3_qmi_service_init` 在 `ipa3_is_ready` 和
+`ipa3_init_q6_smem` 之后。裸机还没有这条端点准备，所以先撤掉
+`0x31` 公告和 LOOKUP 回包，`HOST_ADV` 回到 4 个服务。
+
+这张已刷（106496 字节，18:27，LZ4 roundtrip exact）。闸门同样通过，
+`boot_a` / `set_active a` / reboot 都是 0。又是约第 11 次 ping 通，
+2323 连 6 次超时。之后 ping 失败，fastboot 和 adb 都是 0。
+没有 `sm`。撤掉公告并没有把 USB 留住。这次是热重启，上一张
+`0x101` 掉线之后没有拔电。
+
+关机再进 fastboot 之后，同一张又刷了一次。闸门通过。约第 10 次
+ping 通，2323 连 8 次超时，探测过程中 ping 变为失败。fastboot
+没有设备。冷启动同样留不住 USB。`sm` 没有。
+
+下一张把第五个公告改回实例字 `1`（`lk=0.0.5` 那张 ping 和 2323
+还在）。`./build-bare.sh --s20` 已出 18:38 的 `boot-s20.img`
+（106496 字节，flat 166936，LZ4 roundtrip exact）。当时
+fastboot `device_count 0`，ping 也不通。没刷。
+
+这张随后已刷。闸门 device_count 1、product redfin、不是 enchilada，
+`boot_a` / `set_active a` / reboot 都是 0。约第 11 次 ping 通，
+2323 立刻回 `aginx`。一次 `sm`（1658 字节）：`iq=1.201.0.1d`，
+`ii=2.1.0`，`ic=0.0`，`im=0`，`lk=0.0.5`，`sr=1.7fffffff.0`，
+`si=0`，`ik=4.0`。`ql` 读到 `480.480.1e0.1a8.e.92`（不是
+`0x31`）。25 秒后 ping 仍通，第二次 2323 超时。再探 ping 失败，
+fastboot `device_count 0`。没有第二份 `q=`，没有 `0x45` 的新证据。
+
+去掉 `im=` 闩之后又刷了一张（18:51）。闸门通过。`sm`（1648 字节）：
+`q=42.b401,2b.1202,f.1,33.201,15.1,33.b01,18.1,16.1001`，没有
+`0x45`。`ql` 空。`iq=1.201.0.1d`，`ii=2.1.0`，`ic=0.0`，
+`lk=0.0.5`，`sr=1.7fffffff.0`，`ik=4.0`。之后 40 秒只 ping、不再
+连 2323，ping 一直通。第二次 2323 超时，紧接着 ping 失败。
+fastboot `device_count 0`。
+
+唯一套接字停在关闭态时，下一笔 SYN 走 smoltcp RST。已改成
+`abort` 后重新 `listen`（和半开握手同一条）。18:55 的
+`boot-s20.img` 已编出。当时 fastboot 没有设备，没刷。
+
+这张已刷。闸门通过。三次 `sm` 都回 `aginx`，每次之后 ping 都通，
+第三次之后 15 秒 ping 仍通。三次内容一样：
+`q=42.b401,2b.1202,f.1,33.201,15.1,33.b01,18.1,16.1001`，没有
+`0x45`。`ql` 空。`iq=1.201.0.1d`，`ii=2.1.0`，`ic=0.0`，
+`lk=0.0.5`，`sr=1.7fffffff.0`，`si=0`，`ik=4.0`。
+
+slot-b 在 `Sending QMI_IPA_INIT_MODEM_DRIVER_REQ` 后 164 微秒就进了
+`ipa3_handle_indication_req`（当时 init 还没完成，所以 “not send
+indication”）。服务端实例字必须是 `0x101`。TCP 能连第二次之后，
+把第五个公告从实例字 `1` 改成 `0x101`。
+
+这张已刷（19:10）。两次 `sm`，ping 都通。`q` 仍无 `0x45`。
+`ii=2.1.0`，`ic=0.0`，`lk=0.0.5`，`sr=1.7fffffff.0`，`ik=4.0`。
+`im=27`：服务端口第一笔请求是 `QMI_IPA_CONFIG_REQ`（0x27），不是
+`0x20` 也不是 `0x35`。
+
+内核 `handle_ipa_config_req` 调 `ipa_mhi_handle_ipa_config_req`
+（这条返回 0），应答只有 TLV 0x02 result 成功。先按这个回。
+
+19:13 那张已刷。`im=27.27.47`，8 秒后再读是 `27.27.52`。第一笔和
+最近一笔都是 `0x27`，已回次数 0x47 再到 0x52。同一笔停在接收环里，
+每轮扫描又回一次。`q` 仍无 `0x45`，`ic=0`，`sr` 仍 UNINIT。ping 通。
+
+改成同一个事务号和源端口只回一次。19:15 的镜像 110592 字节，闸门
+通过并刷了。两分钟没有 ping，fastboot 和 adb 都是 0。没有 `sm`。
+
+随后把应答改到第一次 `sm` 之后。19:25 已刷。第一次 `sm`：
+`im=27.27.0`（见到 `0x27`，还没回），`q` 无 `0x45`，`ii=2.1.0`，
+`ic=0`，`sr=1.7fffffff.0`，ping 通。8 秒后再连，2323 超时，ping
+失败。成功的 CONFIG 应答本身会把 USB 弄掉。
+
+19:28 的镜像不再回 CONFIG，只把请求前 4 个字留在 `cg=`。
+fastboot `device_count 0`，没刷。
+
+随后已刷，并热重启了一次。两次都是 ping 通、`cg=-`、`q` 空、
+`lk=0.0.0`、`hh=1`、`ii` 原因 1。第一次 `s` 从 6 变成 `107`。
+第二次 25 秒时还是 `s=6`，再过 15 秒也是 `107`。
+`af=` 是 `err_qdi.c:1045` … `SNS_REG_INIT` …
+`sns_registry_sensor.c:94:SNS_RC_SUCCESS`。IPA/CDSP PAS 是绿的
+（`ip=80000003.0.0.0`，`cd=8000000b.0.0.0`，`ce=1.6.32`）。
+没有 `0x27`，因为 modem 在公告之前就 err-fatal 了。这两次都是
+fastboot 热重启，不是拔电。
+
+拔电后再刷同一张。闸门通过。约第 11 次 ping 通。隔 20 秒连
+2323 超时，ping 也不回。又等 20 秒仍是超时。fastboot
+`device_count 0`。没有 `sm`，`cg=` 没读到。
+
+同一张再刷一次。闸门通过。ping 一通就读。两次 `sm`，ping 都在。
+`q=42.b401,2b.1202,f.1,33.201,15.1,33.b01,18.1,16.1001`，没有
+`0x45`。`ii=2.1.0`，`ic=0.0`，`im=27.27.0`，`lk=0.0.5`，
+`sr=1.7fffffff.0`，`ik=4.0`，`s=6`。
+`cg=27000300.10003800.30004.4150000`。
+
+这是 QMI 请求头：类型 0、事务 3、msgid `0x27`、体长 `0x38`。
+第一个 TLV 是 `0x10`，长度 4，值 3。`ipa_config_req_msg_v01` 里
+`0x10` 是 `peripheral_type`，3 是 `QMI_IPA_PERIPHERAL_PCIE`，
+不是速度枚举里的 USB SuperSpeed（那是 TLV `0x14`）。
+内核在 GSI 上忽略这条，只回成功。
+
+21:52 这张在第一次 `sm` 之后回一次成功。`im` 从 `27.27.0` 变成
+`27.27.1`，之后 40 秒内 ping 一直通，最近一笔仍是 `0x27`，
+`ic=0`，`sr=1.7fffffff.0`，`q` 仍无 `0x45`，`s=6`。
+一次成功应答没有把 USB 弄掉，也没有引出 `0x20` 或 `0x45`。
+
+23:25 这张：见到 `0x20` 就回成功，并且 INIT 已经完成时再发
+`0x22`。`jx` 记 0x15/0x16 上第一笔不是 `0x27` 的包。
+三次 `sm`，ping 都通。`im` 从 `27.27.0` 到 `27.27.1`。
+`jx=15.2.21`：那是 INIT 的应答（端口 `0x15`，qtype 2，msgid `0x21`）。
+`ir=0.0`：没有 `0x20`，所以也没发 `0x22`。`ic=0`，
+`sr=1.7fffffff.0`，`q` 仍无 `0x45`，`s=6`。
+
+Canary 已铺：`ig` 的 ca/cb 是 `deadbeef.deadbeef`。USB 仍在。
+`ii=2.1.0`，`im=27.27.1`，`jx=15.2.21`，`ir=0.0`，`sr` 仍 UNINIT，
+`q` 仍无 `0x45`。
+
+CH7 上下文全 0，端点没分配。内核这时不发 TLV `0x17`。
+去掉 `ctrl_comm_dest_end_pt=16` 后刷了。约第 14 次 ping 通，
+接着 2323 超时，ping 也不回。fastboot `device_count 0`。没有 `sm`。
+TLV `0x17` 已加回源码，死亡镜像不再作为下一张。23:43 的
+`boot-s20.img` 是加回之后的。
+
+这张已刷。闸门通过。约第 25 次 ping 通，2323 超时，ping 随即失败。
+再探 30 秒，ping 和 fastboot 都是 0。没有 `sm`。上一趟同一套
+代码（canary + TLV `0x17`）两次 `sm` 都在。这次是那张把端点
+拿掉、USB 掉线之后的再刷。
+
+关机再进 fastboot 后又刷了一次。闸门通过。又是约第 25 次 ping
+通，2323 连续超时，ping 失败。没有 `sm`。冷启动写 canary 的
+镜像留不住 USB。canary 写入已从探测里拿掉，下一张不写。
+
+07:16 不写 canary 的镜像已刷。闸门通过。约第 13 次 ping 通，
+两次 `sm`，ping 都在。`ig` 的 ca/cb 是 `40f3727d.92a6e3b6`，
+不是 `deadbeef`。`q` 无 `0x45`。`ii=2.1.0`，`im` 从 `27.27.0`
+到 `27.27.1`，`jx=15.2.21`，`ir=0.0`，`ic=0`，`sr=1.7fffffff.0`，
+`s=6`。
+
+随后改成第一次 `sm` 之后才写 canary。已刷。约第 14 次 ping 通。
+第一次 `ig` ca/cb 仍是 `40f3727d.92a6e3b6`，`im=27.27.0`。
+4 秒后第二次是 `deadbeef.deadbeef`，`im=27.27.1`。ping 都在。
+`jx=15.2.21`，`ir=0.0`，`sr=1.7fffffff.0`，`q` 仍无 `0x45`，
+`s=6`。晚写能留下，基带不重新发 `0x20`。
+
+接着按 `ipa3_init_q6_smem` 在探测里先把 `modem_hdr`、
+`modem_hdr_proc_ctx`、`modem` 三段清零，再写 canary。从正在跑的
+机器 `fb` 重启刷上。约第 13 次 ping 通。第一次 `sm` 的 ca/cb
+已经是 `deadbeef.deadbeef`。两次 ping 都在。`ii=2.1.0`，
+`im` 从 `27.27.0` 到 `27.27.1`，`jx=15.2.21`，`ir=0.0`，
+`sr=1.7fffffff.0`，`q` 仍无 `0x45`，`s=6`。清零加 canary
+没有引出 `0x20`。这次不是冷启动。
+
+modem 入向已有 `ipa`（`me=1.2.1`，没有 `wlan`），出向 value 一直是 0。
+`ipa3_smp2p_modem_clk_query_isr` 把 bit0（完成）和 bit1（时钟票）写上。
+这张已刷。第一次 `sm`：`mv=1`，`me=1.2.1`，`sr=1.7fffffff.0`，
+`si=0`，`ir=0`，`q` 无 `0x45`，`tf` 仍是
+`/readonly/firmware/image/modem_pr/so/549_38_0.mbn`，ping 通。
+6 秒后 2323 超时，ping 失败。时钟应答之后 USB 掉了。调用已撤。
+
+07:43 撤掉时钟应答的镜像已刷。闸门通过。约第 13 次 ping 通。
+第一次 `sm`：`mv=0`，`me=1.2.1`，`ig` ca/cb 是 `deadbeef`，
+`ii=2.1.0`，`im=27.27.0`，`ir=0`，`sr=1.7fffffff.0`，`q` 无
+`0x45`，`s=6`，ping 通。8 秒后 2323 超时，ping 失败。
+fastboot `device_count 0`。没有第二份 `sm`。上一趟同一套
+清零加 canary、不回时钟的代码能一直 ping。这次没有。
+
+同一张 07:43 又刷了一次。闸门通过。约第 14 次 ping 通。
+第一次 `sm` 和上一趟一样：`mv=0`，`me=1.2.1`，`ii=2.1.0`，
+`im=27.27.0`，`ir=0`，`sr=1.7fffffff.0`，`q` 无 `0x45`，
+`s=6`。4 秒后 2323 超时，ping 失败。这次也是掉线之后直接进
+fastboot，没有拔电。
+
+拔电后再刷 07:43。闸门通过。约第 15 次 ping 通。三次 `sm`
+（间隔 6 秒、再 8 秒）ping 都在。内容一样：`mv=0`，
+`me=1.2.1`，`ii=2.1.0`，`im` 从 `27.27.0` 到 `27.27.1`，
+`ir=0`，`sr=1.7fffffff.0`，`q` 无 `0x45`，`s=6`。
+
+从这台干净机器 `fb` 再刷一次时钟应答。约第 13 次 ping 通。
+第一次 `sm`：`mv=1`，`me=1.2.1`，`sr=1.7fffffff.0`，`ir=0`，
+`q` 无 `0x45`。`tf` 不再是 `549_38_0.mbn`，变成
+`/readwrite/ota_firewall/ruleset`。6 秒后 2323 超时，ping
+失败。干净重启上，时钟应答本身会让基带往下走，并把 USB 弄掉。
+调用已再撤。09:16 的镜像是撤掉之后的。
+
+09:16 已刷。闸门通过。两分钟没有 ping。随后 fastboot 和 adb
+都是 0。没有 `sm`。
+
+同一张再刷。闸门通过。约第 15 次 ping 通，USB 留着，但 `q` 空，
+`hh=1`，`lk=0.0.0`，随后 `s=107`。`af=` 结尾是
+`SNS_REG_INIT` … `SNS_RC_SUCCESS`。`ik=0`。没有服务，没有
+`0x45`。同一张再热重启一次：又是 `hh=1`、`lk=0`，约 20 秒后
+同样 `s=107`，`af=` 仍是 `SNS_RC_SUCCESS`。ping 还在。
+
+只加了 `iz=`：lcid 2 上见过的最大 intent，门槛 52 没动。
+从这台已经 `s=107` 的机器 `fb` 刷上。约第 16 次 ping 通，
+等 20 秒后 2323 超时，ping 失败。fastboot `device_count 0`。
+`iz=` 没读到。
+
+拔电后再刷同一张。闸门通过。约第 16 次 ping 通。第一次
+`sm`：`iz=2080`，`hh=1`，`lk=0.0.5`，`s=6`，`ii=2.1.0`，
+`ik=4.0`，`q=42.b401,2b.1202,f.1,33.201,15.1,33.b01` 起，
+没有 `0x45`。8 秒后 2323 超时，ping 失败。intent 是
+`0x2080`，大于门槛 52。
+
+同一张再刷，没有改代码。闸门通过。约第 16 次 ping 通。
+`pn=tms/pddump_disabled.0.11`（命中 0，载荷 `0x11`）。
+`tf=/readonly/firmware/image/modem_pr/so/549_38_0.mbn.1.2b`。
+`sr=1.7fffffff.0`，`lk=0.0.5`，`iz=2080`，`s=6`，`q` 无
+`0x45`。读的时候 ping 是通的。`pn` 只留最后一次名字。
+
+只加 `pe=`：任何一笔域名请求是 `kernel/elf_loader` 就记 1。
+不新发应答。09:59 的镜像已编。fastboot `device_count 0`，没刷。
+
+09:59 已刷。闸门通过。约 45 次探测没有 ping。随后
+fastboot 和 adb 都是 0。没有 `sm`，`pe=` 没读到。
+
+同一张再刷。闸门通过。约 40 次探测没有 ping。随后
+fastboot 和 adb 仍是 0。`pe=` 还是没读到。没有改代码。
+
+同一张再刷。闸门通过。约第 29 次 ping 通。当时
+`pe=0`，`pr=0`，`pn` 空，`tf` 空，`iz=0`，`hh=1`，`lk=0.0.0`，
+`s=6`。再过大约 35 秒：`pe` 仍是 0，`iz` 仍是 0，`s=107`，
+`q` 空。ping 还在。没有域名请求，因为通道 2 上没有记到
+intent，服务没有公告。
+
+`x=` 尾部 88 字节对得上一条 DATA：命令字 `0x10009`，
+lcid 1，chunk `0x34`，QRTR 类型 2（HELLO）。本机 intent
+只发给 lcid 2。这条 HELLO 在 lcid 1 上，所以 `iz=0`，
+`lk` 停在 0。没有改代码。
+
+收包侧改成认对端通道 1。发出仍用本机通道 2。已刷。
+约第 31 次 ping 通。6 秒后仍是 `iz=0`，`lk=0.0.0`，`hh=1`，
+`s=6`。再过约 20 秒 `s=107`，`iz` 仍是 0，`q` 空，`pe=0`。
+ping 还在。通道 1 上也没有够格的 intent。
+
+活体 `d=` 的接收头是 `0x2b0`。`glink_open_ack` 在头超过
+`0x80` 时直接返回，`OPEN_ACK` 不做，`glink_hello` 也不进。
+只去掉这个上限。已刷。约 40 次探测没有 ping。随后
+fastboot `device_count 0`。没有 `sm`。
+
+同一张再刷。闸门通过。约第 31 次 ping 通。`iz=0`，
+`hh=1`，`lk=0.0.0`，`s=6`，`q` 空。再过大约 35 秒
+`s=107`，`iz` 仍是 0，`lk` 仍是 0。ping 还在。
+去掉 `0x80` 上限没有让公告发出去。
+
+只加 `ga=`：`GLINK_ACKED` 是否做过。已刷。约第 31 次
+ping 通。`ga=1`，`iz=0`，`hh=1`，`lk=0.0.0`，`s=6`，`q` 空。
+20 秒后仍是这些数，ping 还在。OPEN_ACK 做过，hello 也进了，
+通道 1 上还是没有 intent。
+
+这一趟 `x=` 尾部是 `0x20009`：DATA，lcid 2。上一趟是
+`0x10009`，lcid 1。收包改成 1 或 2 都认。已刷。约第 20 次
+ping 通。`iz=2080`，`ga=1`，`hh=1`，`lk=0.0.5`，`s=6`，
+`ii=2.1.0`，`q=42.b401,2b.1202,f.1,33.201,15.1,33.b01` 起，
+没有 `0x45`。ping 还在。
+
+同一张再刷，没有改代码。闸门通过。约 40 次探测没有
+ping。随后 fastboot `device_count 0`。`pe=` 和 `tf=` 没读到。
+
+同一张再刷。闸门通过。约第 29 次 ping 通。第一次 2323
+超时，ping 仍在。12 秒后：`pe=1`，
+`pn=kernel/elf_loader.1.30`，`pr=3`，
+`tf=/readonly/firmware/image/modem_pr/so/549_38_0.mbn.1.9e`，
+`sr=1.7fffffff.0`，`lk=0.0.5`，`s=107`，
+`q=42.b401,2b.1202,f.1,33.201,15.1,33.b01,18.1,16.1001`，
+没有 `0x45`。ping 还在。`kernel/elf_loader` 来过，命中 1。
+
+只在 INIT 已成功后，对 RRQ 回一次 TFTP file-not-found。已刷。
+约第 20 次 ping 通。`tf=...549_38_0.mbn.1.1d`，8 秒后 `.1.45`。
+`pe=0`，`sr=1.7fffffff.0`，`lk=0.0.5`，`ii=2.1.0`，`s=6`，
+`q` 仍无 `0x45`。两次 ping 都在。这一次错误应答没有把 USB 弄掉，
+也没有让基带停手。
+
+只加 `mw=`：`0x8C000000` 第一个字，ELF 小端魔数是 `464c457f`。
+已刷。约 40 次探测没有 ping。随后 fastboot `device_count 0`。
+`mw=` 没读到。这个读只在 `sm` 里，开机路径没碰那块内存。
+
+同一张再刷。闸门通过。约 45 次探测没有 ping。随后
+fastboot `device_count 0`。`mw=` 仍没读到。没有改代码。
+
+同一张再刷。闸门通过。约第 30 次 ping 通，接着两次
+2323 都超时，ping 也失败。随后 fastboot `device_count 0`。
+`mw=` 仍没读到。没有改代码。
+
+同一张再刷。闸门通过。约第 41 次（0.5 秒一探）ping 通，
+接着 4 次 2323 都超时，ping 失败。随后 fastboot
+`device_count 0`。`mw=` 仍没读到。没有改代码。
+
+同一张再刷。闸门通过。约第 52 次（0.4 秒一探）ping 通，
+接着 6 次 2323 都超时，ping 失败。随后 fastboot
+`device_count 0`。`mw=` 仍没读到。没有改代码。
+
+同一张再刷。闸门通过。约第 55 次（0.3 秒一探）ping 通，
+接着 5 次 2323 都超时，ping 失败。随后 fastboot
+`device_count 0`。`mw=` 仍没读到。没有改代码。
+
+同一张再刷。闸门通过。约第 57 次（0.3 秒一探）ping 通，
+接着 5 次 2323 都超时，ping 失败。随后 fastboot
+`device_count 0`。`mw=` 仍没读到。没有改代码。
+
+同一张再刷。闸门通过。约第 55 次（0.3 秒一探）ping 通，
+接着 5 次 2323 都超时，ping 失败。随后 fastboot
+`device_count 0`。`mw=` 仍没读到。没有改代码。
+
+同一张再刷。闸门通过。约第 56 次（0.3 秒一探）ping 通，
+接着 5 次 2323 都超时，ping 失败。随后 fastboot
+`device_count 0`。`mw=` 仍没读到。没有改代码。
+
+同一张再刷。闸门通过。又是约第 56 次 ping 通，接着 5 次
+2323 都超时，ping 失败。随后 fastboot `device_count 0`。
+`mw=` 仍没读到。没有改代码。
+
+同一张再刷。闸门通过。又是约第 56 次 ping 通，接着 5 次
+2323 都超时，ping 失败。随后 fastboot `device_count 0`。
+`mw=` 仍没读到。没有改代码。
+
+`mw=` 那张每次都是 ping 闪一下、2323 连不上。已把这个读撤掉，
+编回能连过 2323 的代码并刷了。约 45 次探测没有 ping。随后
+fastboot 和 adb 都是 0。
+
+撤掉 `mw=` 的 15:17 镜像再刷。闸门通过。第 10 次探测已经
+离开 fastboot。约第 30 次 ping 通，2323 超时，当时 ping 已失败。
+随后 fastboot `device_count 0`。不是 `mw=` 这一读造成的。
+
+同一张 15:17（110592 字节，无 `mw=`）再刷。闸门通过。约第 44 次
+ping 通，2323 连上，`sm` 1761 字节。`pe=0`，
+`tf=/readonly/firmware/image/modem_pr/so/549_38_0.mbn.1.2b`，
+`sr=1.7fffffff.0`，`lk=0.0.5`，`s=6`，
+`q=42.b401,2b.1202,f.1,33.201,15.1,33.b01,18.1,16.1001`。
+没有 `0x45`。这是这张去掉 `mw=` 之后第一次读到控制台。
+随后再探：USB 产品名仍是 Aginx ECM，fastboot 和 adb 都是 0，
+ping 失败，2323 超时。没有第二份 `sm`。没有改代码，没有再刷。
+
+## 2026-10-20 已确认 / 待确认
+
+对照的是这三处，不是猜的：
+
+- 槽 b `dmesg-raw.txt` 与 `TIMELINE.md`（2026-10-19 11:03）
+- 内核 `include/linux/soc/qcom/pdr.h` 的状态值，以及仓内
+  `rootfs/src/qcom/tqftpserv/tqftpserv.c` 的 `handle_rrq`
+- 裸机 15:17 那次 `sm`（上面那段）
+
+### 已经在机器或源码里定下来的
+
+| 事实 | 出处 |
+|---|---|
+| 状态：DOWN `0x0fffffff`，UP `0x1fffffff`，UNINIT `0x7fffffff` | `pdr.h` |
+| 槽 b 顺序：`ipa_fws` → ADSP → CDSP → modem → rmtfs 真读 → 约 1.2 秒后 `wlan_pd` UP | dmesg 40.88–50.21 |
+| 同一秒 `icnss` 连上 WLFW，`state: 0x980`。dmesg 里没有 `tftp` / `549_38` / `elf_loader` | `TIMELINE.md` |
+| `tftp_server` 进程在跑。`qrtr-lookup` 里 `0x45` 实例 `0x1`，node 0 端口 88，modem 上还有几十个服务 | `ps.txt`、`qrtr-lookup.txt` |
+| IPA 的 indication 在 INIT 完成前被内核明确丢掉（`not send indication`），`wlan_pd` 照样 UP | dmesg 49.30 / 50.21 |
+| `tqftpserv` 对带 option 的 RRQ：新 QRTR 口上发 OACK；没有 option 才发 DATA；找不到文件也在这个新口上发 ERROR，不在监听口 | `handle_rrq` |
+| 裸机 FAT 上 `549_38_0.mbn` 在，长 `0xeb43c`，簇 `0x1a67` | 早前 `tz=1.eb43c.1a67` |
+| 监听口上的一次 file-not-found 不掉 USB，也止不住 RRQ | 15:17：`tf` 次数 `0x2b`，`s=6` |
+| 枚举之前发 OACK 或 DATA，ECM 在、ARP 不完整 | `8a761ad` / `25df6d3` / `365d1f4` |
+| 15:17 控制台：`sr=1.7fffffff.0`（登记成功，状态 UNINIT），`lk=0.0.5`，`s=6`，`pe=0`，`q=` 正好 8 个，字符串里没有 `45` | 上面那次 `sm` |
+
+`q=` 只有 8 格。`scan_new_servers` 每轮先清零，再只留下最先看到的 8 个 `NEW_SERVER`。槽 b 的 `0x45` 在端口 88，排在这 8 个后面。所以「`q=` 里没有 `45`」不能当成「modem 没注册」。`0x31` 已经用 `iq=` 在 8 格外面闩过，`0x45` 之前没有同样的闩。
+
+### 还没证实的
+
+- 15:17 那份 `sm` 没拆 `si=`、`cd=`、`ce=`、`ip=`、`ik=`、`tz=`。不知道 CDSP 的 err-ready、IPA PAS、EFS 种子、SO 探针在那一次开机里是什么。
+- `STATE_UPDATED`（`si`）在更早的开机上是 0。15:17 这次没读到。UNINIT 只说明登记那一瞬间 PD 没起来，不排除之后才 UP、而 `0x45` 被 8 格丢掉。
+- 槽 b 的 `tftp_server` 在跑，但没有它的日志。dmesg 没有 `549_38` 不能证明它没把这个 SO 喂出去。
+- 枚举完成之后再按 `tqftpserv` 发一次 OACK（仍不 DATA）没有试过。枚举前的 OACK 已经挂过，这一刀不做。
+
+### 这一刀
+
+只加 `w45=`：见到服务 `0x45` 就闩住，不跟那 8 格一起清。不发新的 QRTR，不改 TFTP，不改 PAS。`w45=0` 是没见过；高位为 1 才是见过，低位是实例字。
+
+### 刷验（2026-10-20 15:58 镜像，110592 字节）
+
+闸门通过，`boot_a` + `set_active a` + reboot 都是 0。约第 18 次 ping 通，2323 的 `sm` 1767 字节。
+
+| 字段 | 值 | 读法 |
+|---|---|---|
+| `w45` | `0` | 接收 FIFO 里没有 `0x45`。不是被 8 格丢掉的 |
+| `sr` | `1.7fffffff.0` | 登记成功，状态仍是 UNINIT |
+| `si` | `0` | 没有 `STATE_UPDATED` |
+| `s` | `6` | 没有 err-fatal |
+| `lk` | `0.0.5` | QRTR 链路在 |
+| `ik` | `4.0` | EFS 的 IOVEC 成功 |
+| `tz` | `1.eb43c.1a67` | SO 仍在，实长没变 |
+| `ip` | `80000003.0.0.0` | IPA fws 三段，PAS 三步都是 0 |
+| `cd` | `8000000b.0.0.0` | CDSP 11 段，PAS 三步都是 0 |
+| `ce` | `1.6.32` | 出向已发；ready = 6 = bit1 err-ready + bit2 proxy-unvote，bit0 fatal 是清的；50 ms |
+| `me` | `1.2.1` | 入向有 `ipa`，没有 `wlan` |
+| `pe` | `0` | 这一拍还没见到 `kernel/elf_loader` |
+| `tf` | SO 的 RRQ，次数 `0x20` | 回退链还在 |
+
+CDSP 先于 modem、而且 err-ready 干净，这一条已经做到了。`wlan_pd` 仍是 UNINIT，`0x45` 仍没注册。缺的不是「CDSP 没起来」。
+
+### 2026-10-20 只读 SO 文件头
+
+公开文档没有写 `549_38_0.mbn` 是不是 `wlan_pd` 的镜像。主机上没有这份文件，只有 FAT 位置（簇 `0x1a67`，长 `0xeb43c`）。这一刀在已有的开机探针里多读文件第一块，不发给 modem，RRQ 仍是 file-not-found。
+
+`th=mag.eh`。`mag` 是前 4 字节小端，ELF 是 `464c457f`。`eh` 低 16 位是 `e_type`，高 16 位是 `e_machine`。Hexagon（`EM_QDSP6`）是 164，即 `0xa4`。可执行文件 `e_type` 2 时，`eh` 打印成 `a40002`。共享对象 `e_type` 3 时是 `a40003`。
+
+刷验：闸门通过。约第 18 次 ping 通，`sm` 1786 字节，有换行。`th=464c457f.a40003`。前 4 字节是 ELF。`e_type` 3 是共享对象，`e_machine` `0xa4` 是 Hexagon。`tz=1.eb43c.1a67` 没变。`w45=0`，`sr=1.7fffffff.0`，`si=0`。文件没有发给 modem。
+
+### 2026-10-20 第 4 步：按 tqftpserv 送 SO
+
+`rootfs/src/qcom/tqftpserv/tqftpserv.c` 的 `handle_rrq`：新 QRTR 口，带选项就 OACK，然后等 ACK，再发 DATA。块号从 1 起，偏移是 `ack * blksize`。
+
+裸机发送环的载荷上限是 256。DATA 头 4 字节，所以 OACK 里的 `blksize` 写 252，`wsize` 写 1，`tsize` 写文件实长。源端口 `0x21`，不占用监听口 `0x11`。`rsize` 若在 RRQ 里就只送那么多；没有就送整文件。对端 opcode 5 把状态记成 9，停。
+
+开机不发。`SM_ARMED` 在第一次 `sm` 里才变成真，下一轮扫描才发 OACK。传输中扫描从 200 圈收成 2 圈，好让 ACK 赶在 modem 的超时里。`tb=st.blk`：1 已 OACK，2 在送 DATA，3 短块已送出，8 读失败，9 对端 ERROR。
+
+刷验：闸门通过。约第 17 次 ping 通。三次 `sm`，ping 都还在。
+
+| | tb | tf 次数 | sr | w45 |
+|---|---|---|---|---|
+| 第 1 次 | `0.0` | `0x1f` | UNINIT | 0 |
+| 3 秒后 | `1.0` | `0x53b` | UNINIT | 0 |
+| 再 5 秒 | `1.0` | `0xe37` | UNINIT | 0 |
+
+OACK 发出去了，USB 没掉。没有 DATA（块号停在 0），也没有对端 ERROR（状态不是 9）。RRQ 次数从 31 涨到 3639：状态停在 1 之后，后来的 RRQ 被丢掉，OACK 仍对着第一次那笔的端口。modem 在换新请求，ACK 没有回到 `0x21`。
+
+下一刀：状态仍是 1、块号仍是 0 时，新的 SO RRQ 改用它自己的 node/port 再发一次 OACK。监听口 `0x11` 上的 opcode 4/5 也算 ACK/ERROR。已经在送 DATA 就不换端口。
+
+换端口这张刷过。闸门通过。约第 29 次 ping 通，2323 超时，随后 ping 失败，fastboot 和 adb 都是 0。`sm` 没读到，`tb` 没有新值。OACK 要等第一次 `sm` 才发，这次控制口没连上，换端口那一步没有跑到。
+
+同一张再刷。约第 18 次 ping 通，三次 `sm` 都有换行，结束时 ping 还在。`s=6`，`sr=1.7fffffff.0`，`si=0`，`w45=0`，`tz=1.eb43c.1a67`。`tb` 三次都是 `0.0`。`tf` 不是 SO，是 `/readwrite/ota_firewall/ruleset` 的 RRQ，次数 `0x2d` → `0x3d` → `0x51`。第三次 `pe=1`。OACK 只认 `549_38_0.mbn`，所以这份请求不会把 `tb` 变成 1。`tqftpserv` 的开机日志里这份 ruleset 也经常打开失败，然后被拒绝。
+
+按那份日志拒绝：请求一到就回，不再等 `sm`。每次从新的源端口回 TFTP ERROR 1 `file not found`，端口从 `0x1000` 起加。INIT 还没完成（`II_ST!=2`）不发，那次早发会卡发送环。`tr=次数.最后源端口`。
+
+刷验：闸门通过。约第 19 次 ping 通。三次 `sm`，结束时 ping 还在。`s=6`，`sr` 仍 UNINIT，`w45=0`，`pe=0`。
+
+| | tr | tf | tb |
+|---|---|---|---|
+| 第 1 次 | `1.1000` | SO，次数 `0x27` | `0.0` |
+| 3 秒后 | `1.1000` | SO，`0xc4` | `1.0` |
+| 再 4 秒 | `1.1000` | SO，`0xc4` | `1.0` |
+
+ruleset 只拒绝了一次，源端口 `0x1000`。随后 modem 改去要 `549_38_0.mbn`，和 `tqftpserv` 开机日志的顺序一样。SO 的 OACK 发出后块号停在 0，后两拍请求次数也不再涨。后两行顶满 1792 字节，换行被丢掉。USB 没掉。
+
+下一刀：SO 的 OACK 和后面的 DATA 改用新源端口（`tf_new_port`，记在 `TF_XFER_PORT`），ACK 听这个口，不再固定 `0x21`。ruleset 已经证明新口才被收下。
+
+这张刷过。闸门通过。约第 29 次 ping 通，2323 超时，随后 ping 失败。没有 `sm`。SO 的 OACK 要等第一次 `sm`，这次没跑到。ruleset 的新口拒绝在 `sm` 之前就会发，这张和上一张能连上的镜像在那一步是一样的。这次是控制口没起来。
+
+同一张再刷。约第 18 次 ping 通。三次 `sm`，结束时 ping 还在。`s=6`，`sr` 仍 UNINIT，`w45=0`，`pe=0`。`tr=1.1000`。`tf` 是 SO，次数 `0x1e` → `0xbb`，后两拍停在 `0xbb`。`tb` 从 `0.0.0` 变成 `1.0.109d`，再停住。OACK 从新口 `0x109d` 发出，块号仍是 0。换端口没有换来 ACK。后两行仍顶满 1792，没有换行。
+
+下一刀：OACK 改成 `tftp_send_oack` 的内容和顺序。回请求里的 `blksize`、`timeoutms`、文件实长 `tsize`、`wsize`，不再写死 252 和 `wsize=1`。`blksize` 大于 252 时即使收到 ACK 0 也不发短 DATA（短块会被当成文件结束），`tb` 状态记 7。错误码 9（End of Transfer，stat 之后的正常回应）把状态记 4，下一笔 SO 可以再 OACK。不抬 glink 的 256/512 帽。
+
+这张刷过。闸门通过。90 次里没有 ping。随后 fastboot 也是 0。没有 `sm`，新的 OACK 内容没跑到。SO 的 OACK 仍要等第一次 `sm`。
+
+同一张再刷。闸门通过。70 次里没有 ping。没有 `sm`。这是这张镜像连续第二次控制口没出现。新的 OACK 内容仍没读到。
+
+开机只抄 SO 载荷，选项在第一次 `sm` 之后才写进 OACK。这张刷过。约第 2 次 ping 通。三次 `sm`，结束时 ping 还在。`tr=1.1000`。`tf` 是 SO，`0x22` → `0xbf` 后停住。`tb` 从 `0.0.0` 到 `1.0.109d`，没有变成 4 或 7。`w45=0`，`sr` 仍 UNINIT。按请求回选项之后，仍然没有 ACK，也没有错误码 9。
+
+接收扫描每次从 0 重走，最多 200 个 glink 包，碰到 chunk>512 就停。OACK 之后的 ACK 落在这扇窗口外面，所以 `tb` 停在 1、请求次数也不再涨。下一刀从 `RX_PARSED` 接着扫，大包跳过但不截断后面的包。
+
+这张刷过。约第 18 次 ping 通。三次 `sm` 都有换行，结束时 ping 还在。`tr=1.1000`。`tf` 是 SO，次数停在 `0x7`。`tb` 三次都是 `0.0.0`。游标不回头，SO 请求在 `sm` 之前被丢掉，之后扫不到，所以 OACK 没发。下一刀：`sm` 之前遇到 SO 请求只留着，不丢。
+
+留着再刷。约第 18 次 ping 通。三次 `sm` 都有换行，结束时 ping 还在。`tr=0.0`。`tf` 是 SO，次数 `0x3` → `0x4` 后停住。`tb` 从 `0.0.0` 变成 `1.0.1000`，再停住。OACK 从 `0x1000` 发出了。没有变成 4 或 7。`w45=0`，`sr` 仍 UNINIT。请求留到 `sm` 之后能发出去，ACK 和错误码 9 仍然没被认出来。
+
+下一刀只记账：OACK 之后第一包打到传输口，或者任何端口上的 TFTP 操作码 4/5，记进 `rx=端口.节点|操作码<<16`。不再猜它回了什么。
+
+这张刷过。约第 19 次 ping 通。三次 `sm` 都有换行，结束时 ping 还在。`tr=1.1000`。`tf` 是 SO，`0x5` → `0x6` 后停住。`tb` 从 `0.0.0` 变成 `1.0.1001`。`rx` 三次都是 `0.0`。`w45=0`，`sr` 仍 UNINIT。OACK 从 `0x1001` 发出之后，扫描里没有打到这个口的包，也没有操作码 4 或 5。
+
+`ob=blk.wsz.ts` 是实际写进 OACK 的三个数。`ts=1` 表示带了文件实长。不改回包。OACK 发出前这三个数还是默认 `512.1.0`。
+
+这张刷过。闸门通过。70 次里没有 ping。没有 `sm`，`ob` 没读到。回包没改，和上一张能连上的镜像只差这一行打印。
+
+同一张再刷。约第 20 次 ping 通。三次 `sm` 都有换行，结束时 ping 还在。`tb` 从 `0.0.0` 变成 `1.0.1001`。`ob` 从 `200.1.0` 变成 `1e00.1.0`。`rx=0.0`。`w45=0`，`sr` 仍 UNINIT。
+
+`1e00` 是 7680，块长抄对了。`wsz=1` 不是请求里的 10，`ts=0` 表示 OACK 里没有文件实长。96 字节的抄录把后面的 `tsize` 和 `wsize` 截掉了。
+
+抄录改成 192 字节，整段 RRQ 装得下。OACK 仍按抄到的 `blksize`、`wsize`、`tsize` 回。不改别的。
+
+这张刷过。约第 18 次 ping 通。三次 `sm` 都有换行，结束时 ping 还在。`tb` 变成 `1.0.1001` 之后 `ob` 仍是 `1e00.1.0`。`rx=0.0`。`w45=0`，`sr` 仍 UNINIT。192 字节里解析出来的还是只有块长 7680，没有 `wsize=10`，也没有 `tsize`。先前那两个数来自 `tqftpserv` 的例子，不是这台机器这份请求。
+
+刷验：闸门通过。约第 15 次 ping 通。三次 `sm` 都有换行，结束时 ping 还在。`s=6`，`sr` 仍 UNINIT，`w45=0`，`tb=0.0`。`tf` 一直是 ruleset，次数 `0x31` → `0x41` → `0x55`。`tr` 从 `0` 到 `0x10` 再到 `0x24`。拒绝发出去了，USB 没掉，modem 没有因此改去要 SO。第三次 `pe=1`。
+
+## 2026-10-20 rmtfs 8 深队列（过期任务，已收成 1，勿刷 s18）
+
+`fr` 开头的 `dog_hal_common.c:180:[tmr_slave3` 是 DOG 定时从端。
+`radio-bringup`：`qrtr-ns`、`pd-mapper`、`tftp_server`、`rmt_storage`
+没有真在服务时，这条每 65.7 秒把初始化判死。commaai PR 120 在
+servreg 实例 180 之后、`wlan_pd` 变成 `0x1fffffff` 之前，是
+`/boot/modem_fs1`、`modem_fs2`、`modem_fsg`、`modem_fsc` 四次 OPEN，
+然后 `ALLOC_BUFF`，然后 Read iovec。`tmr_slave3` 等的就是这条走完。
+
+`rmtfs.c` 的 `handle_rmtfs` 每次 `recvfrom` 都答。裸机扫描一次走到
+head，端口 `0x10` 上 msgid 1..=5 只在 `RF_PEND` 为假时闩一笔。
+同趟后面的只记 `RF_DROP` bit1，不进 `RF_SEEN`。`rf_reply` 看见发送
+head 不等于 tail 就返回，`RF_N` 不加，8 轮循环停。接着
+`glink_rx_advance` 把接收 tail 推到整段 `RX_PARSED`，没答的包被吃掉。
+四次 OPEN 加一次 ALLOC 落在同一次 FIFO 里会被丢掉。这是闩的错误。
+
+上一张 8 深整包拷贝混进过别的镜像，刷后 ping 没回来，已经撤掉，
+那张不要再刷。这一张不抄 528 字节。8 个槽只留 txn、node、port、
+msgid、FIFO 偏移和 OPEN 的路径。`rf_reply` 仍用原来的
+`put_result` / `qmi_finish` / `glink_tx_payload`，发送环空了才答
+队头。接收 tail 停在队头那一笔的偏移上，ALLOC 和 IOVEC 还在原来的
+FIFO 里，给现有的 TLV 读取用。队列满才记 drop bit1。
+
+`./build-bare.sh --s18` 出了
+`.local/device/redfin/boot-out/boot-s18.img`（110592 字节，12:20）。
+fastboot 没有设备，没刷。没有新的 `q=`，`0x45` 仍不在线上。
+随后把队列收成 1，并去掉它卡住接收 tail 的那段。`boot-s18.img`
+不要刷。上面这句「`boot-s20.img` 仍是 11:45 那张」只对当时有效。
+
+## 2026-10-21 OACK 去掉默认 wsize（当前，0x45 仍无）
+
+`boot-s20.img` 是 2026-10-20 23:23 那张，110592 字节，已刷进 `boot_a`。OACK 不再写默认 `wsize=1`；请求里有 `rsize` 键且值为 0 时停在状态 1，等 code 9，不发 DATA。不抬 glink 256/512。`RF_Q_CAP` 仍是 1。不要刷 `boot-s18.img`。
+
+刷后有一次 ping（约第 17 次）。只读到一次 `sm`，发生在 OACK 之前：`s=6`，`tr=1.1000`，SO 请求 5 次，`tb=0.0.0`，`w45=0`，`sr=1.7fffffff.0`。随后链路断，第二次 `sm` 没读到。状态行里先有一段 rmtfs 的 `rs=`，新的 rsize 在 `ob=` 和 `tr=` 之间，那次没拆出来。
+
+2026-10-21 再读时活动槽位已经是 b。切回 a 再重启，没有重刷。这次没有 ping，也不在 fastboot。没有新的 `sm`。`0x45` 仍不在线上。
+
+接棒（同日，Opus）：闸门过后 `set_active a` 重臂（retry 3）→ reboot，没重刷。这次做了自动窗口抓取：后台循环等 ping，通后 ~1s 内连 2323。ping 通（抓取器 t=96s），`aginx` 问候+第一拍 `sm` 都拿到，随后 6s 后的第二拍无回包，事后 ping 100% 丢，手机三无（ping/fastboot/adb 全死，需物理强关）。
+
+第一拍 `sm`（uptime `u=12390`≈12.4s，即 ping 起来后 ~1s 内）：`s=6`，`tf` SO RRQ ×5（挂起待发），`tb=0.0.0`，`rx=0.0`，`ob=200.0.0`（默认，OACK 未发），TFTP `rs=0.0`（**挂起的这份 RRQ 里没解析到 rsize 键**——「stat rsize=0 等码 9」分支这次根本没武装），`tr=0.0`（这次开机 ruleset RRQ 一次都没来过，与上一棒的 `tr=1.1000` 不同），`ii=2`（INIT 完），`sr=1.7fffffff.0`，`w45=0`。
+
+判读：`sm` 第一拍把 `SM_ARMED` 置位，挂起的 SO RRQ 的 OACK 会在下一轮扫描发出——但第二拍没读到，OACK 发没发、发了之后 modem 回什��，全部没观察到。这张镜像（10-20 23:23）三个观察窗：一窗 sm#1 前链路死、一窗只活到 sm#1 后 ~6s、一窗（上一棒）同样只到 sm#1。**它从未产出过 OACK 之后的 sm 读数**；而 10-20 白天那些把 `wsize=1` 写进 OACK 的镜像能连出三拍、OACK 后 ping 仍在。窗口长度本身在变短还是这张的 OACK（只回 blksize）发出后引死，现有数据分不开。按指令未改任何回包。
+
+接棒第二窗（同日稍后，Opus）：`set_active a` 重臂（3）→ reboot，密集采样器（ping 通后 0/1/2/3/5/7/10/14/20s 各一拍、每拍新连接）。**九拍全中，OACK 后 ping 活满 20s 采样窗**（后续补采又活 ~20s，总窗口 ~1-2 分钟后死）。前述「这张的 OACK 引死链路」假设作废。
+
+时间线（uptime 均显示 `u=12390` 冻结，为网络起位锁存值，非活体）：
+- t=+0s（sm#1，武装 SM_ARMED）：`tf` SO RRQ ×4 挂起，`tb=0.0.0`，`ob=200.0.0`（默认），`rs=0.0`，`tr=1.1000`（ruleset 已拒一次），`pn=tms/pddump_disabled`。
+- t=+1s：**`tb=1.0.1001`（OACK 已发，出口 0x1001），`ob=1e00.0.0`（只写 blksize=7680）**；SO RRQ 停在 ×5 不再涨；**`pn` 切到 `kernel/elf_loader.1.30`、`pr=2→3`、`pe=1`**——modem 开始问 wlan_pd 装载服务，此线历史最远。
+- t=+3s→+5s 之间：**`rx=12.40001`**（一槽闩死，之后不再变）。
+- t=+5s..+20s 及补采：全部字段冻结（`tb=1.0.1001`、RRQ ×5、`d=` 走了一格 b80、`x=` 出现 QMI 形内容后归零）。
+
+三条定谳：
+1. **OACK（只回 blksize=7680）被 modem 收下**——RRQ 重试从「无限涨」（10-20 各窗 0x1f→0x53b→0xe37）变为「停在 5」，随后 modem 推进到 kernel/elf_loader servreg 问询。「OACK 没人理」的旧判词对本张不成立。
+2. **`rx=12.40001` 几乎可以断定不是 TFTP ACK**：TX 构包（glink_tx_payload，+28 src_port/+40 dst_node/+44 dst_port/+48 载荷）与 RX 解析对称，该包 dst=0x12——正是我们公告的 **svc 64（servreg/pd-mapper 位）**端口（glink_announce：svc 4096→0x11、svc 64→0x12）。载荷首两字节 `00 04`（QMI ctl=0/txn=4）与 TFTP ACK 碰码；stock tqftpserv 用 `qrtr_open(0)` 临时口收 ACK，客户端应答到 OACK 的源口（0x1001）而非 0x12，而 0x1001 上什么都没收到。备忘录一槽（TF_RX_HIT 闩）无法区分，此判据待下一刀验证。
+3. **结构墙坐实**：本机这份 SO RRQ 只有 `blksize=7680`、**无 rsize**（`rs=0.0`，192 字节全抄也只见 blksize）——公开日志「stat(rsize=0)→code 9→rsize=52 读头」的舞步与本机首请求不符。blksize=7680 的 DATA 块（物理上限：glink 载荷 ≤256、整包 ≤512）发不出；短块=TFTP EOF=截断文件。**双方对峙：modem 收了 OACK 等块 1，我方发不出 7680。**
+
+下一刀候选（未做，待裁决）：OACK 里把 blksize **向下议价**（RFC 2348 允许服务器回更小值，如 256：载荷 4+256=260→chunk 292→total 312≤512 可发）。这不是补没见过的选项，是改一个已见选项的值；但 stock tqftpserv 从不降议（原样回显），Qualcomm 客户端是否接受降议无参照，属上机实验。备选：维持现状已无新信息（状态机两头等死）。
+
+### 刀一（同日深夜，Opus 执刀）：降议 252 —— OACK 被收，但 ACK 全程不来
+
+用户裁决「你开解决问题」，降议刀自主上机。刀口：RRQ 解析处 `TF_REQ_BLK = v` 改为钳到 `TF_BLK`（252）——OACK 值、ACK 后 `>TF_BLK` 闸、DATA 切块三处同源一个变量（commit c87f758）。镜像 110592B/01:03 刷 boot_a。
+
+- **窗 1（01:06，短命）**：ping 起 15 秒，+2s 一发 sm 为武装前形状（`ob=200.0.0`），+9s 零字节，链死。不构成协议结果（与既往窗口抖动同款）。
+- **窗 2（01:12–01:15+，活窗）**：`ob=fc.0.0`（**OACK 实发 252**）、`tb=1.0.1001`、RRQ 停 ×6 不再爬、`rx=12.40001`（servreg 包照旧占闩）。此后 **20 发采样横跨 144 秒：`tb` 纹丝不动 1.0.1001，无 ACK、无 ERROR、无重 RRQ**。ping 全程活（1.9ms），2323 拒连一次=旁路连接挤爆裸监听 backlog（教训：单采样者纪律）。
+
+定谳（刀一）：**modem 收下 OACK(252) 后整体沉默**——不是拒（无 ERROR→tb 没走 9），不是重试（RRQ 不涨），就是不来 ACK。两种活口：
+- **B：ACK 回到 0x11（RRQ 目的地/播报的 TFTP 服务口）而非 OACK 源口 0x1001**——旧图 `tf_note_ack` 只认 0x21/0x1001，此路全瞎；
+- **D：Qualcomm 客户端不支持降议，值不等于请求即静默停车**（stock tqftpserv 从不降议，客户端从未被逼着处理过这事）。
+另记工具账：rx 单发闩被 servreg 包永久占用后，OACK 之后的一切收包不可观测——观察面本身先瞎了。
+
+### 刀二（同日，紧接上刀）：rx 滚动备忘 + 0x11 ACK 监听（commit b0f2329，镜像 01:16，待上机）
+
+两件一套，一次窗口榨两个答案：
+1. rx 备忘改**滚动 4 槽**（port.op 时间序旧→新），0x12（自家假 pd-mapper 口，QMI 头 `00 04` 恒撞 ACK 码）不入册——B/D 之外任何口上出现 op 4/5 都现形；
+2. `tf_note_ack` 增监听 `TF_SVC_PORT=0x11`——若 B 为真，ACK-0 直接被处理，DATA 块 1 当场开流（等于顺手就是修法）。
+判读表：tb→2 且块号爬 = B 真，传输开流；rx 册空且 tb 钉死 = D 真（客户端对降议静默），下一刀换「OACK 后宽限期直发 DATA 块 1」（hypothesis E：非规客户端 OACK 后不等 ACK-0）。
