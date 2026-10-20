@@ -4536,12 +4536,16 @@ static mut TF_ACK_OFF: u32 = 0xffff_ffff;
 static mut TF_ACK_PEND: bool = false;
 /// 旧的固定数据口。SO 的这次传输改用 TF_XFER_PORT。
 const TF_DATA_PORT: u32 = 0x21;
+/// 我们播报的 TFTP 服务口（svc 4096→0x11，RRQ 的目的地）。客户端可能把 ACK
+/// 回到这里而不是 OACK 源口——tf_note_ack 一并监听。
+const TF_SVC_PORT: u32 = 0x11;
 /// 这次 SO 传输的源端口。0 表示还没发 OACK。
 static mut TF_XFER_PORT: u32 = 0;
-/// OACK 之后看到的第一包：目的端口，以及节点和 TFTP 操作码。
-static mut TF_RX_HIT: u8 = 0;
-static mut TF_RX_PORT: u32 = 0;
-static mut TF_RX_META: u32 = 0;
+/// OACK 之后收包滚动备忘：最近 4 包的 (dst_port, TFTP op)，时间序旧→新。
+/// 单发闩被 servreg 包（0x12 口 QMI 头 00 04 撞 ACK 码）吃掉的教训。
+static mut TF_RX_LOG_P: [u32; 4] = [0; 4];
+static mut TF_RX_LOG_O: [u32; 4] = [0; 4];
+static mut TF_RX_LOG_N: u32 = 0;
 const TF_BLK: u32 = 252;
 static mut TF_BLKBUF: [u8; 256] = [0; 256];
 static mut TF_NODE: u32 = 0;
@@ -11194,16 +11198,20 @@ fn scan_new_servers(fifo: u64, rh: u64) {
                 let dst_port = rd32((fifo + off + 44) as usize);
                 let xfer_port = unsafe { TF_XFER_PORT };
                 let on_xfer = xfer_port != 0 && dst_port == xfer_port;
-                if typ == 1 && (dst_port == TF_DATA_PORT || on_xfer) {
+                if typ == 1 && (dst_port == TF_DATA_PORT || dst_port == TF_SVC_PORT || on_xfer) {
                     tf_note_ack(off, fifo);
                 }
-                if typ == 1 && chunk >= 52 && unsafe { TF_ST } >= 1 && unsafe { TF_RX_HIT } == 0 {
+                if typ == 1 && chunk >= 52 && unsafe { TF_ST } >= 1 {
                     let op = ((rd8(fifo + off + 48) as u32) << 8) | (rd8(fifo + off + 49) as u32);
-                    if on_xfer || op == 4 || op == 5 {
+                    // 0x12 是自家假 pd-mapper 口，QMI 头 00 04 恒撞 ACK 码，不入册。
+                    if on_xfer || dst_port == TF_SVC_PORT
+                        || (dst_port != 0x12 && (op == 4 || op == 5))
+                    {
+                        let idx = (unsafe { TF_RX_LOG_N } & 3) as usize;
                         unsafe {
-                            TF_RX_HIT = 1;
-                            TF_RX_PORT = dst_port;
-                            TF_RX_META = dst_node | (op << 16);
+                            TF_RX_LOG_P[idx] = dst_port;
+                            TF_RX_LOG_O[idx] = op;
+                            TF_RX_LOG_N = TF_RX_LOG_N.wrapping_add(1);
                         }
                     }
                 }
@@ -12117,9 +12125,25 @@ fn ctrl_service(
                                 push_str(&mut reply, &mut rn, ".");
                                 push_hex(&mut reply, &mut rn, unsafe { TF_XFER_PORT } as u64);
                                 push_str(&mut reply, &mut rn, " rx=");
-                                push_hex(&mut reply, &mut rn, unsafe { TF_RX_PORT } as u64);
-                                push_str(&mut reply, &mut rn, ".");
-                                push_hex(&mut reply, &mut rn, unsafe { TF_RX_META } as u64);
+                                // 滚动备忘：总数.随后最多 4 槽 port.op（时间序，旧→新）
+                                push_hex(&mut reply, &mut rn, unsafe { TF_RX_LOG_N } as u64);
+                                let n_log = unsafe { TF_RX_LOG_N };
+                                let mut k_log = n_log.saturating_sub(4);
+                                while k_log < n_log {
+                                    push_str(&mut reply, &mut rn, ".");
+                                    push_hex(
+                                        &mut reply,
+                                        &mut rn,
+                                        unsafe { TF_RX_LOG_P[(k_log & 3) as usize] } as u64,
+                                    );
+                                    push_str(&mut reply, &mut rn, ".");
+                                    push_hex(
+                                        &mut reply,
+                                        &mut rn,
+                                        unsafe { TF_RX_LOG_O[(k_log & 3) as usize] } as u64,
+                                    );
+                                    k_log += 1;
+                                }
                                 // ob=blk.wsz.ts — 写进 OACK 的数。wsz=0 表示请求没带 wsize。
                                 // rs=有键.值。rs=1.0 是 stat。
                                 push_str(&mut reply, &mut rn, " ob=");
