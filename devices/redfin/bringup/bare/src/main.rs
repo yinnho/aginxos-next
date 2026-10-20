@@ -4558,6 +4558,16 @@ static mut TF_RX_LOG_N: u32 = 0;
 static mut TF_BLKBUF: [u8; 8200] = [0; 8200];
 static mut TF_NODE: u32 = 0;
 static mut TF_PORT: u32 = 0;
+/// 刀 G2：RRQ 客户端地址观测。rq=本笔 node.port，rq2=上一笔——port 逐笔换新
+/// = 客户端每笔重开 socket（回信追着死口打，立刻现形）；port 稳定 = socket 常驻。
+static mut TF_RQ_NODE: u32 = 0;
+static mut TF_RQ_PORT: u32 = 0;
+static mut TF_RQ2_NODE: u32 = 0;
+static mut TF_RQ2_PORT: u32 = 0;
+/// 刀 G2 探针：CTRL 口(0xfffffffe) OACK 副本是否已发（0/1）。我们答 LOOKUP 用的
+/// 正是 (1,CTRL)→客户端 这个源址形状且客户端据此找上门；若它只认这种源址，
+/// 副本一收住它就有反应（tf 冻结或 rx 现形）。
+static mut TF_CTRL_PROBE: u32 = 0;
 static mut TF_OP: u32 = 0;
 static mut TF_OFF: u32 = 0;
 static mut TF_SEEN: [u32; 8] = [0xffff_ffff; 8];
@@ -7321,6 +7331,26 @@ fn tf_reply(ufs: &mut Ufs, at478: u64, at479: u64, sz479: u64) {
             TF_ACK_PEND = false;
             TF_ACK_OFF = 0xffff_ffff;
             TF_OACK_AT = time::cntvct();
+        }
+        // 刀 G2 探针：此刻环刚排空、双份 OACK 总量 <300B 远小于 16K 环容——直接从
+        // CTRL 口(0xfffffffe) 再排一份同载荷同目的址的副本，只换源口。一次性。
+        // 答 LOOKUP 的 NEW_SERVER 就是 (1,CTRL)→客户端 这个形状；若 TFTP 客户端
+        // 只收这种源址，副本一落地它就有反应（tf 冻结 / rx 现形）。
+        if unsafe { TF_CTRL_PROBE } == 0 && n > 0 {
+            let padded = (n + 3) & !3;
+            let total = (16 + (32 + padded) + 7) & !7;
+            if glink_tx_payload(
+                at478,
+                at479,
+                tx_head + total as u64,
+                sz479,
+                0xffff_fffe,
+                unsafe { TF_NODE },
+                unsafe { TF_PORT },
+                &q[..n],
+            ) {
+                unsafe { TF_CTRL_PROBE = 1; }
+            }
         }
         tf_drop_pend();
     }
@@ -11531,6 +11561,10 @@ fn scan_new_servers(fifo: u64, rh: u64) {
                         unsafe {
                             TF_NODE = rd32((fifo + off + 24) as usize);
                             TF_PORT = rd32((fifo + off + 28) as usize);
+                            TF_RQ2_NODE = TF_RQ_NODE;
+                            TF_RQ2_PORT = TF_RQ_PORT;
+                            TF_RQ_NODE = TF_NODE;
+                            TF_RQ_PORT = TF_PORT;
                             TF_OP = op;
                             TF_OFF = key;
                             TF_NAME = name;
@@ -12215,6 +12249,18 @@ fn ctrl_service(
                                 push_hex(&mut reply, &mut rn, unsafe { TF_TXT } as u64);
                                 push_str(&mut reply, &mut rn, ".");
                                 push_hex(&mut reply, &mut rn, unsafe { TF_TXSZ } as u64);
+                                // 刀 G2：rq=本笔 RRQ 客户端 node.port，rq2=上一笔（port 换新
+                                // =客户端重开 socket）；cp=CTRL 口副本探针已发与否。
+                                push_str(&mut reply, &mut rn, " rq=");
+                                push_hex(&mut reply, &mut rn, unsafe { TF_RQ_NODE } as u64);
+                                push_str(&mut reply, &mut rn, ".");
+                                push_hex(&mut reply, &mut rn, unsafe { TF_RQ_PORT } as u64);
+                                push_str(&mut reply, &mut rn, ".");
+                                push_hex(&mut reply, &mut rn, unsafe { TF_RQ2_NODE } as u64);
+                                push_str(&mut reply, &mut rn, ".");
+                                push_hex(&mut reply, &mut rn, unsafe { TF_RQ2_PORT } as u64);
+                                push_str(&mut reply, &mut rn, " cp=");
+                                push_hex(&mut reply, &mut rn, unsafe { TF_CTRL_PROBE } as u64);
                                 // me=pub.vout.inflags — MPSS SMP2P ipa 刀
                                 push_str(&mut reply, &mut rn, " me=");
                                 push_hex(&mut reply, &mut rn, unsafe { MPSS_PUB } as u64);
