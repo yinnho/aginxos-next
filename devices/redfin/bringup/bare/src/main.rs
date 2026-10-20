@@ -4544,6 +4544,11 @@ static mut TF_XFER_PORT: u32 = 0;
 /// OACK 发出时刻（CNTVCT）。宽限刀用：OACK 后 2s 无 ACK-0 就合成 ack=0 直发 DATA 块 1
 /// （非规客户端 OACK 后不 ACK 只等数据的假设 E）。0 = 未发。
 static mut TF_OACK_AT: u64 = 0;
+/// TX 环快照（tf_reply 每次进来时读）：head.tail.环容。tail 推进=modem 消费了
+/// 我们的包（送达到 glink 层）；tail 冻结=块压根没被收（假设 F：大块传输层被弃）。
+static mut TF_TXH: u32 = 0;
+static mut TF_TXT: u32 = 0;
+static mut TF_TXSZ: u32 = 0;
 /// OACK 之后收包滚动备忘：最近 4 包的 (dst_port, TFTP op)，时间序旧→新。
 /// 单发闩被 servreg 包（0x12 口 QMI 头 00 04 撞 ACK 码）吃掉的教训。
 static mut TF_RX_LOG_P: [u32; 4] = [0; 4];
@@ -7078,6 +7083,11 @@ fn tf_reply(ufs: &mut Ufs, at478: u64, at479: u64, sz479: u64) {
     }
     let tx_head = rd32((at478 + 4) as usize) as u64;
     let tx_tail = rd32(at478 as usize) as u64;
+    unsafe {
+        TF_TXH = tx_head as u32;
+        TF_TXT = tx_tail as u32;
+        TF_TXSZ = sz479 as u32;
+    }
     if tx_head != tx_tail {
         return;
     }
@@ -12194,6 +12204,13 @@ fn ctrl_service(
                                 push_hex(&mut reply, &mut rn, unsafe { TF_REJ } as u64);
                                 push_str(&mut reply, &mut rn, ".");
                                 push_hex(&mut reply, &mut rn, unsafe { TF_REJ_PORT } as u64);
+                                // tt=TX环 head.tail.环容 —— tail 推进=modem 消费（送达 glink 层）
+                                push_str(&mut reply, &mut rn, " tt=");
+                                push_hex(&mut reply, &mut rn, unsafe { TF_TXH } as u64);
+                                push_str(&mut reply, &mut rn, ".");
+                                push_hex(&mut reply, &mut rn, unsafe { TF_TXT } as u64);
+                                push_str(&mut reply, &mut rn, ".");
+                                push_hex(&mut reply, &mut rn, unsafe { TF_TXSZ } as u64);
                                 // me=pub.vout.inflags — MPSS SMP2P ipa 刀
                                 push_str(&mut reply, &mut rn, " me=");
                                 push_hex(&mut reply, &mut rn, unsafe { MPSS_PUB } as u64);
