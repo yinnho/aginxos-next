@@ -7320,13 +7320,22 @@ static mut TF_W_OX: u32 = 0;
 static mut TF_W_SRC: u32 = 0;
 static mut TF_W_BL: u32 = 0;
 static mut TF_W_BLV: u32 = 0;
-/// 刀 G26：op2 全量环（最近 4 发 dst.sport）+ 总数——#26 三方矛盾（武装
+/// 刀 G26：op2 全量环 + 总数——#26 三方矛盾（武装
 /// VIA=11 + 撞门 BLV=11 + 阶梯槽 1011 且 6 槽窗内无 11 op2）在 N/BL 两
 /// 账内无法自洽（arm 与 blocked 互补无缝隙、区前无 continue），改为在
-/// ladder 站点（无口过滤）照抄 op2 全序，下靴直读真身。
-static mut TF_WLOG_P: [u32; 4] = [0; 4];
-static mut TF_WLOG_S: [u32; 4] = [0; 4];
+/// ladder 站点照抄 op2 全序，下靴直读真身。
+/// 刀 G27：环 4→6 槽+op 位+口过滤（#27 无口过滤收了打 0x12 假
+/// pd-mapper 口的 QMI 假阳）+渲染钳位修；同门 G24 区口集，两账可直
+/// 接对账。
+static mut TF_WLOG_P: [u32; 6] = [0; 6];
+static mut TF_WLOG_S: [u32; 6] = [0; 6];
+static mut TF_WLOG_O: [u8; 6] = [0; 6];
 static mut TF_W_TOT: u32 = 0;
+/// 刀 G27：武装 WRQ 的文件名快照——#27 客户端 .so 收幕后全静、写会话
+/// OACK 后零 DATA，写目标从未被捕（TF_NAME 被后续请求覆写）。武装时
+/// 单独抄盘，wn= 直读「客户端想写什么」。
+static mut TF_W_NAME: [u8; 56] = [0; 56];
+static mut TF_W_NAME_N: u8 = 0;
 /// 刀 G25：28B→56B——#25 三槽只见到 /readonly/firmware/image/m 前
 /// 缀，56B 可罩住 image/modem_pr/so/549_38_0.mbn 全长（49 字符）。
 static mut TF_PR: [[u8; 56]; 6] = [[0; 56]; 6];
@@ -12375,12 +12384,20 @@ fn scan_new_servers(fifo: u64, rh: u64) {
                     let op0 = ((rd8(fifo + off + 48) as u32) << 8) | (rd8(fifo + off + 49) as u32);
                     if op0 == 1 || op0 == 2 {
                         let sp = rd32((fifo + off + 28) as usize);
-                        // 刀 G26：op2 全量环——ladder 站点无口过滤=真总账。
-                        if op0 == 2 {
-                            let wi = (unsafe { TF_W_TOT } % 4) as usize;
+                        // 刀 G26/G27：op2 全量环（6 槽+op 位）——#27 实测
+                        // 无口过滤会收假阳（打 0x12 假 pd-mapper 口的 QMI
+                        // REQ 头两字节 00 02 撞 op2），改收 tftp 口集
+                        // （0x11/0x1011/xfer）与 G24 区同门，两账直接对账。
+                        let xfer0 = unsafe { TF_XFER_PORT };
+                        let tftpish = dst_port == 0x11
+                            || dst_port == TF_ALT_PORT
+                            || (xfer0 != 0 && dst_port == xfer0);
+                        if op0 == 2 && tftpish {
+                            let wi = (unsafe { TF_W_TOT } % 6) as usize;
                             unsafe {
                                 TF_WLOG_P[wi] = dst_port;
                                 TF_WLOG_S[wi] = sp;
+                                TF_WLOG_O[wi] = op0 as u8;
                                 TF_W_TOT = TF_W_TOT.wrapping_add(1);
                             }
                         }
@@ -12739,6 +12756,15 @@ fn scan_new_servers(fifo: u64, rh: u64) {
                                 TF_W_N = TF_W_N.wrapping_add(1);
                                 // 刀 G25：武装 WRQ 的源口入账。
                                 TF_W_SRC = rd32((fifo + off + 28) as usize);
+                                // 刀 G27：武装 WRQ 文件名快照（name/nn
+                                // 解析在本块上层，零重读）。
+                                TF_W_NAME = [0; 56];
+                                let mut wn = 0usize;
+                                while wn < 56 && wn < nn {
+                                    TF_W_NAME[wn] = name[wn];
+                                    wn += 1;
+                                }
+                                TF_W_NAME_N = wn as u8;
                             }
                         }
                     }
@@ -13513,16 +13539,35 @@ fn ctrl_service(
                                 push_hex(reply, &mut rn, unsafe { TF_W_TOT } as u64);
                                 push_str(reply, &mut rn, " wl=");
                                 let mut wli = 0u32;
-                                while wli < 4 {
-                                    let base = unsafe { TF_W_TOT } as i64 - 4 + wli as i64;
-                                    let idx = if base < 0 { 0 } else { (base as u32) % 4 } as usize;
-                                    push_hex(reply, &mut rn, unsafe { TF_WLOG_P[idx] } as u64);
-                                    push_str(reply, &mut rn, ".");
-                                    push_hex(reply, &mut rn, unsafe { TF_WLOG_S[idx] } as u64);
-                                    if wli != 3 {
+                                let tot6 = unsafe { TF_W_TOT };
+                                while wli < 6 {
+                                    // 刀 G27：钳位修（#26 渲染负 base 钳 0
+                                    // 致首槽 ×3 假重复）+空槽显 -。
+                                    if tot6 < 6 && wli >= tot6 {
+                                        push_str(reply, &mut rn, "-");
+                                    } else {
+                                        let idx = if tot6 >= 6 {
+                                            ((tot6 - 6 + wli) % 6) as usize
+                                        } else {
+                                            wli as usize
+                                        };
+                                        push_hex(reply, &mut rn, unsafe { TF_WLOG_P[idx] } as u64);
+                                        push_str(reply, &mut rn, ".");
+                                        push_hex(reply, &mut rn, unsafe { TF_WLOG_S[idx] } as u64);
+                                        push_str(reply, &mut rn, ".");
+                                        push_hex(reply, &mut rn, unsafe { TF_WLOG_O[idx] } as u64);
+                                    }
+                                    if wli != 5 {
                                         push_str(reply, &mut rn, ",");
                                     }
                                     wli += 1;
+                                }
+                                // 刀 G27：wn= 武装 WRQ 文件名快照（hex 直读）。
+                                push_str(reply, &mut rn, " wn=");
+                                let mut wni = 0u32;
+                                while wni < unsafe { TF_W_NAME_N } as u32 {
+                                    push_hex(reply, &mut rn, unsafe { TF_W_NAME[wni as usize] } as u64);
+                                    wni += 1;
                                 }
                                 push_str(reply, &mut rn, " i2=");
                                 push_hex(reply, &mut rn, unsafe { I2_N } as u64);

@@ -120,6 +120,7 @@ MODE="heartbeat"
 [ "${1:-}" = "--s24" ] && MODE="s24"
 [ "${1:-}" = "--s25" ] && MODE="s25"
 [ "${1:-}" = "--s26" ] && MODE="s26"
+[ "${1:-}" = "--s27" ] && MODE="s27"
 mkdir -p "${OUTDIR}"
 ELF="${OUTDIR}/heartbeat.elf"
 
@@ -929,6 +930,16 @@ elif [ "${MODE}" = "s26" ]; then
   ELF="${OUTDIR}/s26.elf"
   cp "${HERE}/target/aarch64-unknown-none-softfloat/release/redfin-bare" "${ELF}"
   BIN="${OUTDIR}/s26.bin"; IMG="${OUTDIR}/boot-s26.img"
+elif [ "${MODE}" = "s27" ]; then
+  # 刀 G27：s26 同面，纯观察零协议变化——#27 i2=1.1.20（0x23 首答）但
+  # 客户端仍全静（rl/rq/c9/i7/bg 全冻）、ic=0.0（0x35 从未发）。观察：
+  # wn= 武装 WRQ 文件名快照（写目标从未被捕——客户端想写什么）；
+  # wl= 环 4→6 槽+op 位+tftp 口过滤（#27 假阳=打 0x12 的 QMI REQ 头
+  # 00 02 撞 op2）+钳位修。
+  (cd "${HERE}" && cargo build --release --target aarch64-unknown-none-softfloat)
+  ELF="${OUTDIR}/s27.elf"
+  cp "${HERE}/target/aarch64-unknown-none-softfloat/release/redfin-bare" "${ELF}"
+  BIN="${OUTDIR}/s27.bin"; IMG="${OUTDIR}/boot-s27.img"
 elif [ "${MODE}" = "s21" ]; then
   # 刀 G22：s20 同面，intent 池+归还追踪（cmd5 全量入池、TX 池挑、
   # RX_DONE/W_REUSE 归还、池干 RX_INTENT_REQ、cmd3/11 入 8B 集、ii= 台账）。
