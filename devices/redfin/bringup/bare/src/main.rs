@@ -4567,6 +4567,8 @@ static mut TF_DV: u32 = 0;
 static mut TF_DZ: u32 = 0;
 static mut TF_DX: u32 = 0;
 static mut TF_DC: u32 = 0;
+// 刀 G9c：retry 路 OACK 服务计数（st=2/3 新到 pend 的应答数）。
+static mut TF_DR: u32 = 0;
 static mut TF_RX_LOG_N: u32 = 0;
 /// DATA 缓冲。8200 = 4 字节 TFTP 头 + 8192 上限（so_read 单发双扇区 4096×2）。
 static mut TF_BLKBUF: [u8; 8200] = [0; 8200];
@@ -7349,11 +7351,20 @@ fn tf_reply(ufs: &mut Ufs, at478: u64, at479: u64, sz479: u64) {
     let st_now = unsafe { TF_ST };
     let retarget = st_now == 1 && unsafe { TF_BLKNO } == 0;
     let fresh = st_now == 0 || st_now == 4;
+    // 刀 G9c：st=2/3（DATA 已发/送完）新到 pend 不再饿死——只回 OACK
+    // 应答（不重置游标、不 synth DATA、~100B/笔）。G9 满服务版三靴全黑
+    // （G8b 对照定罪，收据 7d8d282）；节流版答到每个重试口又不打环。
+    let retry = st_now == 2 || st_now == 3;
     // 游标不回头纪律保持：fresh（st 0/4）之外照旧丢。armed 已是 II_ST=2（刀 G4）。
     if op == 1 && !armed && tf_is_so() && unsafe { TZ_ST } == 1 && fresh {
         return;
     }
-    if op != 1 || !armed || (!retarget && !fresh) || !tf_is_so() || unsafe { TZ_ST } != 1 {
+    if op != 1
+        || !armed
+        || (!retarget && !fresh && !retry)
+        || !tf_is_so()
+        || unsafe { TZ_ST } != 1
+    {
         tf_drop_pend();
         return;
     }
@@ -7433,21 +7444,27 @@ fn tf_reply(ufs: &mut Ufs, at478: u64, at479: u64, sz479: u64) {
         unsafe { TF_PORT },
         &q[..n],
     ) {
-        unsafe {
-            TF_XFER_PORT = sport;
-            TF_ST = 1;
-            TF_BLKNO = 0;
-            TF_ACK_PEND = false;
-            TF_ACK_OFF = 0xffff_ffff;
-            TF_OACK_AT = time::cntvct();
-            // 刀 G7：OACK 落环即合成 ACK-0（2s 宽限退役为兜底）。G6 窗2 实测：
-            // 客户端 1s 超时窗（tm=3e8）内既不 ACK-0 也不 EOT——18 笔重试全在
-            // ping 前打完，2s 后才发的 DATA 块 1 永远扑空（tb=2.1.11 冻结、
-            // rx=0 全靴零回包）。若客户端真是 ACK-0 型，真 ACK-0 稍后到也不碍
-            // 事：TF_ACK_OFF 去重，且 ack≠expect 的迟到 ACK 直接丢。stat 舞不受
-            // 影响——DATA 分支的 rsize=0 门照旧拦住不发。
-            TF_ACK_PEND = true;
-            TF_ACK_BLK = 0;
+        // 刀 G9c：retry 服务只投 OACK，不碰游标/synth——原会话状态原样保留，
+        // 重试口的任何回包（ACK/EOT）由 rx 滚动备忘捕获即达判读目的。
+        if !retry {
+            unsafe {
+                TF_XFER_PORT = sport;
+                TF_ST = 1;
+                TF_BLKNO = 0;
+                TF_ACK_PEND = false;
+                TF_ACK_OFF = 0xffff_ffff;
+                TF_OACK_AT = time::cntvct();
+                // 刀 G7：OACK 落环即合成 ACK-0（2s 宽限退役为兜底）。G6 窗2 实测：
+                // 客户端 1s 超时窗（tm=3e8）内既不 ACK-0 也不 EOT——18 笔重试全在
+                // ping 前打完，2s 后才发的 DATA 块 1 永远扑空（tb=2.1.11 冻结、
+                // rx=0 全靴零回包）。若客户端真是 ACK-0 型，真 ACK-0 稍后到也不碍
+                // 事：TF_ACK_OFF 去重，且 ack≠expect 的迟到 ACK 直接丢。stat 舞不受
+                // 影响——DATA 分支的 rsize=0 门照旧拦住不发。
+                TF_ACK_PEND = true;
+                TF_ACK_BLK = 0;
+            }
+        } else {
+            unsafe { TF_DR = TF_DR.wrapping_add(1) };
         }
         // 刀 G4：CTRL 副本探针删除。G3 实测它一笔不被消费即冻环（tt 卡 a00.960、
         // grace/DATA 连带冻死）；且其落位公式与 glink_tx_payload 内部回卷纪律
@@ -12395,6 +12412,9 @@ fn ctrl_service(
                                 push_hex(&mut reply, &mut rn, unsafe { TF_DX } as u64);
                                 push_str(&mut reply, &mut rn, ".");
                                 push_hex(&mut reply, &mut rn, unsafe { TF_DC } as u64);
+                                // 刀 G9c：dv 第五元=retry OACK 服务数。
+                                push_str(&mut reply, &mut rn, ".");
+                                push_hex(&mut reply, &mut rn, unsafe { TF_DR } as u64);
                                 // ob=blk.wsz.ts — 写进 OACK 的数。wsz=0 表示请求没带 wsize。
                                 // rs=有键.值。rs=1.0 是 stat。
                                 push_str(&mut reply, &mut rn, " ob=");
