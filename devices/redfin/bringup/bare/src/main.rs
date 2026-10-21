@@ -4567,6 +4567,11 @@ static mut TF_DV: u32 = 0;
 static mut TF_DZ: u32 = 0;
 static mut TF_DX: u32 = 0;
 static mut TF_DC: u32 = 0;
+// 刀 G10：转录插桩（零行为变化）——最近 2 笔 op4/op5 入站包原文 ≤24B
+// （op+码+错误消息串）。op5 的消息文本＝客户端拒收理由原文，一眼定谳。
+static mut TF_RXR: [[u8; 24]; 2] = [[0; 24]; 2];
+static mut TF_RXR_L: [u8; 2] = [0; 2];
+static mut TF_RXR_N: u32 = 0;
 // 刀 G9c：retry 路 OACK 服务计数（st=2/3 新到 pend 的应答数）。
 static mut TF_DR: u32 = 0;
 static mut TF_RX_LOG_N: u32 = 0;
@@ -11416,6 +11421,25 @@ fn scan_new_servers(fifo: u64, rh: u64) {
                             TF_RX_LOG_A[idx] = arg;
                             TF_RX_LOG_N = TF_RX_LOG_N.wrapping_add(1);
                         }
+                        // 刀 G10：op4/op5 顺带抄原文 ≤24B 进双槽环（定宽 nibble
+                        // 渲染进 rr=）。op5 消息文本＝拒收理由原文。
+                        if op == 4 || op == 5 {
+                            let size = rd32((fifo + off + 36) as usize) as usize;
+                            let room = chunk as usize - 48;
+                            let n = size.min(room).min(24);
+                            let ridx = (unsafe { TF_RXR_N } & 1) as usize;
+                            let mut i = 0usize;
+                            while i < n {
+                                unsafe {
+                                    TF_RXR[ridx][i] = rd8(fifo + off + 48 + i as u64);
+                                }
+                                i += 1;
+                            }
+                            unsafe {
+                                TF_RXR_L[ridx] = n as u8;
+                                TF_RXR_N = TF_RXR_N.wrapping_add(1);
+                            }
+                        }
                     }
                 }
             }
@@ -12083,7 +12107,8 @@ fn ctrl_service(
                             }
                             continue;
                         }
-                        let mut reply = [0u8; 1792];
+                        // 刀 G10：+rp=/rr= 转录字段（~330 字符）——1792 顶满会截尾，扩 2560。
+                        let mut reply = [0u8; 2560];
                         let mut rn = 0usize;
                         match code {
                             1 => push_str(&mut reply, &mut rn, "redfin\n"),
@@ -12822,6 +12847,37 @@ fn ctrl_service(
                                 }
                                 push_str(&mut reply, &mut rn, " w45=");
                                 push_hex(&mut reply, &mut rn, unsafe { SAW_45 } as u64);
+                                // 刀 G10：rp=保存的 SO RRQ 原文（≤96B，定宽 nibble）——
+                                // 文件名+mode+选项区逐字节，解析器盲区的尾巴直接可见，
+                                // 方言真图。tf_save_so 只存 SO 文件（TF_OPTBUF/TF_OPTLEN）。
+                                push_str(&mut reply, &mut rn, " rp=");
+                                let n_rp = (unsafe { TF_OPTLEN } as usize).min(96);
+                                let mut i_rp = 0usize;
+                                while i_rp < n_rp {
+                                    let b = unsafe { TF_OPTBUF[i_rp] };
+                                    push_hex(&mut reply, &mut rn, (b >> 4) as u64);
+                                    push_hex(&mut reply, &mut rn, (b & 0xF) as u64);
+                                    i_rp += 1;
+                                }
+                                // 刀 G10：rr=最近 2 笔 op4/op5 原文（时间序旧→新，各 ≤24B）。
+                                // op5 例：0005 0009 "End of transfer" ——消息文本＝拒收理由。
+                                push_str(&mut reply, &mut rn, " rr=");
+                                push_hex(&mut reply, &mut rn, unsafe { TF_RXR_N } as u64);
+                                let n_rr = unsafe { TF_RXR_N }.min(2);
+                                let mut k_rr = n_rr;
+                                while k_rr > 0 {
+                                    let ridx = ((unsafe { TF_RXR_N } - k_rr) & 1) as usize;
+                                    let len = unsafe { TF_RXR_L[ridx] } as usize;
+                                    push_str(&mut reply, &mut rn, ".");
+                                    let mut i_rr = 0usize;
+                                    while i_rr < len {
+                                        let b = unsafe { TF_RXR[ridx][i_rr] };
+                                        push_hex(&mut reply, &mut rn, (b >> 4) as u64);
+                                        push_hex(&mut reply, &mut rn, (b & 0xF) as u64);
+                                        i_rr += 1;
+                                    }
+                                    k_rr -= 1;
+                                }
                                 push_str(&mut reply, &mut rn, " q=");
                                 let nsvc = unsafe { SMEM_NSVC }.min(8);
                                 for i in 0..nsvc {
