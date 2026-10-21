@@ -119,6 +119,7 @@ MODE="heartbeat"
 [ "${1:-}" = "--s23" ] && MODE="s23"
 [ "${1:-}" = "--s24" ] && MODE="s24"
 [ "${1:-}" = "--s25" ] && MODE="s25"
+[ "${1:-}" = "--s26" ] && MODE="s26"
 mkdir -p "${OUTDIR}"
 ELF="${OUTDIR}/heartbeat.elf"
 
@@ -917,6 +918,17 @@ elif [ "${MODE}" = "s25" ]; then
   ELF="${OUTDIR}/s25.elf"
   cp "${HERE}/target/aarch64-unknown-none-softfloat/release/redfin-bare" "${ELF}"
   BIN="${OUTDIR}/s25.bin"; IMG="${OUTDIR}/boot-s25.img"
+elif [ "${MODE}" = "s26" ]; then
+  # 刀 G26：s25 同面，巨 REQ 腿搬家——#26 定谳 i2=0.0.0：0x23 巨 REQ 走
+  # cmd9 大包短路（G23 自供「QMI 深解析仍限小包」），II 区全程只见 0x27
+  # （im=27.27.1）。修：大包分支就地头四字深解析，0x23 武装 I2、0x35 武
+  # 装 IC（ic=0.0 各靴恒零疑同因）。观察：wx= 扩第 7 位 op2 总数、wl=
+  # op2 全量环（最近 4 发 dst.sport，#26 三方矛盾 VIA=11/BLV=11/阶梯槽
+  # 1011 在 N/BL 两账内无法自洽）。
+  (cd "${HERE}" && cargo build --release --target aarch64-unknown-none-softfloat)
+  ELF="${OUTDIR}/s26.elf"
+  cp "${HERE}/target/aarch64-unknown-none-softfloat/release/redfin-bare" "${ELF}"
+  BIN="${OUTDIR}/s26.bin"; IMG="${OUTDIR}/boot-s26.img"
 elif [ "${MODE}" = "s21" ]; then
   # 刀 G22：s20 同面，intent 池+归还追踪（cmd5 全量入池、TX 池挑、
   # RX_DONE/W_REUSE 归还、池干 RX_INTENT_REQ、cmd3/11 入 8B 集、ii= 台账）。

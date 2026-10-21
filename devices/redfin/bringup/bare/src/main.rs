@@ -7320,6 +7320,13 @@ static mut TF_W_OX: u32 = 0;
 static mut TF_W_SRC: u32 = 0;
 static mut TF_W_BL: u32 = 0;
 static mut TF_W_BLV: u32 = 0;
+/// 刀 G26：op2 全量环（最近 4 发 dst.sport）+ 总数——#26 三方矛盾（武装
+/// VIA=11 + 撞门 BLV=11 + 阶梯槽 1011 且 6 槽窗内无 11 op2）在 N/BL 两
+/// 账内无法自洽（arm 与 blocked 互补无缝隙、区前无 continue），改为在
+/// ladder 站点（无口过滤）照抄 op2 全序，下靴直读真身。
+static mut TF_WLOG_P: [u32; 4] = [0; 4];
+static mut TF_WLOG_S: [u32; 4] = [0; 4];
+static mut TF_W_TOT: u32 = 0;
 /// 刀 G25：28B→56B——#25 三槽只见到 /readonly/firmware/image/m 前
 /// 缀，56B 可罩住 image/modem_pr/so/549_38_0.mbn 全长（49 字符）。
 static mut TF_PR: [[u8; 56]; 6] = [[0; 56]; 6];
@@ -12205,6 +12212,48 @@ fn scan_new_servers(fifo: u64, rh: u64) {
                             BG_W[2] = rd32((fifo + off + 56) as usize);
                         }
                     }
+                    // 刀 G26：大包短路吃掉巨 REQ——#26 实证 i2=0.0.0 而
+                    // bg/bx 早见包（G23 注释自供：QMI 深解析仍限小包，II
+                    // 区全程只见 0x27）。就地补一档头四字深解析：打 IPA 口
+                    // 的 qtype0 REQ，0x23 武装 I2、0x35 武装 IC（ic=0.0 各
+                    // 靴恒零疑同因——CMPLT_REQ 载 TLV 同为巨包）。回信仍走
+                    // 各自 tick，PEND+DONE 去重同 II 区原样。
+                    if typ == 1
+                        && dst_node == 1
+                        && (dst_port == IPA_SVC_PORT || dst_port == IPA_QRTR_PORT)
+                        && chunk >= 56
+                    {
+                        let w = rd32((fifo + off + 48) as usize);
+                        let w1 = rd32((fifo + off + 52) as usize);
+                        let qtype = w & 0xff;
+                        let msgid = ((w >> 24) & 0xff) | ((w1 & 0xff) << 8);
+                        let txn = (w >> 8) & 0xffff;
+                        if qtype == 0
+                            && msgid == 0x23
+                            && dst_port == IPA_SVC_PORT
+                            && !unsafe { I2_PEND }
+                        {
+                            let port = rd32((fifo + off + 28) as usize);
+                            if unsafe { txn != I2_DONE_TXN || port != I2_DONE_PORT } {
+                                unsafe {
+                                    I2_TXN = txn;
+                                    I2_NODE = rd32((fifo + off + 24) as usize);
+                                    I2_PORT = port;
+                                    I2_N = I2_N.wrapping_add(1);
+                                    I2_PEND = true;
+                                }
+                            }
+                        }
+                        if qtype == 0 && msgid == 0x35 && !unsafe { IC_PEND } {
+                            unsafe {
+                                IC_N = IC_N.wrapping_add(1);
+                                IC_TXN = txn;
+                                IC_NODE = rd32((fifo + off + 24) as usize);
+                                IC_PORT = rd32((fifo + off + 28) as usize);
+                                IC_PEND = true;
+                            }
+                        }
+                    }
                     let xfer_port = unsafe { TF_XFER_PORT };
                     let on_xfer = xfer_port != 0 && dst_port == xfer_port;
                     if typ == 1
@@ -12326,6 +12375,15 @@ fn scan_new_servers(fifo: u64, rh: u64) {
                     let op0 = ((rd8(fifo + off + 48) as u32) << 8) | (rd8(fifo + off + 49) as u32);
                     if op0 == 1 || op0 == 2 {
                         let sp = rd32((fifo + off + 28) as usize);
+                        // 刀 G26：op2 全量环——ladder 站点无口过滤=真总账。
+                        if op0 == 2 {
+                            let wi = (unsafe { TF_W_TOT } % 4) as usize;
+                            unsafe {
+                                TF_WLOG_P[wi] = dst_port;
+                                TF_WLOG_S[wi] = sp;
+                                TF_W_TOT = TF_W_TOT.wrapping_add(1);
+                            }
+                        }
                         let (_, saw_rs, rsz, saw_sk, skv) = if op0 == 1 {
                             tf_rrq_rsize(fifo, off, chunk)
                         } else {
@@ -13449,6 +13507,23 @@ fn ctrl_service(
                                 push_hex(reply, &mut rn, unsafe { TF_W_BL } as u64);
                                 push_str(reply, &mut rn, ".");
                                 push_hex(reply, &mut rn, unsafe { TF_W_BLV } as u64);
+                                push_str(reply, &mut rn, ".");
+                                // 刀 G26：op2 总数 + 全量环（最近 4 发 dst.sport，
+                                // 旧→新）——三方矛盾的直读判据。
+                                push_hex(reply, &mut rn, unsafe { TF_W_TOT } as u64);
+                                push_str(reply, &mut rn, " wl=");
+                                let mut wli = 0u32;
+                                while wli < 4 {
+                                    let base = unsafe { TF_W_TOT } as i64 - 4 + wli as i64;
+                                    let idx = if base < 0 { 0 } else { (base as u32) % 4 } as usize;
+                                    push_hex(reply, &mut rn, unsafe { TF_WLOG_P[idx] } as u64);
+                                    push_str(reply, &mut rn, ".");
+                                    push_hex(reply, &mut rn, unsafe { TF_WLOG_S[idx] } as u64);
+                                    if wli != 3 {
+                                        push_str(reply, &mut rn, ",");
+                                    }
+                                    wli += 1;
+                                }
                                 push_str(reply, &mut rn, " i2=");
                                 push_hex(reply, &mut rn, unsafe { I2_N } as u64);
                                 push_str(reply, &mut rn, ".");
