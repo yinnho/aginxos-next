@@ -3888,3 +3888,51 @@ tsize 应答**。若假说成立，客户端 ACK-0 → DATA 流出 → 本线第
 ③ rp= 转 `px=`（让出与旧 rp=0.ffffffff 的撞名）、渲染帽 96→160
 （TF_OPTBUF 192 容得下）；④ OACK/解析器零改动。风险：若 "ts" 后不是
 tsize 而是未知键，解析器忽略、OACK 不变、安全空转。
+
+## 刀 G11 收据（2026-10-21 14:35 靴，room 修＋rpl=）：方言全貌闭环、OACK 与 stock 同字节——客户端改姿态但仍零回包；dv=0 矛盾立案 G12
+
+刷线：14:34 物理循环 #7（用户手），14:34:52 gate 过刷 boot_a，14:35:51
+ping 起。faa3408 镜像（room chunk-48→chunk-32、rpl=、px= 帽 160）。
+
+**rpl=67.68 定谳：size=0x67=103 ≤ room=0x68=104——抄本完整，零跨界截
+断**。G10 的「ts 死在键中间」确系 16B 裁切制品，G8「纯 RRQ」翻案闭环。
+完整方言原文（103B）：`op1 +
+"/readonly/firmware/image/modem_pr/so/549_38_0.mbn\0" + "octet\0" +
+"blksize\0" "7680\0" + "timeoutms\0" "1000\0" + "tsize\0" "0\0" +
+"wsize\0" "10\0"`。客户端要 **tsize=0**（尺寸探询）＋ **wsize=10**
+（RFC7440 窗口读），无 rsize/seek。解析器全见：ob=1e00.a.1（blk=7680、
+wsz=10、ts=1）；OACK 回 blksize/timeoutms/tsize=964092/wsize=10——
+与 stock tqftpserv 对该请求的应答**同内容**（键序同、值同）。
+
+**客户端换姿态（内容确实被解析）**：5×RRQ→0x11（src 0x22/0x23/0x21）
+＋1×RRQ→**dst 0x1111**（错口不服务）；O1–O4 后全静默，O5 后单笔裸
+4B EOT-9（rr=1.00050009，本靴最后一笔客户端包，st=4 定谳＝O5 后超时
+闭口）；全线 ~+7s 冻结（d=2b40.2b40、tt=b48）。G10 是每 OACK 一笔
+EOT-9，G11 收敛为「静默×4＋末笔 EOT-9」——纯超时重试画像，像极了
+「从未收到任何应答」的经典 TFTP 客户端弃线形。**tsize 假说（缺键即
+拒）证伪一半**：键全回了，客户端仍不 ACK-0。
+
+**G6w2 复核翻案（G7 注释重读）**：窗2 的「dv 有数」是 2s 宽限合成后
+发的 DATA 块1（客户端 1s 窗早过、扑空）；「客户端 ACK-0 型」从未成
+立——**全史零客户端回包**（OACK 从 0x11、DATA 从 0x11，皆零感知）。
+
+**dv=0.0.0.0.0 矛盾（G12 主题）**：G7 synth 在 OACK TX 成功即置
+st=1＋pend=true＋blk=0；pump 门 `armed&&(st1|st2)&&pend` 在
+smem_scan(true) 每圈免费评估（soak 环 xfer 期 every=2，~2ms 一圈）；
+TF_DC=0（环闸没挡）、tf_note_ack op1 no-op、tf_drop_pend 不碰 pend、
+II_ST=2 吸死（ipa_init_tick 早退门 `II_ST==2`，无 2→3 路径）——静态
+推演 dv 必≥1，实测 0。G8 注释早留话：「静态推演所有门都该过，必须实
+测堵点」。**G12 四分位插桩裁决：pq=call.noarm.nost.nopend＋
+ox=ok.no（OACK TX 成败），六格完整分割每次 tf_reply 调用**。
+
+**临时口案中案（G1 doctrine 被推翻）**：rl= 里 dst=0x1011/0x1111 的
+RRQ＝客户端咬住我们 ruleset ERROR 的临时源口（tf_new_port() 0x1000+）
+再寻址——**临时口包可穿 modem 路由层抵达客户端**（抵达才有咬住），
+且反向（客户端→0x1111）也穿。G1「路由器只认 NEW_SERVER 播报口」与
+0x11 现象同形（glink 尾随、客户端零感知），从未区分两口；stock
+tqftpserv 本就每客户 qrtr_open(0) 新临时口应答（qrtr_publish 只发
+布服务口 0x11 等价物）。**G12 第二刀：OACK/DATA 改从 tf_new_port()
+临时口发（stock 同构；retry st2/3 沿用在役 XFER 口）；ACK 回临时口
+的 on_xfer 监听腿已在役（walker 11408）**。若临时口活、pq= 显示 pump
+放行、dv>0、客户端仍静默——下一刀转 qrtr 头字节级对 stock（confirm
+位/节点编码）。
