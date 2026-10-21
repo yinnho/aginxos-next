@@ -7465,17 +7465,10 @@ fn tf_reply(ufs: &mut Ufs, at478: u64, at479: u64, sz479: u64) {
             n += 1;
         }
     }
-    // 刀 G12：OACK 改从临时口发（stock 同构：tqftpserv 每客户 qrtr_open(0)
-    // 新口应答，OACK/DATA 同口，服务口 0x11 只做 RRQ 进线）。G1「temp 口被
-    // modem 路由层弃」与 0x11 现象同形（glink 尾随、客户端零感知），从未被
-    // 区分实验；G9/G11 rl= 里客户端主动把 RRQ 发往 0x1011/0x1111——临时口
-    // 可穿路由且被客户端咬住。retry（st2/3）沿用在役 XFER 口不换（G9c 节流
-    // 语义）。ACK 回临时口的 on_xfer 监听腿已在役（walker 读 TF_XFER_PORT）。
-    let sport = if retry {
-        unsafe { TF_XFER_PORT }
-    } else {
-        tf_new_port()
-    };
+    // 刀 G13（二分回退）：G12 镜像两窗复现「纯 ping 20s 活、首查 sm 即死」
+    // （+8s ping 亡且不回靴）——行为增量只有临时口。本刀 sport 复位 0x11，
+    // pq=/ox= 四分位计数全留（一刀两用：若 sm 复活，pq= 直接实测 dv=0 矛盾）。
+    let sport = TF_SVC_PORT;
     if glink_tx_payload(
         at478,
         at479,
