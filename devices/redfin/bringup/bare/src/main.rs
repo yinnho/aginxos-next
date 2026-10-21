@@ -11968,8 +11968,49 @@ fn scan_new_servers(fifo: u64, rh: u64) {
                 break;
             }
             let step = (16 + chunk + 7) & !7;
-            // 大于 512 的包不解析，但不要把后面的 ACK 截掉。
+            // 刀 G23：大包两件照办，其余仍小包专属——
+            // ① 还 intent：写客户端整块 DATA（blksize 7680→chunk 7712）
+            //   吃我们广告的 intent，不还=modem 发 10 块就干涸停口；
+            // ② tftp 记账：tf_note_ack(op4/5)/tf_note_data(op3) 只读
+            //   头 52B，大包同样可记——G14 的「>512 跳步不解析」把写腿
+            //   全弄瞎（#22 定谳：WRQ 会话开、DATA 永远不被看见、客户端
+            //   超时弃线）。QMI 深解析/请求处理仍限小包。
             if chunk > 512 {
+                let lcid = w0 >> 16;
+                let liid = rd32((fifo + off + 4) as usize);
+                unsafe {
+                    if GLINK_INTENTS
+                        && HOST_ADV >= 4
+                        && qrtr_lcid(lcid)
+                        && liid != 0
+                        && off >= RX_VIS
+                        && RX_LIID_N < 16
+                    {
+                        RX_LIID[RX_LIID_N as usize] = liid;
+                        RX_LIID_N += 1;
+                        RX_VIS = off + step;
+                    }
+                }
+                if chunk >= 52 {
+                    let typ = rd32((fifo + off + 20) as usize);
+                    let dst_node = rd32((fifo + off + 40) as usize);
+                    let dst_port = rd32((fifo + off + 44) as usize);
+                    let xfer_port = unsafe { TF_XFER_PORT };
+                    let on_xfer = xfer_port != 0 && dst_port == xfer_port;
+                    if typ == 1
+                        && dst_node == 1
+                        && (dst_port == TF_DATA_PORT || dst_port == TF_SVC_PORT || on_xfer)
+                    {
+                        let op0 = ((rd8(fifo + off + 48) as u32) << 8)
+                            | (rd8(fifo + off + 49) as u32);
+                        if op0 == 4 || op0 == 5 {
+                            tf_note_ack(off, fifo);
+                        }
+                        if op0 == 3 {
+                            tf_note_data(off, fifo, chunk as u32);
+                        }
+                    }
+                }
                 off += step;
                 continue;
             }
