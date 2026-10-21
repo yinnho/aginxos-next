@@ -4220,3 +4220,37 @@ CTRL_REPLY/TCP_TX 2560→3072（xl≈96B 余量防截尾）。
 - 不动、frontier 是控制包（W_REUSE）→ 毒包（T1，10-18 同族）。
 **G22 候选刀序**（按判读定）：READ_NOTIF 催件腿 / intent 池+归还追踪 /
 W_REUSE 分品 / 自由回卷。禁在三嫌疑未定谳前混刀。
+
+## modem 固件语料全解（2026-10-22 凌晨，离线，无刀）
+
+**案**：REA 反编译 modem 侧 tqftp 客户端/glink 读端一直缺 b 系列语料
+（设备侧只拉回过 modem.mdt 9420B）。厂包 radio img 曾试 mtools 全败。
+
+**破**：factory zip `redfin-up1a.231105.001.b2-factory-*.zip` 里的
+`radio-redfin-g7250-00264-230619-b-10346159.img`（153,424,012B）结构：
+
+- 0x00–0x8B：FBPK 头（magic `FBPK`，product 串，0x50 entry：
+  size 0x0925108C、name `modem`）。
+- **0x8C 起＝标准 FAT16 引导扇**（`eb 3c 90` + OEM `MSDOS5.0` + 卷标
+  `NO NAME    FAT16   `），此前 mtools 全败的根因＝**每扇区 4096B**
+  （mkfs 用了 modem 分区 4K LBA 几何）。
+- BPB：bps=4096、spc=4（16KB 簇）、rsvd=1、nfats=2、fatsz=6 扇、
+  root=512 项 → fat1@0x108C、root@0xD08C、cluster2@0x1108C——与
+  main.rs:6459 的设备侧 MODEM_LBA 几何完全互证。
+- 根目录两个目录：`image/`（modem.mdt+b00..b34+modemr.jsn）与
+  `verinfo/`；`image/` 里另有 `saipan/`、**`modem_pr/so/`**——即设备
+  侧 `/readonly/firmware/image/modem_pr/so/` 的真身，549_38_0.mbn 等
+  全部 so 件都在。
+
+**收**：全语料抽至 `.local/device/redfin/modem/`（96M，gitignored）：
+
+- `modem.mdt` md5=edc9367a… 与设备侧拉回件**逐字节一致**——厂件=机件。
+- `modem.b16` 4,014,080B 与设备侧尺寸一致（b 文件头 `b0c30058` 标准
+  hash 段头，REA 主目标）。
+- `so/549_38_0.mbn` 963,644B（ELF，e_machine=0xA4 QDSP6、ET_DYN）。
+  设备侧 RRQ 曾报 tsize=0（本次 px= 也证 tsize=0）；此前记的 964,092
+  与厂件差 448B，版本元组 549_38_0 一致，反编译用途不受影响。
+- 抽取脚本 `/tmp/modem-radio/extract.py`（LFN+8.3 混排、FAT 链走读）。
+
+**账**：REA 反编译（b16 + so 件找 tqftp 客户端）仍**保温挂账**——等
+#21 xl= 判读先出，经验法不够了再动 Ghidra；语料已就位，动工零门槛。
