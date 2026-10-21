@@ -3961,3 +3961,32 @@ tqftpserv 本就每客户 qrtr_open(0) 新临时口应答（qrtr_publish 只发
 **G13 二分回退（21b50cb，镜像 17:35 md5 4ce92dc0…）**：sport 复位
 0x11，pq=/ox= 全留——一刀两用：若 sm 复活 → 临时口腿定罪＋pq= 直接
 实测 dv=0 矛盾；若仍死 → 计数/渲染/console 路径翻案再查。
+
+## 刀 G13 收据：临时口无罪释放＋sm 杀靴定谳＋观测面路由污染案
+
+**G13b 铁壁窗（#11，刷 18:54:17，全探针带 en10 接口绑定）**：
+ping up 18:55:31（58s 正常带）→ **纯 ping 90s 全活**（G12 两窗
++16/+28s 死位不复发=「镜像自发死」分支死）→ **首查 sm（+91s）即
+TimeoutError → +98s ping 亡**（if_active=True）→ **死后 5min 无复活**
+（panic-reset 会对偶回靴；无复活+USB 链仍活=**硬楔死**：溢栈或死循环
+形状，非干净数据放弃）。
+
+**判决**：
+1. **临时口腿无罪**——sport 复位 0x11 后死形复现，G12/G13 共享增量
+   =pq=/ox= 计数+渲染。但计数在 90s soak 里跑了数百次无害；渲染只在
+   首查 sm 时首跑——时间上精确贴死。
+2. **栈深论立案（G14 裁决）**：ctrl_service 栈上 `reply=[u8;2560]`
+   活过整个 match，`smem_scan(ufs,true)` 在 arm-8 里跑在其上——
+   console 路径=kmain→ctrl_service(+2560B)→smem_scan→tf_reply→
+   pump→so_read(UFS 深栈)，比 soak 路径深 2.5KB+。so 传输活窗期
+   （RRQ 迟重试）so_read 被踩到即溢栈。TF_BLKBUF 是静态（pump 无大
+   栈缓冲），深差主项=reply 本体。**G14=reply 挪静态 CTRL_REPLY**
+   （720cbe2，零行为差）：若首查 sm 活+pq= 出数 → 栈论成+dv=0 实测
+   到手；若仍死 → 栈论死，转环境对照刀（G11 源重编译重刷）。
+
+**观测基础设施案（本窗烧掉一扇观测）**：Mac 会给 169.254.1.1 生成
+en0 reject 主机路由（netstat 尾标 `!`；Wi-Fi 侧另有 169.254.x 邻居
+169.254.140.138），裸 ping/TCP 全走 en0 瞎探。**免疫法=接口绑定**：
+`ping -b en10`、TCP `setsockopt(IPPROTO_IP, 25 /*IP_BOUND_IF*/,
+if_index)`；sudo 删路由要密码不可用。G13 首窗（18:01 刷）整窗被此
+烧掉（死时刻未记录）；g13b 起全带绑定。
