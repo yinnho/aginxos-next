@@ -7395,7 +7395,13 @@ fn tf_reply(ufs: &mut Ufs, at478: u64, at479: u64, sz479: u64) {
     // 刀 G9c：st=2/3（DATA 已发/送完）新到 pend 不再饿死——只回 OACK
     // 应答（不重置游标、不 synth DATA、~100B/笔）。G9 满服务版三靴全黑
     // （G8b 对照定罪，收据 7d8d282）；节流版答到每个重试口又不打环。
-    let retry = st_now == 2 || st_now == 3;
+    // 刀 G18：终态 7/8/9 同入 retry 腿。G17 实测客户端原话「Expected
+    // OACK」（op5 code8，超时腔调=从未收到我们的 OACK）后打成一发新
+    // RRQ（rx 备忘末槽），却被 st=9 黑洞整吞——ox=1.0 恒 1、dv 第五元
+    // (retry 服务数)恒 0、nost 象限独大。错误终态不该封死重答：错误后
+    // 每笔新 RRQ 换新口、每口 1s 窗，本腿让它们都在浸泡节奏（~130ms）
+    // 内拿到新 OACK。节流纪律不变（一 pend 一答、不动游标）。
+    let retry = st_now == 2 || st_now == 3 || (st_now >= 7 && st_now <= 9);
     // 游标不回头纪律保持：fresh（st 0/4）之外照旧丢。armed 已是 II_ST=2（刀 G4）。
     if op == 1 && !armed && tf_is_so() && unsafe { TZ_ST } == 1 && fresh {
         return;
