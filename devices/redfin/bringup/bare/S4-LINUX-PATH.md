@@ -3706,3 +3706,52 @@ pend 后 2s 仍能自救重发）。真 ACK-0 若后到：TF_ACK_OFF 去重 + ac
   侧（下刀撤未请求 wsize）；
 - **仍 rx=0** → 客户端根本没吃到我们任何包 → 投递层（qrtr 源口/路由）升权，
   下刀换临时口+NEW_SERVER 册（stock 每笔 RRQ qrtr_open(0) 的全仿）。
+
+### 刀 G7 收据（10:39 窗，+159s 冻结后窗亡）：立即 DATA 零上环——T1 根本没被测到；客户端改吐 EOT-9
+
+刷链 10:38:41 一次过（捉 fastboot→闸→刷→set_active a→重启，60s 内 ping 起）。
++0.7s 首样定谳，至窗亡（sample#23，~3 分钟）全冻结同形：
+
+- **tb=4.0.11**——st=4 来源找到了（main.rs 7080：`code == 9 && TF_ST == 1`）：
+  客户端发的是 **ERROR code 9 = EOT（礼貌收摊）**，不是错误。每笔 OACK 后
+  客户端 1s 内 EOT-9 关口，换口（0x21→0x25 递增）重试，16 笔后弃；
+- **tt=be8（全靴 ~3048B）＝纯 OACK+rejects 体积——立即 DATA 一块都没上环**。
+  G7 的 T1 测试根本没打出去：客户端从未收到过我们的 DATA；
+- rx=3（两 op5 arg=ffff 短包＋一笔 op1"/r"）；tf=NAME.1.6（6 笔 OACK）；
+  rl=0x10 全 fl=0；pr=3 两域活；w45=0。
+
+**客户端行为横比**（OACK 字节 G6≡G7 逐字节一致）：
+
+| 窗 | OACK 内容 | DATA | 客户端反应 |
+|----|-----------|------|-----------|
+| G5 | 缺 wsize | 无（grace 未到窗亡） | 两笔 op5 收摊 |
+| G6w2 | wsize=1 | +2s 扑空 | **全静默** rx=0 |
+| G7 | wsize=1 | +0ms 没发出去 | 两笔 op5(EOT-9) 收摊 |
+
+同字节不同反应＝客户端逐靴情绪不稳定（G6w2 是 re-arm 二靴，G5/G7 是首靴
+——首靴反应型、二靴静默型，两数据点待更多样本）。**st=4 定谳把「OACK 被
+拒」改写成「客户端主动收摊」**——EOT-9 在 stock 方言里是 stat 舞的完成信号，
+客户端对无 rsize 的普通 RRQ 也发它＝把这个 OACK 当成了 stat 应答、或者是
+干脆利落的「不要了」。
+
+**stock 对齐终审**（本轮重读 handle_rrq+tftp_send_oack+parse_options 三层门）：
+tsize 两层门复合（调用点 `tsize ? &tsize : NULL` 与内闸 `*tsize != -1`）＝
+只在请求时回；wsize 恒回（缺省 1）；rsize/seek 值非零才回；顺序
+blksize,timeoutms,tsize,wsize,rsize,seek。**我们 G6/G7 的 OACK 与 stock
+逐字节一致**——OACK 内容排雷完毕，方言层再无已知差异。
+
+### 刀 G8（10:5x 镜像）：DATA 路径四级计数器 dv=（纯插桩不改行为）
+
+G7 最大遗留＝立即 DATA 没上环的堵点定位。静态推演穷尽：分支门（st=1/
+ACK_PEND/ack==expect/stat 门/blk≤8192/off<limit）全该过；G6w2 同分支同代码
++2s 能发；内圈 tf_reply 每外圈至少一趟。四计数器进 sm：
+
+- dv=进入.读零.tx拒.环闸挡
+- 进入=DATA 分支卫队通过次数（OACK 后~1s 内每圈+1，应≈主循环频率）
+- 读零=so_read 归零（UFS/FAT 读失败→st=8）
+- tx拒=glink_tx_payload 返假
+- 环闸挡=tf_reply 顶 `head≠tail && head+8192>环` 挡
+
+判读表：读零>0＝UFS 早期读失败（G6w2 +2s 能读、G7 +0.5s 不能？）；
+tx拒>0＝glink 内闸；环闸挡>0＝容量；全 0 而 tt 仍无 DATA＝tt 读数另解。
+G7 的立即 synth 保留，行为零改动。
