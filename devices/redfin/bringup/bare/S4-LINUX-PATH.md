@@ -4254,3 +4254,22 @@ W_REUSE 分品 / 自由回卷。禁在三嫌疑未定谳前混刀。
 
 **账**：REA 反编译（b16 + so 件找 tqftp 客户端）仍**保温挂账**——等
 #21 xl= 判读先出，经验法不够了再动 Ghidra；语料已就位，动工零门槛。
+
+### 补记：tqftp 客户端定段＝modem.b22（同晚，串三斗）
+
+- **客户端代码段＝b22**（10.3MB，非旧档以为的 b16——b16 是 4MB 引导主
+  像，零 TFTP 串）。锚点（b22 内偏移）：
+  - `tftp_socket_ipcr_modem.c` @0x10342 与 @0xecd59（源文件名串×2）；
+  - 断言簇 @0xec07c–0xed0b2：`sock_res == TFTP_SOCKET_RESULT_SUCCESS`、
+    `sockaddr->sa_family == AF_IPC_ROUTER`、`addrtype == IPCR_ADDR_PORT`
+    ——客户端走 IPC router socket 腿，与 qrtr 谱系互证；
+  - **选项名表 @0xed06e 起＝枚举序**：`blksize,timeout,tsize,seek,
+    append,unlink,wsize,timeoutms,rsize,null`（TFTP_PKT_OPTION_ID_MAX
+    断言紧随）——客户端全部词汇；线上只见 blksize/timeoutms/tsize/
+    wsize 四件，rsize/seek 是另有触发条件的腿。
+- **.mbn 四路搜索序**（@0x9166x，每文件同构）：`/readonly/firmware/
+  image/X` → `/readonly/vendor/firmware_mnt/image/X` → `/readonly/
+  vendor/firmware/X` → `/readonly/vendor/firmware/X.otaupdate`。客户端
+  本靴取第一条——与我们观测的 RRQ 路径一致。
+- REA 反编译开工时的入口：b22 @0xecd40 附近函数簇；Ghidra hexagon
+  段加载用 mdt 的 program headers 排段。
