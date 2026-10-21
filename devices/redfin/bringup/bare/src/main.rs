@@ -526,6 +526,11 @@ const CTRL_PORT: u16 = 2323;
 static mut CTRL_LINE: [u8; 64] = [0; 64];
 static mut CTRL_LINE_N: usize = 0;
 static mut CTRL_OVERFLOW: bool = false;
+// 刀 G14：console 应答缓冲挪静态——ctrl_service 栈上 [u8;2560] 正压在
+// smem_scan→tf_reply→pump→so_read(UFS 深栈) 顶上（比 soak 路径深 2.5KB），
+// 首 sm 若逢 so 传输活窗即溢栈楔死（三窗死形同构：首查超时+ping 亡+USB 链
+// 仍活）。零行为差，纯栈形改。
+static mut CTRL_REPLY: [u8; 2560] = [0; 2560];
 /// 0 闲，1 应答已交、等 IN 完成，2 再等 20ms 后拉 PS_HOLD。
 static mut CTRL_FB: u8 = 0;
 static mut FB_APID: u32 = 0;
@@ -12143,144 +12148,144 @@ fn ctrl_service(
                             continue;
                         }
                         // 刀 G10：+rp=/rr= 转录字段（~330 字符）——1792 顶满会截尾，扩 2560。
-                        let mut reply = [0u8; 2560];
+                        let reply: &mut [u8] = unsafe { &mut CTRL_REPLY };
                         let mut rn = 0usize;
                         match code {
-                            1 => push_str(&mut reply, &mut rn, "redfin\n"),
-                            2 => push_str(&mut reply, &mut rn, "pong\n"),
+                            1 => push_str(reply, &mut rn, "redfin\n"),
+                            2 => push_str(reply, &mut rn, "pong\n"),
                             4 => {
-                                push_str(&mut reply, &mut rn, "up ");
+                                push_str(reply, &mut rn, "up ");
                                 let secs = if freq == 0 {
                                     0
                                 } else {
                                     time::cntvct() / freq as u64
                                 };
-                                push_u64(&mut reply, &mut rn, secs);
-                                push_str(&mut reply, &mut rn, " seq ");
-                                push_u64(&mut reply, &mut rn, unsafe { RING.seq });
-                                push_str(&mut reply, &mut rn, "\n");
+                                push_u64(reply, &mut rn, secs);
+                                push_str(reply, &mut rn, " seq ");
+                                push_u64(reply, &mut rn, unsafe { RING.seq });
+                                push_str(reply, &mut rn, "\n");
                             }
                             5 => match fb_check(arb, n_apid) {
                                 Ok(()) => {
                                     if unsafe { CTRL_FB } == 0 {
                                         unsafe { CTRL_FB = 1 };
                                     }
-                                    push_str(&mut reply, &mut rn, "fb\n");
+                                    push_str(reply, &mut rn, "fb\n");
                                 }
                                 Err(err) => {
-                                    push_str(&mut reply, &mut rn, "fb ");
-                                    push_hex(&mut reply, &mut rn, err);
-                                    push_str(&mut reply, &mut rn, "\n");
+                                    push_str(reply, &mut rn, "fb ");
+                                    push_hex(reply, &mut rn, err);
+                                    push_str(reply, &mut rn, "\n");
                                     s20_keep(ufs, freq, t, " s20 fb=0x", err);
                                 }
                             },
                             7 => match bat_f(arb) {
                                 Some(f) => {
-                                    push_str(&mut reply, &mut rn, "bat f=");
-                                    push_hex(&mut reply, &mut rn, f);
-                                    push_str(&mut reply, &mut rn, "\n");
+                                    push_str(reply, &mut rn, "bat f=");
+                                    push_hex(reply, &mut rn, f);
+                                    push_str(reply, &mut rn, "\n");
                                 }
-                                None => push_str(&mut reply, &mut rn, "bat\n"),
+                                None => push_str(reply, &mut rn, "bat\n"),
                             },
                             8 => {
                                 smem_scan(ufs, true);
                                 unsafe { CFG_ARM = 1; }
                                 let s = unsafe { &SMEM_SNAP };
-                                push_str(&mut reply, &mut rn, "sm i=");
-                                push_hex(&mut reply, &mut rn, s.init as u64);
-                                push_str(&mut reply, &mut rn, " v=");
-                                push_hex(&mut reply, &mut rn, s.ver as u64);
-                                push_str(&mut reply, &mut rn, " n=");
-                                push_hex(&mut reply, &mut rn, s.nent as u64);
-                                push_str(&mut reply, &mut rn, " p=");
-                                push_hex(&mut reply, &mut rn, s.part as u64);
-                                push_str(&mut reply, &mut rn, " g=");
-                                push_hex(&mut reply, &mut rn, s.g as u64);
-                                push_str(&mut reply, &mut rn, " u=");
-                                push_hex(&mut reply, &mut rn, s.free as u64);
-                                push_str(&mut reply, &mut rn, " s=");
-                                push_hex(&mut reply, &mut rn, s.slave as u64);
-                                push_str(&mut reply, &mut rn, " m=");
-                                push_hex(&mut reply, &mut rn, s.smpm as u64);
-                                push_str(&mut reply, &mut rn, " d=");
-                                push_hex(&mut reply, &mut rn, s.d0 as u64);
-                                push_str(&mut reply, &mut rn, ".");
-                                push_hex(&mut reply, &mut rn, s.d1 as u64);
-                                push_str(&mut reply, &mut rn, ".");
-                                push_hex(&mut reply, &mut rn, s.d2 as u64);
-                                push_str(&mut reply, &mut rn, ".");
-                                push_hex(&mut reply, &mut rn, s.d3 as u64);
-                                push_str(&mut reply, &mut rn, " r=");
-                                push_hex(&mut reply, &mut rn, s.rx0 as u64);
-                                push_str(&mut reply, &mut rn, " rk=");
-                                push_hex(&mut reply, &mut rn, unsafe { RX_DONE_N } as u64);
-                                push_str(&mut reply, &mut rn, " cf=");
-                                push_hex(&mut reply, &mut rn, unsafe { CF_N } as u64);
-                                push_str(&mut reply, &mut rn, " hh=");
-                                push_hex(&mut reply, &mut rn, unsafe { HELLO_RX } as u64);
-                                push_str(&mut reply, &mut rn, " iz=");
-                                push_hex(&mut reply, &mut rn, unsafe { SEEN_ISZ } as u64);
-                                push_str(&mut reply, &mut rn, " ga=");
-                                push_hex(&mut reply, &mut rn, if unsafe { GLINK_ACKED } { 1 } else { 0 });
-                                push_str(&mut reply, &mut rn, " rl=");
-                                push_hex(&mut reply, &mut rn, unsafe { GLINK_RXLEN });
-                                push_str(&mut reply, &mut rn, " b=");
-                                push_hex(&mut reply, &mut rn, s.boff as u64);
-                                push_str(&mut reply, &mut rn, ".");
-                                push_hex(&mut reply, &mut rn, s.b0 as u64);
-                                push_str(&mut reply, &mut rn, ".");
-                                push_hex(&mut reply, &mut rn, s.b1 as u64);
-                                push_str(&mut reply, &mut rn, ".");
-                                push_hex(&mut reply, &mut rn, s.blast as u64);
-                                push_str(&mut reply, &mut rn, " k=");
-                                push_hex(&mut reply, &mut rn, s.k as u64);
-                                push_str(&mut reply, &mut rn, " c=");
-                                push_hex(&mut reply, &mut rn, s.cached as u64);
-                                push_str(&mut reply, &mut rn, " gk=");
-                                push_hex(&mut reply, &mut rn, s.gk as u64);
-                                push_str(&mut reply, &mut rn, " e=");
-                                push_hex(&mut reply, &mut rn, s.ev as u64);
-                                push_str(&mut reply, &mut rn, " n0=");
-                                push_hex(&mut reply, &mut rn, s.n0 as u64);
-                                push_str(&mut reply, &mut rn, " a=");
+                                push_str(reply, &mut rn, "sm i=");
+                                push_hex(reply, &mut rn, s.init as u64);
+                                push_str(reply, &mut rn, " v=");
+                                push_hex(reply, &mut rn, s.ver as u64);
+                                push_str(reply, &mut rn, " n=");
+                                push_hex(reply, &mut rn, s.nent as u64);
+                                push_str(reply, &mut rn, " p=");
+                                push_hex(reply, &mut rn, s.part as u64);
+                                push_str(reply, &mut rn, " g=");
+                                push_hex(reply, &mut rn, s.g as u64);
+                                push_str(reply, &mut rn, " u=");
+                                push_hex(reply, &mut rn, s.free as u64);
+                                push_str(reply, &mut rn, " s=");
+                                push_hex(reply, &mut rn, s.slave as u64);
+                                push_str(reply, &mut rn, " m=");
+                                push_hex(reply, &mut rn, s.smpm as u64);
+                                push_str(reply, &mut rn, " d=");
+                                push_hex(reply, &mut rn, s.d0 as u64);
+                                push_str(reply, &mut rn, ".");
+                                push_hex(reply, &mut rn, s.d1 as u64);
+                                push_str(reply, &mut rn, ".");
+                                push_hex(reply, &mut rn, s.d2 as u64);
+                                push_str(reply, &mut rn, ".");
+                                push_hex(reply, &mut rn, s.d3 as u64);
+                                push_str(reply, &mut rn, " r=");
+                                push_hex(reply, &mut rn, s.rx0 as u64);
+                                push_str(reply, &mut rn, " rk=");
+                                push_hex(reply, &mut rn, unsafe { RX_DONE_N } as u64);
+                                push_str(reply, &mut rn, " cf=");
+                                push_hex(reply, &mut rn, unsafe { CF_N } as u64);
+                                push_str(reply, &mut rn, " hh=");
+                                push_hex(reply, &mut rn, unsafe { HELLO_RX } as u64);
+                                push_str(reply, &mut rn, " iz=");
+                                push_hex(reply, &mut rn, unsafe { SEEN_ISZ } as u64);
+                                push_str(reply, &mut rn, " ga=");
+                                push_hex(reply, &mut rn, if unsafe { GLINK_ACKED } { 1 } else { 0 });
+                                push_str(reply, &mut rn, " rl=");
+                                push_hex(reply, &mut rn, unsafe { GLINK_RXLEN });
+                                push_str(reply, &mut rn, " b=");
+                                push_hex(reply, &mut rn, s.boff as u64);
+                                push_str(reply, &mut rn, ".");
+                                push_hex(reply, &mut rn, s.b0 as u64);
+                                push_str(reply, &mut rn, ".");
+                                push_hex(reply, &mut rn, s.b1 as u64);
+                                push_str(reply, &mut rn, ".");
+                                push_hex(reply, &mut rn, s.blast as u64);
+                                push_str(reply, &mut rn, " k=");
+                                push_hex(reply, &mut rn, s.k as u64);
+                                push_str(reply, &mut rn, " c=");
+                                push_hex(reply, &mut rn, s.cached as u64);
+                                push_str(reply, &mut rn, " gk=");
+                                push_hex(reply, &mut rn, s.gk as u64);
+                                push_str(reply, &mut rn, " e=");
+                                push_hex(reply, &mut rn, s.ev as u64);
+                                push_str(reply, &mut rn, " n0=");
+                                push_hex(reply, &mut rn, s.n0 as u64);
+                                push_str(reply, &mut rn, " a=");
                                 for i in 0..5 {
                                     if i != 0 {
-                                        push_str(&mut reply, &mut rn, ".");
+                                        push_str(reply, &mut rn, ".");
                                     }
-                                    push_hex(&mut reply, &mut rn, unsafe { SMEM_ENTS[i] } as u64);
+                                    push_hex(reply, &mut rn, unsafe { SMEM_ENTS[i] } as u64);
                                 }
-                                push_str(&mut reply, &mut rn, " f=");
+                                push_str(reply, &mut rn, " f=");
                                 for i in 5..10 {
                                     if i != 5 {
-                                        push_str(&mut reply, &mut rn, ".");
+                                        push_str(reply, &mut rn, ".");
                                     }
-                                    push_hex(&mut reply, &mut rn, unsafe { SMEM_ENTS[i] } as u64);
+                                    push_hex(reply, &mut rn, unsafe { SMEM_ENTS[i] } as u64);
                                 }
-                                push_str(&mut reply, &mut rn, " qs=");
-                                push_hex(&mut reply, &mut rn, unsafe { SMEM_QSTOP } as u64);
-                                push_str(&mut reply, &mut rn, ".");
-                                push_hex(&mut reply, &mut rn, unsafe { SMEM_QCMD } as u64);
-                                push_str(&mut reply, &mut rn, " pv=");
+                                push_str(reply, &mut rn, " qs=");
+                                push_hex(reply, &mut rn, unsafe { SMEM_QSTOP } as u64);
+                                push_str(reply, &mut rn, ".");
+                                push_hex(reply, &mut rn, unsafe { SMEM_QCMD } as u64);
+                                push_str(reply, &mut rn, " pv=");
                                 for i in 0..9 {
                                     if i != 0 {
-                                        push_str(&mut reply, &mut rn, ".");
+                                        push_str(reply, &mut rn, ".");
                                     }
-                                    push_hex(&mut reply, &mut rn, unsafe { PROXY[i] } as u64);
+                                    push_hex(reply, &mut rn, unsafe { PROXY[i] } as u64);
                                 }
-                                push_str(&mut reply, &mut rn, " pa=");
-                                push_hex(&mut reply, &mut rn, unsafe { PROXY_AUX[0] } as u64);
-                                push_str(&mut reply, &mut rn, ".");
-                                push_hex(&mut reply, &mut rn, unsafe { PROXY_AUX[1] } as u64);
-                                push_str(&mut reply, &mut rn, " qm=");
+                                push_str(reply, &mut rn, " pa=");
+                                push_hex(reply, &mut rn, unsafe { PROXY_AUX[0] } as u64);
+                                push_str(reply, &mut rn, ".");
+                                push_hex(reply, &mut rn, unsafe { PROXY_AUX[1] } as u64);
+                                push_str(reply, &mut rn, " qm=");
                                 for i in 0..8 {
                                     if i != 0 {
-                                        push_str(&mut reply, &mut rn, ".");
+                                        push_str(reply, &mut rn, ".");
                                     }
-                                    push_hex(&mut reply, &mut rn, unsafe { QMPW[i] } as u64);
+                                    push_hex(reply, &mut rn, unsafe { QMPW[i] } as u64);
                                 }
-                                push_str(&mut reply, &mut rn, " pr=");
-                                push_hex(&mut reply, &mut rn, unsafe { PD_N } as u64);
-                                push_str(&mut reply, &mut rn, " pn=");
+                                push_str(reply, &mut rn, " pr=");
+                                push_hex(reply, &mut rn, unsafe { PD_N } as u64);
+                                push_str(reply, &mut rn, " pn=");
                                 let nn = unsafe { PD_NAME_N } as usize;
                                 let mut pi = 0usize;
                                 while pi < nn && pi < 64 {
@@ -12291,15 +12296,15 @@ fn ctrl_service(
                                     }
                                     pi += 1;
                                 }
-                                push_str(&mut reply, &mut rn, ".");
-                                push_hex(&mut reply, &mut rn, unsafe { PD_HITS } as u64);
-                                push_str(&mut reply, &mut rn, ".");
-                                push_hex(&mut reply, &mut rn, unsafe { PD_QLEN } as u64);
-                                push_str(&mut reply, &mut rn, " pe=");
-                                push_hex(&mut reply, &mut rn, unsafe { PD_SAW_ELF } as u64);
-                                push_str(&mut reply, &mut rn, " rf=");
-                                push_hex(&mut reply, &mut rn, unsafe { RF_MSG } as u64);
-                                push_str(&mut reply, &mut rn, ".");
+                                push_str(reply, &mut rn, ".");
+                                push_hex(reply, &mut rn, unsafe { PD_HITS } as u64);
+                                push_str(reply, &mut rn, ".");
+                                push_hex(reply, &mut rn, unsafe { PD_QLEN } as u64);
+                                push_str(reply, &mut rn, " pe=");
+                                push_hex(reply, &mut rn, unsafe { PD_SAW_ELF } as u64);
+                                push_str(reply, &mut rn, " rf=");
+                                push_hex(reply, &mut rn, unsafe { RF_MSG } as u64);
+                                push_str(reply, &mut rn, ".");
                                 let rfn = unsafe { RF_PATH_N } as usize;
                                 let mut ri = 0usize;
                                 while ri < rfn && ri < 64 {
@@ -12310,31 +12315,31 @@ fn ctrl_service(
                                     }
                                     ri += 1;
                                 }
-                                push_str(&mut reply, &mut rn, ".");
-                                push_hex(&mut reply, &mut rn, unsafe { RF_ID } as u64);
-                                push_str(&mut reply, &mut rn, ".");
-                                push_hex(&mut reply, &mut rn, unsafe { RF_N } as u64);
-                                push_str(&mut reply, &mut rn, ".");
-                                push_hex(&mut reply, &mut rn, unsafe { RF_SZ } as u64);
-                                push_str(&mut reply, &mut rn, ".");
-                                push_hex(&mut reply, &mut rn, unsafe { RF_AS } as u64);
-                                push_str(&mut reply, &mut rn, " rh=");
-                                push_hex(&mut reply, &mut rn, unsafe { RF_HIT } as u64);
-                                push_str(&mut reply, &mut rn, ".");
-                                push_hex(&mut reply, &mut rn, unsafe { RF_DROP } as u64);
-                                push_str(&mut reply, &mut rn, ".");
-                                push_hex(&mut reply, &mut rn, unsafe { RF_HIST[0] } as u64);
-                                push_str(&mut reply, &mut rn, ".");
-                                push_hex(&mut reply, &mut rn, unsafe { RF_HIST[1] } as u64);
-                                push_str(&mut reply, &mut rn, ".");
-                                push_hex(&mut reply, &mut rn, unsafe { RF_HIST[2] } as u64);
-                                push_str(&mut reply, &mut rn, ".");
-                                push_hex(&mut reply, &mut rn, unsafe { RF_HIST[3] } as u64);
-                                push_str(&mut reply, &mut rn, " ik=");
-                                push_hex(&mut reply, &mut rn, unsafe { RF_IOK } as u64);
-                                push_str(&mut reply, &mut rn, ".");
-                                push_hex(&mut reply, &mut rn, unsafe { RF_IFAIL } as u64);
-                                push_str(&mut reply, &mut rn, " rs=");
+                                push_str(reply, &mut rn, ".");
+                                push_hex(reply, &mut rn, unsafe { RF_ID } as u64);
+                                push_str(reply, &mut rn, ".");
+                                push_hex(reply, &mut rn, unsafe { RF_N } as u64);
+                                push_str(reply, &mut rn, ".");
+                                push_hex(reply, &mut rn, unsafe { RF_SZ } as u64);
+                                push_str(reply, &mut rn, ".");
+                                push_hex(reply, &mut rn, unsafe { RF_AS } as u64);
+                                push_str(reply, &mut rn, " rh=");
+                                push_hex(reply, &mut rn, unsafe { RF_HIT } as u64);
+                                push_str(reply, &mut rn, ".");
+                                push_hex(reply, &mut rn, unsafe { RF_DROP } as u64);
+                                push_str(reply, &mut rn, ".");
+                                push_hex(reply, &mut rn, unsafe { RF_HIST[0] } as u64);
+                                push_str(reply, &mut rn, ".");
+                                push_hex(reply, &mut rn, unsafe { RF_HIST[1] } as u64);
+                                push_str(reply, &mut rn, ".");
+                                push_hex(reply, &mut rn, unsafe { RF_HIST[2] } as u64);
+                                push_str(reply, &mut rn, ".");
+                                push_hex(reply, &mut rn, unsafe { RF_HIST[3] } as u64);
+                                push_str(reply, &mut rn, " ik=");
+                                push_hex(reply, &mut rn, unsafe { RF_IOK } as u64);
+                                push_str(reply, &mut rn, ".");
+                                push_hex(reply, &mut rn, unsafe { RF_IFAIL } as u64);
+                                push_str(reply, &mut rn, " rs=");
                                 {
                                     let rn0 = unsafe { RF_RSP_N } as usize;
                                     let mut i = 0usize;
@@ -12350,53 +12355,53 @@ fn ctrl_service(
                                         i += 1;
                                     }
                                 }
-                                push_str(&mut reply, &mut rn, " pm=");
-                                push_hex(&mut reply, &mut rn, unsafe { PM_HIT } as u64);
-                                push_str(&mut reply, &mut rn, ".");
-                                push_hex(&mut reply, &mut rn, unsafe { PM_N } as u64);
-                                push_str(&mut reply, &mut rn, ".");
-                                push_hex(&mut reply, &mut rn, unsafe { PM_MSG } as u64);
-                                push_str(&mut reply, &mut rn, " sr=");
-                                push_hex(&mut reply, &mut rn, unsafe { SR_HIT } as u64);
-                                push_str(&mut reply, &mut rn, ".");
-                                push_hex(&mut reply, &mut rn, unsafe { SR_STATE } as u64);
-                                push_str(&mut reply, &mut rn, ".");
-                                push_hex(&mut reply, &mut rn, unsafe { SR_RES } as u64);
-                                push_str(&mut reply, &mut rn, " si=");
-                                push_hex(&mut reply, &mut rn, unsafe { SR_IND_N } as u64);
-                                push_str(&mut reply, &mut rn, " sp=");
+                                push_str(reply, &mut rn, " pm=");
+                                push_hex(reply, &mut rn, unsafe { PM_HIT } as u64);
+                                push_str(reply, &mut rn, ".");
+                                push_hex(reply, &mut rn, unsafe { PM_N } as u64);
+                                push_str(reply, &mut rn, ".");
+                                push_hex(reply, &mut rn, unsafe { PM_MSG } as u64);
+                                push_str(reply, &mut rn, " sr=");
+                                push_hex(reply, &mut rn, unsafe { SR_HIT } as u64);
+                                push_str(reply, &mut rn, ".");
+                                push_hex(reply, &mut rn, unsafe { SR_STATE } as u64);
+                                push_str(reply, &mut rn, ".");
+                                push_hex(reply, &mut rn, unsafe { SR_RES } as u64);
+                                push_str(reply, &mut rn, " si=");
+                                push_hex(reply, &mut rn, unsafe { SR_IND_N } as u64);
+                                push_str(reply, &mut rn, " sp=");
                                 if unsafe { SR_HAVE } {
-                                    push_hex(&mut reply, &mut rn, unsafe { SR_NODE } as u64);
-                                    push_str(&mut reply, &mut rn, ".");
-                                    push_hex(&mut reply, &mut rn, unsafe { SR_PORT } as u64);
+                                    push_hex(reply, &mut rn, unsafe { SR_NODE } as u64);
+                                    push_str(reply, &mut rn, ".");
+                                    push_hex(reply, &mut rn, unsafe { SR_PORT } as u64);
                                 } else {
-                                    push_str(&mut reply, &mut rn, "ffffffff");
+                                    push_str(reply, &mut rn, "ffffffff");
                                 }
-                                push_str(&mut reply, &mut rn, " rp=");
-                                push_hex(&mut reply, &mut rn, unsafe { SR_RP_N } as u64);
-                                push_str(&mut reply, &mut rn, ".");
-                                push_hex(&mut reply, &mut rn, unsafe { SR_RP_ERR } as u64);
-                                push_str(&mut reply, &mut rn, " lk=");
-                                push_hex(&mut reply, &mut rn, unsafe { LOOK_N } as u64);
-                                push_str(&mut reply, &mut rn, ".");
-                                push_hex(&mut reply, &mut rn, unsafe { LOOK_PEND } as u64);
-                                push_str(&mut reply, &mut rn, ".");
-                                push_hex(&mut reply, &mut rn, unsafe { HOST_ADV } as u64);
-                                push_str(&mut reply, &mut rn, " qp=");
-                                push_hex(&mut reply, &mut rn, unsafe { QP_HIST_N } as u64);
-                                push_str(&mut reply, &mut rn, ".");
-                                push_hex(&mut reply, &mut rn, unsafe { QP_HIST[0] } as u64);
-                                push_str(&mut reply, &mut rn, ".");
-                                push_hex(&mut reply, &mut rn, unsafe { QP_HIST[1] } as u64);
-                                push_str(&mut reply, &mut rn, ".");
-                                push_hex(&mut reply, &mut rn, unsafe { QP_HIST[2] } as u64);
-                                push_str(&mut reply, &mut rn, ".");
-                                push_hex(&mut reply, &mut rn, unsafe { QP_HIST[3] } as u64);
-                                push_str(&mut reply, &mut rn, " es=");
-                                push_hex(&mut reply, &mut rn, unsafe { RFS_SEED } as u64);
-                                push_str(&mut reply, &mut rn, ".");
-                                push_hex(&mut reply, &mut rn, unsafe { GPT_ENTRIES } as u64);
-                                push_str(&mut reply, &mut rn, " gn=");
+                                push_str(reply, &mut rn, " rp=");
+                                push_hex(reply, &mut rn, unsafe { SR_RP_N } as u64);
+                                push_str(reply, &mut rn, ".");
+                                push_hex(reply, &mut rn, unsafe { SR_RP_ERR } as u64);
+                                push_str(reply, &mut rn, " lk=");
+                                push_hex(reply, &mut rn, unsafe { LOOK_N } as u64);
+                                push_str(reply, &mut rn, ".");
+                                push_hex(reply, &mut rn, unsafe { LOOK_PEND } as u64);
+                                push_str(reply, &mut rn, ".");
+                                push_hex(reply, &mut rn, unsafe { HOST_ADV } as u64);
+                                push_str(reply, &mut rn, " qp=");
+                                push_hex(reply, &mut rn, unsafe { QP_HIST_N } as u64);
+                                push_str(reply, &mut rn, ".");
+                                push_hex(reply, &mut rn, unsafe { QP_HIST[0] } as u64);
+                                push_str(reply, &mut rn, ".");
+                                push_hex(reply, &mut rn, unsafe { QP_HIST[1] } as u64);
+                                push_str(reply, &mut rn, ".");
+                                push_hex(reply, &mut rn, unsafe { QP_HIST[2] } as u64);
+                                push_str(reply, &mut rn, ".");
+                                push_hex(reply, &mut rn, unsafe { QP_HIST[3] } as u64);
+                                push_str(reply, &mut rn, " es=");
+                                push_hex(reply, &mut rn, unsafe { RFS_SEED } as u64);
+                                push_str(reply, &mut rn, ".");
+                                push_hex(reply, &mut rn, unsafe { GPT_ENTRIES } as u64);
+                                push_str(reply, &mut rn, " gn=");
                                 let gnn = unsafe { RFS_GNN } as usize;
                                 let mut gi = 0usize;
                                 while gi < gnn && gi < 64 {
@@ -12407,7 +12412,7 @@ fn ctrl_service(
                                     }
                                     gi += 1;
                                 }
-                                push_str(&mut reply, &mut rn, " tf=");
+                                push_str(reply, &mut rn, " tf=");
                                 let tfn = unsafe { TF_NAME_N } as usize;
                                 let mut ti = 0usize;
                                 while ti < tfn && ti < 64 {
@@ -12418,45 +12423,45 @@ fn ctrl_service(
                                     }
                                     ti += 1;
                                 }
-                                push_str(&mut reply, &mut rn, ".");
-                                push_hex(&mut reply, &mut rn, unsafe { TF_OP } as u64);
-                                push_str(&mut reply, &mut rn, ".");
-                                push_hex(&mut reply, &mut rn, unsafe { TF_N } as u64);
-                                push_str(&mut reply, &mut rn, " tz=");
-                                push_hex(&mut reply, &mut rn, unsafe { TZ_ST } as u64);
-                                push_str(&mut reply, &mut rn, ".");
-                                push_hex(&mut reply, &mut rn, unsafe { TZ_SZ } as u64);
-                                push_str(&mut reply, &mut rn, ".");
-                                push_hex(&mut reply, &mut rn, unsafe { TZ_CL } as u64);
+                                push_str(reply, &mut rn, ".");
+                                push_hex(reply, &mut rn, unsafe { TF_OP } as u64);
+                                push_str(reply, &mut rn, ".");
+                                push_hex(reply, &mut rn, unsafe { TF_N } as u64);
+                                push_str(reply, &mut rn, " tz=");
+                                push_hex(reply, &mut rn, unsafe { TZ_ST } as u64);
+                                push_str(reply, &mut rn, ".");
+                                push_hex(reply, &mut rn, unsafe { TZ_SZ } as u64);
+                                push_str(reply, &mut rn, ".");
+                                push_hex(reply, &mut rn, unsafe { TZ_CL } as u64);
                                 // tb=st.blk — 0 空闲 1 OACK 2 DATA 3 送完 8 读失败 9 对端 ERROR
-                                push_str(&mut reply, &mut rn, " tb=");
-                                push_hex(&mut reply, &mut rn, unsafe { TF_ST } as u64);
-                                push_str(&mut reply, &mut rn, ".");
-                                push_hex(&mut reply, &mut rn, unsafe { TF_BLKNO } as u64);
-                                push_str(&mut reply, &mut rn, ".");
-                                push_hex(&mut reply, &mut rn, unsafe { TF_XFER_PORT } as u64);
-                                push_str(&mut reply, &mut rn, " rx=");
+                                push_str(reply, &mut rn, " tb=");
+                                push_hex(reply, &mut rn, unsafe { TF_ST } as u64);
+                                push_str(reply, &mut rn, ".");
+                                push_hex(reply, &mut rn, unsafe { TF_BLKNO } as u64);
+                                push_str(reply, &mut rn, ".");
+                                push_hex(reply, &mut rn, unsafe { TF_XFER_PORT } as u64);
+                                push_str(reply, &mut rn, " rx=");
                                 // 滚动备忘：总数.随后最多 4 槽 port.op.arg（时间序，旧→新；
                                 // arg=op5 错误码/op4 块号，刀 G6）
-                                push_hex(&mut reply, &mut rn, unsafe { TF_RX_LOG_N } as u64);
+                                push_hex(reply, &mut rn, unsafe { TF_RX_LOG_N } as u64);
                                 let n_log = unsafe { TF_RX_LOG_N };
                                 let mut k_log = n_log.saturating_sub(4);
                                 while k_log < n_log {
-                                    push_str(&mut reply, &mut rn, ".");
+                                    push_str(reply, &mut rn, ".");
                                     push_hex(
-                                        &mut reply,
+                                        reply,
                                         &mut rn,
                                         unsafe { TF_RX_LOG_P[(k_log & 3) as usize] } as u64,
                                     );
-                                    push_str(&mut reply, &mut rn, ".");
+                                    push_str(reply, &mut rn, ".");
                                     push_hex(
-                                        &mut reply,
+                                        reply,
                                         &mut rn,
                                         unsafe { TF_RX_LOG_O[(k_log & 3) as usize] } as u64,
                                     );
-                                    push_str(&mut reply, &mut rn, ".");
+                                    push_str(reply, &mut rn, ".");
                                     push_hex(
-                                        &mut reply,
+                                        reply,
                                         &mut rn,
                                         unsafe { TF_RX_LOG_A[(k_log & 3) as usize] } as u64,
                                     );
@@ -12464,70 +12469,70 @@ fn ctrl_service(
                                 }
                                 // 刀 G8：dv=进入.读零.tx拒.环闸挡——DATA 路径堵点
                                 // 实测（G7 立即 DATA 零上环的定位插桩）。
-                                push_str(&mut reply, &mut rn, " dv=");
-                                push_hex(&mut reply, &mut rn, unsafe { TF_DV } as u64);
-                                push_str(&mut reply, &mut rn, ".");
-                                push_hex(&mut reply, &mut rn, unsafe { TF_DZ } as u64);
-                                push_str(&mut reply, &mut rn, ".");
-                                push_hex(&mut reply, &mut rn, unsafe { TF_DX } as u64);
-                                push_str(&mut reply, &mut rn, ".");
-                                push_hex(&mut reply, &mut rn, unsafe { TF_DC } as u64);
+                                push_str(reply, &mut rn, " dv=");
+                                push_hex(reply, &mut rn, unsafe { TF_DV } as u64);
+                                push_str(reply, &mut rn, ".");
+                                push_hex(reply, &mut rn, unsafe { TF_DZ } as u64);
+                                push_str(reply, &mut rn, ".");
+                                push_hex(reply, &mut rn, unsafe { TF_DX } as u64);
+                                push_str(reply, &mut rn, ".");
+                                push_hex(reply, &mut rn, unsafe { TF_DC } as u64);
                                 // 刀 G9c：dv 第五元=retry OACK 服务数。
-                                push_str(&mut reply, &mut rn, ".");
-                                push_hex(&mut reply, &mut rn, unsafe { TF_DR } as u64);
+                                push_str(reply, &mut rn, ".");
+                                push_hex(reply, &mut rn, unsafe { TF_DR } as u64);
                                 // 刀 G12：pq=call.noarm.nost.nopend（tf_reply
                                 // 四分位，宽限 synth 后计）＋ ox=ok.no（OACK TX
                                 // 成败）——dv=0 矛盾的实测堵点。
-                                push_str(&mut reply, &mut rn, " pq=");
-                                push_hex(&mut reply, &mut rn, unsafe { TF_PQ_CALL } as u64);
-                                push_str(&mut reply, &mut rn, ".");
-                                push_hex(&mut reply, &mut rn, unsafe { TF_PQ_NOARM } as u64);
-                                push_str(&mut reply, &mut rn, ".");
-                                push_hex(&mut reply, &mut rn, unsafe { TF_PQ_NOST } as u64);
-                                push_str(&mut reply, &mut rn, ".");
-                                push_hex(&mut reply, &mut rn, unsafe { TF_PQ_NOPEND } as u64);
-                                push_str(&mut reply, &mut rn, " ox=");
-                                push_hex(&mut reply, &mut rn, unsafe { TF_PQ_TXOK } as u64);
-                                push_str(&mut reply, &mut rn, ".");
-                                push_hex(&mut reply, &mut rn, unsafe { TF_PQ_TXNO } as u64);
+                                push_str(reply, &mut rn, " pq=");
+                                push_hex(reply, &mut rn, unsafe { TF_PQ_CALL } as u64);
+                                push_str(reply, &mut rn, ".");
+                                push_hex(reply, &mut rn, unsafe { TF_PQ_NOARM } as u64);
+                                push_str(reply, &mut rn, ".");
+                                push_hex(reply, &mut rn, unsafe { TF_PQ_NOST } as u64);
+                                push_str(reply, &mut rn, ".");
+                                push_hex(reply, &mut rn, unsafe { TF_PQ_NOPEND } as u64);
+                                push_str(reply, &mut rn, " ox=");
+                                push_hex(reply, &mut rn, unsafe { TF_PQ_TXOK } as u64);
+                                push_str(reply, &mut rn, ".");
+                                push_hex(reply, &mut rn, unsafe { TF_PQ_TXNO } as u64);
                                 // ob=blk.wsz.ts — 写进 OACK 的数。wsz=0 表示请求没带 wsize。
                                 // rs=有键.值。rs=1.0 是 stat。
-                                push_str(&mut reply, &mut rn, " ob=");
-                                push_hex(&mut reply, &mut rn, unsafe { TF_REQ_BLK } as u64);
-                                push_str(&mut reply, &mut rn, ".");
-                                push_hex(&mut reply, &mut rn, unsafe { TF_REQ_WSZ } as u64);
-                                push_str(&mut reply, &mut rn, ".");
-                                push_hex(&mut reply, &mut rn, unsafe { TF_HAS_TS } as u64);
-                                push_str(&mut reply, &mut rn, " rs=");
-                                push_hex(&mut reply, &mut rn, unsafe { TF_HAS_RS } as u64);
-                                push_str(&mut reply, &mut rn, ".");
-                                push_hex(&mut reply, &mut rn, unsafe { TF_RSIZE } as u64);
-                                push_str(&mut reply, &mut rn, " tr=");
-                                push_hex(&mut reply, &mut rn, unsafe { TF_REJ } as u64);
-                                push_str(&mut reply, &mut rn, ".");
-                                push_hex(&mut reply, &mut rn, unsafe { TF_REJ_PORT } as u64);
+                                push_str(reply, &mut rn, " ob=");
+                                push_hex(reply, &mut rn, unsafe { TF_REQ_BLK } as u64);
+                                push_str(reply, &mut rn, ".");
+                                push_hex(reply, &mut rn, unsafe { TF_REQ_WSZ } as u64);
+                                push_str(reply, &mut rn, ".");
+                                push_hex(reply, &mut rn, unsafe { TF_HAS_TS } as u64);
+                                push_str(reply, &mut rn, " rs=");
+                                push_hex(reply, &mut rn, unsafe { TF_HAS_RS } as u64);
+                                push_str(reply, &mut rn, ".");
+                                push_hex(reply, &mut rn, unsafe { TF_RSIZE } as u64);
+                                push_str(reply, &mut rn, " tr=");
+                                push_hex(reply, &mut rn, unsafe { TF_REJ } as u64);
+                                push_str(reply, &mut rn, ".");
+                                push_hex(reply, &mut rn, unsafe { TF_REJ_PORT } as u64);
                                 // tt=TX环 head.tail.环容 —— tail 推进=modem 消费（送达 glink 层）
-                                push_str(&mut reply, &mut rn, " tt=");
-                                push_hex(&mut reply, &mut rn, unsafe { TF_TXH } as u64);
-                                push_str(&mut reply, &mut rn, ".");
-                                push_hex(&mut reply, &mut rn, unsafe { TF_TXT } as u64);
-                                push_str(&mut reply, &mut rn, ".");
-                                push_hex(&mut reply, &mut rn, unsafe { TF_TXSZ } as u64);
+                                push_str(reply, &mut rn, " tt=");
+                                push_hex(reply, &mut rn, unsafe { TF_TXH } as u64);
+                                push_str(reply, &mut rn, ".");
+                                push_hex(reply, &mut rn, unsafe { TF_TXT } as u64);
+                                push_str(reply, &mut rn, ".");
+                                push_hex(reply, &mut rn, unsafe { TF_TXSZ } as u64);
                                 // 刀 G2：rq=本笔 RRQ 客户端 node.port，rq2=上一笔（port 换新
                                 // =客户端重开 socket）；cp=CTRL 口副本探针已发与否。
-                                push_str(&mut reply, &mut rn, " rq=");
-                                push_hex(&mut reply, &mut rn, unsafe { TF_RQ_NODE } as u64);
-                                push_str(&mut reply, &mut rn, ".");
-                                push_hex(&mut reply, &mut rn, unsafe { TF_RQ_PORT } as u64);
-                                push_str(&mut reply, &mut rn, ".");
-                                push_hex(&mut reply, &mut rn, unsafe { TF_RQ2_NODE } as u64);
-                                push_str(&mut reply, &mut rn, ".");
-                                push_hex(&mut reply, &mut rn, unsafe { TF_RQ2_PORT } as u64);
-                                push_str(&mut reply, &mut rn, " cp=");
-                                push_hex(&mut reply, &mut rn, unsafe { TF_CTRL_PROBE } as u64);
+                                push_str(reply, &mut rn, " rq=");
+                                push_hex(reply, &mut rn, unsafe { TF_RQ_NODE } as u64);
+                                push_str(reply, &mut rn, ".");
+                                push_hex(reply, &mut rn, unsafe { TF_RQ_PORT } as u64);
+                                push_str(reply, &mut rn, ".");
+                                push_hex(reply, &mut rn, unsafe { TF_RQ2_NODE } as u64);
+                                push_str(reply, &mut rn, ".");
+                                push_hex(reply, &mut rn, unsafe { TF_RQ2_PORT } as u64);
+                                push_str(reply, &mut rn, " cp=");
+                                push_hex(reply, &mut rn, unsafe { TF_CTRL_PROBE } as u64);
                                 // 刀 G3：rd=OACK 发出距最新 RRQ 捕获的毫秒（对赌客户端
                                 // ~1s 的 socket 存活窗）；tm=RRQ 请求的 timeoutms。
-                                push_str(&mut reply, &mut rn, " rd=");
+                                push_str(reply, &mut rn, " rd=");
                                 let freq3 = time::freq_or(FREQ_FALLBACK as u32) as u64;
                                 let d3 = if freq3 > 0
                                     && unsafe { TF_RQ_AT } != 0
@@ -12537,14 +12542,14 @@ fn ctrl_service(
                                 } else {
                                     0
                                 };
-                                push_hex(&mut reply, &mut rn, d3);
-                                push_str(&mut reply, &mut rn, " tm=");
-                                push_hex(&mut reply, &mut rn, unsafe { TF_REQ_TMO } as u64);
+                                push_hex(reply, &mut rn, d3);
+                                push_str(reply, &mut rn, " tm=");
+                                push_hex(reply, &mut rn, unsafe { TF_REQ_TMO } as u64);
                                 // 刀 G5：rl=全口请求日志（6 槽，旧→新）。槽=dst口.源口.op.
                                 // fl.rsize.seek；fl bit0=rsize 键在、bit1=seek 键在。
                                 // 补盲洞：此前请求只认 0x11，换口请求整段不可见。
-                                push_str(&mut reply, &mut rn, " rl=");
-                                push_hex(&mut reply, &mut rn, unsafe { TF_RL_N } as u64);
+                                push_str(reply, &mut rn, " rl=");
+                                push_hex(reply, &mut rn, unsafe { TF_RL_N } as u64);
                                 {
                                     let total = unsafe { TF_RL_N } as usize;
                                     let shown = total.min(6);
@@ -12553,87 +12558,87 @@ fn ctrl_service(
                                     while k < shown {
                                         let idx = (start + k) % 6;
                                         if k != 0 {
-                                            push_str(&mut reply, &mut rn, ",");
+                                            push_str(reply, &mut rn, ",");
                                         }
-                                        push_hex(&mut reply, &mut rn, unsafe { TF_RL_P[idx] } as u64);
-                                        push_str(&mut reply, &mut rn, ".");
-                                        push_hex(&mut reply, &mut rn, unsafe { TF_RL_S[idx] } as u64);
-                                        push_str(&mut reply, &mut rn, ".");
-                                        push_hex(&mut reply, &mut rn, unsafe { TF_RL_O[idx] } as u64);
-                                        push_str(&mut reply, &mut rn, ".");
-                                        push_hex(&mut reply, &mut rn, unsafe { TF_RL_F[idx] } as u64);
-                                        push_str(&mut reply, &mut rn, ".");
-                                        push_hex(&mut reply, &mut rn, unsafe { TF_RL_R[idx] } as u64);
-                                        push_str(&mut reply, &mut rn, ".");
-                                        push_hex(&mut reply, &mut rn, unsafe { TF_RL_K[idx] } as u64);
+                                        push_hex(reply, &mut rn, unsafe { TF_RL_P[idx] } as u64);
+                                        push_str(reply, &mut rn, ".");
+                                        push_hex(reply, &mut rn, unsafe { TF_RL_S[idx] } as u64);
+                                        push_str(reply, &mut rn, ".");
+                                        push_hex(reply, &mut rn, unsafe { TF_RL_O[idx] } as u64);
+                                        push_str(reply, &mut rn, ".");
+                                        push_hex(reply, &mut rn, unsafe { TF_RL_F[idx] } as u64);
+                                        push_str(reply, &mut rn, ".");
+                                        push_hex(reply, &mut rn, unsafe { TF_RL_R[idx] } as u64);
+                                        push_str(reply, &mut rn, ".");
+                                        push_hex(reply, &mut rn, unsafe { TF_RL_K[idx] } as u64);
                                         k += 1;
                                     }
                                     if shown == 0 {
-                                        push_str(&mut reply, &mut rn, "-");
+                                        push_str(reply, &mut rn, "-");
                                     }
                                 }
                                 // me=pub.vout.inflags — MPSS SMP2P ipa 刀
-                                push_str(&mut reply, &mut rn, " me=");
-                                push_hex(&mut reply, &mut rn, unsafe { MPSS_PUB } as u64);
-                                push_str(&mut reply, &mut rn, ".");
-                                push_hex(&mut reply, &mut rn, unsafe { MPSS_VOUT } as u64);
-                                push_str(&mut reply, &mut rn, ".");
-                                push_hex(&mut reply, &mut rn, unsafe { MPSS_IN } as u64);
-                                push_str(&mut reply, &mut rn, " mv=");
-                                push_hex(&mut reply, &mut rn, unsafe { IPA_SMP_SENT } as u64);
+                                push_str(reply, &mut rn, " me=");
+                                push_hex(reply, &mut rn, unsafe { MPSS_PUB } as u64);
+                                push_str(reply, &mut rn, ".");
+                                push_hex(reply, &mut rn, unsafe { MPSS_VOUT } as u64);
+                                push_str(reply, &mut rn, ".");
+                                push_hex(reply, &mut rn, unsafe { MPSS_IN } as u64);
+                                push_str(reply, &mut rn, " mv=");
+                                push_hex(reply, &mut rn, unsafe { IPA_SMP_SENT } as u64);
                                 // bc=NAME.st.addr.unit.width,... — IPA BCM cmd-db 只读（序：IP0 SH0 MC0 ACV SN1 CN0 SH4）
                                 bcm_probe();
-                                push_str(&mut reply, &mut rn, " bc=");
+                                push_str(reply, &mut rn, " bc=");
                                 {
                                     let mut bi = 0usize;
                                     while bi < 7 {
                                         if bi != 0 {
-                                            push_str(&mut reply, &mut rn, ",");
+                                            push_str(reply, &mut rn, ",");
                                         }
-                                        push_str(&mut reply, &mut rn, BCM_TAGS[bi]);
-                                        push_str(&mut reply, &mut rn, ".");
-                                        push_hex(&mut reply, &mut rn, unsafe { BCM_ST[bi] } as u64);
-                                        push_str(&mut reply, &mut rn, ".");
-                                        push_hex(&mut reply, &mut rn, unsafe { BCM_ADDR[bi] } as u64);
-                                        push_str(&mut reply, &mut rn, ".");
-                                        push_hex(&mut reply, &mut rn, unsafe { BCM_UNIT[bi] } as u64);
-                                        push_str(&mut reply, &mut rn, ".");
-                                        push_hex(&mut reply, &mut rn, unsafe { BCM_WIDTH[bi] } as u64);
+                                        push_str(reply, &mut rn, BCM_TAGS[bi]);
+                                        push_str(reply, &mut rn, ".");
+                                        push_hex(reply, &mut rn, unsafe { BCM_ST[bi] } as u64);
+                                        push_str(reply, &mut rn, ".");
+                                        push_hex(reply, &mut rn, unsafe { BCM_ADDR[bi] } as u64);
+                                        push_str(reply, &mut rn, ".");
+                                        push_hex(reply, &mut rn, unsafe { BCM_UNIT[bi] } as u64);
+                                        push_str(reply, &mut rn, ".");
+                                        push_hex(reply, &mut rn, unsafe { BCM_WIDTH[bi] } as u64);
                                         bi += 1;
                                     }
                                 }
                                 // I4：STE + ACTIVE votes（一次）；sm ste=/bv=/ip=
                                 ipa_i4_once(freq);
-                                push_str(&mut reply, &mut rn, " ste=");
-                                push_hex(&mut reply, &mut rn, unsafe { IPA_STE_MASK } as u64);
-                                push_str(&mut reply, &mut rn, ".");
-                                push_hex(&mut reply, &mut rn, unsafe { IPA_STE[0] } as u64);
-                                push_str(&mut reply, &mut rn, ".");
-                                push_hex(&mut reply, &mut rn, unsafe { IPA_STE[1] } as u64);
-                                push_str(&mut reply, &mut rn, ".");
-                                push_hex(&mut reply, &mut rn, unsafe { IPA_STE[2] } as u64);
-                                push_str(&mut reply, &mut rn, " bv=");
-                                push_hex(&mut reply, &mut rn, unsafe { BCM_BV } as u64);
+                                push_str(reply, &mut rn, " ste=");
+                                push_hex(reply, &mut rn, unsafe { IPA_STE_MASK } as u64);
+                                push_str(reply, &mut rn, ".");
+                                push_hex(reply, &mut rn, unsafe { IPA_STE[0] } as u64);
+                                push_str(reply, &mut rn, ".");
+                                push_hex(reply, &mut rn, unsafe { IPA_STE[1] } as u64);
+                                push_str(reply, &mut rn, ".");
+                                push_hex(reply, &mut rn, unsafe { IPA_STE[2] } as u64);
+                                push_str(reply, &mut rn, " bv=");
+                                push_hex(reply, &mut rn, unsafe { BCM_BV } as u64);
                                 // ip=st.p0.p1.p2 — IPA fws PAS（ADSP 后；未跑则 st=0 p=ffffffff）
-                                push_str(&mut reply, &mut rn, " ip=");
-                                push_hex(&mut reply, &mut rn, unsafe { IPA_ST } as u64);
-                                push_str(&mut reply, &mut rn, ".");
-                                push_hex(&mut reply, &mut rn, unsafe { IPA_P[0] } as u64);
-                                push_str(&mut reply, &mut rn, ".");
-                                push_hex(&mut reply, &mut rn, unsafe { IPA_P[1] } as u64);
-                                push_str(&mut reply, &mut rn, ".");
-                                push_hex(&mut reply, &mut rn, unsafe { IPA_P[2] } as u64);
+                                push_str(reply, &mut rn, " ip=");
+                                push_hex(reply, &mut rn, unsafe { IPA_ST } as u64);
+                                push_str(reply, &mut rn, ".");
+                                push_hex(reply, &mut rn, unsafe { IPA_P[0] } as u64);
+                                push_str(reply, &mut rn, ".");
+                                push_hex(reply, &mut rn, unsafe { IPA_P[1] } as u64);
+                                push_str(reply, &mut rn, ".");
+                                push_hex(reply, &mut rn, unsafe { IPA_P[2] } as u64);
                                 // cd=st.p0.p1.p2 — CDSP PAS（仅 IPA+ADSP 绿后；未跑则 st=0 p=ffffffff）
-                                push_str(&mut reply, &mut rn, " cd=");
-                                push_hex(&mut reply, &mut rn, unsafe { CDSP_ST } as u64);
-                                push_str(&mut reply, &mut rn, ".");
-                                push_hex(&mut reply, &mut rn, unsafe { CDSP_P[0] } as u64);
-                                push_str(&mut reply, &mut rn, ".");
-                                push_hex(&mut reply, &mut rn, unsafe { CDSP_P[1] } as u64);
-                                push_str(&mut reply, &mut rn, ".");
-                                push_hex(&mut reply, &mut rn, unsafe { CDSP_P[2] } as u64);
-                                push_str(&mut reply, &mut rn, " cb=");
-                                push_hex(&mut reply, &mut rn, unsafe { CDSP_CB } as u64);
+                                push_str(reply, &mut rn, " cd=");
+                                push_hex(reply, &mut rn, unsafe { CDSP_ST } as u64);
+                                push_str(reply, &mut rn, ".");
+                                push_hex(reply, &mut rn, unsafe { CDSP_P[0] } as u64);
+                                push_str(reply, &mut rn, ".");
+                                push_hex(reply, &mut rn, unsafe { CDSP_P[1] } as u64);
+                                push_str(reply, &mut rn, ".");
+                                push_hex(reply, &mut rn, unsafe { CDSP_P[2] } as u64);
+                                push_str(reply, &mut rn, " cb=");
+                                push_hex(reply, &mut rn, unsafe { CDSP_CB } as u64);
                                 // ce=pub.rdy.wt — CDSP ONLINE（bit1）；sm 时刷新 rdy
                                 {
                                     let (_c, v, _p) = cdsp_edge(false);
@@ -12641,24 +12646,24 @@ fn ctrl_service(
                                         unsafe { CDSP_RDY = v };
                                     }
                                 }
-                                push_str(&mut reply, &mut rn, " ce=");
-                                push_hex(&mut reply, &mut rn, unsafe { CDSP_PUB } as u64);
-                                push_str(&mut reply, &mut rn, ".");
-                                push_hex(&mut reply, &mut rn, unsafe { CDSP_RDY } as u64);
-                                push_str(&mut reply, &mut rn, ".");
-                                push_hex(&mut reply, &mut rn, unsafe { CDSP_WT } as u64);
-                                push_str(&mut reply, &mut rn, " cz=");
-                                push_hex(&mut reply, &mut rn, unsafe { CDSP_Z } as u64);
-                                push_str(&mut reply, &mut rn, ".");
-                                push_hex(&mut reply, &mut rn, unsafe { CDSP_ZB } as u64);
-                                push_str(&mut reply, &mut rn, " ad=");
-                                push_hex(&mut reply, &mut rn, unsafe { ADSP_ST } as u64);
-                                push_str(&mut reply, &mut rn, ".");
-                                push_hex(&mut reply, &mut rn, unsafe { ADSP_P[0] } as u64);
-                                push_str(&mut reply, &mut rn, ".");
-                                push_hex(&mut reply, &mut rn, unsafe { ADSP_P[1] } as u64);
-                                push_str(&mut reply, &mut rn, ".");
-                                push_hex(&mut reply, &mut rn, unsafe { ADSP_P[2] } as u64);
+                                push_str(reply, &mut rn, " ce=");
+                                push_hex(reply, &mut rn, unsafe { CDSP_PUB } as u64);
+                                push_str(reply, &mut rn, ".");
+                                push_hex(reply, &mut rn, unsafe { CDSP_RDY } as u64);
+                                push_str(reply, &mut rn, ".");
+                                push_hex(reply, &mut rn, unsafe { CDSP_WT } as u64);
+                                push_str(reply, &mut rn, " cz=");
+                                push_hex(reply, &mut rn, unsafe { CDSP_Z } as u64);
+                                push_str(reply, &mut rn, ".");
+                                push_hex(reply, &mut rn, unsafe { CDSP_ZB } as u64);
+                                push_str(reply, &mut rn, " ad=");
+                                push_hex(reply, &mut rn, unsafe { ADSP_ST } as u64);
+                                push_str(reply, &mut rn, ".");
+                                push_hex(reply, &mut rn, unsafe { ADSP_P[0] } as u64);
+                                push_str(reply, &mut rn, ".");
+                                push_hex(reply, &mut rn, unsafe { ADSP_P[1] } as u64);
+                                push_str(reply, &mut rn, ".");
+                                push_hex(reply, &mut rn, unsafe { ADSP_P[2] } as u64);
                                 {
                                     let (_c, v, _p) = lpass_edge(false);
                                     if v & 0x8000_0000 == 0 {
@@ -12672,66 +12677,66 @@ fn ctrl_service(
                                         unsafe { SM_ARMED = true };
                                     }
                                 }
-                                push_str(&mut reply, &mut rn, " au=");
-                                push_hex(&mut reply, &mut rn, unsafe { ADSP_UV } as u64);
-                                push_str(&mut reply, &mut rn, " ae=");
-                                push_hex(&mut reply, &mut rn, unsafe { ADSP_PUB } as u64);
-                                push_str(&mut reply, &mut rn, ".");
-                                push_hex(&mut reply, &mut rn, unsafe { ADSP_SLV } as u64);
-                                push_str(&mut reply, &mut rn, ".");
-                                push_hex(&mut reply, &mut rn, unsafe { ADSP_WT } as u64);
-                                push_str(&mut reply, &mut rn, " ap=");
-                                push_hex(&mut reply, &mut rn, unsafe { ADSP_PRE } as u64);
-                                push_str(&mut reply, &mut rn, " ft=");
-                                push_hex(&mut reply, &mut rn, unsafe { ADSP_FT } as u64);
-                                push_str(&mut reply, &mut rn, " az=");
-                                push_hex(&mut reply, &mut rn, unsafe { ADSP_Z } as u64);
-                                push_str(&mut reply, &mut rn, ".");
-                                push_hex(&mut reply, &mut rn, unsafe { ADSP_ZB } as u64);
+                                push_str(reply, &mut rn, " au=");
+                                push_hex(reply, &mut rn, unsafe { ADSP_UV } as u64);
+                                push_str(reply, &mut rn, " ae=");
+                                push_hex(reply, &mut rn, unsafe { ADSP_PUB } as u64);
+                                push_str(reply, &mut rn, ".");
+                                push_hex(reply, &mut rn, unsafe { ADSP_SLV } as u64);
+                                push_str(reply, &mut rn, ".");
+                                push_hex(reply, &mut rn, unsafe { ADSP_WT } as u64);
+                                push_str(reply, &mut rn, " ap=");
+                                push_hex(reply, &mut rn, unsafe { ADSP_PRE } as u64);
+                                push_str(reply, &mut rn, " ft=");
+                                push_hex(reply, &mut rn, unsafe { ADSP_FT } as u64);
+                                push_str(reply, &mut rn, " az=");
+                                push_hex(reply, &mut rn, unsafe { ADSP_Z } as u64);
+                                push_str(reply, &mut rn, ".");
+                                push_hex(reply, &mut rn, unsafe { ADSP_ZB } as u64);
                                 unsafe { ADSP_SFR = sfr_load(freq, 423) };
-                                push_str(&mut reply, &mut rn, " ah=");
-                                push_hex(&mut reply, &mut rn, unsafe { ADSP_IN[0] } as u64);
-                                push_str(&mut reply, &mut rn, ".");
-                                push_hex(&mut reply, &mut rn, unsafe { ADSP_IN[1] } as u64);
-                                push_str(&mut reply, &mut rn, ".");
-                                push_hex(&mut reply, &mut rn, unsafe { ADSP_IN[2] } as u64);
-                                push_str(&mut reply, &mut rn, ".");
-                                push_hex(&mut reply, &mut rn, unsafe { ADSP_ACK } as u64);
-                                push_str(&mut reply, &mut rn, " lh=");
-                                push_hex(&mut reply, &mut rn, unsafe { LG_HN } as u64);
-                                push_str(&mut reply, &mut rn, ".");
-                                push_hex(&mut reply, &mut rn, unsafe { LG_HELLO } as u64);
-                                push_str(&mut reply, &mut rn, " fi=");
-                                push_hex(&mut reply, &mut rn, unsafe { FP_IN } as u64);
-                                push_str(&mut reply, &mut rn, ".");
-                                push_hex(&mut reply, &mut rn, unsafe { FP_ILOG[2] } as u64);
-                                push_str(&mut reply, &mut rn, ".");
-                                push_hex(&mut reply, &mut rn, unsafe { FP_ILOG[3] } as u64);
-                                push_str(&mut reply, &mut rn, ".");
-                                push_hex(&mut reply, &mut rn, unsafe { FP_REQ } as u64);
-                                push_str(&mut reply, &mut rn, " fs=");
-                                push_hex(&mut reply, &mut rn, unsafe { FP_SENT } as u64);
-                                push_str(&mut reply, &mut rn, ".");
-                                push_hex(&mut reply, &mut rn, unsafe { FP_SMR } as u64);
-                                push_str(&mut reply, &mut rn, ".");
-                                push_hex(&mut reply, &mut rn, unsafe { FP_RCID } as u64);
-                                push_str(&mut reply, &mut rn, ".");
-                                push_hex(&mut reply, &mut rn, unsafe { FP_ISZ } as u64);
-                                push_str(&mut reply, &mut rn, " fy=");
-                                push_hex(&mut reply, &mut rn, unsafe { FP_PREV[0] } as u64);
-                                push_str(&mut reply, &mut rn, ".");
-                                push_hex(&mut reply, &mut rn, unsafe { FP_PREV[1] } as u64);
-                                push_str(&mut reply, &mut rn, " fo=");
-                                push_hex(&mut reply, &mut rn, unsafe { FP_SENT } as u64);
-                                push_str(&mut reply, &mut rn, ".");
-                                push_hex(&mut reply, &mut rn, unsafe { FP_REUSE } as u64);
-                                push_str(&mut reply, &mut rn, ".");
-                                push_hex(&mut reply, &mut rn, unsafe { FP_RDONE } as u64);
-                                push_str(&mut reply, &mut rn, ".");
-                                push_hex(&mut reply, &mut rn, unsafe { FP_RLIID } as u64);
-                                push_str(&mut reply, &mut rn, ".");
-                                push_hex(&mut reply, &mut rn, unsafe { FP_OPN } as u64);
-                                push_str(&mut reply, &mut rn, ".");
+                                push_str(reply, &mut rn, " ah=");
+                                push_hex(reply, &mut rn, unsafe { ADSP_IN[0] } as u64);
+                                push_str(reply, &mut rn, ".");
+                                push_hex(reply, &mut rn, unsafe { ADSP_IN[1] } as u64);
+                                push_str(reply, &mut rn, ".");
+                                push_hex(reply, &mut rn, unsafe { ADSP_IN[2] } as u64);
+                                push_str(reply, &mut rn, ".");
+                                push_hex(reply, &mut rn, unsafe { ADSP_ACK } as u64);
+                                push_str(reply, &mut rn, " lh=");
+                                push_hex(reply, &mut rn, unsafe { LG_HN } as u64);
+                                push_str(reply, &mut rn, ".");
+                                push_hex(reply, &mut rn, unsafe { LG_HELLO } as u64);
+                                push_str(reply, &mut rn, " fi=");
+                                push_hex(reply, &mut rn, unsafe { FP_IN } as u64);
+                                push_str(reply, &mut rn, ".");
+                                push_hex(reply, &mut rn, unsafe { FP_ILOG[2] } as u64);
+                                push_str(reply, &mut rn, ".");
+                                push_hex(reply, &mut rn, unsafe { FP_ILOG[3] } as u64);
+                                push_str(reply, &mut rn, ".");
+                                push_hex(reply, &mut rn, unsafe { FP_REQ } as u64);
+                                push_str(reply, &mut rn, " fs=");
+                                push_hex(reply, &mut rn, unsafe { FP_SENT } as u64);
+                                push_str(reply, &mut rn, ".");
+                                push_hex(reply, &mut rn, unsafe { FP_SMR } as u64);
+                                push_str(reply, &mut rn, ".");
+                                push_hex(reply, &mut rn, unsafe { FP_RCID } as u64);
+                                push_str(reply, &mut rn, ".");
+                                push_hex(reply, &mut rn, unsafe { FP_ISZ } as u64);
+                                push_str(reply, &mut rn, " fy=");
+                                push_hex(reply, &mut rn, unsafe { FP_PREV[0] } as u64);
+                                push_str(reply, &mut rn, ".");
+                                push_hex(reply, &mut rn, unsafe { FP_PREV[1] } as u64);
+                                push_str(reply, &mut rn, " fo=");
+                                push_hex(reply, &mut rn, unsafe { FP_SENT } as u64);
+                                push_str(reply, &mut rn, ".");
+                                push_hex(reply, &mut rn, unsafe { FP_REUSE } as u64);
+                                push_str(reply, &mut rn, ".");
+                                push_hex(reply, &mut rn, unsafe { FP_RDONE } as u64);
+                                push_str(reply, &mut rn, ".");
+                                push_hex(reply, &mut rn, unsafe { FP_RLIID } as u64);
+                                push_str(reply, &mut rn, ".");
+                                push_hex(reply, &mut rn, unsafe { FP_OPN } as u64);
+                                push_str(reply, &mut rn, ".");
                                 if unsafe { FP_OPN } != 0 && unsafe { FP_SENT } == 4 {
                                     let page = core::ptr::addr_of!(FP_PAGE) as u64;
                                     dcache_ivac(page + 896, 64);
@@ -12740,45 +12745,45 @@ fn ctrl_service(
                                         FP_DL = rd32((page + 900) as usize);
                                     }
                                 }
-                                push_hex(&mut reply, &mut rn, unsafe { FP_HDL } as u64);
-                                push_str(&mut reply, &mut rn, ".");
-                                push_hex(&mut reply, &mut rn, unsafe { FP_DL } as u64);
-                                push_str(&mut reply, &mut rn, ".");
-                                push_hex(&mut reply, &mut rn, unsafe { FP_OPEN[0] } as u64);
-                                push_str(&mut reply, &mut rn, ".");
-                                push_hex(&mut reply, &mut rn, unsafe { FP_OPEN[2] } as u64);
-                                push_str(&mut reply, &mut rn, ".");
-                                push_hex(&mut reply, &mut rn, unsafe { FP_REGN } as u64);
-                                push_str(&mut reply, &mut rn, ".");
-                                push_hex(&mut reply, &mut rn, unsafe { FP_REG[0] } as u64);
-                                push_str(&mut reply, &mut rn, ".");
-                                push_hex(&mut reply, &mut rn, unsafe { FP_REG[2] } as u64);
-                                push_str(&mut reply, &mut rn, ".");
+                                push_hex(reply, &mut rn, unsafe { FP_HDL } as u64);
+                                push_str(reply, &mut rn, ".");
+                                push_hex(reply, &mut rn, unsafe { FP_DL } as u64);
+                                push_str(reply, &mut rn, ".");
+                                push_hex(reply, &mut rn, unsafe { FP_OPEN[0] } as u64);
+                                push_str(reply, &mut rn, ".");
+                                push_hex(reply, &mut rn, unsafe { FP_OPEN[2] } as u64);
+                                push_str(reply, &mut rn, ".");
+                                push_hex(reply, &mut rn, unsafe { FP_REGN } as u64);
+                                push_str(reply, &mut rn, ".");
+                                push_hex(reply, &mut rn, unsafe { FP_REG[0] } as u64);
+                                push_str(reply, &mut rn, ".");
+                                push_hex(reply, &mut rn, unsafe { FP_REG[2] } as u64);
+                                push_str(reply, &mut rn, ".");
                                 if unsafe { FP_SENT } == 8 && unsafe { FP_CLSN } != 0 && unsafe { FP_CDL } == 0xffff_ffff
                                 {
                                     let page = core::ptr::addr_of!(FP_PAGE) as u64;
                                     dcache_ivac(page + 640, 64);
                                     unsafe { FP_CDL = rd32((page + 640) as usize) };
                                 }
-                                push_hex(&mut reply, &mut rn, unsafe { FP_CLSN } as u64);
-                                push_str(&mut reply, &mut rn, ".");
-                                push_hex(&mut reply, &mut rn, unsafe { FP_CLS[0] } as u64);
-                                push_str(&mut reply, &mut rn, ".");
-                                push_hex(&mut reply, &mut rn, unsafe { FP_CLS[2] } as u64);
-                                push_str(&mut reply, &mut rn, ".");
-                                push_hex(&mut reply, &mut rn, unsafe { FP_CDL } as u64);
-                                push_str(&mut reply, &mut rn, ".");
-                                push_hex(&mut reply, &mut rn, unsafe { FP_ININ } as u64);
-                                push_str(&mut reply, &mut rn, ".");
-                                push_hex(&mut reply, &mut rn, unsafe { FP_INI[0] } as u64);
-                                push_str(&mut reply, &mut rn, ".");
-                                push_hex(&mut reply, &mut rn, unsafe { FP_INI[2] } as u64);
-                                push_str(&mut reply, &mut rn, ".");
-                                push_hex(&mut reply, &mut rn, unsafe { FP_NXN } as u64);
-                                push_str(&mut reply, &mut rn, ".");
-                                push_hex(&mut reply, &mut rn, unsafe { FP_NX[0] } as u64);
-                                push_str(&mut reply, &mut rn, ".");
-                                push_hex(&mut reply, &mut rn, unsafe { FP_NX[2] } as u64);
+                                push_hex(reply, &mut rn, unsafe { FP_CLSN } as u64);
+                                push_str(reply, &mut rn, ".");
+                                push_hex(reply, &mut rn, unsafe { FP_CLS[0] } as u64);
+                                push_str(reply, &mut rn, ".");
+                                push_hex(reply, &mut rn, unsafe { FP_CLS[2] } as u64);
+                                push_str(reply, &mut rn, ".");
+                                push_hex(reply, &mut rn, unsafe { FP_CDL } as u64);
+                                push_str(reply, &mut rn, ".");
+                                push_hex(reply, &mut rn, unsafe { FP_ININ } as u64);
+                                push_str(reply, &mut rn, ".");
+                                push_hex(reply, &mut rn, unsafe { FP_INI[0] } as u64);
+                                push_str(reply, &mut rn, ".");
+                                push_hex(reply, &mut rn, unsafe { FP_INI[2] } as u64);
+                                push_str(reply, &mut rn, ".");
+                                push_hex(reply, &mut rn, unsafe { FP_NXN } as u64);
+                                push_str(reply, &mut rn, ".");
+                                push_hex(reply, &mut rn, unsafe { FP_NX[0] } as u64);
+                                push_str(reply, &mut rn, ".");
+                                push_hex(reply, &mut rn, unsafe { FP_NX[2] } as u64);
                                 if unsafe { FP_NXN } != 0 && unsafe { FP_SENT } == 10 {
                                     let page = core::ptr::addr_of!(FP_PAGE) as u64;
                                     dcache_ivac(page + 768, 128);
@@ -12792,23 +12797,23 @@ fn ctrl_service(
                                 }
                                 let mut k = 0usize;
                                 while k < 4 {
-                                    push_str(&mut reply, &mut rn, ".");
-                                    push_hex(&mut reply, &mut rn, unsafe { FP_NOUT[k] } as u64);
+                                    push_str(reply, &mut rn, ".");
+                                    push_hex(reply, &mut rn, unsafe { FP_NOUT[k] } as u64);
                                     k += 1;
                                 }
-                                push_str(&mut reply, &mut rn, " rv=");
-                                push_hex(&mut reply, &mut rn, unsafe { FP_REV } as u64);
-                                push_str(&mut reply, &mut rn, ".");
-                                push_hex(&mut reply, &mut rn, unsafe { FP_RVN } as u64);
-                                push_str(&mut reply, &mut rn, ".");
-                                push_hex(&mut reply, &mut rn, unsafe { FP_RVH } as u64);
-                                push_str(&mut reply, &mut rn, ".");
-                                push_hex(&mut reply, &mut rn, unsafe { FP_RVSC } as u64);
-                                push_str(&mut reply, &mut rn, ".");
-                                push_hex(&mut reply, &mut rn, unsafe { FP_RVRES } as u64);
-                                push_str(&mut reply, &mut rn, ".");
-                                push_hex(&mut reply, &mut rn, unsafe { AST_METHOD } as u64);
-                                push_str(&mut reply, &mut rn, ".");
+                                push_str(reply, &mut rn, " rv=");
+                                push_hex(reply, &mut rn, unsafe { FP_REV } as u64);
+                                push_str(reply, &mut rn, ".");
+                                push_hex(reply, &mut rn, unsafe { FP_RVN } as u64);
+                                push_str(reply, &mut rn, ".");
+                                push_hex(reply, &mut rn, unsafe { FP_RVH } as u64);
+                                push_str(reply, &mut rn, ".");
+                                push_hex(reply, &mut rn, unsafe { FP_RVSC } as u64);
+                                push_str(reply, &mut rn, ".");
+                                push_hex(reply, &mut rn, unsafe { FP_RVRES } as u64);
+                                push_str(reply, &mut rn, ".");
+                                push_hex(reply, &mut rn, unsafe { AST_METHOD } as u64);
+                                push_str(reply, &mut rn, ".");
                                 let rvn = unsafe { FP_RVNAMEN } as usize;
                                 let mut ri = 0usize;
                                 while ri < rvn && ri < 32 {
@@ -12819,49 +12824,49 @@ fn ctrl_service(
                                     }
                                     ri += 1;
                                 }
-                                push_str(&mut reply, &mut rn, " ri=");
+                                push_str(reply, &mut rn, " ri=");
                                 let rvin_n = unsafe { FP_RVINN }.min(29) as usize;
                                 let mut ri = 0usize;
                                 while ri < rvin_n {
-                                    push_hex(&mut reply, &mut rn, unsafe { FP_RVIN[ri] } as u64);
+                                    push_hex(reply, &mut rn, unsafe { FP_RVIN[ri] } as u64);
                                     if ri + 1 < rvin_n {
-                                        push_str(&mut reply, &mut rn, ".");
+                                        push_str(reply, &mut rn, ".");
                                     }
                                     ri += 1;
                                 }
-                                push_str(&mut reply, &mut rn, " gq=");
-                                push_hex(&mut reply, &mut rn, unsafe { FP_CH } as u64);
-                                push_str(&mut reply, &mut rn, ".");
-                                push_hex(&mut reply, &mut rn, unsafe { FP_CT } as u64);
-                                push_str(&mut reply, &mut rn, ".");
-                                push_hex(&mut reply, &mut rn, unsafe { FP_SH } as u64);
-                                push_str(&mut reply, &mut rn, ".");
-                                push_hex(&mut reply, &mut rn, unsafe { FP_ST } as u64);
-                                push_str(&mut reply, &mut rn, ".");
-                                push_hex(&mut reply, &mut rn, unsafe { FP_DN } as u64);
-                                push_str(&mut reply, &mut rn, ".");
-                                push_hex(&mut reply, &mut rn, unsafe { FP_RDP } as u64);
-                                push_str(&mut reply, &mut rn, " fp=");
-                                push_hex(&mut reply, &mut rn, unsafe { LG_FPN } as u64);
-                                push_str(&mut reply, &mut rn, ".");
-                                push_hex(&mut reply, &mut rn, unsafe { FP_RXP } as u64);
+                                push_str(reply, &mut rn, " gq=");
+                                push_hex(reply, &mut rn, unsafe { FP_CH } as u64);
+                                push_str(reply, &mut rn, ".");
+                                push_hex(reply, &mut rn, unsafe { FP_CT } as u64);
+                                push_str(reply, &mut rn, ".");
+                                push_hex(reply, &mut rn, unsafe { FP_SH } as u64);
+                                push_str(reply, &mut rn, ".");
+                                push_hex(reply, &mut rn, unsafe { FP_ST } as u64);
+                                push_str(reply, &mut rn, ".");
+                                push_hex(reply, &mut rn, unsafe { FP_DN } as u64);
+                                push_str(reply, &mut rn, ".");
+                                push_hex(reply, &mut rn, unsafe { FP_RDP } as u64);
+                                push_str(reply, &mut rn, " fp=");
+                                push_hex(reply, &mut rn, unsafe { LG_FPN } as u64);
+                                push_str(reply, &mut rn, ".");
+                                push_hex(reply, &mut rn, unsafe { FP_RXP } as u64);
                                 let mut fi = 0usize;
                                 while fi < 4 {
-                                    push_str(&mut reply, &mut rn, ".");
-                                    push_hex(&mut reply, &mut rn, unsafe { LG_FP[fi] } as u64);
+                                    push_str(reply, &mut rn, ".");
+                                    push_hex(reply, &mut rn, unsafe { LG_FP[fi] } as u64);
                                     fi += 1;
                                 }
-                                push_str(&mut reply, &mut rn, " lg=");
-                                push_hex(&mut reply, &mut rn, unsafe { LG_BITS } as u64);
-                                push_str(&mut reply, &mut rn, " ag=");
-                                push_hex(&mut reply, &mut rn, unsafe { LG_ST } as u64);
-                                push_str(&mut reply, &mut rn, ".");
-                                push_hex(&mut reply, &mut rn, unsafe { LG_PHASE } as u64);
-                                push_str(&mut reply, &mut rn, " af=");
-                                push_hex(&mut reply, &mut rn, unsafe { ADSP_SFR.st } as u64);
-                                push_str(&mut reply, &mut rn, ".");
-                                push_hex(&mut reply, &mut rn, unsafe { ADSP_SFR.sz } as u64);
-                                push_str(&mut reply, &mut rn, ".");
+                                push_str(reply, &mut rn, " lg=");
+                                push_hex(reply, &mut rn, unsafe { LG_BITS } as u64);
+                                push_str(reply, &mut rn, " ag=");
+                                push_hex(reply, &mut rn, unsafe { LG_ST } as u64);
+                                push_str(reply, &mut rn, ".");
+                                push_hex(reply, &mut rn, unsafe { LG_PHASE } as u64);
+                                push_str(reply, &mut rn, " af=");
+                                push_hex(reply, &mut rn, unsafe { ADSP_SFR.st } as u64);
+                                push_str(reply, &mut rn, ".");
+                                push_hex(reply, &mut rn, unsafe { ADSP_SFR.sz } as u64);
+                                push_str(reply, &mut rn, ".");
                                 let mut ai = 0usize;
                                 while ai < 32 {
                                     let w = unsafe { ADSP_SFR.w[ai] };
@@ -12881,250 +12886,250 @@ fn ctrl_service(
                                     }
                                     ai += 1;
                                 }
-                                push_str(&mut reply, &mut rn, " ql=");
+                                push_str(reply, &mut rn, " ql=");
                                 let nlook = unsafe { SMEM_NLOOK }.min(8);
                                 for i in 0..nlook {
                                     if i != 0 {
-                                        push_str(&mut reply, &mut rn, ",");
+                                        push_str(reply, &mut rn, ",");
                                     }
-                                    push_hex(&mut reply, &mut rn, unsafe { SMEM_LOOK[i as usize * 2] } as u64);
-                                    push_str(&mut reply, &mut rn, ".");
+                                    push_hex(reply, &mut rn, unsafe { SMEM_LOOK[i as usize * 2] } as u64);
+                                    push_str(reply, &mut rn, ".");
                                     push_hex(
-                                        &mut reply,
+                                        reply,
                                         &mut rn,
                                         unsafe { SMEM_LOOK[i as usize * 2 + 1] } as u64,
                                     );
                                 }
-                                push_str(&mut reply, &mut rn, " w45=");
-                                push_hex(&mut reply, &mut rn, unsafe { SAW_45 } as u64);
+                                push_str(reply, &mut rn, " w45=");
+                                push_hex(reply, &mut rn, unsafe { SAW_45 } as u64);
                                 // 刀 G10：px=保存的 SO RRQ 原文（定宽 nibble）——
                                 // 文件名+mode+选项区逐字节，解析器盲区的尾巴直接可见，
                                 // 方言真图。tf_save_so 只存 SO 文件（TF_OPTBUF/TF_OPTLEN）。
                                 // 刀 G11：让出 rp= 撞名（旧 rp=0.ffffffff 在前），帽 96→160。
-                                push_str(&mut reply, &mut rn, " px=");
+                                push_str(reply, &mut rn, " px=");
                                 let n_rp = (unsafe { TF_OPTLEN } as usize).min(160);
                                 let mut i_rp = 0usize;
                                 while i_rp < n_rp {
                                     let b = unsafe { TF_OPTBUF[i_rp] };
-                                    push_hex(&mut reply, &mut rn, (b >> 4) as u64);
-                                    push_hex(&mut reply, &mut rn, (b & 0xF) as u64);
+                                    push_hex(reply, &mut rn, (b >> 4) as u64);
+                                    push_hex(reply, &mut rn, (b & 0xF) as u64);
                                     i_rp += 1;
                                 }
                                 // 刀 G11：rpl=qrtr 尺寸段.抄本窗——size>room ⇒ 跨
                                 // fragment 截断（G12 重组立案）；size≤room ⇒ 抄本即全量。
-                                push_str(&mut reply, &mut rn, " rpl=");
-                                push_hex(&mut reply, &mut rn, unsafe { TF_RPL_SZ } as u64);
-                                push_str(&mut reply, &mut rn, ".");
-                                push_hex(&mut reply, &mut rn, unsafe { TF_RPL_RM } as u64);
+                                push_str(reply, &mut rn, " rpl=");
+                                push_hex(reply, &mut rn, unsafe { TF_RPL_SZ } as u64);
+                                push_str(reply, &mut rn, ".");
+                                push_hex(reply, &mut rn, unsafe { TF_RPL_RM } as u64);
                                 // 刀 G10：rr=最近 2 笔 op4/op5 原文（时间序旧→新，各 ≤24B）。
                                 // op5 例：0005 0009 "End of transfer" ——消息文本＝拒收理由。
-                                push_str(&mut reply, &mut rn, " rr=");
-                                push_hex(&mut reply, &mut rn, unsafe { TF_RXR_N } as u64);
+                                push_str(reply, &mut rn, " rr=");
+                                push_hex(reply, &mut rn, unsafe { TF_RXR_N } as u64);
                                 let n_rr = unsafe { TF_RXR_N }.min(2);
                                 let mut k_rr = n_rr;
                                 while k_rr > 0 {
                                     let ridx = ((unsafe { TF_RXR_N } - k_rr) & 1) as usize;
                                     let len = unsafe { TF_RXR_L[ridx] } as usize;
-                                    push_str(&mut reply, &mut rn, ".");
+                                    push_str(reply, &mut rn, ".");
                                     let mut i_rr = 0usize;
                                     while i_rr < len {
                                         let b = unsafe { TF_RXR[ridx][i_rr] };
-                                        push_hex(&mut reply, &mut rn, (b >> 4) as u64);
-                                        push_hex(&mut reply, &mut rn, (b & 0xF) as u64);
+                                        push_hex(reply, &mut rn, (b >> 4) as u64);
+                                        push_hex(reply, &mut rn, (b & 0xF) as u64);
                                         i_rr += 1;
                                     }
                                     k_rr -= 1;
                                 }
-                                push_str(&mut reply, &mut rn, " q=");
+                                push_str(reply, &mut rn, " q=");
                                 let nsvc = unsafe { SMEM_NSVC }.min(8);
                                 for i in 0..nsvc {
                                     if i != 0 {
-                                        push_str(&mut reply, &mut rn, ",");
+                                        push_str(reply, &mut rn, ",");
                                     }
-                                    push_hex(&mut reply, &mut rn, unsafe { SMEM_SVC[i as usize * 2] } as u64);
-                                    push_str(&mut reply, &mut rn, ".");
+                                    push_hex(reply, &mut rn, unsafe { SMEM_SVC[i as usize * 2] } as u64);
+                                    push_str(reply, &mut rn, ".");
                                     push_hex(
-                                        &mut reply,
+                                        reply,
                                         &mut rn,
                                         unsafe { SMEM_SVC[i as usize * 2 + 1] } as u64,
                                     );
                                 }
                                 // iq=seen.inst — IPA QMI 0x31 NEW_SERVER 闩（零写）
-                                push_str(&mut reply, &mut rn, " iq=");
-                                push_hex(&mut reply, &mut rn, unsafe { IQ_SEEN } as u64);
-                                push_str(&mut reply, &mut rn, ".");
-                                push_hex(&mut reply, &mut rn, unsafe { IQ_INST } as u64);
-                                push_str(&mut reply, &mut rn, ".");
-                                push_hex(&mut reply, &mut rn, unsafe { IQ_NODE } as u64);
-                                push_str(&mut reply, &mut rn, ".");
-                                push_hex(&mut reply, &mut rn, unsafe { IQ_PORT } as u64);
+                                push_str(reply, &mut rn, " iq=");
+                                push_hex(reply, &mut rn, unsafe { IQ_SEEN } as u64);
+                                push_str(reply, &mut rn, ".");
+                                push_hex(reply, &mut rn, unsafe { IQ_INST } as u64);
+                                push_str(reply, &mut rn, ".");
+                                push_hex(reply, &mut rn, unsafe { IQ_NODE } as u64);
+                                push_str(reply, &mut rn, ".");
+                                push_hex(reply, &mut rn, unsafe { IQ_PORT } as u64);
                                 // ig= — IPA/GSI 只读 MMIO（PAS 绿后一次；零写）
                                 ipa_gsi_ro_probe();
                                 ipa_gsi_ring_carve();
-                                push_str(&mut reply, &mut rn, " ig=");
-                                push_hex(&mut reply, &mut rn, unsafe { IG_ST } as u64);
-                                push_str(&mut reply, &mut rn, ".");
-                                push_hex(&mut reply, &mut rn, unsafe { IG_IVER } as u64);
-                                push_str(&mut reply, &mut rn, ".");
-                                push_hex(&mut reply, &mut rn, unsafe { IG_GCFG } as u64);
-                                push_str(&mut reply, &mut rn, ".");
-                                push_hex(&mut reply, &mut rn, unsafe { IG_GSTAT } as u64);
-                                push_str(&mut reply, &mut rn, ".");
-                                push_hex(&mut reply, &mut rn, unsafe { IG_GVER } as u64);
-                                push_str(&mut reply, &mut rn, ".");
-                                push_hex(&mut reply, &mut rn, unsafe { IG_HP2 } as u64);
-                                push_str(&mut reply, &mut rn, ".");
-                                push_hex(&mut reply, &mut rn, unsafe { IG_CH0 } as u64);
-                                push_str(&mut reply, &mut rn, ".");
-                                push_hex(&mut reply, &mut rn, unsafe { IG_CA } as u64);
-                                push_str(&mut reply, &mut rn, ".");
-                                push_hex(&mut reply, &mut rn, unsafe { IG_CB } as u64);
-                                push_str(&mut reply, &mut rn, ".");
-                                push_hex(&mut reply, &mut rn, unsafe { IG_SMEM } as u64);
-                                push_str(&mut reply, &mut rn, ".");
-                                push_hex(&mut reply, &mut rn, unsafe { IG_R } as u64);
+                                push_str(reply, &mut rn, " ig=");
+                                push_hex(reply, &mut rn, unsafe { IG_ST } as u64);
+                                push_str(reply, &mut rn, ".");
+                                push_hex(reply, &mut rn, unsafe { IG_IVER } as u64);
+                                push_str(reply, &mut rn, ".");
+                                push_hex(reply, &mut rn, unsafe { IG_GCFG } as u64);
+                                push_str(reply, &mut rn, ".");
+                                push_hex(reply, &mut rn, unsafe { IG_GSTAT } as u64);
+                                push_str(reply, &mut rn, ".");
+                                push_hex(reply, &mut rn, unsafe { IG_GVER } as u64);
+                                push_str(reply, &mut rn, ".");
+                                push_hex(reply, &mut rn, unsafe { IG_HP2 } as u64);
+                                push_str(reply, &mut rn, ".");
+                                push_hex(reply, &mut rn, unsafe { IG_CH0 } as u64);
+                                push_str(reply, &mut rn, ".");
+                                push_hex(reply, &mut rn, unsafe { IG_CA } as u64);
+                                push_str(reply, &mut rn, ".");
+                                push_hex(reply, &mut rn, unsafe { IG_CB } as u64);
+                                push_str(reply, &mut rn, ".");
+                                push_hex(reply, &mut rn, unsafe { IG_SMEM } as u64);
+                                push_str(reply, &mut rn, ".");
+                                push_hex(reply, &mut rn, unsafe { IG_R } as u64);
                                 // gc= — GSI CH7 只读（与 ig 同次；零写；非 alloc/start）
-                                push_str(&mut reply, &mut rn, " gc=");
-                                push_hex(&mut reply, &mut rn, unsafe { GC_ST } as u64);
-                                push_str(&mut reply, &mut rn, ".");
-                                push_hex(&mut reply, &mut rn, unsafe { GC_C0 } as u64);
-                                push_str(&mut reply, &mut rn, ".");
-                                push_hex(&mut reply, &mut rn, unsafe { GC_C1 } as u64);
-                                push_str(&mut reply, &mut rn, ".");
-                                push_hex(&mut reply, &mut rn, unsafe { GC_C2 } as u64);
-                                push_str(&mut reply, &mut rn, ".");
-                                push_hex(&mut reply, &mut rn, unsafe { GC_C3 } as u64);
-                                push_str(&mut reply, &mut rn, ".");
-                                push_hex(&mut reply, &mut rn, unsafe { GC_IRQ } as u64);
-                                push_str(&mut reply, &mut rn, ".");
-                                push_hex(&mut reply, &mut rn, unsafe { GC_ERR } as u64);
+                                push_str(reply, &mut rn, " gc=");
+                                push_hex(reply, &mut rn, unsafe { GC_ST } as u64);
+                                push_str(reply, &mut rn, ".");
+                                push_hex(reply, &mut rn, unsafe { GC_C0 } as u64);
+                                push_str(reply, &mut rn, ".");
+                                push_hex(reply, &mut rn, unsafe { GC_C1 } as u64);
+                                push_str(reply, &mut rn, ".");
+                                push_hex(reply, &mut rn, unsafe { GC_C2 } as u64);
+                                push_str(reply, &mut rn, ".");
+                                push_hex(reply, &mut rn, unsafe { GC_C3 } as u64);
+                                push_str(reply, &mut rn, ".");
+                                push_hex(reply, &mut rn, unsafe { GC_IRQ } as u64);
+                                push_str(reply, &mut rn, ".");
+                                push_hex(reply, &mut rn, unsafe { GC_ERR } as u64);
                                 // gr= — CH7 DRAM 划区（allocate-only；无 doorbell）
-                                push_str(&mut reply, &mut rn, " gr=");
-                                push_hex(&mut reply, &mut rn, unsafe { GR_ST } as u64);
-                                push_str(&mut reply, &mut rn, ".");
-                                push_hex(&mut reply, &mut rn, unsafe { GR_CH } as u64);
-                                push_str(&mut reply, &mut rn, ".");
-                                push_hex(&mut reply, &mut rn, unsafe { GR_EVT } as u64);
-                                push_str(&mut reply, &mut rn, ".");
-                                push_hex(&mut reply, &mut rn, unsafe { GR_RX } as u64);
-                                push_str(&mut reply, &mut rn, ".");
-                                push_hex(&mut reply, &mut rn, unsafe { GR_SZ } as u64);
+                                push_str(reply, &mut rn, " gr=");
+                                push_hex(reply, &mut rn, unsafe { GR_ST } as u64);
+                                push_str(reply, &mut rn, ".");
+                                push_hex(reply, &mut rn, unsafe { GR_CH } as u64);
+                                push_str(reply, &mut rn, ".");
+                                push_hex(reply, &mut rn, unsafe { GR_EVT } as u64);
+                                push_str(reply, &mut rn, ".");
+                                push_hex(reply, &mut rn, unsafe { GR_RX } as u64);
+                                push_str(reply, &mut rn, ".");
+                                push_hex(reply, &mut rn, unsafe { GR_SZ } as u64);
                                 // ii=st.txn.res — INIT_MODEM_DRIVER 单发闩
-                                push_str(&mut reply, &mut rn, " ii=");
-                                push_hex(&mut reply, &mut rn, unsafe { II_ST } as u64);
-                                push_str(&mut reply, &mut rn, ".");
-                                push_hex(&mut reply, &mut rn, unsafe { II_TXN } as u64);
-                                push_str(&mut reply, &mut rn, ".");
-                                push_hex(&mut reply, &mut rn, unsafe { II_RES } as u64);
-                                push_str(&mut reply, &mut rn, ".");
-                                push_hex(&mut reply, &mut rn, unsafe { II_WHY } as u64);
-                                push_str(&mut reply, &mut rn, ".");
-                                push_hex(&mut reply, &mut rn, unsafe { II_HX } as u64);
-                                push_str(&mut reply, &mut rn, ".");
-                                push_hex(&mut reply, &mut rn, unsafe { II_TL } as u64);
-                                push_str(&mut reply, &mut rn, ".");
+                                push_str(reply, &mut rn, " ii=");
+                                push_hex(reply, &mut rn, unsafe { II_ST } as u64);
+                                push_str(reply, &mut rn, ".");
+                                push_hex(reply, &mut rn, unsafe { II_TXN } as u64);
+                                push_str(reply, &mut rn, ".");
+                                push_hex(reply, &mut rn, unsafe { II_RES } as u64);
+                                push_str(reply, &mut rn, ".");
+                                push_hex(reply, &mut rn, unsafe { II_WHY } as u64);
+                                push_str(reply, &mut rn, ".");
+                                push_hex(reply, &mut rn, unsafe { II_HX } as u64);
+                                push_str(reply, &mut rn, ".");
+                                push_hex(reply, &mut rn, unsafe { II_TL } as u64);
+                                push_str(reply, &mut rn, ".");
                                 let mut pk = 0usize;
                                 while pk < 8 {
                                     if pk != 0 {
-                                        push_str(&mut reply, &mut rn, ".");
+                                        push_str(reply, &mut rn, ".");
                                     }
-                                    push_hex(&mut reply, &mut rn, unsafe { II_PK[pk] } as u64);
+                                    push_hex(reply, &mut rn, unsafe { II_PK[pk] } as u64);
                                     pk += 1;
                                 }
-                                push_str(&mut reply, &mut rn, " ic=");
-                                push_hex(&mut reply, &mut rn, unsafe { IC_N } as u64);
-                                push_str(&mut reply, &mut rn, ".");
-                                push_hex(&mut reply, &mut rn, unsafe { IC_SENT } as u64);
-                                push_str(&mut reply, &mut rn, " im=");
-                                push_hex(&mut reply, &mut rn, unsafe { IPA_REQ } as u64);
-                                push_str(&mut reply, &mut rn, ".");
-                                push_hex(&mut reply, &mut rn, unsafe { IPA_LAST } as u64);
-                                push_str(&mut reply, &mut rn, ".");
-                                push_hex(&mut reply, &mut rn, unsafe { CFG_SENT } as u64);
-                                push_str(&mut reply, &mut rn, " cg=");
+                                push_str(reply, &mut rn, " ic=");
+                                push_hex(reply, &mut rn, unsafe { IC_N } as u64);
+                                push_str(reply, &mut rn, ".");
+                                push_hex(reply, &mut rn, unsafe { IC_SENT } as u64);
+                                push_str(reply, &mut rn, " im=");
+                                push_hex(reply, &mut rn, unsafe { IPA_REQ } as u64);
+                                push_str(reply, &mut rn, ".");
+                                push_hex(reply, &mut rn, unsafe { IPA_LAST } as u64);
+                                push_str(reply, &mut rn, ".");
+                                push_hex(reply, &mut rn, unsafe { CFG_SENT } as u64);
+                                push_str(reply, &mut rn, " cg=");
                                 if unsafe { CFG_CAP_N } == 0 {
-                                    push_str(&mut reply, &mut rn, "-");
+                                    push_str(reply, &mut rn, "-");
                                 } else {
                                     let mut k = 0usize;
                                     while k < 4 {
                                         if k != 0 {
-                                            push_str(&mut reply, &mut rn, ".");
+                                            push_str(reply, &mut rn, ".");
                                         }
-                                        push_hex(&mut reply, &mut rn, unsafe { CFG_CAP[k] } as u64);
+                                        push_hex(reply, &mut rn, unsafe { CFG_CAP[k] } as u64);
                                         k += 1;
                                     }
                                 }
-                                push_str(&mut reply, &mut rn, " jx=");
+                                push_str(reply, &mut rn, " jx=");
                                 if unsafe { JX_OTHER } == 0 {
-                                    push_str(&mut reply, &mut rn, "-");
+                                    push_str(reply, &mut rn, "-");
                                 } else {
-                                    push_hex(&mut reply, &mut rn, (unsafe { JX_OTHER } >> 16) as u64);
-                                    push_str(&mut reply, &mut rn, ".");
-                                    push_hex(&mut reply, &mut rn, ((unsafe { JX_OTHER } >> 8) & 0xff) as u64);
-                                    push_str(&mut reply, &mut rn, ".");
-                                    push_hex(&mut reply, &mut rn, (unsafe { JX_OTHER } & 0xff) as u64);
+                                    push_hex(reply, &mut rn, (unsafe { JX_OTHER } >> 16) as u64);
+                                    push_str(reply, &mut rn, ".");
+                                    push_hex(reply, &mut rn, ((unsafe { JX_OTHER } >> 8) & 0xff) as u64);
+                                    push_str(reply, &mut rn, ".");
+                                    push_hex(reply, &mut rn, (unsafe { JX_OTHER } & 0xff) as u64);
                                 }
-                                push_str(&mut reply, &mut rn, " ir=");
-                                push_hex(&mut reply, &mut rn, unsafe { IR_DONE } as u64);
-                                push_str(&mut reply, &mut rn, ".");
-                                push_hex(&mut reply, &mut rn, unsafe { IND_SENT } as u64);
-                                push_str(&mut reply, &mut rn, " x=");
+                                push_str(reply, &mut rn, " ir=");
+                                push_hex(reply, &mut rn, unsafe { IR_DONE } as u64);
+                                push_str(reply, &mut rn, ".");
+                                push_hex(reply, &mut rn, unsafe { IND_SENT } as u64);
+                                push_str(reply, &mut rn, " x=");
                                 for i in 0..22 {
                                     if i != 0 {
-                                        push_str(&mut reply, &mut rn, ".");
+                                        push_str(reply, &mut rn, ".");
                                     }
-                                    push_hex(&mut reply, &mut rn, unsafe { SMEM_RX[i] } as u64);
+                                    push_hex(reply, &mut rn, unsafe { SMEM_RX[i] } as u64);
                                 }
-                                push_str(&mut reply, &mut rn, " rn=");
-                                push_hex(&mut reply, &mut rn, unsafe { FP_RNOTIF } as u64);
-                                push_str(&mut reply, &mut rn, " gd=");
-                                push_hex(&mut reply, &mut rn, unsafe { FP_GDONE } as u64);
-                                push_str(&mut reply, &mut rn, ".");
-                                push_hex(&mut reply, &mut rn, unsafe { FP_GLIID } as u64);
-                                push_str(&mut reply, &mut rn, "\n");
+                                push_str(reply, &mut rn, " rn=");
+                                push_hex(reply, &mut rn, unsafe { FP_RNOTIF } as u64);
+                                push_str(reply, &mut rn, " gd=");
+                                push_hex(reply, &mut rn, unsafe { FP_GDONE } as u64);
+                                push_str(reply, &mut rn, ".");
+                                push_hex(reply, &mut rn, unsafe { FP_GLIID } as u64);
+                                push_str(reply, &mut rn, "\n");
                             }
                             9 => {
                                 proxy_vote(ufs, freq, t);
-                                push_str(&mut reply, &mut rn, "pv=");
+                                push_str(reply, &mut rn, "pv=");
                                 for i in 0..9 {
                                     if i != 0 {
-                                        push_str(&mut reply, &mut rn, ".");
+                                        push_str(reply, &mut rn, ".");
                                     }
-                                    push_hex(&mut reply, &mut rn, unsafe { PROXY[i] } as u64);
+                                    push_hex(reply, &mut rn, unsafe { PROXY[i] } as u64);
                                 }
-                                push_str(&mut reply, &mut rn, " pa=");
-                                push_hex(&mut reply, &mut rn, unsafe { PROXY_AUX[0] } as u64);
-                                push_str(&mut reply, &mut rn, ".");
-                                push_hex(&mut reply, &mut rn, unsafe { PROXY_AUX[1] } as u64);
-                                push_str(&mut reply, &mut rn, "\n");
+                                push_str(reply, &mut rn, " pa=");
+                                push_hex(reply, &mut rn, unsafe { PROXY_AUX[0] } as u64);
+                                push_str(reply, &mut rn, ".");
+                                push_hex(reply, &mut rn, unsafe { PROXY_AUX[1] } as u64);
+                                push_str(reply, &mut rn, "\n");
                             }
                             10 => {
                                 let addr = unsafe { PROXY[0] };
                                 let sel = unsafe { PROXY[1] };
                                 if sel > 15 || (addr >> 16) & 7 != CMD_DB_HW_ARC {
-                                    push_str(&mut reply, &mut rn, "px skip\n");
+                                    push_str(reply, &mut rn, "px skip\n");
                                 } else {
                                     let sts = rpmh_cmd(addr, sel, freq);
                                     unsafe { PROXY[2] = sts };
-                                    push_str(&mut reply, &mut rn, "px ");
-                                    push_hex(&mut reply, &mut rn, sts as u64);
-                                    push_str(&mut reply, &mut rn, "\n");
+                                    push_str(reply, &mut rn, "px ");
+                                    push_hex(reply, &mut rn, sts as u64);
+                                    push_str(reply, &mut rn, "\n");
                                 }
                             }
                             11 => {
                                 // mbox_desc 在 msgram+0。只读 16 个字，不写、不踢 IPCC。
-                                push_str(&mut reply, &mut rn, "qm=");
+                                push_str(reply, &mut rn, "qm=");
                                 for i in 0..16 {
                                     if i != 0 {
-                                        push_str(&mut reply, &mut rn, ".");
+                                        push_str(reply, &mut rn, ".");
                                     }
                                     push_hex(
-                                        &mut reply,
+                                        reply,
                                         &mut rn,
                                         rd32(QMP_MSGRAM + i * 4) as u64,
                                     );
                                 }
-                                push_str(&mut reply, &mut rn, "\n");
+                                push_str(reply, &mut rn, "\n");
                             }
                             12 => {
                                 // __qmp_rx_worker 的 LINK_DISCONNECTED：回 ack，
@@ -13134,11 +13139,11 @@ fn ctrl_service(
                                 let ulink = rd32(QMP_MSGRAM + 12);
                                 let mlink = rd32(QMP_MSGRAM + 36);
                                 if magic != 0x4d41_494c {
-                                    push_str(&mut reply, &mut rn, "qn mag\n");
+                                    push_str(reply, &mut rn, "qn mag\n");
                                 } else if ulink != 0xffff {
-                                    push_str(&mut reply, &mut rn, "qn ul\n");
+                                    push_str(reply, &mut rn, "qn ul\n");
                                 } else if mlink == 0xffff {
-                                    push_str(&mut reply, &mut rn, "qn have\n");
+                                    push_str(reply, &mut rn, "qn have\n");
                                 } else {
                                     let sz = rd32(QMP_MSGRAM + 52);
                                     let off = rd32(QMP_MSGRAM + 56);
@@ -13153,7 +13158,7 @@ fn ctrl_service(
                                         core::arch::asm!("dsb sy", options(nostack));
                                     }
                                     wr32(0x4080_0c, 0);
-                                    push_str(&mut reply, &mut rn, "qn 1\n");
+                                    push_str(reply, &mut rn, "qn 1\n");
                                 }
                             }
                             13 => {
@@ -13164,9 +13169,9 @@ fn ctrl_service(
                                 let mack = rd32(QMP_MSGRAM + 40);
                                 let mch = rd32(QMP_MSGRAM + 44);
                                 if magic != 0x4d41_494c || mlink != 0xffff || mack != 0xffff {
-                                    push_str(&mut reply, &mut rn, "qc nolink\n");
+                                    push_str(reply, &mut rn, "qc nolink\n");
                                 } else if mch == 0xffff {
-                                    push_str(&mut reply, &mut rn, "qc have\n");
+                                    push_str(reply, &mut rn, "qc have\n");
                                 } else {
                                     let uch = rd32(QMP_MSGRAM + 20);
                                     let uack = rd32(QMP_MSGRAM + 24);
@@ -13178,7 +13183,7 @@ fn ctrl_service(
                                         core::arch::asm!("dsb sy", options(nostack));
                                     }
                                     wr32(0x4080_0c, 0);
-                                    push_str(&mut reply, &mut rn, "qc 1\n");
+                                    push_str(reply, &mut rn, "qc 1\n");
                                 }
                             }
                             14 => {
@@ -13190,9 +13195,9 @@ fn ctrl_service(
                                 let slot = QMP_MSGRAM + 0x128;
                                 if uch != 0xffff || uack != 0xffff || mch != 0xffff || mack != 0xffff
                                 {
-                                    push_str(&mut reply, &mut rn, "qs nopen\n");
+                                    push_str(reply, &mut rn, "qs nopen\n");
                                 } else if rd32(slot) != 0 {
-                                    push_str(&mut reply, &mut rn, "qs busy\n");
+                                    push_str(reply, &mut rn, "qs busy\n");
                                 } else {
                                     let text =
                                         b"{class: image, res: load_state, name: modem, val: on}";
@@ -13222,32 +13227,32 @@ fn ctrl_service(
                                     while left != 0 && time::cntvct() < end {
                                         left = rd32(slot);
                                     }
-                                    push_str(&mut reply, &mut rn, "qs ");
-                                    push_hex(&mut reply, &mut rn, left as u64);
-                                    push_str(&mut reply, &mut rn, "\n");
+                                    push_str(reply, &mut rn, "qs ");
+                                    push_hex(reply, &mut rn, left as u64);
+                                    push_str(reply, &mut rn, "\n");
                                 }
                             }
                             15 => {
                                 sfr_read(freq);
                                 let s = unsafe { &SFR };
-                                push_str(&mut reply, &mut rn, "fr st=");
-                                push_hex(&mut reply, &mut rn, s.st as u64);
-                                push_str(&mut reply, &mut rn, " sz=");
-                                push_hex(&mut reply, &mut rn, s.sz as u64);
-                                push_str(&mut reply, &mut rn, " gp=");
-                                push_hex(&mut reply, &mut rn, s.gp as u64);
-                                push_str(&mut reply, &mut rn, " at=");
-                                push_hex(&mut reply, &mut rn, s.at as u64);
-                                push_str(&mut reply, &mut rn, " c=");
-                                push_hex(&mut reply, &mut rn, s.c as u64);
-                                push_str(&mut reply, &mut rn, " w=");
+                                push_str(reply, &mut rn, "fr st=");
+                                push_hex(reply, &mut rn, s.st as u64);
+                                push_str(reply, &mut rn, " sz=");
+                                push_hex(reply, &mut rn, s.sz as u64);
+                                push_str(reply, &mut rn, " gp=");
+                                push_hex(reply, &mut rn, s.gp as u64);
+                                push_str(reply, &mut rn, " at=");
+                                push_hex(reply, &mut rn, s.at as u64);
+                                push_str(reply, &mut rn, " c=");
+                                push_hex(reply, &mut rn, s.c as u64);
+                                push_str(reply, &mut rn, " w=");
                                 for i in 0..8 {
                                     if i != 0 {
-                                        push_str(&mut reply, &mut rn, ".");
+                                        push_str(reply, &mut rn, ".");
                                     }
-                                    push_hex(&mut reply, &mut rn, s.w[i] as u64);
+                                    push_hex(reply, &mut rn, s.w[i] as u64);
                                 }
-                                push_str(&mut reply, &mut rn, "\n");
+                                push_str(reply, &mut rn, "\n");
                             }
                             16 => {
                                 // 发送环 pending 起 56B hex，对账 intent/TX_DATA/READ_NOTIF。
@@ -13264,63 +13269,63 @@ fn ctrl_service(
                                 } else {
                                     0
                                 };
-                                push_str(&mut reply, &mut rn, "tx gq=");
-                                push_hex(&mut reply, &mut rn, th);
-                                push_str(&mut reply, &mut rn, ".");
-                                push_hex(&mut reply, &mut rn, tt);
-                                push_str(&mut reply, &mut rn, " rn=");
-                                push_hex(&mut reply, &mut rn, unsafe { FP_RNOTIF } as u64);
-                                push_str(&mut reply, &mut rn, " gd=");
-                                push_hex(&mut reply, &mut rn, unsafe { FP_GDONE } as u64);
-                                push_str(&mut reply, &mut rn, ".");
-                                push_hex(&mut reply, &mut rn, unsafe { FP_GLIID } as u64);
-                                push_str(&mut reply, &mut rn, " ix=");
-                                push_hex(&mut reply, &mut rn, unsafe { FP_IXTRA } as u64);
-                                push_str(&mut reply, &mut rn, " ru=");
-                                push_hex(&mut reply, &mut rn, unsafe { FP_REUSE } as u64);
-                                push_str(&mut reply, &mut rn, " h=");
+                                push_str(reply, &mut rn, "tx gq=");
+                                push_hex(reply, &mut rn, th);
+                                push_str(reply, &mut rn, ".");
+                                push_hex(reply, &mut rn, tt);
+                                push_str(reply, &mut rn, " rn=");
+                                push_hex(reply, &mut rn, unsafe { FP_RNOTIF } as u64);
+                                push_str(reply, &mut rn, " gd=");
+                                push_hex(reply, &mut rn, unsafe { FP_GDONE } as u64);
+                                push_str(reply, &mut rn, ".");
+                                push_hex(reply, &mut rn, unsafe { FP_GLIID } as u64);
+                                push_str(reply, &mut rn, " ix=");
+                                push_hex(reply, &mut rn, unsafe { FP_IXTRA } as u64);
+                                push_str(reply, &mut rn, " ru=");
+                                push_hex(reply, &mut rn, unsafe { FP_REUSE } as u64);
+                                push_str(reply, &mut rn, " h=");
                                 if txf != 0 && tt + 56 <= txn {
                                     dcache_ivac(txf + tt, 56);
                                     let mut i = 0u64;
                                     while i < 14 {
                                         if i != 0 {
-                                            push_str(&mut reply, &mut rn, ".");
+                                            push_str(reply, &mut rn, ".");
                                         }
                                         push_hex(
-                                            &mut reply,
+                                            reply,
                                             &mut rn,
                                             smem_rd32(txf + tt + i * 4).unwrap_or(0xffff_ffff) as u64,
                                         );
                                         i += 1;
                                     }
                                 } else {
-                                    push_str(&mut reply, &mut rn, "-");
+                                    push_str(reply, &mut rn, "-");
                                 }
                                 // 前 16B 上下文（若 tail>=16）
-                                push_str(&mut reply, &mut rn, " p=");
+                                push_str(reply, &mut rn, " p=");
                                 if txf != 0 && tt >= 16 {
                                     let po = tt - 16;
                                     dcache_ivac(txf + po, 16);
                                     let mut i = 0u64;
                                     while i < 4 {
                                         if i != 0 {
-                                            push_str(&mut reply, &mut rn, ".");
+                                            push_str(reply, &mut rn, ".");
                                         }
                                         push_hex(
-                                            &mut reply,
+                                            reply,
                                             &mut rn,
                                             smem_rd32(txf + po + i * 4).unwrap_or(0xffff_ffff) as u64,
                                         );
                                         i += 1;
                                     }
                                 } else {
-                                    push_str(&mut reply, &mut rn, "-");
+                                    push_str(reply, &mut rn, "-");
                                 }
-                                push_str(&mut reply, &mut rn, "\n");
+                                push_str(reply, &mut rn, "\n");
                             }
                             3 => {}
 
-                            _ => push_str(&mut reply, &mut rn, "?\n"),
+                            _ => push_str(reply, &mut rn, "?\n"),
                         }
                         if rn > 0 && ctrl_reply(sock, &reply[..rn]) {
                             s20_keep(ufs, freq, t, " s20 cmd=0x", code as u64);
