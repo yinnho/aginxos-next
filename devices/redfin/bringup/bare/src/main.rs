@@ -4539,6 +4539,9 @@ static mut TF_REQ_BLK: u32 = 512;
 static mut TF_REQ_WSZ: u32 = 0;
 static mut TF_REQ_TMO: u32 = 1000;
 static mut TF_HAS_TS: u8 = 0;
+/// 刀 G20：tsize 选项的值（此前只记 HAS_TS 丢值）。stock WRQ OACK
+/// 回显规则=tsize 值非 0 才写（tqftpserv.c:703 `tsize ? &tsize : NULL`）。
+static mut TF_REQ_TSZ: u32 = 0;
 static mut TF_BLKNO: u16 = 0;
 static mut TF_ACK_BLK: u16 = 0;
 static mut TF_ACK_OFF: u32 = 0xffff_ffff;
@@ -4547,6 +4550,24 @@ static mut TF_ACK_PEND: bool = false;
 /// TF_BLKNO = base + TF_WSENT。0=窗未开/已收口；>0 且 <wsz=环闸/DX
 /// 打断，下圈从 base+WSENT 续推。会话重启（tf_apply_saved）归零。
 static mut TF_WSENT: u32 = 0;
+/// 刀 G20：WRQ 写会话。G19 靴 #19 定谳分岔点——EFS 写回 WRQ 我们的桩
+/// 回 ACK-0（stock 带选项回 OACK，tqftpserv.c:713），DATA(op3) 块无人
+/// ACK → EFS 同步楔死 → modem 启动序卡在 so 读步之前。本组状态镜像
+/// stock handle_writer：块序从 1 数，窗尾（block%wsz==0）或短块才 ACK，
+/// 载荷弃（RAM 沉淀，EFS 一致性归 modem）。
+static mut TF_W_ACTIVE: bool = false;
+static mut TF_W_EXP: u32 = 0;
+static mut TF_W_BLK: u32 = 512;
+static mut TF_W_WSZ: u32 = 1;
+static mut TF_W_PEND: bool = false;
+static mut TF_W_PBLK: u32 = 0;
+static mut TF_W_SHORT: bool = false;
+static mut TF_W_OFF: u32 = 0xffff_ffff;
+static mut TF_W_SNODE: u32 = 0;
+static mut TF_W_SPORT: u32 = 0;
+static mut TF_W_ACKS: u32 = 0;
+static mut TF_W_BYTES: u64 = 0;
+static mut TF_W_ERRS: u32 = 0;
 /// 旧的固定数据口。SO 的这次传输改用 TF_XFER_PORT。
 const TF_DATA_PORT: u32 = 0x21;
 /// 我们播报的 TFTP 服务口（svc 4096→0x11，RRQ 的目的地）。客户端可能把 ACK
@@ -7026,6 +7047,7 @@ fn tf_apply_saved() {
         TF_REQ_WSZ = 0;
         TF_REQ_TMO = 1000;
         TF_HAS_TS = 0;
+        TF_REQ_TSZ = 0;
         // 刀 G5：rsize/seek 也是逐请求选项，缺省清零重置。
         TF_HAS_RS = 0;
         TF_RSIZE = 0;
@@ -7092,6 +7114,7 @@ fn tf_apply_saved() {
                 TF_REQ_TMO = v;
             } else if klen == 5 && k0 == b't' {
                 TF_HAS_TS = 1;
+                TF_REQ_TSZ = v;
             } else if klen == 5 && k0 == b'r' {
                 // 刀 G5：stock tqftpserv 对齐——rsize/seek 从保存的 RRQ 重放，
                 // OACK 原样回显，DATA 偏移从 seek 起算。
@@ -7124,6 +7147,55 @@ fn tf_note_ack(off: u64, fifo: u64) {
             // 9 = End of Transfer。tqftpserv 日志里 stat（rsize=0）的 OACK 之后就是它。
             TF_ST = if code == 9 && TF_ST == 1 { 4 } else { 9 };
             TF_ACK_PEND = false;
+        }
+    }
+}
+
+/// 刀 G20：WRQ 客户端发来的 DATA(op3) 记账。walker 只记（同 tf_note_ack
+/// 的分工），ACK 由 tf_reply 写泵持 TX 上下文应答。镜像 stock
+/// handle_writer 节奏：块序从 1 数，窗尾（block%wsz==0）或短块才摆 ACK，
+/// 短块=末块。载荷弃（RAM 沉淀）。去重两道：FIFO 偏移（glink 重通知）
+/// + 上一已收块的重传（ACK 丢失自愈：重摆 pend 再答一次）。乱序块
+/// （非重传）记 ERRS 弃包——客户端 ACK 超时重传缺块即收敛。
+fn tf_note_data(off: u64, fifo: u64, chunk: u32) {
+    if unsafe { TF_W_OFF } == off as u32 {
+        return;
+    }
+    if !unsafe { TF_W_ACTIVE } || chunk < 52 {
+        return;
+    }
+    let op = ((rd8(fifo + off + 48) as u32) << 8) | (rd8(fifo + off + 49) as u32);
+    if op != 3 {
+        return;
+    }
+    let blk = ((rd8(fifo + off + 50) as u32) << 8) | (rd8(fifo + off + 51) as u32);
+    let plen = chunk - 52;
+    unsafe {
+        TF_W_OFF = off as u32;
+        TF_W_SNODE = rd32((fifo + off + 24) as usize);
+        TF_W_SPORT = rd32((fifo + off + 28) as usize);
+    }
+    if blk + 1 == unsafe { TF_W_EXP } {
+        // 上一已收块的重传：重摆 pend 让写泵再 ACK 一次（ACK 丢失自愈）。
+        // 会话已关（短块收口）则进不来——W_ACTIVE 门在上面。
+        unsafe {
+            TF_W_PEND = true;
+            TF_W_PBLK = blk;
+        }
+        return;
+    }
+    if blk != unsafe { TF_W_EXP } {
+        unsafe { TF_W_ERRS = TF_W_ERRS.wrapping_add(1) };
+        return;
+    }
+    unsafe {
+        TF_W_EXP = TF_W_EXP.wrapping_add(1);
+        TF_W_BYTES = TF_W_BYTES.wrapping_add(plen as u64);
+        let wsz = if TF_W_WSZ == 0 { 1 } else { TF_W_WSZ };
+        if TF_W_EXP % wsz == 0 || plen < TF_W_BLK {
+            TF_W_PEND = true;
+            TF_W_PBLK = blk;
+            TF_W_SHORT = plen < TF_W_BLK;
         }
     }
 }
@@ -7362,14 +7434,117 @@ fn tf_reply(ufs: &mut Ufs, at478: u64, at479: u64, sz479: u64) {
             }
         }
     }
+    // 刀 G20：写泵。tf_note_data 只记账，ACK 在这里持 TX 上下文应答
+    // （浸泡节奏 ~130ms ≪ 客户端 timeoutms≥1000，安全）。短块 ACK 完
+    // 收口会话（客户端见短块+ACK 即知写完）。
+    if unsafe { TF_W_ACTIVE && TF_W_PEND } {
+        let blk = unsafe { TF_W_PBLK };
+        let mut q = [0u8; 4];
+        q[1] = 4;
+        q[2] = (blk >> 8) as u8;
+        q[3] = blk as u8;
+        if glink_tx_payload(
+            at478,
+            at479,
+            tx_head,
+            sz479,
+            0x11,
+            unsafe { TF_W_SNODE },
+            unsafe { TF_W_SPORT },
+            &q,
+        ) {
+            unsafe {
+                TF_W_PEND = false;
+                TF_W_ACKS = TF_W_ACKS.wrapping_add(1);
+                if TF_W_SHORT {
+                    TF_W_ACTIVE = false;
+                    TF_W_PEND = false;
+                }
+            }
+        }
+        return;
+    }
     if unsafe { !TF_PEND } {
         return;
     }
     let op = unsafe { TF_OP };
     if op == 2 {
-        let mut q = [0u8; 4];
+        // 刀 G20：WRQ 写腿补全。G19 靴 #19 定谳分岔点：EFS 写回 WRQ 桩
+        // 回 ACK-0，客户端 DATA(op3) 无人接 → 写同步楔死 → modem 启动序
+        // 卡在 so 读步之前（#18 尾 6×RRQ 无 WRQ vs #19 尾 1×WRQ+5×RRQ
+        // 后全静）。stock 对带选项 WRQ 回 OACK（tqftpserv.c:713
+        // handle_wrq），OACK 后客户端从块 1 发 DATA，本侧 tf_note_data/
+        // 写泵接手。会话参数镜像 stock：块序从 1、wsz 缺省 1。
+        tf_apply_saved();
+        unsafe {
+            TF_W_ACTIVE = true;
+            TF_W_EXP = 1;
+            TF_W_BLK = TF_REQ_BLK;
+            TF_W_WSZ = if TF_REQ_WSZ == 0 {
+                1
+            } else {
+                TF_REQ_WSZ.min(16)
+            };
+            TF_W_PEND = false;
+            TF_W_SHORT = false;
+        }
+        // OACK 顺序照抄 RRQ 路径（tftp_send_oack 实序：blksize、timeoutms、
+        // tsize、wsize、rsize、seek）。WRQ 回显差一处：tsize 只在值非 0
+        // 时回（stock `tsize ? &tsize : NULL`——客户端报 0 字节写=键弃）。
+        let mut q = [0u8; 96];
+        let mut n = 0usize;
         q[0] = 0;
-        q[1] = 4;
+        q[1] = 6;
+        n = 2;
+        tf_put_cstr(&mut q, &mut n, b"blksize");
+        tf_put_dec(&mut q, &mut n, unsafe { TF_REQ_BLK });
+        if n < q.len() {
+            q[n] = 0;
+            n += 1;
+        }
+        tf_put_cstr(&mut q, &mut n, b"timeoutms");
+        tf_put_dec(&mut q, &mut n, unsafe { TF_REQ_TMO });
+        if n < q.len() {
+            q[n] = 0;
+            n += 1;
+        }
+        if unsafe { TF_REQ_TSZ } != 0 {
+            tf_put_cstr(&mut q, &mut n, b"tsize");
+            tf_put_dec(&mut q, &mut n, unsafe { TF_REQ_TSZ });
+            if n < q.len() {
+                q[n] = 0;
+                n += 1;
+            }
+        }
+        {
+            let wsv = if unsafe { TF_REQ_WSZ } > 0 {
+                unsafe { TF_REQ_WSZ }.min(16)
+            } else {
+                1
+            };
+            tf_put_cstr(&mut q, &mut n, b"wsize");
+            tf_put_dec(&mut q, &mut n, wsv);
+            if n < q.len() {
+                q[n] = 0;
+                n += 1;
+            }
+        }
+        if unsafe { TF_HAS_RS } != 0 && unsafe { TF_RSIZE } != 0 {
+            tf_put_cstr(&mut q, &mut n, b"rsize");
+            tf_put_dec(&mut q, &mut n, unsafe { TF_RSIZE });
+            if n < q.len() {
+                q[n] = 0;
+                n += 1;
+            }
+        }
+        if unsafe { TF_HAS_SK } != 0 && unsafe { TF_SEEK } != 0 {
+            tf_put_cstr(&mut q, &mut n, b"seek");
+            tf_put_dec(&mut q, &mut n, unsafe { TF_SEEK });
+            if n < q.len() {
+                q[n] = 0;
+                n += 1;
+            }
+        }
         if glink_tx_payload(
             at478,
             at479,
@@ -7378,7 +7553,7 @@ fn tf_reply(ufs: &mut Ufs, at478: u64, at479: u64, sz479: u64) {
             0x11,
             unsafe { TF_NODE },
             unsafe { TF_PORT },
-            &q,
+            &q[..n],
         ) {
             tf_drop_pend();
         }
@@ -11486,6 +11661,12 @@ fn scan_new_servers(fifo: u64, rh: u64) {
                 if typ == 1 && (dst_port == TF_DATA_PORT || dst_port == TF_SVC_PORT || on_xfer) {
                     tf_note_ack(off, fifo);
                 }
+                // 刀 G20：WRQ 客户端的 DATA(op3)——发往我们 OACK 的源口
+                // 0x11。op≠3 时 tf_note_data 自门不动（op4/op5 仍走
+                // tf_note_ack，互不串台）。
+                if typ == 1 && chunk >= 52 && (dst_port == TF_SVC_PORT || on_xfer) {
+                    tf_note_data(off, fifo, chunk as u32);
+                }
                 if typ == 1 && chunk >= 52 && unsafe { TF_ST } >= 1 {
                     let op = ((rd8(fifo + off + 48) as u32) << 8) | (rd8(fifo + off + 49) as u32);
                     // 0x12 是自家假 pd-mapper 口，QMI 头 00 04 恒撞 ACK 码，不入册。
@@ -11795,12 +11976,19 @@ fn scan_new_servers(fifo: u64, rh: u64) {
                     if op0 == 4 || op0 == 5 {
                         tf_note_ack(off, fifo);
                     }
+                    // 刀 G20：DATA(op3) 是写客户端的数据块，不是请求——
+                    // 记账进写机（FIFO 偏移去重与主扫共用）。不得刷地址：
+                    // G3 门原本把 op3 当请求，写方每块 DATA 都会把读侧
+                    // 回信地址污染成写方；也不得占 pend（名字=载荷垃圾）。
+                    if op0 == 3 && chunk >= 52 {
+                        tf_note_data(off, fifo, chunk as u32);
+                    }
                     // 刀 G3：地址刷新先于一切闸。客户端口逐笔换新（0x22→0x23 实测），
                     // pend 占用或 seen 命中也不能让回信地址陈旧——每见一笔发往
                     // 0x11 的请求（RRQ/WRQ/stat）就把回信地址与捕获时刻刷成最新。
                     // 陈旧地址投给已关 socket，modem 路由器静默丢：tt 消费、rx 恒零、
-                    // tf 无限爬的合并根因。
-                    if op0 != 4 && op0 != 5 {
+                    // tf 无限爬的合并根因。op3=写 DATA 不算请求（刀 G20）。
+                    if op0 != 3 && op0 != 4 && op0 != 5 {
                         unsafe {
                             let sn = rd32((fifo + off + 24) as usize);
                             let sp = rd32((fifo + off + 28) as usize);
@@ -11827,7 +12015,7 @@ fn scan_new_servers(fifo: u64, rh: u64) {
                             i += 1;
                         }
                     }
-                    if op0 != 4 && op0 != 5 && !seen && unsafe { !TF_PEND } {
+                    if op0 != 3 && op0 != 4 && op0 != 5 && !seen && unsafe { !TF_PEND } {
                         let op = op0;
                         let mut name = [0u8; 64];
                         let mut nn = 0usize;
@@ -12488,6 +12676,19 @@ fn ctrl_service(
                                 push_hex(reply, &mut rn, unsafe { TF_XFER_PORT } as u64);
                                 push_str(reply, &mut rn, ".");
                                 push_hex(reply, &mut rn, unsafe { TF_WSENT } as u64);
+                                // ww=刀 G20 写会话：active.exp.acks.bytes.errs —
+                                // active=OACK 已答会话活，exp=下一期望块号，
+                                // acks=已答 ACK 数，bytes=已收载荷字节，errs=乱序弃包。
+                                push_str(reply, &mut rn, " ww=");
+                                push_hex(reply, &mut rn, unsafe { TF_W_ACTIVE } as u64);
+                                push_str(reply, &mut rn, ".");
+                                push_hex(reply, &mut rn, unsafe { TF_W_EXP } as u64);
+                                push_str(reply, &mut rn, ".");
+                                push_hex(reply, &mut rn, unsafe { TF_W_ACKS } as u64);
+                                push_str(reply, &mut rn, ".");
+                                push_hex(reply, &mut rn, unsafe { TF_W_BYTES });
+                                push_str(reply, &mut rn, ".");
+                                push_hex(reply, &mut rn, unsafe { TF_W_ERRS } as u64);
                                 push_str(reply, &mut rn, " rx=");
                                 // 滚动备忘：总数.随后最多 4 槽 port.op.arg（时间序，旧→新；
                                 // arg=op5 错误码/op4 块号，刀 G6）
