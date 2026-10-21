@@ -114,6 +114,7 @@ MODE="heartbeat"
 [ "${1:-}" = "--s18" ] && MODE="s18"
 [ "${1:-}" = "--s19" ] && MODE="s19"
 [ "${1:-}" = "--s20" ] && MODE="s20"
+[ "${1:-}" = "--s21" ] && MODE="s21"
 mkdir -p "${OUTDIR}"
 ELF="${OUTDIR}/heartbeat.elf"
 
@@ -872,6 +873,13 @@ elif [ "${MODE}" = "s19" ]; then
   ELF="${OUTDIR}/s19.elf"
   cp "${HERE}/target/aarch64-unknown-none-softfloat/release/redfin-bare" "${ELF}"
   BIN="${OUTDIR}/s19.bin"; IMG="${OUTDIR}/boot-s19.img"
+elif [ "${MODE}" = "s21" ]; then
+  # 刀 G22：s20 同面，intent 池+归还追踪（cmd5 全量入池、TX 池挑、
+  # RX_DONE/W_REUSE 归还、池干 RX_INTENT_REQ、cmd3/11 入 8B 集、ii= 台账）。
+  (cd "${HERE}" && cargo build --release --target aarch64-unknown-none-softfloat)
+  ELF="${OUTDIR}/s21.elf"
+  cp "${HERE}/target/aarch64-unknown-none-softfloat/release/redfin-bare" "${ELF}"
+  BIN="${OUTDIR}/s21.bin"; IMG="${OUTDIR}/boot-s21.img"
 elif [ "${MODE}" = "s20" ]; then
   # NOLINUX-PLAN S3 第二刀：s19 上电面不变，⑩-4 加 EP0 + CDC-ECM 枚举
   # （配方 S3-USB.md「EP0 → CDC-ECM/NCM」）。先断线再武装 SETUP，清

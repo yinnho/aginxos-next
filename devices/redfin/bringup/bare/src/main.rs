@@ -4244,6 +4244,122 @@ fn qrtr_lcid(lcid: u32) -> bool {
 /// 对端通道上见过的最大 intent，不论够不够 52。
 static mut SEEN_ISZ: u32 = 0;
 static mut HAVE_IID: bool = false;
+/// 刀 G22：远端 intent 池（#21 T2 定谳的修法）。cmd5 广告按内核
+/// qcom_glink_handle_intent 展开：8B 头后 count×{u32 size, u32 iid}；
+/// TX 挑「最小 free 且 size≥need」（__qcom_glink_send 同款）并标 in_use，
+/// 对端 RX_DONE(6) 删槽、RX_DONE_W_REUSE(14) 置闲；池干发
+/// RX_INTENT_REQ(7) 求批。槽=[iid,size,in_use]，iid 0=空。
+static mut IIP: [[u32; 3]; 16] = [[0, 0, 0]; 16];
+static mut IIP_ADS: u32 = 0;
+static mut IIP_DONE: u32 = 0;
+static mut IIP_DRY: u32 = 0;
+static mut IIP_REQ: u32 = 0;
+/// cmd7 求批的上一脚时刻（cntvct），≥1s 一脚防刷屏。
+static mut IIP_REQ_AT: u64 = 0;
+/// 靴内见过的 count>1 广告数（步进修复前会踩 desync 的形状计数）。
+static mut IIP_SFIX: u32 = 0;
+
+fn iip_add(iid: u32, size: u32) {
+    if iid == 0 {
+        return;
+    }
+    unsafe {
+        for s in IIP.iter_mut() {
+            if s[0] == iid {
+                s[1] = size;
+                s[2] = 0;
+                return;
+            }
+        }
+        for s in IIP.iter_mut() {
+            if s[0] == 0 {
+                s[0] = iid;
+                s[1] = size;
+                s[2] = 0;
+                return;
+            }
+        }
+    }
+}
+
+/// 对端归还：裸 RX_DONE=删槽（内核 remote_intent_release），W_REUSE=置闲。
+fn iip_ret(iid: u32, reuse: bool) {
+    unsafe {
+        for s in IIP.iter_mut() {
+            if s[0] == iid {
+                if reuse {
+                    s[2] = 0;
+                } else {
+                    s[0] = 0;
+                }
+                IIP_DONE = IIP_DONE.wrapping_add(1);
+                return;
+            }
+        }
+    }
+}
+
+/// 最小 free 且 size>=need；标 in_use；无则 IIP_DRY++ 返回 0。
+fn iip_pick(need: u32) -> u32 {
+    let mut best: u32 = 0;
+    let mut best_sz: u32 = u32::MAX;
+    unsafe {
+        for s in IIP.iter() {
+            if s[0] != 0 && s[2] == 0 && s[1] >= need && s[1] < best_sz {
+                best = s[0];
+                best_sz = s[1];
+            }
+        }
+        if best != 0 {
+            for s in IIP.iter_mut() {
+                if s[0] == best {
+                    s[2] = 1;
+                }
+            }
+        } else {
+            IIP_DRY = IIP_DRY.wrapping_add(1);
+        }
+    }
+    best
+}
+
+/// 刀 G22：池干求批——RX_INTENT_REQ(7)，{cmd,lcid=2}{need}，内核
+/// qcom_glink_request_intent 同款（param1=lcid、param2=need）。≥1s 一脚。
+fn iip_req_maybe(at478: u64, at479: u64, sz479: u64, need: u32) {
+    if at478 == 0 || at479 == 0 || sz479 < 8 {
+        return;
+    }
+    let now = time::cntvct();
+    unsafe {
+        let freq = time::freq_or(FREQ_FALLBACK as u32) as u64;
+        if freq > 0 && IIP_REQ_AT != 0 && now.wrapping_sub(IIP_REQ_AT) < freq {
+            return;
+        }
+        IIP_REQ_AT = now;
+    }
+    let mut head = rd32((at478 + 4) as usize) as u64;
+    if head + 8 > sz479 {
+        let tail = rd32(at478 as usize) as u64;
+        if head != tail {
+            return;
+        }
+        head = 0;
+        if 8 > sz479 {
+            return;
+        }
+    }
+    wr32((at479 + head) as usize, 7 | (2 << 16));
+    wr32((at479 + head + 4) as usize, need);
+    unsafe {
+        core::arch::asm!("dsb sy", options(nostack));
+    }
+    wr32((at478 + 4) as usize, (head + 8) as u32);
+    if at478 < 0x80A0_0000 {
+        dcache_civac(at478, 16);
+    }
+    wr32(0x4080_0c, 2 << 16);
+    unsafe { IIP_REQ = IIP_REQ.wrapping_add(1); }
+}
 /// 已经归还过 intent 的接收偏移。qcom_glink_rx_done 每个 TX_DATA 只还一次。
 static mut RX_VIS: u64 = 0;
 /// 本轮从 0 走到的接收偏移，以及 item 480 的长度。消费尾按这个往前推。
@@ -5649,7 +5765,25 @@ fn glink_hello(at478: u64, at479: u64, sz479: u64, at480: u64, sz480: u64) -> u3
                     HAVE_IID = true;
                 }
             }
-            16
+            // 刀 G22：广告全量入池（内核：8B 头后 count×{size,iid}），
+            // 步进随 count（旧代码恒 16，count>1 会踩 desync）。
+            if count > 1 {
+                unsafe { IIP_SFIX = IIP_SFIX.wrapping_add(1); }
+            }
+            if off + 8 + (count as u64) * 8 > rx_head {
+                break;
+            }
+            let mut k = 0u64;
+            while k < count as u64 && k < 16 {
+                let sz = rd32((at480 + off + 8 + k * 8) as usize);
+                let id2 = rd32((at480 + off + 12 + k * 8) as usize);
+                if qrtr_lcid(lcid) {
+                    iip_add(id2, sz);
+                    unsafe { IIP_ADS = IIP_ADS.wrapping_add(1); }
+                }
+                k += 1;
+            }
+            8 + (count as u64) * 8
         } else if cmd == 9 {
             let chunk = rd32((at480 + off + 8) as usize) as u64;
             if chunk > 512 || off + 16 + chunk > rx_head + 16 {
@@ -5865,6 +5999,12 @@ fn glink_resume(at478: u64, at479: u64, sz479: u64) {
     if tx_head != tx_tail || tx_head + 64 > sz479 {
         return;
     }
+    // 刀 G22：控制包也从池挑（need=44）；池干就等下拍（CF_PEND 保持）。
+    let pick = iip_pick(44);
+    if pick == 0 {
+        iip_req_maybe(at478, at479, sz479, 44);
+        return;
+    }
     let p = at479 + tx_head;
     let mut i = 0u64;
     while i < 64 {
@@ -5872,7 +6012,7 @@ fn glink_resume(at478: u64, at479: u64, sz479: u64) {
         i += 4;
     }
     wr32(p as usize, 9 | (2 << 16));
-    wr32((p + 4) as usize, unsafe { LAST_IID });
+    wr32((p + 4) as usize, pick);
     wr32((p + 8) as usize, 44);
     wr32((p + 16) as usize, 1);
     wr32((p + 20) as usize, 7);
@@ -6023,7 +6163,7 @@ fn glink_tx_payload(
     let isz = unsafe { LAST_ISZ } as usize;
     // 扩容刀：载荷上限 7684（TFTP 4 头+7680 块），整包 8192。
     // 真协议闸是 isz（对端批的 intent）与环界；这两个帽只是本方缓冲界。
-    if !unsafe { HAVE_IID } || n > 7684 || chunk > isz || total > 8192 {
+    if n > 7684 || chunk > isz || total > 8192 {
         return false;
     }
     // 环尾放不下时回卷。各发送者都守 head==tail 单飞纪律，到这必是整环已排空。
@@ -6037,6 +6177,13 @@ fn glink_tx_payload(
             return false;
         }
     }
+    // 刀 G22：从池里挑「最小 free 且 size>=chunk」；池干（T2 形）则
+    // 求批让路，下拍重试。不碰 LAST_IID（hello 期发送者仍走旧章）。
+    let pick = iip_pick(chunk as u32);
+    if pick == 0 {
+        iip_req_maybe(at478, at479, sz479, chunk as u32);
+        return false;
+    }
     let p = at479 + head;
     let mut i = 0usize;
     while i < total {
@@ -6044,7 +6191,7 @@ fn glink_tx_payload(
         i += 4;
     }
     wr32(p as usize, 9 | (2 << 16));
-    wr32((p + 4) as usize, unsafe { LAST_IID });
+    wr32((p + 4) as usize, pick);
     wr32((p + 8) as usize, chunk as u32);
     wr32((p + 12) as usize, 0);
     wr32((p + 16) as usize, 1);
@@ -11771,13 +11918,22 @@ fn scan_new_servers(fifo: u64, rh: u64) {
         let step = if cmd == 0
             || cmd == 1
             || cmd == 4
-            || cmd == 6
             || cmd == 7
             || cmd == 8
             || cmd == 13
-            || cmd == 14
             || cmd == 15
         {
+            8
+        } else if cmd == 3 || cmd == 11 {
+            // 刀 G22：CLOSE/CLOSE_ACK 入 8B 集（旧缺位=楔死向量）。
+            8
+        } else if cmd == 6 || cmd == 14 {
+            // 刀 G22：对端归还 intent——裸 RX_DONE 删槽、W_REUSE 置闲。
+            let rid = w0 >> 16;
+            let rii = rd32((fifo + off + 4) as usize);
+            if qrtr_lcid(rid) {
+                iip_ret(rii, cmd == 14);
+            }
             8
         } else if cmd == 2 {
             let nlen = rd32((fifo + off + 4) as usize) & 0xffff;
@@ -11786,7 +11942,26 @@ fn scan_new_servers(fifo: u64, rh: u64) {
             }
             (8 + nlen as u64 + 7) & !7
         } else if cmd == 5 {
-            16
+            // 刀 G22：广告全量入池（旧恒步 16 且不解析内容）。
+            let count = rd32((fifo + off + 4) as usize);
+            if count > 1 {
+                unsafe { IIP_SFIX = IIP_SFIX.wrapping_add(1); }
+            }
+            if off + 8 + (count as u64) * 8 > rh {
+                break;
+            }
+            let alcid = w0 >> 16;
+            let mut k = 0u64;
+            while k < count as u64 && k < 16 {
+                let sz = rd32((fifo + off + 8 + k * 8) as usize);
+                let id2 = rd32((fifo + off + 12 + k * 8) as usize);
+                if qrtr_lcid(alcid) {
+                    iip_add(id2, sz);
+                    unsafe { IIP_ADS = IIP_ADS.wrapping_add(1); }
+                }
+                k += 1;
+            }
+            8 + (count as u64) * 8
         } else if cmd == 9 {
             let chunk = rd32((fifo + off + 8) as usize) as u64;
             if chunk == 0 || off + 16 + chunk > rh + 16 {
@@ -12890,6 +13065,32 @@ fn ctrl_service(
                                 }
                                 push_str(reply, &mut rn, ".");
                                 push_hex(reply, &mut rn, unsafe { TXK_N } as u64);
+                                // 刀 G22：ii=intent 池台账——广告数.free数.in_use数.
+                                // 池干脚.求批脚.对端归还数.count>1广告数（T2 的直接读数）。
+                                let (mut ii_free, mut ii_used) = (0u64, 0u64);
+                                for s in unsafe { &IIP }.iter() {
+                                    if s[0] != 0 {
+                                        if s[2] == 0 {
+                                            ii_free += 1;
+                                        } else {
+                                            ii_used += 1;
+                                        }
+                                    }
+                                }
+                                push_str(reply, &mut rn, " ii=");
+                                push_hex(reply, &mut rn, unsafe { IIP_ADS } as u64);
+                                push_str(reply, &mut rn, ".");
+                                push_hex(reply, &mut rn, ii_free);
+                                push_str(reply, &mut rn, ".");
+                                push_hex(reply, &mut rn, ii_used);
+                                push_str(reply, &mut rn, ".");
+                                push_hex(reply, &mut rn, unsafe { IIP_DRY } as u64);
+                                push_str(reply, &mut rn, ".");
+                                push_hex(reply, &mut rn, unsafe { IIP_REQ } as u64);
+                                push_str(reply, &mut rn, ".");
+                                push_hex(reply, &mut rn, unsafe { IIP_DONE } as u64);
+                                push_str(reply, &mut rn, ".");
+                                push_hex(reply, &mut rn, unsafe { IIP_SFIX } as u64);
                                 push_str(reply, &mut rn, " rx=");
                                 // 滚动备忘：总数.随后最多 4 槽 port.op.arg（时间序，旧→新；
                                 // arg=op5 错误码/op4 块号，刀 G6）
