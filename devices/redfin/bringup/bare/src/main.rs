@@ -4524,6 +4524,10 @@ static mut TF_HASOPT: u8 = 0;
 /// 请求里出现过 rsize 键。值为 0 是 stat，不是“按整文件送”。
 static mut TF_HAS_RS: u8 = 0;
 static mut TF_RSIZE: u32 = 0;
+/// 刀 G5：RRQ 里的 seek 键（stock tqftpserv 段落读用它定文件偏移）。
+/// DATA 的起点 = seek + ack*blksize，OACK 要原样回显。
+static mut TF_HAS_SK: u8 = 0;
+static mut TF_SEEK: u32 = 0;
 /// RRQ 里的选项。OACK 只回请求里有的项，再加 tqftpserv 总会回的 timeoutms。
 /// wsize 缺省 0：请求没带就不写进 OACK。
 static mut TF_REQ_BLK: u32 = 512;
@@ -6862,12 +6866,14 @@ fn tf_put_cstr(q: &mut [u8], n: &mut usize, s: &[u8]) {
     }
 }
 
-/// RRQ 载荷里有没有选项，有没有 rsize 键，以及 rsize 的值。
+/// RRQ 载荷里有没有选项，有没有 rsize/seek 键，以及两键的值。
 /// 键不存在时值为 0，和“键存在且值为 0”分开记。
-fn tf_rrq_rsize(fifo: u64, off: u64, chunk: u64) -> (bool, bool, u32) {
+/// 刀 G5：补 seek 解析——stock tqftpserv 的 OACK 会把 rsize/seek 原样回显，
+/// 客户端段落读（rsize=52 读 ELF 头）靠 seek 定偏移，此前我们全忽略。
+fn tf_rrq_rsize(fifo: u64, off: u64, chunk: u64) -> (bool, bool, u32, bool, u32) {
     let size = rd32((fifo + off + 36) as usize) as u64;
     if size < 4 || 48 + size > 16 + chunk {
-        return (false, false, 0);
+        return (false, false, 0, false, 0);
     }
     let base = fifo + off + 48;
     let mut p = 2u64;
@@ -6881,7 +6887,9 @@ fn tf_rrq_rsize(fifo: u64, off: u64, chunk: u64) -> (bool, bool, u32) {
     }
     let has = p < size;
     let mut saw_rs = false;
+    let mut saw_sk = false;
     let mut rsize = 0u32;
+    let mut seek = 0u32;
     while p < size {
         let ks = p;
         while p < size && rd8(base + p) != 0 {
@@ -6899,14 +6907,20 @@ fn tf_rrq_rsize(fifo: u64, off: u64, chunk: u64) -> (bool, bool, u32) {
         if p < size {
             p += 1;
         }
-        if ke - ks == 5
-            && rd8(base + ks) == b'r'
+        let klen = ke - ks;
+        let k0 = rd8(base + ks);
+        let is_rs = klen == 5
+            && k0 == b'r'
             && rd8(base + ks + 1) == b's'
             && rd8(base + ks + 2) == b'i'
             && rd8(base + ks + 3) == b'z'
-            && rd8(base + ks + 4) == b'e'
-        {
-            saw_rs = true;
+            && rd8(base + ks + 4) == b'e';
+        let is_sk = klen == 4
+            && k0 == b's'
+            && rd8(base + ks + 1) == b'e'
+            && rd8(base + ks + 2) == b'e'
+            && rd8(base + ks + 3) == b'k';
+        if is_rs || is_sk {
             let mut v = 0u32;
             let mut i = vs;
             while i < ve {
@@ -6917,14 +6931,31 @@ fn tf_rrq_rsize(fifo: u64, off: u64, chunk: u64) -> (bool, bool, u32) {
                 v = v.saturating_mul(10).saturating_add((c - b'0') as u32);
                 i += 1;
             }
-            rsize = v;
+            if is_rs {
+                saw_rs = true;
+                rsize = v;
+            } else {
+                saw_sk = true;
+                seek = v;
+            }
         }
     }
-    (has, saw_rs, rsize)
+    (has, saw_rs, rsize, saw_sk, seek)
 }
 
 static mut TF_OPTBUF: [u8; 192] = [0; 192];
 static mut TF_OPTLEN: u8 = 0;
+
+/// 刀 G5：RRQ/WRQ 滚动日志（6 槽）。任何目的口发到 node1 的 op1/op2 都入册——
+/// 此前只看 0x11，客户端若换口发请求整段盲。fl bit0=rsize 键在、bit1=seek 键在。
+static mut TF_RL_P: [u32; 6] = [0; 6];
+static mut TF_RL_S: [u32; 6] = [0; 6];
+static mut TF_RL_O: [u32; 6] = [0; 6];
+static mut TF_RL_R: [u32; 6] = [0; 6];
+static mut TF_RL_K: [u32; 6] = [0; 6];
+static mut TF_RL_F: [u32; 6] = [0; 6];
+static mut TF_RL_N: u32 = 0;
+static mut TF_RL_VIS: u64 = 0;
 
 /// 只把 SO 的 RRQ 载荷抄进 BSS。选项等到第一次 sm 之后再解析。
 fn tf_save_so(fifo: u64, off: u64, chunk: u64) {
@@ -6950,6 +6981,11 @@ fn tf_apply_saved() {
         TF_REQ_WSZ = 0;
         TF_REQ_TMO = 1000;
         TF_HAS_TS = 0;
+        // 刀 G5：rsize/seek 也是逐请求选项，缺省清零重置。
+        TF_HAS_RS = 0;
+        TF_RSIZE = 0;
+        TF_HAS_SK = 0;
+        TF_SEEK = 0;
     }
     let n = unsafe { TF_OPTLEN } as usize;
     if n < 4 {
@@ -7009,6 +7045,14 @@ fn tf_apply_saved() {
                 TF_REQ_TMO = v;
             } else if klen == 5 && k0 == b't' {
                 TF_HAS_TS = 1;
+            } else if klen == 5 && k0 == b'r' {
+                // 刀 G5：stock tqftpserv 对齐——rsize/seek 从保存的 RRQ 重放，
+                // OACK 原样回显，DATA 偏移从 seek 起算。
+                TF_HAS_RS = 1;
+                TF_RSIZE = v;
+            } else if klen == 4 && k0 == b's' {
+                TF_HAS_SK = 1;
+                TF_SEEK = v;
             }
         }
     }
@@ -7156,11 +7200,20 @@ fn tf_reply(ufs: &mut Ufs, at478: u64, at479: u64, sz479: u64) {
             return;
         }
         let blk_sz = unsafe { TF_REQ_BLK } as usize;
-        let off = (ack as u32).saturating_mul(blk_sz as u32);
+        // 刀 G5：DATA 从 seek 起算（stock tftp_send_data 同款：文件偏移 =
+        // seek + ack*blksize，块号在窗口内从 1 数）。此前 seek 全忽略，段落读
+        // 永远从文件头回数据。
+        let off = unsafe { TF_SEEK }
+            .saturating_add((ack as u32).saturating_mul(blk_sz as u32));
         let limit = {
             let sz = unsafe { TZ_SZ };
             let rs = unsafe { TF_RSIZE };
-            if rs > 0 { rs.min(sz) } else { sz }
+            // rsize 是「从 seek 起要多少」，窗口尾 = seek+rsize，夹在文件尾内。
+            if rs > 0 {
+                unsafe { TF_SEEK }.saturating_add(rs).min(sz)
+            } else {
+                sz
+            }
         };
         if off >= limit {
             unsafe {
@@ -7319,6 +7372,24 @@ fn tf_reply(ufs: &mut Ufs, at478: u64, at479: u64, sz479: u64) {
     if unsafe { TF_REQ_WSZ } > 0 {
         tf_put_cstr(&mut q, &mut n, b"wsize");
         tf_put_dec(&mut q, &mut n, unsafe { TF_REQ_WSZ });
+        if n < q.len() {
+            q[n] = 0;
+            n += 1;
+        }
+    }
+    // 刀 G5：rsize/seek 原样回显（stock tftp_send_oack 同款：请求带才回）。
+    // stat 舞（rsize=0）与段落读（rsize=52 读 ELF 头）都靠这两键认门。
+    if unsafe { TF_HAS_RS } != 0 {
+        tf_put_cstr(&mut q, &mut n, b"rsize");
+        tf_put_dec(&mut q, &mut n, unsafe { TF_RSIZE });
+        if n < q.len() {
+            q[n] = 0;
+            n += 1;
+        }
+    }
+    if unsafe { TF_HAS_SK } != 0 {
+        tf_put_cstr(&mut q, &mut n, b"seek");
+        tf_put_dec(&mut q, &mut n, unsafe { TF_SEEK });
         if n < q.len() {
             q[n] = 0;
             n += 1;
@@ -11305,6 +11376,34 @@ fn scan_new_servers(fifo: u64, rh: u64) {
                         }
                     }
                 }
+                // 刀 G5：全口 RRQ/WRQ 日志。tf 扫描只认 dst_port==0x11，客户端若
+                // 换口发请求整段盲——窗2 静默期 tt 已清空（TX 全被消费）、pr 停爬，
+                // 请求可能正落在看不见的口上。任何发到 node1 的 op1/op2 都入册，
+                // 水位去重与 HELLO/QP 同法（off 只进不退）。
+                if typ == 1 && dst_node == 1 && chunk >= 50 && off >= unsafe { TF_RL_VIS } {
+                    let op0 = ((rd8(fifo + off + 48) as u32) << 8) | (rd8(fifo + off + 49) as u32);
+                    if op0 == 1 || op0 == 2 {
+                        let sp = rd32((fifo + off + 28) as usize);
+                        let (_, saw_rs, rsz, saw_sk, skv) = if op0 == 1 {
+                            tf_rrq_rsize(fifo, off, chunk)
+                        } else {
+                            (false, false, 0, false, 0)
+                        };
+                        let fl = (if saw_rs { 1u32 } else { 0 })
+                            | (if saw_sk { 2u32 } else { 0 });
+                        let idx = (unsafe { TF_RL_N } % 6) as usize;
+                        unsafe {
+                            TF_RL_P[idx] = dst_port;
+                            TF_RL_S[idx] = sp;
+                            TF_RL_O[idx] = op0;
+                            TF_RL_R[idx] = rsz;
+                            TF_RL_K[idx] = skv;
+                            TF_RL_F[idx] = fl;
+                            TF_RL_N = TF_RL_N.wrapping_add(1);
+                        }
+                    }
+                    unsafe { TF_RL_VIS = off + step; }
+                }
                 if typ == 1 && dst_node == 1 && chunk >= 40 && off >= unsafe { QP_VIS } {
                     let w = rd32((fifo + off + 48) as usize);
                     let w1 = rd32((fifo + off + 52) as usize);
@@ -11583,10 +11682,12 @@ fn scan_new_servers(fifo: u64, rh: u64) {
                             TF_NAME_N = nn as u8;
                             TF_PEND = true;
                             if op == 1 {
-                                let (has, saw_rs, rsz) = tf_rrq_rsize(fifo, off, chunk);
+                                let (has, saw_rs, rsz, saw_sk, skv) = tf_rrq_rsize(fifo, off, chunk);
                                 TF_HASOPT = if has { 1 } else { 0 };
                                 TF_HAS_RS = if saw_rs { 1 } else { 0 };
                                 TF_RSIZE = rsz;
+                                TF_HAS_SK = if saw_sk { 1 } else { 0 };
+                                TF_SEEK = skv;
                                 tf_save_so(fifo, off, chunk);
                             }
                         }
@@ -12288,6 +12389,38 @@ fn ctrl_service(
                                 push_hex(&mut reply, &mut rn, d3);
                                 push_str(&mut reply, &mut rn, " tm=");
                                 push_hex(&mut reply, &mut rn, unsafe { TF_REQ_TMO } as u64);
+                                // 刀 G5：rl=全口请求日志（6 槽，旧→新）。槽=dst口.源口.op.
+                                // fl.rsize.seek；fl bit0=rsize 键在、bit1=seek 键在。
+                                // 补盲洞：此前请求只认 0x11，换口请求整段不可见。
+                                push_str(&mut reply, &mut rn, " rl=");
+                                push_hex(&mut reply, &mut rn, unsafe { TF_RL_N } as u64);
+                                {
+                                    let total = unsafe { TF_RL_N } as usize;
+                                    let shown = total.min(6);
+                                    let start = total.saturating_sub(6);
+                                    let mut k = 0usize;
+                                    while k < shown {
+                                        let idx = (start + k) % 6;
+                                        if k != 0 {
+                                            push_str(&mut reply, &mut rn, ",");
+                                        }
+                                        push_hex(&mut reply, &mut rn, unsafe { TF_RL_P[idx] } as u64);
+                                        push_str(&mut reply, &mut rn, ".");
+                                        push_hex(&mut reply, &mut rn, unsafe { TF_RL_S[idx] } as u64);
+                                        push_str(&mut reply, &mut rn, ".");
+                                        push_hex(&mut reply, &mut rn, unsafe { TF_RL_O[idx] } as u64);
+                                        push_str(&mut reply, &mut rn, ".");
+                                        push_hex(&mut reply, &mut rn, unsafe { TF_RL_F[idx] } as u64);
+                                        push_str(&mut reply, &mut rn, ".");
+                                        push_hex(&mut reply, &mut rn, unsafe { TF_RL_R[idx] } as u64);
+                                        push_str(&mut reply, &mut rn, ".");
+                                        push_hex(&mut reply, &mut rn, unsafe { TF_RL_K[idx] } as u64);
+                                        k += 1;
+                                    }
+                                    if shown == 0 {
+                                        push_str(&mut reply, &mut rn, "-");
+                                    }
+                                }
                                 // me=pub.vout.inflags — MPSS SMP2P ipa 刀
                                 push_str(&mut reply, &mut rn, " me=");
                                 push_hex(&mut reply, &mut rn, unsafe { MPSS_PUB } as u64);
