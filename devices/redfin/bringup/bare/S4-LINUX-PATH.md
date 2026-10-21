@@ -3585,3 +3585,49 @@ G4 修复时延后一切重验。
 
 判读表：`rd=` 应落到 <100ms；`rx=` 出现 ACK → 传输开流，直奔 st=3（126 块）
 与 w45；rx 仍零 → 时延排除，0x11 源口终于获干净重测（G1 翻案验证）。
+
+### 刀 G4 收据（08:41/08:48 两窗）：rx=1.11.5 —— 客户端首答落袋，stat 舞闭合
+
+**窗1（08:41）**：零样（+0.7s 即 TimeoutError，ping 死于样#1）。与历史 13s~2min
+短窗同形，无新信息；采样器已加 3 次重连。经济窗：不重刷，`set_active a`
+重臂 retry 计数再 reboot。
+
+**窗2（08:48:48 开窗，活到 +578s，ping 死 08:58:47）**——历史最长窗：
+
+- `rd=0`：OACK 与 RRQ 捕获同圈，时延根除（G3 的 19f3 凶器确认已死）；
+- `rx=1.11.5`、`tb=4.0.11`：**客户端有史以来第一笔回答**——发往 0x11 的
+  op5 ERROR code 9（End of Transfer），stat 舞按 stock 剧本闭合
+  （tf_note_ack：code 9 + st 1 → st 4）；
+- 全程无主机 sm（+0.7s 首样即 ii=2、rf=3，rmtfs 回复已在 TX 流动）——
+  无头武装实测成立，此前所有「客户端聋」判读的时延污染彻底坐实；
+- stat 闭合后客户端又发 4 笔 RRQ（rq=0.22、末笔 0x21 口，rsize 键不再带，
+  `rs=0.0`，仅 blksize=7680+timeoutms），随后 pr=3 pn=kernel/elf_loader.1.30
+  （modem 问 elf_loader 域，我们答 1 hit msm/modem/wlan_pd inst 180）、
+  modem 播 NEW_SERVER(svc 4, inst 1, node 0, port 0x43)——然后**全静默**，
+  tt=b30.b30（TX 环清空，全被消费）直到窗死。
+
+**stall 定位与观察盲洞**：静默期 pr 停爬、tt 清空、rx 零新笔。两种假设无法
+区分：(a) modem 在等我们从未播报的某服务（NEW_LOOKUP 无应答）；(b) 客户端
+把后续 RRQ 发到了 0x11 以外的口——tf 扫描硬编码 dst_port==0x11，rx 日志也
+只看 TF 口，换口请求整段不可见。7975 行注释自证：「缺 ipa 出向时 modem 可能
+不走内存内自拉 wlan_pd，掉进 elf_loader+TFTP」——我们正在这条 fallback 路上，
+elf_loader 的段落读（stock README：stat 后 `RRQ rsize=52 seek=0` 读 ELF 头，
+再逐段读）需要 rsize/seek 两键，而我们的 OACK 不回显、DATA 不认 seek。
+
+窗死本身（+578s）是历史最长，非本刀回归——旧窗 13s~2min 死于同因未明。
+
+### 刀 G5（09:03 镜像 114688B）：全口请求日志 rl= + OACK 回显 rsize/seek + DATA 从 seek 起算——待上机
+
+对准 G4 窗2 stall 的三个盲洞/缺口：
+
+1. **rl= 全口请求日志**（6 槽滚动，槽=dst口.源口.op.fl.rsize.seek，水位去重）：
+   任何发到 node1 的 op1/op2 都入册——客户端换口发请求不再盲。fl bit0=rsize
+   键在、bit1=seek 键在（区分「键在值 0」=stat 与「键不在」）；
+2. **OACK 回显 rsize+seek**（stock tftp_send_oack 同款，请求带才回）：stat 舞
+   与段落读都靠这两键认门；tf_rrq_rsize 扩为 (has, saw_rs, rsize, saw_sk, seek)
+   五元，tf_apply_saved 重放并逐请求清零；
+3. **DATA 偏移 = seek + ack×blksize**，窗口尾 = min(seek+rsize, 文件尾)——
+   段落读（rsize=52 读 ELF 头等）此前永远从文件头回。
+
+判读表：静默期若 rl= 冒新槽（非 0x11 口）→ 假设 (b) 成立，看 fl/rs/sk 按
+stock 舞应答；rl= 也零新笔 → 假设 (a)，下一刀对准 NEW_LOOKUP 应答面。
