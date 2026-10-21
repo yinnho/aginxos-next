@@ -4120,3 +4120,64 @@ G5–G17 十七刀全在「OACK 到没到」打转，G18 把战线推到「窗�
 vs「ACK 没来」）。观测=g19 早窗加密（+3/+5/+8s 三拍 sm 抓中途爬升）。
 胜判：dv>10（首窗）、rx 见 op4、tt 爬升 → 126 块 964092B 送完 →
 w45>0 → wlan_pd UP。
+
+## 刀 G19/G20 收据：三层洋葱解剖——#18 泵送达层死、#19 客户端层死（stat 收幕+WRQ 换轨）、#20 传输层死（TX 消耗冻结先于会话）
+
+**G19（#19，码 b8c306c，烤 7727d939，23:08 刷）——传输健康，客户端换轨**：
+- sm0（+3s）即 **tb=4.0.11.0**：st=4＝客户端在收到我们 OACK 后回
+  **ERROR code 9（End of Transfer）**——tf_note_ack 7299 行 `code==9
+  && TF_ST==1 → 4`。**stat 舞首次完整收幕**：客户端要 tsize→OACK 带
+  尺寸→ERROR-9 关账。G7 合成 ACK-0 与 rsize=0 门配合正确（dv=0.0.0.0.0
+  读泵零进入＝stat 请求不放 DATA）。
+- **tt=a80→c08 后 c08.c08.4000 定格＝head==tail：TX 环被吃空**——传输层
+  健康（对照 #20）。ox=2.0 两笔 OACK 送达；rq=0.25.0.24（37 笔 RRQ）、
+  rx=3（op5(opffff)→新 op1→op5），pq=nopend 独大＝后续请求无新 pend
+  （tf_drop 或水位盲）。
+- **rl= 台账解锁 #19 真故事**：计数 0x1011=4113 笔探测；末 6 槽含
+  **port 0x1f 的 op2 WRQ**（tf 扫描只服务 0x11——WRQ 落在异口）+5 笔
+  0x11 RRQ。客户端在 stat 收幕后**换 WRQ 姿态**——G20 写腿的动因。
+- +377s 单次 ICMP 丢后 5 连 OK＝**软失速**（新现象，挂账）；观测窗在此
+  被脚本判死退出（watch 短板：5 粒度后即弃，盒可能仍活）。
+
+**G20（#20，码 88396bb，烤 ef49ed2b，23:34:49 刷）——泵开火但传输已死**：
+- sm0（+3s）即全定格：**tb=2.3.11.3——G19 窗口泵开火**（st=2、blk=3、
+  **wsent=3**），**ww=1.1.0.0.0——WRQ 会话开账**（OACK 已答、期望块 1、
+  零数据回收）；rx=4＝op5→**op2 WRQ**(2f72)→op1→op1，**全程零 op4**。
+- **tt=3c70.28b8.4000 定格：gap=0x13B8=5048B 未被消费**。3 块×7712B=
+  23KB > 16KB 环容量——**TX 消费冻结先于 TFTP 会话内容入环**：客户端
+  rx 序列以 ERROR 开头＝它从未收到我们的任何回包（stat 舞在 #19 能收幕
+  证明客户端能消费 OACK；#20 的 0x28b8 尾巴冻死＝modem 侧 glink 消费
+  停摆，门铃丢/intent 记账死二选一）。
+- **入场门 8192 自锁**：head=0x3c70 近环尾（sz=0x4000），`head+8192>sz`
+  恒真→dc≈call−42（pq call 0xb4c、dv4 从 0xb22 爬到 0x475aa＝每 ~2ms
+  一挡）——**retry-OACK 腿被自己锁死在门外**，全靴再无任何 tf_reply
+  体出环。
+- 客户端终态：ERROR→WRQ→RRQ×3→**永久静默**（服务器不可达的教科书
+  姿态）；盒本身活满 600s 观测窗（33 样本、保温全绿）——死的是 glink
+  TX，不是 L0。
+
+**三层洋葱定谳**：#18 泵送达层活（客户端收下 OACK+块1，窗死锁协议层）；
+#19 传输层活（环吃空）客户端层换轨（stat 收幕→WRQ）；#20 传输层死在
+会话前。三靴三层各烂一层——**单靴死形不可跨靴外推**（G15 教训三现）。
+
+**G20 自伤（码内发现，未及发作）**：WRQ 腿调 tf_apply_saved()——
+①op2 选项从不存盘（tf_save_so 只认 op1），解析的是**陈旧 RRQ 选项**；
+②apply 会清 TF_WSENT＝破坏 G19 读窗不变式；③涂改 TF_REQ_* 污染读
+会话。本靴 WRQ/RRQ 选项同形（blksize 7680/wsize 10）故未显炸，但结构
+性错误必须修。
+
+**刀 G21（码 7b8cdda，烤 7df52b58，#21 待刷）——传输法证+自愈+污染修**：
+① xl= 台账：glink_tx_payload 成功记 4 槽 sport.size.head，定位冻结
+   frontier（#20 的 5048B 里坐的是谁）；sm=xl=count[.sport.size.head
+   ×≤4].rkick。
+② tx_rekick：tail 静止 ≥500ms 且 head≠tail → 重发布 head+重敲门铃
+   （1s 节流，TXK_N 计数）——门铃丢假说直接考；soak 环每拍调用。
+③ 泵在飞闸：inflight>4096 拒续推——防泵把环灌死反锁 retry 腿。
+④ WRQ 元组解析：tf_save_opts（walker op2 分支随 pend 存选项）+
+   tf_w_parse 只读元组，OACK 回显全局部变量，零共享静态污染。
+⑤ 入场门 8192→1024：head 近环尾不再永久锁死 retry-OACK（最大包体
+   DATA ~880B<1024——注：blksize 7680 时单块 7712B 仍过不了门，
+   靠环闸另挡；门的职责只是别把小回包锁死）。
+CTRL_REPLY/TCP_TX 2560→3072（xl≈96B 余量防截尾）。
+胜判不变：xl frontier 在 TFTP 会话包上＋TXK_N>0 后 tail 动 → tt 爬升
+→ rx 见 op4 → 126 块 964092B → w45>0 → wlan_pd UP。
