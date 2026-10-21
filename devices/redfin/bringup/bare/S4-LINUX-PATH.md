@@ -3662,3 +3662,47 @@ stock 舞应答；rl= 也零新笔 → 假设 (a)，下一刀对准 NEW_LOOKUP �
 判读表：rx= 槽第三元直接看 op5 码——9=EOT 正常收摊、其他码=真错误；tb 离开
 4 进 2/3=客户端开始 ACK DATA（wsize 补齐奏效）；rl 再冒新槽+fl 含 rsize/seek
 位=进入段落读舞（stock README 的 rsize=52 读 ELF 头）。
+
+### 刀 G6 收据（10:24 窗2，活过 +378s 冻结）：EOT 消失、tb 初进 2——wsize 回显改变客户端反应，但 DATA 晚到
+
+窗1 09:27 死于 sample#1（17s 零样本，G4w1 同款首发窗劣化方差，非刀退）；
+手机随后全挂（adb/ping 全盲 90s 轮询不回），两条 re-arm 链 600s/1800s 空手，
+第三条 30min 看守 10:23:57 捉到 fastboot，re-arm（不重刷）得长命窗2。
+
+窗2 判读（首样 +5.3s 定谳，至 +378s 全冻结同形）：
+
+- **tb=2.1.11**——状态机首进 2（DATA 块 1 已发）。但发它的是 2s 宽限合成的
+  ACK-0（OACK+2s→synth→DATA），而客户端超时是 **tm=3e8=1000ms**：18 笔重试
+  全在宽限窗内打完（最后口 0x24 已死），DATA 块 1 迟到扑空；
+- **rx=0 全靴零回包**——G5 有两笔 op5 EOT，G6 补上 wsize 后 EOT 也消失。
+  客户端对「OACK+迟到 DATA」既不 ACK-0 也不 EOT，纯静默；
+- rl=0x12（18 笔）全 dst=0x11 src 0x22–0x24、op=1、fl=0；tf=…1.7（7 笔
+  pend 各得一 OACK）；tt=29c0.29c0 环排空；pr=3 pn=kernel/elf_loader pe=1
+  （两域全活）；w45=0。
+
+**判读**：wsize 恒回显**确实改变了客户端反应**（EOT→静默），说明客户端在
+逐字节看 OACK。两大假设并存：
+
+- **T1**：客户端是「OACK 后直接等 DATA」型（RFC 2348 windowsize=1 语义下
+  无需 ACK-0）——我们 2s 宽限错过它 1s 窗；
+- **T2**：RFC 2347 禁止服务端回显未请求的选项——stock 恒回 wsize 恰好是
+  这条违例，Qualcomm 客户端收到带未请求 wsize 的 OACK 静默丢弃。
+
+（G6w2 零回包 vs G5 两 EOT 也可读成 T2 侧证：G5 OACK 缺 wsize 但其余合法
+→ 客户端 EOT 收摊；G6 OACK 带未请求 wsize → 客户端更早更狠地静默。）
+
+### 刀 G7（10:36 镜像）：OACK 落环即合成 ACK-0、同循环直发 DATA 块 1——T1/T2 一刀两证
+
+改法：OACK glink_tx 成功块内直接 `TF_ACK_PEND=true; TF_ACK_BLK=0;`——下一
+趟 tf_reply 即发 DATA 块 1（微秒级，不再等 2s）。wsize 恒回显**保留不动**
+（单变量判读）。宽限块因 `!TF_ACK_PEND` 门自然退役为兜底（迟到错块 ACK 丢
+pend 后 2s 仍能自救重发）。真 ACK-0 若后到：TF_ACK_OFF 去重 + ack≠expect
+直接丢，不重复块 1。stat 舞不受影响（DATA 分支 rsize=0 门照旧拦住）。
+
+判读表：
+- **rx 出现 op4（块号第三元）且 tb=2.N 推进、tt 增长** → T1 定谳，传输开流，
+  朝 126 块（st=3）/w45=1 推进；
+- **rx 冒 op5 code9（tb=4）** → 客户端读到了 OACK+DATA 但内容拒收 → 偏 T2
+  侧（下刀撤未请求 wsize）；
+- **仍 rx=0** → 客户端根本没吃到我们任何包 → 投递层（qrtr 源口/路由）升权，
+  下刀换临时口+NEW_SERVER 册（stock 每笔 RRQ qrtr_open(0) 的全仿）。
