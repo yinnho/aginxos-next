@@ -4543,6 +4543,10 @@ static mut TF_BLKNO: u16 = 0;
 static mut TF_ACK_BLK: u16 = 0;
 static mut TF_ACK_OFF: u32 = 0xffff_ffff;
 static mut TF_ACK_PEND: bool = false;
+/// 刀 G19：RFC 7440 窗口泵——本窗已推块数（相对窗基 base）。不变式：
+/// TF_BLKNO = base + TF_WSENT。0=窗未开/已收口；>0 且 <wsz=环闸/DX
+/// 打断，下圈从 base+WSENT 续推。会话重启（tf_apply_saved）归零。
+static mut TF_WSENT: u32 = 0;
 /// 旧的固定数据口。SO 的这次传输改用 TF_XFER_PORT。
 const TF_DATA_PORT: u32 = 0x21;
 /// 我们播报的 TFTP 服务口（svc 4096→0x11，RRQ 的目的地）。客户端可能把 ACK
@@ -7027,6 +7031,8 @@ fn tf_apply_saved() {
         TF_RSIZE = 0;
         TF_HAS_SK = 0;
         TF_SEEK = 0;
+        // 刀 G19：窗口状态随会话重启归零（新 RRQ=弃线重来，base 回 0）。
+        TF_WSENT = 0;
     }
     let n = unsafe { TF_OPTLEN } as usize;
     if n < 4 {
@@ -7187,7 +7193,9 @@ fn tf_reply(ufs: &mut Ufs, at478: u64, at479: u64, sz479: u64) {
     // 刀 G12：入口计数（pq=call 首格）。dc 在环闸里已是 dv 第四格，
     // call = dc + noarm + nost + nopend + dv0 全分割。
     unsafe { TF_PQ_CALL = TF_PQ_CALL.wrapping_add(1) };
-    let tx_head = rd32((at478 + 4) as usize) as u64;
+    // 刀 G19：窗口泵循环内每块 TX 后重读环头（glink_tx_payload 自己发布
+    // head+total），故 mut。
+    let mut tx_head = rd32((at478 + 4) as usize) as u64;
     let tx_tail = rd32(at478 as usize) as u64;
     unsafe {
         TF_TXH = tx_head as u32;
@@ -7232,96 +7240,127 @@ fn tf_reply(ufs: &mut Ufs, at478: u64, at479: u64, sz479: u64) {
     } else if !unsafe { TF_ACK_PEND } {
         unsafe { TF_PQ_NOPEND = TF_PQ_NOPEND.wrapping_add(1) };
     }
-    if armed && (st == 1 || st == 2) && unsafe { TF_ACK_PEND } {
-        unsafe { TF_DV = TF_DV.wrapping_add(1) };
-        let ack = unsafe { TF_ACK_BLK };
-        let expect = unsafe { TF_BLKNO };
-        if ack != expect {
-            unsafe { TF_ACK_PEND = false };
-            return;
-        }
-        // stat：rsize 键在，值为 0。停在状态 1，等 opcode 5 code 9。不发 DATA。
-        if unsafe { TF_HAS_RS } != 0 && unsafe { TF_RSIZE } == 0 {
-            unsafe { TF_ACK_PEND = false };
-            return;
-        }
-        // 对方要的块超过本方缓冲/环上限（8192）才拒。7680 是本机实测请求值，
-        // TX 扩容刀后 glink 按 isz(8320 intent) 与环界双闸放行。
-        if unsafe { TF_REQ_BLK } > 8192 {
-            unsafe {
-                TF_ST = 7;
-                TF_ACK_PEND = false;
-            }
-            return;
-        }
-        let blk_sz = unsafe { TF_REQ_BLK } as usize;
-        // 刀 G5：DATA 从 seek 起算（stock tftp_send_data 同款：文件偏移 =
-        // seek + ack*blksize，块号在窗口内从 1 数）。此前 seek 全忽略，段落读
-        // 永远从文件头回数据。
-        let off = unsafe { TF_SEEK }
-            .saturating_add((ack as u32).saturating_mul(blk_sz as u32));
-        let limit = {
-            let sz = unsafe { TZ_SZ };
-            let rs = unsafe { TF_RSIZE };
-            // rsize 是「从 seek 起要多少」，窗口尾 = seek+rsize，夹在文件尾内。
-            if rs > 0 {
-                unsafe { TF_SEEK }.saturating_add(rs).min(sz)
+    // 刀 G19：RFC 7440 窗口泵。G18 定谳死锁形：方言 wsize=10，客户端
+    // 攒满整窗（10 块）才回 ACK；老泵单块在飞（发块 1 等 ACK-1），客户
+    // 端等块 2..10，双方零报错（rr=0）——dv 永冻 1、nopend 独大。改法：
+    // 每个窗尾 ACK/续推腿把整窗 min(wsz, EOF) 连推。环闸撞上（TX 拒绝）
+    // 即 DX++ 让路，TF_WSENT 保留在途数，下圈浸泡节奏续推。
+    if armed && (st == 1 || st == 2) {
+        let wsz = {
+            let w = unsafe { TF_REQ_WSZ };
+            if w == 0 {
+                1
             } else {
-                sz
+                w.min(16) as usize
             }
         };
-        if off >= limit {
-            unsafe {
-                TF_ST = 3;
-                TF_ACK_PEND = false;
+        let resume = st == 2
+            && !unsafe { TF_ACK_PEND }
+            && unsafe { TF_WSENT } > 0
+            && (unsafe { TF_WSENT } as usize) < wsz;
+        if unsafe { TF_ACK_PEND } || resume {
+            unsafe { TF_DV = TF_DV.wrapping_add(1) };
+            // 窗基：真 ACK（含宽限 synth ACK-0）从 ack 重开整窗；resume
+            // 腿从 TF_BLKNO-WSENT 续推。ack>expect=不可能事件丢；ack<expect
+            // =合法重传/客户端重启，从 ack+1 重开。
+            let base: u32 = if unsafe { TF_ACK_PEND } {
+                let ack = unsafe { TF_ACK_BLK };
+                let expect = unsafe { TF_BLKNO };
+                if ack > expect {
+                    unsafe { TF_ACK_PEND = false };
+                    return;
+                }
+                unsafe {
+                    TF_ACK_PEND = false;
+                    TF_WSENT = 0;
+                }
+                ack as u32
+            } else {
+                (unsafe { TF_BLKNO } as u32).wrapping_sub(unsafe { TF_WSENT })
+            };
+            // stat：rsize 键在，值为 0。停在状态 1，等 opcode 5 code 9。不发 DATA。
+            if unsafe { TF_HAS_RS } != 0 && unsafe { TF_RSIZE } == 0 {
+                return;
             }
-            return;
-        }
-        let mut want = blk_sz;
-        if off + blk_sz as u32 > limit {
-            want = (limit - off) as usize;
-        }
-        let n = so_read(ufs, off, want);
-        if n == 0 {
-            unsafe {
-                TF_DZ = TF_DZ.wrapping_add(1);
-                TF_ST = 8;
-                TF_ACK_PEND = false;
+            // 对方要的块超过本方缓冲/环上限（8192）才拒。7680 是本机实测请求值，
+            // TX 扩容刀后 glink 按 isz(8320 intent) 与环界双闸放行。
+            if unsafe { TF_REQ_BLK } > 8192 {
+                unsafe { TF_ST = 7 };
+                return;
             }
-            return;
-        }
-        let blk = ack.wrapping_add(1);
-        unsafe {
-            TF_BLKBUF[0] = 0;
-            TF_BLKBUF[1] = 3;
-            TF_BLKBUF[2] = (blk >> 8) as u8;
-            TF_BLKBUF[3] = blk as u8;
-        }
-        let pkt = unsafe { &TF_BLKBUF[..4 + n] };
-        if glink_tx_payload(
-            at478,
-            at479,
-            tx_head,
-            sz479,
-            unsafe { TF_XFER_PORT },
-            unsafe { TF_NODE },
-            unsafe { TF_PORT },
-            pkt,
-        ) {
-            unsafe {
-                TF_BLKNO = blk;
-                TF_ST = if n < blk_sz || off + n as u32 >= limit {
-                    3
+            let blk_sz = unsafe { TF_REQ_BLK } as usize;
+            // 刀 G5：DATA 从 seek 起算（stock tftp_send_data 同款：文件偏移 =
+            // seek + cur*blksize，块号在窗口内从 1 数）。
+            let limit = {
+                let sz = unsafe { TZ_SZ };
+                let rs = unsafe { TF_RSIZE };
+                // rsize 是「从 seek 起要多少」，窗口尾 = seek+rsize，夹在文件尾内。
+                if rs > 0 {
+                    unsafe { TF_SEEK }.saturating_add(rs).min(sz)
                 } else {
-                    2
-                };
-                TF_ACK_PEND = false;
-                TF_N += 1;
+                    sz
+                }
+            };
+            loop {
+                let cur = base.wrapping_add(unsafe { TF_WSENT });
+                let off = unsafe { TF_SEEK }
+                    .saturating_add(cur.saturating_mul(blk_sz as u32));
+                if off >= limit {
+                    unsafe { TF_ST = 3 };
+                    return;
+                }
+                let mut want = blk_sz;
+                if off + blk_sz as u32 > limit {
+                    want = (limit - off) as usize;
+                }
+                let n = so_read(ufs, off, want);
+                if n == 0 {
+                    unsafe {
+                        TF_DZ = TF_DZ.wrapping_add(1);
+                        TF_ST = 8;
+                    }
+                    return;
+                }
+                let blk = (cur + 1) as u16;
+                unsafe {
+                    TF_BLKBUF[0] = 0;
+                    TF_BLKBUF[1] = 3;
+                    TF_BLKBUF[2] = (blk >> 8) as u8;
+                    TF_BLKBUF[3] = blk as u8;
+                }
+                let pkt = unsafe { &TF_BLKBUF[..4 + n] };
+                if !glink_tx_payload(
+                    at478,
+                    at479,
+                    tx_head,
+                    sz479,
+                    unsafe { TF_XFER_PORT },
+                    unsafe { TF_NODE },
+                    unsafe { TF_PORT },
+                    pkt,
+                ) {
+                    // 环满/回卷闸拒绝：DX++ 让路。TF_WSENT/TF_BLKNO 保留在
+                    // 途进度，下圈 resume 腿续推。
+                    unsafe { TF_DX = TF_DX.wrapping_add(1) };
+                    return;
+                }
+                unsafe {
+                    TF_BLKNO = blk;
+                    TF_WSENT = TF_WSENT.wrapping_add(1);
+                    TF_ST = if n < blk_sz || off + n as u32 >= limit {
+                        3
+                    } else {
+                        2
+                    };
+                    TF_N += 1;
+                }
+                if unsafe { TF_ST } == 3 || unsafe { TF_WSENT } as usize >= wsz {
+                    return;
+                }
+                // glink_tx_payload 已内部发布新环头——重读再推下一块。
+                tx_head = rd32((at478 + 4) as usize) as u64;
             }
-        } else {
-            unsafe { TF_DX = TF_DX.wrapping_add(1) };
         }
-        return;
     }
     if unsafe { !TF_PEND } {
         return;
@@ -12439,13 +12478,16 @@ fn ctrl_service(
                                 push_hex(reply, &mut rn, unsafe { TZ_SZ } as u64);
                                 push_str(reply, &mut rn, ".");
                                 push_hex(reply, &mut rn, unsafe { TZ_CL } as u64);
-                                // tb=st.blk — 0 空闲 1 OACK 2 DATA 3 送完 8 读失败 9 对端 ERROR
+                                // tb=st.blk.xfer.wsent — 0 空闲 1 OACK 2 DATA 3 送完 8 读失败
+                                // 9 对端 ERROR；wsent=刀 G19 本窗已推块数（blk=base+wsent）
                                 push_str(reply, &mut rn, " tb=");
                                 push_hex(reply, &mut rn, unsafe { TF_ST } as u64);
                                 push_str(reply, &mut rn, ".");
                                 push_hex(reply, &mut rn, unsafe { TF_BLKNO } as u64);
                                 push_str(reply, &mut rn, ".");
                                 push_hex(reply, &mut rn, unsafe { TF_XFER_PORT } as u64);
+                                push_str(reply, &mut rn, ".");
+                                push_hex(reply, &mut rn, unsafe { TF_WSENT } as u64);
                                 push_str(reply, &mut rn, " rx=");
                                 // 滚动备忘：总数.随后最多 4 槽 port.op.arg（时间序，旧→新；
                                 // arg=op5 错误码/op4 块号，刀 G6）
