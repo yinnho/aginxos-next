@@ -118,6 +118,7 @@ MODE="heartbeat"
 [ "${1:-}" = "--s22" ] && MODE="s22"
 [ "${1:-}" = "--s23" ] && MODE="s23"
 [ "${1:-}" = "--s24" ] && MODE="s24"
+[ "${1:-}" = "--s25" ] && MODE="s25"
 mkdir -p "${OUTDIR}"
 ELF="${OUTDIR}/heartbeat.elf"
 
@@ -906,6 +907,16 @@ elif [ "${MODE}" = "s24" ]; then
   ELF="${OUTDIR}/s24.elf"
   cp "${HERE}/target/aarch64-unknown-none-softfloat/release/redfin-bare" "${ELF}"
   BIN="${OUTDIR}/s24.bin"; IMG="${OUTDIR}/boot-s24.img"
+elif [ "${MODE}" = "s25" ]; then
+  # 刀 G25：s24 同面，msgid 0x23 巨 REQ 应答腿——#25 bx= 定谳客户端发
+  # 7784B qtype0/msgid0x23 巨 REQ 打 IPA 服务口 0x16，旧无腿只记账、客
+  # 户端等回全静（.so 收幕即哑）。0x20/0x27/0x35 三腿先例：小 RESP TLV
+  # 0x02 成功。观察加宽：wx= 扩武装源口/撞门数/撞门口（两发 WRQ 判据）、
+  # pr= 28→56B（modem_pr/so/549_38_0.mbn 全长可罩）、i2= 0x23 腿三账。
+  (cd "${HERE}" && cargo build --release --target aarch64-unknown-none-softfloat)
+  ELF="${OUTDIR}/s25.elf"
+  cp "${HERE}/target/aarch64-unknown-none-softfloat/release/redfin-bare" "${ELF}"
+  BIN="${OUTDIR}/s25.bin"; IMG="${OUTDIR}/boot-s25.img"
 elif [ "${MODE}" = "s21" ]; then
   # 刀 G22：s20 同面，intent 池+归还追踪（cmd5 全量入池、TX 池挑、
   # RX_DONE/W_REUSE 归还、池干 RX_INTENT_REQ、cmd3/11 入 8B 集、ii= 台账）。

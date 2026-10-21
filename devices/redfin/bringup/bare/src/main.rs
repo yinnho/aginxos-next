@@ -4192,6 +4192,20 @@ static mut CFG_ARM: u8 = 0;
 static mut CAN_DONE: u8 = 0;
 static mut CFG_CAP: [u32; 4] = [0; 4];
 static mut CFG_CAP_N: u32 = 0;
+
+/// 刀 G25：msgid 0x23 巨 REQ 应答腿（I2）。#25 bx=20.23000400… 定谳：
+/// 客户端发 7784B qtype0/msgid0x23 巨 REQ 打 IPA 服务口 0x16，旧无腿
+/// 只进 IPA_REQ/IPA_LAST 记账——客户端 .so 收幕即全静，唯一悬而未答
+/// 的问句就是它。0x20/0x27/0x35 三腿皆有小 RESP，本腿同款 TLV 0x02
+/// 成功。
+static mut I2_PEND: bool = false;
+static mut I2_TXN: u32 = 0;
+static mut I2_NODE: u32 = 0;
+static mut I2_PORT: u32 = 0;
+static mut I2_N: u32 = 0;
+static mut I2_SENT: u32 = 0;
+static mut I2_DONE_TXN: u32 = 0xffff_ffff;
+static mut I2_DONE_PORT: u32 = 0xffff_ffff;
 /// 0x20 登记。应答成功后，若 INIT 已完成，再发 0x22。
 static mut IR_PEND: bool = false;
 static mut IR_TXN: u32 = 0;
@@ -5493,6 +5507,7 @@ fn smem_scan(ufs: &mut Ufs, do_glink: bool) {
                     ipa_init_tick(at478, at479, sz479);
                     ipa_cmplt_tick(at478, at479, sz479);
                     ipa_cfg_tick(at478, at479, sz479);
+                    i2_tick(at478, at479, sz479);
                     ipa_ir_tick(at478, at479, sz479);
                     ipa_ind_tick(at478, at479, sz479);
                     round += 1;
@@ -7299,7 +7314,15 @@ static mut TF_RL_VIS: u64 = 0;
 static mut TF_W_VIA: u32 = 0;
 static mut TF_W_N: u32 = 0;
 static mut TF_W_OX: u32 = 0;
-static mut TF_PR: [[u8; 28]; 6] = [[0; 28]; 6];
+/// 刀 G25：#25 定谳武装的是 0x11 那发 WRQ（早于记录窗）、0x1011 那发
+/// 被 PEND 挤掉——SRC=武装 WRQ 源口，BL/BLV=op2 撞门未武装计数/来程
+/// 口，下靴直读两发 WRQ 的先后与挤因。
+static mut TF_W_SRC: u32 = 0;
+static mut TF_W_BL: u32 = 0;
+static mut TF_W_BLV: u32 = 0;
+/// 刀 G25：28B→56B——#25 三槽只见到 /readonly/firmware/image/m 前
+/// 缀，56B 可罩住 image/modem_pr/so/549_38_0.mbn 全长（49 字符）。
+static mut TF_PR: [[u8; 56]; 6] = [[0; 56]; 6];
 static mut TF_PR_L: [u8; 6] = [0; 6];
 static mut BG_SP: u32 = 0;
 static mut BG_W: [u32; 3] = [0; 3];
@@ -8527,6 +8550,41 @@ fn ipa_cfg_tick(at478: u64, at479: u64, sz479: u64) {
             CFG_DONE_PORT = CFG_PORT;
             CFG_PEND = false;
             CFG_SENT = CFG_SENT.wrapping_add(1);
+        }
+    }
+}
+
+/// 刀 G25：msgid 0x23 RESP——cfg 腿同款小包（TLV 0x02 成功），从 IPA
+/// 服务口 0x16 回巨 REQ 的来向。
+fn i2_tick(at478: u64, at479: u64, sz479: u64) {
+    if unsafe { !I2_PEND } || at478 == 0 || at479 == 0 || !unsafe { HAVE_IID } {
+        return;
+    }
+    let tx_head = rd32((at478 + 4) as usize) as u64;
+    let tx_tail = rd32(at478 as usize) as u64;
+    if tx_head != tx_tail {
+        return;
+    }
+    let txn = unsafe { I2_TXN };
+    let mut q = [0u8; 32];
+    let mut n = 7usize;
+    put_result(&mut q, &mut n, false);
+    qmi_finish_typed(&mut q, n, 2, txn, 0x23);
+    if glink_tx_payload(
+        at478,
+        at479,
+        tx_head,
+        sz479,
+        IPA_SVC_PORT,
+        unsafe { I2_NODE },
+        unsafe { I2_PORT },
+        &q[..n],
+    ) {
+        unsafe {
+            I2_DONE_TXN = txn;
+            I2_DONE_PORT = I2_PORT;
+            I2_PEND = false;
+            I2_SENT = I2_SENT.wrapping_add(1);
         }
     }
 }
@@ -12284,9 +12342,10 @@ fn scan_new_servers(fifo: u64, rh: u64) {
                             TF_RL_K[idx] = skv;
                             TF_RL_F[idx] = fl;
                             TF_RL_N = TF_RL_N.wrapping_add(1);
-                            // 刀 G24：路径环同槽抄 ≤28B——px 只存 so，
-                            // 非 so（modem_efs/mdt/b 段）要哪个文件从此可见。
-                            let pn = ((chunk as usize) - 48).min(28);
+                            // 刀 G24：路径环同槽抄 ≤56B（G25 从 28 加宽）
+                            // ——px 只存 so，非 so（modem_efs/mdt/b 段）
+                            // 要哪个文件从此可见。
+                            let pn = ((chunk as usize) - 48).min(56);
                             let mut pi = 0usize;
                             while pi < pn {
                                 TF_PR[idx][pi] = rd8(fifo + off + 48 + pi as u64);
@@ -12517,6 +12576,21 @@ fn scan_new_servers(fifo: u64, rh: u64) {
                             IC_PEND = true;
                         }
                     }
+                    // 刀 G25：msgid 0x23 巨 REQ 武装——同笔停在接收环里
+                    // 不重复回（CFG 同款 txn+port 去重）。
+                    if qtype == 0 && msgid == 0x23 && dst_port == IPA_SVC_PORT && !unsafe { I2_PEND } {
+                        let txn = (w >> 8) & 0xffff;
+                        let port = rd32((fifo + off + 28) as usize);
+                        if unsafe { txn != I2_DONE_TXN || port != I2_DONE_PORT } {
+                            unsafe {
+                                I2_TXN = txn;
+                                I2_NODE = rd32((fifo + off + 24) as usize);
+                                I2_PORT = port;
+                                I2_N = I2_N.wrapping_add(1);
+                                I2_PEND = true;
+                            }
+                        }
+                    }
                 }
                 // 刀 G24：武装门收知名口 0x1011——#24 阶梯首槽 dst=0x1011
                 // 实锤客户端写方言 WRQ 发 0x1000+0x11，旧门整段吞掉（无
@@ -12605,7 +12679,17 @@ fn scan_new_servers(fifo: u64, rh: u64) {
                                 // 镜像它；读腿武装不改此账）。
                                 TF_W_VIA = dst_port;
                                 TF_W_N = TF_W_N.wrapping_add(1);
+                                // 刀 G25：武装 WRQ 的源口入账。
+                                TF_W_SRC = rd32((fifo + off + 28) as usize);
                             }
+                        }
+                    }
+                    // 刀 G25：op2 撞门未武装记账（seen/TF_PEND 挤掉）——
+                    // #25 两发 WRQ（0x11 先武装、0x1011 被挤）的判据。
+                    if op0 == 2 && (seen || unsafe { TF_PEND }) {
+                        unsafe {
+                            TF_W_BL = TF_W_BL.wrapping_add(1);
+                            TF_W_BLV = dst_port;
                         }
                     }
                 }
@@ -13350,13 +13434,27 @@ fn ctrl_service(
                                 push_str(reply, &mut rn, ".");
                                 push_hex(reply, &mut rn, unsafe { I12_N } as u64);
                                 // 刀 G24：wx=写腿账（WRQ 武装数.写 OACK 发出
-                                // 数.来程口）；bx=首枚大包源口+载荷头三字。
+                                // 数.来程口）；刀 G25 扩武装源口.撞门数.撞门口；
+                                // i2=0x23 腿三账（见数.已回.REQ 源口）。
+                                // bx=首枚大包源口+载荷头三字。
                                 push_str(reply, &mut rn, " wx=");
                                 push_hex(reply, &mut rn, unsafe { TF_W_N } as u64);
                                 push_str(reply, &mut rn, ".");
                                 push_hex(reply, &mut rn, unsafe { TF_W_OX } as u64);
                                 push_str(reply, &mut rn, ".");
                                 push_hex(reply, &mut rn, unsafe { TF_W_VIA } as u64);
+                                push_str(reply, &mut rn, ".");
+                                push_hex(reply, &mut rn, unsafe { TF_W_SRC } as u64);
+                                push_str(reply, &mut rn, ".");
+                                push_hex(reply, &mut rn, unsafe { TF_W_BL } as u64);
+                                push_str(reply, &mut rn, ".");
+                                push_hex(reply, &mut rn, unsafe { TF_W_BLV } as u64);
+                                push_str(reply, &mut rn, " i2=");
+                                push_hex(reply, &mut rn, unsafe { I2_N } as u64);
+                                push_str(reply, &mut rn, ".");
+                                push_hex(reply, &mut rn, unsafe { I2_SENT } as u64);
+                                push_str(reply, &mut rn, ".");
+                                push_hex(reply, &mut rn, unsafe { I2_PORT } as u64);
                                 push_str(reply, &mut rn, " bx=");
                                 push_hex(reply, &mut rn, unsafe { BG_SP } as u64);
                                 push_str(reply, &mut rn, ".");
