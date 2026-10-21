@@ -117,6 +117,7 @@ MODE="heartbeat"
 [ "${1:-}" = "--s21" ] && MODE="s21"
 [ "${1:-}" = "--s22" ] && MODE="s22"
 [ "${1:-}" = "--s23" ] && MODE="s23"
+[ "${1:-}" = "--s24" ] && MODE="s24"
 mkdir -p "${OUTDIR}"
 ELF="${OUTDIR}/heartbeat.elf"
 
@@ -893,6 +894,18 @@ elif [ "${MODE}" = "s23" ]; then
   ELF="${OUTDIR}/s23.elf"
   cp "${HERE}/target/aarch64-unknown-none-softfloat/release/redfin-bare" "${ELF}"
   BIN="${OUTDIR}/s23.bin"; IMG="${OUTDIR}/boot-s23.img"
+elif [ "${MODE}" = "s24" ]; then
+  # 刀 G24：s23 同面，写腿知名口 + 观察三件——#24 阶梯首槽 dst=0x1011
+  # 定谳：客户端写方言 WRQ 发 0x1000+0x11（读腿才用广告口 0x11），旧
+  # 武装门整段吞 WRQ→写会话无 OACK 无 ERROR 全静。修：武装门/note_data
+  # 门收 0x1011，写 OACK/ACK 回程口镜像来程（TF_W_VIA）；.so 已在 #24
+  # 完整送达（tb=3+客户端 ERROR-9 收幕）。观察：pr= 请求路径环（非 so
+  # 要哪个文件）、bx= 首枚大包源口+载荷头（0x16 IPA 说 vs 写 DATA 说）、
+  # wx= 写腿三账。
+  (cd "${HERE}" && cargo build --release --target aarch64-unknown-none-softfloat)
+  ELF="${OUTDIR}/s24.elf"
+  cp "${HERE}/target/aarch64-unknown-none-softfloat/release/redfin-bare" "${ELF}"
+  BIN="${OUTDIR}/s24.bin"; IMG="${OUTDIR}/boot-s24.img"
 elif [ "${MODE}" = "s21" ]; then
   # 刀 G22：s20 同面，intent 池+归还追踪（cmd5 全量入池、TX 池挑、
   # RX_DONE/W_REUSE 归还、池干 RX_INTENT_REQ、cmd3/11 入 8B 集、ii= 台账）。

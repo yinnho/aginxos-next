@@ -4724,6 +4724,10 @@ const TF_DATA_PORT: u32 = 0x21;
 /// 我们播报的 TFTP 服务口（svc 4096→0x11，RRQ 的目的地）。客户端可能把 ACK
 /// 回到这里而不是 OACK 源口——tf_note_ack 一并监听。
 const TF_SVC_PORT: u32 = 0x11;
+// 刀 G24：写腿知名口。#24 阶梯实锤（rl 首槽 dst=0x1011）：客户端写方言
+// WRQ 发 0x1000+0x11（硬编码知名口），读腿才用我们 NEW_SERVER 广告的
+// 0x11。旧武装门只认 0x11 → WRQ 整段被吞，写会话无 OACK 无 ERROR 全静。
+const TF_ALT_PORT: u32 = 0x1011;
 /// 这次 SO 传输的源端口。0 表示还没发 OACK。
 static mut TF_XFER_PORT: u32 = 0;
 /// OACK 发出时刻（CNTVCT）。宽限刀用：OACK 后 2s 无 ACK-0 就合成 ack=0 直发 DATA 块 1
@@ -7287,6 +7291,19 @@ static mut TF_RL_F: [u32; 6] = [0; 6];
 static mut TF_RL_N: u32 = 0;
 static mut TF_RL_VIS: u64 = 0;
 
+/// 刀 G24：写腿三账 + 观察三件。TF_W_VIA=本写会话 WRQ 进来的口（写腿
+/// 回程镜像它；0=未定走 0x11）；TF_W_N/TF_W_OX=WRQ 武装数/写 OACK 发出
+/// 数。TF_PR=请求路径环（6×28B，px 只存 so 请求，非 so 整段盲）；
+/// BG_SP/BG_W=首枚大包源口+载荷头三字（0x16 IPA 说 vs 写 DATA 说，
+/// 一靴定谳）。
+static mut TF_W_VIA: u32 = 0;
+static mut TF_W_N: u32 = 0;
+static mut TF_W_OX: u32 = 0;
+static mut TF_PR: [[u8; 28]; 6] = [[0; 28]; 6];
+static mut TF_PR_L: [u8; 6] = [0; 6];
+static mut BG_SP: u32 = 0;
+static mut BG_W: [u32; 3] = [0; 3];
+
 /// 只把 SO 的 RRQ 载荷抄进 BSS。选项等到第一次 sm 之后再解析。
 fn tf_save_so(fifo: u64, off: u64, chunk: u64) {
     if !tf_is_so() {
@@ -7820,12 +7837,19 @@ fn tf_reply(ufs: &mut Ufs, at478: u64, at479: u64, sz479: u64) {
         q[1] = 4;
         q[2] = (blk >> 8) as u8;
         q[3] = blk as u8;
+        // 刀 G24：写腿回程口镜像来程（#24 WRQ 走知名口 0x1011，旧硬编码
+        // 0x11 → 客户端等不存在的应答口）。
+        let wvia = if unsafe { TF_W_VIA } != 0 {
+            unsafe { TF_W_VIA }
+        } else {
+            0x11
+        };
         if glink_tx_payload(
             at478,
             at479,
             tx_head,
             sz479,
-            0x11,
+            wvia,
             unsafe { TF_W_SNODE },
             unsafe { TF_W_SPORT },
             &q,
@@ -7917,16 +7941,23 @@ fn tf_reply(ufs: &mut Ufs, at478: u64, at479: u64, sz479: u64) {
                 n += 1;
             }
         }
+        // 刀 G24：OACK 回程口=WRQ 来程口（TF_W_VIA，武装时记）。
+        let wvia = if unsafe { TF_W_VIA } != 0 {
+            unsafe { TF_W_VIA }
+        } else {
+            0x11
+        };
         if glink_tx_payload(
             at478,
             at479,
             tx_head,
             sz479,
-            0x11,
+            wvia,
             unsafe { TF_NODE },
             unsafe { TF_PORT },
             &q[..n],
         ) {
+            unsafe { TF_W_OX = TF_W_OX.wrapping_add(1); }
             tf_drop_pend();
         }
         return;
@@ -12108,13 +12139,22 @@ fn scan_new_servers(fifo: u64, rh: u64) {
                             BG_DUMP[3] = dst_port;
                             BG_DUMP[4] = ((rd8(fifo + off + 48) as u32) << 8)
                                 | (rd8(fifo + off + 49) as u32);
+                            // 刀 G24：bx= 源口+载荷头三字——大包是 IPA QMI
+                            // 还是写 DATA（op3 帧头 00 03），一靴定谳。
+                            BG_SP = rd32((fifo + off + 28) as usize);
+                            BG_W[0] = rd32((fifo + off + 48) as usize);
+                            BG_W[1] = rd32((fifo + off + 52) as usize);
+                            BG_W[2] = rd32((fifo + off + 56) as usize);
                         }
                     }
                     let xfer_port = unsafe { TF_XFER_PORT };
                     let on_xfer = xfer_port != 0 && dst_port == xfer_port;
                     if typ == 1
                         && dst_node == 1
-                        && (dst_port == TF_DATA_PORT || dst_port == TF_SVC_PORT || on_xfer)
+                        && (dst_port == TF_DATA_PORT
+                            || dst_port == TF_SVC_PORT
+                            || dst_port == TF_ALT_PORT
+                            || on_xfer)
                     {
                         let op0 = ((rd8(fifo + off + 48) as u32) << 8)
                             | (rd8(fifo + off + 49) as u32);
@@ -12156,10 +12196,13 @@ fn scan_new_servers(fifo: u64, rh: u64) {
                 if typ == 1 && (dst_port == TF_DATA_PORT || dst_port == TF_SVC_PORT || on_xfer) {
                     tf_note_ack(off, fifo);
                 }
-                // 刀 G20：WRQ 客户端的 DATA(op3)——发往我们 OACK 的源口
+                // 刀 G20：WRQ 客户端��� DATA(op3)——发往我们 OACK 的源口
                 // 0x11。op≠3 时 tf_note_data 自门不动（op4/op5 仍走
-                // tf_note_ack，互不串台）。
-                if typ == 1 && chunk >= 52 && (dst_port == TF_SVC_PORT || on_xfer) {
+                // tf_note_ack，互不串台）。刀 G24：0x1011 写腿同收。
+                if typ == 1
+                    && chunk >= 52
+                    && (dst_port == TF_SVC_PORT || dst_port == TF_ALT_PORT || on_xfer)
+                {
                     tf_note_data(off, fifo, chunk as u32);
                 }
                 if typ == 1 && chunk >= 52 && unsafe { TF_ST } >= 1 {
@@ -12241,6 +12284,15 @@ fn scan_new_servers(fifo: u64, rh: u64) {
                             TF_RL_K[idx] = skv;
                             TF_RL_F[idx] = fl;
                             TF_RL_N = TF_RL_N.wrapping_add(1);
+                            // 刀 G24：路径环同槽抄 ≤28B——px 只存 so，
+                            // 非 so（modem_efs/mdt/b 段）要哪个文件从此可见。
+                            let pn = ((chunk as usize) - 48).min(28);
+                            let mut pi = 0usize;
+                            while pi < pn {
+                                TF_PR[idx][pi] = rd8(fifo + off + 48 + pi as u64);
+                                pi += 1;
+                            }
+                            TF_PR_L[idx] = pn as u8;
                         }
                     }
                     unsafe { TF_RL_VIS = off + step; }
@@ -12466,7 +12518,14 @@ fn scan_new_servers(fifo: u64, rh: u64) {
                         }
                     }
                 }
-                if typ == 1 && dst_node == 1 && dst_port == 0x11 && chunk >= 34 {
+                // 刀 G24：武装门收知名口 0x1011——#24 阶梯首槽 dst=0x1011
+                // 实锤客户端写方言 WRQ 发 0x1000+0x11，旧门整段吞掉（无
+                // OACK 无 ERROR，写会话全静）。读腿仍以 0x11 为主道。
+                if typ == 1
+                    && dst_node == 1
+                    && (dst_port == 0x11 || dst_port == TF_ALT_PORT)
+                    && chunk >= 34
+                {
                     let op0 = ((rd8(fifo + off + 48) as u32) << 8) | (rd8(fifo + off + 49) as u32);
                     if op0 == 4 || op0 == 5 {
                         tf_note_ack(off, fifo);
@@ -12542,6 +12601,10 @@ fn scan_new_servers(fifo: u64, rh: u64) {
                                 // 刀 G21：WRQ 选项抄盘（读腿专用 TF_OPTBUF 在
                                 // pend 时随请求换血，单 pend 槽无竞态）。
                                 tf_save_opts(fifo, off, chunk);
+                                // 刀 G24：写腿来程口入账（写 OACK/ACK 回程
+                                // 镜像它；读腿武装不改此账）。
+                                TF_W_VIA = dst_port;
+                                TF_W_N = TF_W_N.wrapping_add(1);
                             }
                         }
                     }
@@ -13286,6 +13349,22 @@ fn ctrl_service(
                                 push_hex(reply, &mut rn, unsafe { TX8_N } as u64);
                                 push_str(reply, &mut rn, ".");
                                 push_hex(reply, &mut rn, unsafe { I12_N } as u64);
+                                // 刀 G24：wx=写腿账（WRQ 武装数.写 OACK 发出
+                                // 数.来程口）；bx=首枚大包源口+载荷头三字。
+                                push_str(reply, &mut rn, " wx=");
+                                push_hex(reply, &mut rn, unsafe { TF_W_N } as u64);
+                                push_str(reply, &mut rn, ".");
+                                push_hex(reply, &mut rn, unsafe { TF_W_OX } as u64);
+                                push_str(reply, &mut rn, ".");
+                                push_hex(reply, &mut rn, unsafe { TF_W_VIA } as u64);
+                                push_str(reply, &mut rn, " bx=");
+                                push_hex(reply, &mut rn, unsafe { BG_SP } as u64);
+                                push_str(reply, &mut rn, ".");
+                                push_hex(reply, &mut rn, unsafe { BG_W[0] } as u64);
+                                push_str(reply, &mut rn, ".");
+                                push_hex(reply, &mut rn, unsafe { BG_W[1] } as u64);
+                                push_str(reply, &mut rn, ".");
+                                push_hex(reply, &mut rn, unsafe { BG_W[2] } as u64);
                                 push_str(reply, &mut rn, " rx=");
                                 // 滚动备忘：总数.随后最多 4 槽 port.op.arg（时间序，旧→新；
                                 // arg=op5 错误码/op4 块号，刀 G6）
@@ -13417,6 +13496,33 @@ fn ctrl_service(
                                         push_hex(reply, &mut rn, unsafe { TF_RL_R[idx] } as u64);
                                         push_str(reply, &mut rn, ".");
                                         push_hex(reply, &mut rn, unsafe { TF_RL_K[idx] } as u64);
+                                        k += 1;
+                                    }
+                                    if shown == 0 {
+                                        push_str(reply, &mut rn, "-");
+                                    }
+                                }
+                                // 刀 G24：pr=路径环（末 4 槽 ≤28B hex，与 rl 同
+                                // 步换槽）——非 so 请求要哪个文件从此可见。
+                                push_str(reply, &mut rn, " pr=");
+                                {
+                                    let total = unsafe { TF_RL_N } as usize;
+                                    let shown = total.min(4);
+                                    let start = total.saturating_sub(4);
+                                    let mut k = 0usize;
+                                    while k < shown {
+                                        let idx = (start + k) % 6;
+                                        if k != 0 {
+                                            push_str(reply, &mut rn, ",");
+                                        }
+                                        let mut bi = 0usize;
+                                        let bl = unsafe { TF_PR_L[idx] } as usize;
+                                        while bi < bl {
+                                            let b = unsafe { TF_PR[idx][bi] };
+                                            push_hex(reply, &mut rn, (b >> 4) as u64);
+                                            push_hex(reply, &mut rn, (b & 0xF) as u64);
+                                            bi += 1;
+                                        }
                                         k += 1;
                                     }
                                     if shown == 0 {
