@@ -4559,6 +4559,14 @@ static mut TF_RX_LOG_P: [u32; 4] = [0; 4];
 static mut TF_RX_LOG_O: [u32; 4] = [0; 4];
 /// 刀 G6：第三元=op5 错误码 / op4 块号（ffff=没读到）。
 static mut TF_RX_LOG_A: [u32; 4] = [0; 4];
+// 刀 G8：DATA 路径四级计数器（纯插桩，不改行为）——G7 实测立即 DATA 零上环
+// （tt=be8 全靴 ~3KB＝纯 OACK 体积），静态推演所有门都该过，必须实测堵点。
+// dv=进入.读零.tx拒.环闸挡：进DATA分支 / so_read==0 / glink_tx_payload 假 /
+// tf_reply 顶环容量闸挡（head≠tail 且 head+8192>环）。
+static mut TF_DV: u32 = 0;
+static mut TF_DZ: u32 = 0;
+static mut TF_DX: u32 = 0;
+static mut TF_DC: u32 = 0;
 static mut TF_RX_LOG_N: u32 = 0;
 /// DATA 缓冲。8200 = 4 字节 TFTP 头 + 8192 上限（so_read 单发双扇区 4096×2）。
 static mut TF_BLKBUF: [u8; 8200] = [0; 8200];
@@ -7157,6 +7165,7 @@ fn tf_reply(ufs: &mut Ufs, at478: u64, at479: u64, sz479: u64) {
     // 「免回卷容量闸」：head≠tail 时只要最大包（整包 8192）不回卷也放得下就继续；
     // 回卷纪律（非空不许绕回 0）与 glink_tx_payload 内闸保持一致。
     if tx_head != tx_tail && tx_head + 8192 > sz479 {
+        unsafe { TF_DC = TF_DC.wrapping_add(1) };
         return;
     }
     // 刀 G4：武装改 II_ST=2——G3 实测 rd=19f3(6.6s) 对 tm=3e8(1s)：SM_ARMED 等
@@ -7181,6 +7190,7 @@ fn tf_reply(ufs: &mut Ufs, at478: u64, at479: u64, sz479: u64) {
         }
     }
     if armed && (st == 1 || st == 2) && unsafe { TF_ACK_PEND } {
+        unsafe { TF_DV = TF_DV.wrapping_add(1) };
         let ack = unsafe { TF_ACK_BLK };
         let expect = unsafe { TF_BLKNO };
         if ack != expect {
@@ -7231,6 +7241,7 @@ fn tf_reply(ufs: &mut Ufs, at478: u64, at479: u64, sz479: u64) {
         let n = so_read(ufs, off, want);
         if n == 0 {
             unsafe {
+                TF_DZ = TF_DZ.wrapping_add(1);
                 TF_ST = 8;
                 TF_ACK_PEND = false;
             }
@@ -7264,6 +7275,8 @@ fn tf_reply(ufs: &mut Ufs, at478: u64, at479: u64, sz479: u64) {
                 TF_ACK_PEND = false;
                 TF_N += 1;
             }
+        } else {
+            unsafe { TF_DX = TF_DX.wrapping_add(1) };
         }
         return;
     }
@@ -12372,6 +12385,16 @@ fn ctrl_service(
                                     );
                                     k_log += 1;
                                 }
+                                // 刀 G8：dv=进入.读零.tx拒.环闸挡——DATA 路径堵点
+                                // 实测（G7 立即 DATA 零上环的定位插桩）。
+                                push_str(&mut reply, &mut rn, " dv=");
+                                push_hex(&mut reply, &mut rn, unsafe { TF_DV } as u64);
+                                push_str(&mut reply, &mut rn, ".");
+                                push_hex(&mut reply, &mut rn, unsafe { TF_DZ } as u64);
+                                push_str(&mut reply, &mut rn, ".");
+                                push_hex(&mut reply, &mut rn, unsafe { TF_DX } as u64);
+                                push_str(&mut reply, &mut rn, ".");
+                                push_hex(&mut reply, &mut rn, unsafe { TF_DC } as u64);
                                 // ob=blk.wsz.ts — 写进 OACK 的数。wsz=0 表示请求没带 wsize。
                                 // rs=有键.值。rs=1.0 是 stat。
                                 push_str(&mut reply, &mut rn, " ob=");
