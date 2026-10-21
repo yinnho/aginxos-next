@@ -4273,3 +4273,58 @@ W_REUSE 分品 / 自由回卷。禁在三嫌疑未定谳前混刀。
   本靴取第一条——与我们观测的 RRQ 路径一致。
 - REA 反编译开工时的入口：b22 @0xecd40 附近函数簇；Ghidra hexagon
   段加载用 mdt 的 program headers 排段。
+
+## 刀 G21 收据：靴 #21 判读——T2 定谳，intent 投递层死（2026-10-22 00:26–00:37）
+
+镜像 boot-s20 md5=7df52b58（7b8cdda 五腿）。刷入 00:25:50，ping 起
+00:26:46（en10），+595s 盒死=保温天花板第三次实证（G17 +597 / G18
+~593 / 本靴 +595，三靴同窗 ~593-600s）。33 拍 sm 全程同形，会话
+自 +4s 起完全定格。
+
+**五腿逐项验尸**：
+- **xl 台账（新）首战告捷**：TXL_N 17→13(hex) 停增；frontier 四槽
+  `11.1000.910 / 11.68.998 / 11.60.a08 / 11.68.a88`——**全是 0x11 口
+  TFTP 协议包**（sport=源口、size=含 28B glink 头、head=写后环头）；
+  之后两笔 0x16/0x12 他口小包后 TX 全停。TXK_N=0（零 re-kick）。
+- **tt=c88.c88.4000 六百秒恒等**：TX 环全程排空，modem 消费端活。
+  #20 的「传输层早死」未复发。
+- **入场门 1024 腿生效**：dv4(DC)=0 全程（#20 曾爬 0x475aa 自锁）。
+- **WRQ 元组腿**：ww=1.1.0.0.0——本靴竟无 WRQ 会话痕（active=1 为
+  OACK 答出标记，acks/bytes=0）。
+- **泵/会话形状**：tf=.op1.TF_N5（TF_N=drop_pend×4+泵送×1）；
+  tb=ST3.blkno1.xfer11.wsent1；ob=blk7680.wsz10.ts0；dv=1.0.0.0.0
+  （DV1/DZ0/DX0/DC0/DR0——无环闸挡、无 retry-OACK）。
+
+**时序重建**：客户端 op1 RRQ（blk 7680/wsize 10，rsize 范围读——
+DATA-1 总字节 4096-28-4=4064 载荷=limit 掐尾，ST=3 范围收口）→
+我们 OACK 答出（ox=2.0 成败 2:0）→ 客户端 2s 无 ACK-0 → 宽限刀
+合成 ack=0 → 泵一块 DATA-1 送出、ST=3「送完」→ **客户端从未收到
+任何一包**（零 ACK-0、零 ACK-1）→ timeoutms=1000 重试梯把 RRQ 重发
+×4（每笔被 TF_SEEN 去重账房 tf_drop_pend 静默丢弃）→ 梯尽弃线，
+600s 死寂至盒死。pq 283→2700 持续爬=qrtr 民政包照常解析=盒活。
+
+**判读（按 #21 先验三嫌疑）**：
+- T1 毒包：**排除**——frontier 无控制包，全 TX_DATA。
+- T3 doorbell 丢：**排除**——TXK_N=0，环排空无需 re-kick。
+- **T2 intent 池干：定谳**——客户端对本会话全聋（连 OACK 都没到），
+  而环字节被 modem 消费（tt tail 推进）＝「消费掉但不投递」。与内核
+  契约审计第二结构错位严丝合缝：我们每包盖同一 LAST_IID、不认
+  RX_DONE 归还、池干不发 RX_INTENT_REQ——同 iid 连用在飞=常驻违约。
+  旁证：cmd5 广告（count,size,id）我们只记一个最大 id，内核按
+  id..id+count-1 展开成池、每包消耗一个、等对端 RX_DONE 归还。
+
+**顺带揭出的自伤/隐患（G22 材 料，不与主刀混）**：
+1. **g21 观测过滤器自伤**：SM 元组删了 rl=/px=/rs=——恰是判读最需
+   的三段（本靴 rs= 值不可再考，只能从 4064 反推）。G22 观测必还。
+2. **RX 行走器未知 cmd 即 break**（hello 行走器 5660 一带）：modem
+   若发来表外命令（含归还类），解析折断在该包上，圈圈重折——
+   pq 爬/rx 冻与此形亦吻（rx 侧盲与 T2 不互斥，客户端侧死寂才是
+   T2 铁证）。G22 行走器要按内核全命令表步进。
+3. TF_N 混计 drop_pend+泵送——收据判读时差点误读，将来拆成两段。
+
+**G22 裁决（单刀）**：intent 池+归还追踪——①cmd5 广告展开成池
+（id..id+count-1, size, free/in_use）；②TX 盖章处改「最小可容 free
+intent」、标 in_use、无则计数让路；③认 modem 的 RX_DONE/W_REUSE
+（7/14）归还；④池干发 RX_INTENT_REQ 求批；⑤sm 加 ii= 台账
+（ads/freed/inuse/dry）+观测还 rl=/px=/rs=。READ_NOTIF 催件、
+W_REUSE 分品、自由回卷继续挂账排后——三靴判读均未指向它们。
