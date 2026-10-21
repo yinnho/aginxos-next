@@ -6963,6 +6963,10 @@ fn tf_rrq_rsize(fifo: u64, off: u64, chunk: u64) -> (bool, bool, u32, bool, u32)
 static mut TF_OPTBUF: [u8; 192] = [0; 192];
 static mut TF_OPTLEN: u8 = 0;
 
+/// 刀 G11：rpl= 渲染对——qrtr 尺寸段 vs 抄本窗（tf_save_so 记账）。
+static mut TF_RPL_SZ: u32 = 0;
+static mut TF_RPL_RM: u32 = 0;
+
 /// 刀 G5：RRQ/WRQ 滚动日志（6 槽）。任何目的口发到 node1 的 op1/op2 都入册——
 /// 此前只看 0x11，客户端若换口发请求整段盲。fl bit0=rsize 键在、bit1=seek 键在。
 static mut TF_RL_P: [u32; 6] = [0; 6];
@@ -6980,9 +6984,14 @@ fn tf_save_so(fifo: u64, off: u64, chunk: u64) {
         return;
     }
     let size = rd32((fifo + off + 36) as usize) as usize;
-    let room = if chunk > 48 { chunk as usize - 48 } else { 0 };
+    // 刀 G11：物理载荷＝chunk-32（fragment＝16B glink 头＋chunk，qrtr 头
+    // 32B 落 +16..+48）。旧 chunk-48 少抄 16B——G10 转录里 "tsize" 键
+    // 死在这道裁切上（TF_OPTLEN=88=旧 room，size≥88）。
+    let room = if chunk > 32 { chunk as usize - 32 } else { 0 };
     let n = size.min(room).min(192);
     unsafe {
+        TF_RPL_SZ = size as u32;
+        TF_RPL_RM = room as u32;
         let mut i = 0usize;
         while i < n {
             TF_OPTBUF[i] = rd8(fifo + off + 48 + i as u64);
@@ -12847,11 +12856,12 @@ fn ctrl_service(
                                 }
                                 push_str(&mut reply, &mut rn, " w45=");
                                 push_hex(&mut reply, &mut rn, unsafe { SAW_45 } as u64);
-                                // 刀 G10：rp=保存的 SO RRQ 原文（≤96B，定宽 nibble）——
+                                // 刀 G10：px=保存的 SO RRQ 原文（定宽 nibble）——
                                 // 文件名+mode+选项区逐字节，解析器盲区的尾巴直接可见，
                                 // 方言真图。tf_save_so 只存 SO 文件（TF_OPTBUF/TF_OPTLEN）。
-                                push_str(&mut reply, &mut rn, " rp=");
-                                let n_rp = (unsafe { TF_OPTLEN } as usize).min(96);
+                                // 刀 G11：让出 rp= 撞名（旧 rp=0.ffffffff 在前），帽 96→160。
+                                push_str(&mut reply, &mut rn, " px=");
+                                let n_rp = (unsafe { TF_OPTLEN } as usize).min(160);
                                 let mut i_rp = 0usize;
                                 while i_rp < n_rp {
                                     let b = unsafe { TF_OPTBUF[i_rp] };
@@ -12859,6 +12869,12 @@ fn ctrl_service(
                                     push_hex(&mut reply, &mut rn, (b & 0xF) as u64);
                                     i_rp += 1;
                                 }
+                                // 刀 G11：rpl=qrtr 尺寸段.抄本窗——size>room ⇒ 跨
+                                // fragment 截断（G12 重组立案）；size≤room ⇒ 抄本即全量。
+                                push_str(&mut reply, &mut rn, " rpl=");
+                                push_hex(&mut reply, &mut rn, unsafe { TF_RPL_SZ } as u64);
+                                push_str(&mut reply, &mut rn, ".");
+                                push_hex(&mut reply, &mut rn, unsafe { TF_RPL_RM } as u64);
                                 // 刀 G10：rr=最近 2 笔 op4/op5 原文（时间序旧→新，各 ≤24B）。
                                 // op5 例：0005 0009 "End of transfer" ——消息文本＝拒收理由。
                                 push_str(&mut reply, &mut rn, " rr=");
