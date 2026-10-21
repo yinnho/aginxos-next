@@ -4567,6 +4567,16 @@ static mut TF_DV: u32 = 0;
 static mut TF_DZ: u32 = 0;
 static mut TF_DX: u32 = 0;
 static mut TF_DC: u32 = 0;
+// 刀 G12：tf_reply 四分位计数＋OACK TX 成败（pq=call.noarm.nost.nopend、
+// ox=ok.no）。G8 起全靴 dv=0 与静态推演矛盾（G7 synth 置 pend、pump 每圈
+// 免费评估、TF_DC=0、II_ST=2 吸死）——call/dc/noarm/nost/nopend/dv0 六格
+// 完整分割每次调用，堵点只许实测不许猜（G10 教训）。
+static mut TF_PQ_CALL: u32 = 0;
+static mut TF_PQ_NOARM: u32 = 0;
+static mut TF_PQ_NOST: u32 = 0;
+static mut TF_PQ_NOPEND: u32 = 0;
+static mut TF_PQ_TXOK: u32 = 0;
+static mut TF_PQ_TXNO: u32 = 0;
 // 刀 G10：转录插桩（零行为变化）——最近 2 笔 op4/op5 入站包原文 ≤24B
 // （op+码+错误消息串）。op5 的消息文本＝客户端拒收理由原文，一眼定谳。
 static mut TF_RXR: [[u8; 24]; 2] = [[0; 24]; 2];
@@ -7169,6 +7179,9 @@ fn tf_reply(ufs: &mut Ufs, at478: u64, at479: u64, sz479: u64) {
     if at478 == 0 || at479 == 0 {
         return;
     }
+    // 刀 G12：入口计数（pq=call 首格）。dc 在环闸里已是 dv 第四格，
+    // call = dc + noarm + nost + nopend + dv0 全分割。
+    unsafe { TF_PQ_CALL = TF_PQ_CALL.wrapping_add(1) };
     let tx_head = rd32((at478 + 4) as usize) as u64;
     let tx_tail = rd32(at478 as usize) as u64;
     unsafe {
@@ -7204,6 +7217,15 @@ fn tf_reply(ufs: &mut Ufs, at478: u64, at479: u64, sz479: u64) {
                 TF_ACK_BLK = 0;
             }
         }
+    }
+    // 刀 G12：pump 门四分位插桩（宽限 synth 之后计数——synth 能救的归
+    // dv0，不误记 nopend）。
+    if !armed {
+        unsafe { TF_PQ_NOARM = TF_PQ_NOARM.wrapping_add(1) };
+    } else if st != 1 && st != 2 {
+        unsafe { TF_PQ_NOST = TF_PQ_NOST.wrapping_add(1) };
+    } else if !unsafe { TF_ACK_PEND } {
+        unsafe { TF_PQ_NOPEND = TF_PQ_NOPEND.wrapping_add(1) };
     }
     if armed && (st == 1 || st == 2) && unsafe { TF_ACK_PEND } {
         unsafe { TF_DV = TF_DV.wrapping_add(1) };
@@ -7443,11 +7465,17 @@ fn tf_reply(ufs: &mut Ufs, at478: u64, at479: u64, sz479: u64) {
             n += 1;
         }
     }
-    // 刀 G1：从已播报的服务口 0x11 发（不再用未注册临时口）。tt 证据链：modem 的
-    // glink 层完整消费了 OACK+7680 块 1（tail 精确跟进），但客户端层零感知仍在
-    // 重发 RRQ——断点=modem qrtr 路由层。裸世界无内核 qrtr 登记 temp 口，路由器
-    // 只认 NEW_SERVER 播报过的口。ACK 也落 0x11：刀二的监听+入册正好闭环。
-    let sport = TF_SVC_PORT;
+    // 刀 G12：OACK 改从临时口发（stock 同构：tqftpserv 每客户 qrtr_open(0)
+    // 新口应答，OACK/DATA 同口，服务口 0x11 只做 RRQ 进线）。G1「temp 口被
+    // modem 路由层弃」与 0x11 现象同形（glink 尾随、客户端零感知），从未被
+    // 区分实验；G9/G11 rl= 里客户端主动把 RRQ 发往 0x1011/0x1111——临时口
+    // 可穿路由且被客户端咬住。retry（st2/3）沿用在役 XFER 口不换（G9c 节流
+    // 语义）。ACK 回临时口的 on_xfer 监听腿已在役（walker 读 TF_XFER_PORT）。
+    let sport = if retry {
+        unsafe { TF_XFER_PORT }
+    } else {
+        tf_new_port()
+    };
     if glink_tx_payload(
         at478,
         at479,
@@ -7458,6 +7486,7 @@ fn tf_reply(ufs: &mut Ufs, at478: u64, at479: u64, sz479: u64) {
         unsafe { TF_PORT },
         &q[..n],
     ) {
+        unsafe { TF_PQ_TXOK = TF_PQ_TXOK.wrapping_add(1) };
         // 刀 G9c：retry 服务只投 OACK，不碰游标/synth——原会话状态原样保留，
         // 重试口的任何回包（ACK/EOT）由 rx 滚动备忘捕获即达判读目的。
         if !retry {
@@ -7484,6 +7513,10 @@ fn tf_reply(ufs: &mut Ufs, at478: u64, at479: u64, sz479: u64) {
         // grace/DATA 连带冻死）；且其落位公式与 glink_tx_payload 内部回卷纪律
         // 不一致，疑自我写坏。G2 问题已答（cp=1 无反应），不再需要。
         tf_drop_pend();
+    } else {
+        // 刀 G12：OACK TX 失败计数（环满/回卷闸）。pend 不丢——下圈原样重试
+        // 服务，ox=ok.no 与 pq= 合读即知服务环是否在空转。
+        unsafe { TF_PQ_TXNO = TF_PQ_TXNO.wrapping_add(1) };
     }
 }
 
@@ -12449,6 +12482,21 @@ fn ctrl_service(
                                 // 刀 G9c：dv 第五元=retry OACK 服务数。
                                 push_str(&mut reply, &mut rn, ".");
                                 push_hex(&mut reply, &mut rn, unsafe { TF_DR } as u64);
+                                // 刀 G12：pq=call.noarm.nost.nopend（tf_reply
+                                // 四分位，宽限 synth 后计）＋ ox=ok.no（OACK TX
+                                // 成败）——dv=0 矛盾的实测堵点。
+                                push_str(&mut reply, &mut rn, " pq=");
+                                push_hex(&mut reply, &mut rn, unsafe { TF_PQ_CALL } as u64);
+                                push_str(&mut reply, &mut rn, ".");
+                                push_hex(&mut reply, &mut rn, unsafe { TF_PQ_NOARM } as u64);
+                                push_str(&mut reply, &mut rn, ".");
+                                push_hex(&mut reply, &mut rn, unsafe { TF_PQ_NOST } as u64);
+                                push_str(&mut reply, &mut rn, ".");
+                                push_hex(&mut reply, &mut rn, unsafe { TF_PQ_NOPEND } as u64);
+                                push_str(&mut reply, &mut rn, " ox=");
+                                push_hex(&mut reply, &mut rn, unsafe { TF_PQ_TXOK } as u64);
+                                push_str(&mut reply, &mut rn, ".");
+                                push_hex(&mut reply, &mut rn, unsafe { TF_PQ_TXNO } as u64);
                                 // ob=blk.wsz.ts — 写进 OACK 的数。wsz=0 表示请求没带 wsize。
                                 // rs=有键.值。rs=1.0 是 stat。
                                 push_str(&mut reply, &mut rn, " ob=");
