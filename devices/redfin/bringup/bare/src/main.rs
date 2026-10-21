@@ -4557,6 +4557,8 @@ static mut TF_TXSZ: u32 = 0;
 /// 单发闩被 servreg 包（0x12 口 QMI 头 00 04 撞 ACK 码）吃掉的教训。
 static mut TF_RX_LOG_P: [u32; 4] = [0; 4];
 static mut TF_RX_LOG_O: [u32; 4] = [0; 4];
+/// 刀 G6：第三元=op5 错误码 / op4 块号（ffff=没读到）。
+static mut TF_RX_LOG_A: [u32; 4] = [0; 4];
 static mut TF_RX_LOG_N: u32 = 0;
 /// DATA 缓冲。8200 = 4 字节 TFTP 头 + 8192 上限（so_read 单发双扇区 4096×2）。
 static mut TF_BLKBUF: [u8; 8200] = [0; 8200];
@@ -7369,17 +7371,25 @@ fn tf_reply(ufs: &mut Ufs, at478: u64, at479: u64, sz479: u64) {
             n += 1;
         }
     }
-    if unsafe { TF_REQ_WSZ } > 0 {
+    // 刀 G6：wsize 恒回显（stock handle_rrq：wsize 缺省 1，`wsize ? &wsize : NULL`
+    // 恒真——请求没带也回 wsize=1）。G5 窗实测客户端只带 blksize+timeoutms，
+    // 我们每笔 OACK 都缺 wsize，客户端收 OACK 即 EOT 重试 16 笔后弃。
+    {
+        let wsv = if unsafe { TF_REQ_WSZ } > 0 {
+            unsafe { TF_REQ_WSZ }
+        } else {
+            1
+        };
         tf_put_cstr(&mut q, &mut n, b"wsize");
-        tf_put_dec(&mut q, &mut n, unsafe { TF_REQ_WSZ });
+        tf_put_dec(&mut q, &mut n, wsv);
         if n < q.len() {
             q[n] = 0;
             n += 1;
         }
     }
-    // 刀 G5：rsize/seek 原样回显（stock tftp_send_oack 同款：请求带才回）。
-    // stat 舞（rsize=0）与段落读（rsize=52 读 ELF 头）都靠这两键认门。
-    if unsafe { TF_HAS_RS } != 0 {
+    // 刀 G5→G6：rsize/seek 回显改「值非零」门（stock `rsize ? &rsize : NULL`
+    // ——值为 0 不回显：stat 的 rsize=0 键在也不回；段落读 rsize=52 才回）。
+    if unsafe { TF_HAS_RS } != 0 && unsafe { TF_RSIZE } != 0 {
         tf_put_cstr(&mut q, &mut n, b"rsize");
         tf_put_dec(&mut q, &mut n, unsafe { TF_RSIZE });
         if n < q.len() {
@@ -7387,7 +7397,7 @@ fn tf_reply(ufs: &mut Ufs, at478: u64, at479: u64, sz479: u64) {
             n += 1;
         }
     }
-    if unsafe { TF_HAS_SK } != 0 {
+    if unsafe { TF_HAS_SK } != 0 && unsafe { TF_SEEK } != 0 {
         tf_put_cstr(&mut q, &mut n, b"seek");
         tf_put_dec(&mut q, &mut n, unsafe { TF_SEEK });
         if n < q.len() {
@@ -7417,6 +7427,14 @@ fn tf_reply(ufs: &mut Ufs, at478: u64, at479: u64, sz479: u64) {
             TF_ACK_PEND = false;
             TF_ACK_OFF = 0xffff_ffff;
             TF_OACK_AT = time::cntvct();
+            // 刀 G7：OACK 落环即合成 ACK-0（2s 宽限退役为兜底）。G6 窗2 实测：
+            // 客户端 1s 超时窗（tm=3e8）内既不 ACK-0 也不 EOT——18 笔重试全在
+            // ping 前打完，2s 后才发的 DATA 块 1 永远扑空（tb=2.1.11 冻结、
+            // rx=0 全靴零回包）。若客户端真是 ACK-0 型，真 ACK-0 稍后到也不碍
+            // 事：TF_ACK_OFF 去重，且 ack≠expect 的迟到 ACK 直接丢。stat 舞不受
+            // 影响——DATA 分支的 rsize=0 门照旧拦住不发。
+            TF_ACK_PEND = true;
+            TF_ACK_BLK = 0;
         }
         // 刀 G4：CTRL 副本探针删除。G3 实测它一笔不被消费即冻环（tt 卡 a00.960、
         // grace/DATA 连带冻死）；且其落位公式与 glink_tx_payload 内部回卷纪律
@@ -11354,10 +11372,18 @@ fn scan_new_servers(fifo: u64, rh: u64) {
                     if on_xfer || dst_port == TF_SVC_PORT
                         || (dst_port != 0x12 && (op == 4 || op == 5))
                     {
+                        // 刀 G6：第三元=op5 的错误码 / op4 的块号（其余 op 填 ffff）。
+                        // EOT(9) 与其他错一眼分清。
+                        let arg = if chunk >= 54 {
+                            ((rd8(fifo + off + 50) as u32) << 8) | (rd8(fifo + off + 51) as u32)
+                        } else {
+                            0xffff
+                        };
                         let idx = (unsafe { TF_RX_LOG_N } & 3) as usize;
                         unsafe {
                             TF_RX_LOG_P[idx] = dst_port;
                             TF_RX_LOG_O[idx] = op;
+                            TF_RX_LOG_A[idx] = arg;
                             TF_RX_LOG_N = TF_RX_LOG_N.wrapping_add(1);
                         }
                     }
@@ -12320,7 +12346,8 @@ fn ctrl_service(
                                 push_str(&mut reply, &mut rn, ".");
                                 push_hex(&mut reply, &mut rn, unsafe { TF_XFER_PORT } as u64);
                                 push_str(&mut reply, &mut rn, " rx=");
-                                // 滚动备忘：总数.随后最多 4 槽 port.op（时间序，旧→新）
+                                // 滚动备忘：总数.随后最多 4 槽 port.op.arg（时间序，旧→新；
+                                // arg=op5 错误码/op4 块号，刀 G6）
                                 push_hex(&mut reply, &mut rn, unsafe { TF_RX_LOG_N } as u64);
                                 let n_log = unsafe { TF_RX_LOG_N };
                                 let mut k_log = n_log.saturating_sub(4);
@@ -12336,6 +12363,12 @@ fn ctrl_service(
                                         &mut reply,
                                         &mut rn,
                                         unsafe { TF_RX_LOG_O[(k_log & 3) as usize] } as u64,
+                                    );
+                                    push_str(&mut reply, &mut rn, ".");
+                                    push_hex(
+                                        &mut reply,
+                                        &mut rn,
+                                        unsafe { TF_RX_LOG_A[(k_log & 3) as usize] } as u64,
                                     );
                                     k_log += 1;
                                 }
