@@ -486,7 +486,9 @@ static mut IN_BUSY: bool = false;
 static mut RX_COPY: [u8; 1536] = [0; 1536];
 static mut RX_LEN: usize = 0;
 static mut TCP_RX: [u8; 2560] = [0; 2560];
-static mut TCP_TX: [u8; 2560] = [0; 2560];
+// 刀 G21：TX 随 CTRL_REPLY 同步 3072——send_slice 一次装整条 sm 行，
+// 不足会静默截尾（partial send 仍 Ok）。
+static mut TCP_TX: [u8; 3072] = [0; 3072];
 static mut CTRL_SLOTS: [smoltcp::iface::SocketStorage<'static>; 1] =
     [smoltcp::iface::SocketStorage::EMPTY];
 static mut CTRL_IFACE: Option<smoltcp::iface::Interface> = None;
@@ -530,7 +532,8 @@ static mut CTRL_OVERFLOW: bool = false;
 // smem_scan→tf_reply→pump→so_read(UFS 深栈) 顶上（比 soak 路径深 2.5KB），
 // 首 sm 若逢 so 传输活窗即溢栈楔死（三窗死形同构：首查超时+ping 亡+USB 链
 // 仍活）。零行为差，纯栈形改。
-static mut CTRL_REPLY: [u8; 2560] = [0; 2560];
+// 刀 G21：+xl= 台账（≤4 槽×22 字符≈96B）再扩 512。
+static mut CTRL_REPLY: [u8; 3072] = [0; 3072];
 /// 0 闲，1 应答已交、等 IN 完成，2 再等 20ms 后拉 PS_HOLD。
 static mut CTRL_FB: u8 = 0;
 static mut FB_APID: u32 = 0;
@@ -4568,6 +4571,21 @@ static mut TF_W_SPORT: u32 = 0;
 static mut TF_W_ACKS: u32 = 0;
 static mut TF_W_BYTES: u64 = 0;
 static mut TF_W_ERRS: u32 = 0;
+/// 刀 G21：TX 台账 4 槽——每笔 glink_tx_payload 成功记 (sport, 整包
+/// 字节数, 发后 head)。靴 #20 定谳需要：modem 消费停在 tail=28b8，
+/// 却不知道 frontier 上卡的是哪笔。台账按时间序滚存，渲染进 xl=。
+static mut TXL_S: [u32; 4] = [0; 4];
+static mut TXL_Z: [u32; 4] = [0; 4];
+static mut TXL_H: [u32; 4] = [0; 4];
+static mut TXL_N: u32 = 0;
+/// 刀 G21：doorbell 重踢。靴 #20：环非空、tail 冻结、客户端零回——
+/// modem 侧消费死。若死因是丢 doorbell（USB LPM/竞态），重发布 head
+/// + 重敲 doorbell（全幂等）可救活；若死因在 intent 记账，重踢无害。
+/// tail 静止 ≥500ms 且环非空才踢，≥1s 一脚，TXK_N 计数进 xl=。
+static mut TXK_TAIL: u32 = 0xffff_ffff;
+static mut TXK_AT: u64 = 0;
+static mut TXK_AT2: u64 = 0;
+static mut TXK_N: u32 = 0;
 /// 旧的固定数据口。SO 的这次传输改用 TF_XFER_PORT。
 const TF_DATA_PORT: u32 = 0x21;
 /// 我们播报的 TFTP 服务口（svc 4096→0x11，RRQ 的目的地）。客户端可能把 ACK
@@ -5332,6 +5350,7 @@ fn smem_scan(ufs: &mut Ufs, do_glink: bool) {
                     let before = unsafe { RF_N };
                     rf_reply(at478, at479, sz479);
                     tf_reply(ufs, at478, at479, sz479);
+                    tx_rekick(at478);
                     pm_reply(at478, at479, sz479);
                     sr_tick(at478, at479, sz479);
                     ipa_init_tick(at478, at479, sz479);
@@ -6062,7 +6081,48 @@ fn glink_tx_payload(
         dcache_civac(at478, 16);
     }
     wr32(0x4080_0c, 2 << 16);
+    // 刀 G21：TX 台账（时间序 4 槽滚存）。
+    unsafe {
+        let i = (TXL_N & 3) as usize;
+        TXL_S[i] = src_port;
+        TXL_Z[i] = total as u32;
+        TXL_H[i] = (head + total as u64) as u32;
+        TXL_N = TXL_N.wrapping_add(1);
+    }
     true
+}
+
+/// 刀 G21：TX 消费看门狗。环非空且 tail 静止 ≥500ms 时重发布 head +
+/// 重敲 doorbell（幂等），≥1s 限一脚。救「modem 没看见 doorbell」形
+/// （USB LPM/竞态）；intent 记账死则无害空踢，TXK_N 观测踢了几脚。
+fn tx_rekick(at478: u64) {
+    if at478 == 0 {
+        return;
+    }
+    let head = rd32((at478 + 4) as usize) as u64;
+    let tail = rd32(at478 as usize) as u64;
+    let now = time::cntvct();
+    unsafe {
+        if head == tail || (tail as u32) != TXK_TAIL {
+            TXK_TAIL = tail as u32;
+            TXK_AT = now;
+            return;
+        }
+        let freq = time::freq_or(FREQ_FALLBACK as u32) as u64;
+        if now.wrapping_sub(TXK_AT) < freq / 2 {
+            return;
+        }
+        if TXK_AT2 != 0 && now.wrapping_sub(TXK_AT2) < freq {
+            return;
+        }
+        TXK_AT2 = now;
+        TXK_N = TXK_N.wrapping_add(1);
+    }
+    wr32((at478 + 4) as usize, head as u32);
+    if at478 < 0x80A0_0000 {
+        dcache_civac(at478, 16);
+    }
+    wr32(0x4080_0c, 2 << 16);
 }
 
 fn qmi_tlv_u32(fifo: u64, off: u64, chunk: u64, want: u8) -> Option<u32> {
@@ -7041,6 +7101,97 @@ fn tf_save_so(fifo: u64, off: u64, chunk: u64) {
     }
 }
 
+/// 刀 G21：WRQ（op2）选项抄盘——无 SO 名字闸、无 rpl 记账，纯抄。
+/// 此前 op2 无人存：G20 的 WRQ 腿调 tf_apply_saved 解析的是上一笔
+/// RRQ 的陈旧选项（WRQ OACK 回显错值）。
+fn tf_save_opts(fifo: u64, off: u64, chunk: u64) {
+    let size = rd32((fifo + off + 36) as usize) as usize;
+    let room = if chunk > 32 { chunk as usize - 32 } else { 0 };
+    let n = size.min(room).min(192);
+    unsafe {
+        let mut i = 0usize;
+        while i < n {
+            TF_OPTBUF[i] = rd8(fifo + off + 48 + i as u64);
+            i += 1;
+        }
+        TF_OPTLEN = n as u8;
+    }
+}
+
+/// 刀 G21：WRQ 选项解析（只读 TF_OPTBUF → 元组，不碰任何共享静态——
+/// 读会话的 TF_REQ_*/TF_WSENT 不许被写腿污染；tf_apply_saved 会清
+/// TF_WSENT 破坏 G19 窗不变式，写腿禁用）。缺省 blk=512/wsz=0/tmo=1000。
+fn tf_w_parse() -> (u32, u32, u32, u32, u32, u32) {
+    let mut blk = 512u32;
+    let mut wsz = 0u32;
+    let mut tmo = 1000u32;
+    let mut tsz = 0u32;
+    let mut rs = 0u32;
+    let mut sk = 0u32;
+    let n = unsafe { TF_OPTLEN } as usize;
+    if n < 4 {
+        return (blk, wsz, tmo, tsz, rs, sk);
+    }
+    let mut p = 2usize;
+    let mut skipped = 0u32;
+    while skipped < 2 && p < n {
+        let b = unsafe { TF_OPTBUF[p] };
+        p += 1;
+        if b == 0 {
+            skipped += 1;
+        }
+    }
+    while p < n {
+        let ks = p;
+        while p < n && unsafe { TF_OPTBUF[p] } != 0 {
+            p += 1;
+        }
+        let ke = p;
+        if p < n {
+            p += 1;
+        }
+        let vs = p;
+        while p < n && unsafe { TF_OPTBUF[p] } != 0 {
+            p += 1;
+        }
+        let ve = p;
+        if p < n {
+            p += 1;
+        }
+        let mut v = 0u32;
+        let mut i = vs;
+        let mut digits = ve > vs;
+        while i < ve {
+            let c = unsafe { TF_OPTBUF[i] };
+            if c < b'0' || c > b'9' {
+                digits = false;
+                break;
+            }
+            v = v.saturating_mul(10).saturating_add((c - b'0') as u32);
+            i += 1;
+        }
+        if !digits {
+            continue;
+        }
+        let klen = ke - ks;
+        let k0 = unsafe { TF_OPTBUF[ks] };
+        if klen == 7 && k0 == b'b' {
+            blk = v;
+        } else if klen == 5 && k0 == b'w' {
+            wsz = v;
+        } else if klen == 9 && k0 == b't' {
+            tmo = v;
+        } else if klen == 5 && k0 == b't' {
+            tsz = v;
+        } else if klen == 5 && k0 == b'r' {
+            rs = v;
+        } else if klen == 4 && k0 == b's' {
+            sk = v;
+        }
+    }
+    (blk, wsz, tmo, tsz, rs, sk)
+}
+
 fn tf_apply_saved() {
     unsafe {
         TF_REQ_BLK = 512;
@@ -7278,7 +7429,11 @@ fn tf_reply(ufs: &mut Ufs, at478: u64, at479: u64, sz479: u64) {
     // head≠tail 门把后续 grace/DATA 全部冻死（tt=a00.960 永冻、tb 停在 1）。改
     // 「免回卷容量闸」：head≠tail 时只要最大包（整包 8192）不回卷也放得下就继续；
     // 回卷纪律（非空不许绕回 0）与 glink_tx_payload 内闸保持一致。
-    if tx_head != tx_tail && tx_head + 8192 > sz479 {
+    // 刀 G21：8192→1024。本函数体内最大包=DATA 整包 ~880B（1024 罩住）；
+    // 8192 版在 head>sz-8192 时把 retry OACK/小包全锁死——靴 #20 dc≈call-42
+    // 即此形（环半满+head 近端=永锁）。放小包出门，DATA 放不下由内闸自拒
+    // （DX++，resume 下圈续推）。
+    if tx_head != tx_tail && tx_head + 1024 > sz479 {
         unsafe { TF_DC = TF_DC.wrapping_add(1) };
         return;
     }
@@ -7374,6 +7529,19 @@ fn tf_reply(ufs: &mut Ufs, at478: u64, at479: u64, sz479: u64) {
                 }
             };
             loop {
+                // 刀 G21：在途闸——未消费 >4096B 停推（resume 下圈续）。
+                // 窗口泵不许自己把环尾填满：单飞纪律下环近端+非空=全锁，
+                // 小包（retry OACK/写 ACK）会被饿死。
+                let tail_now = rd32(at478 as usize) as u64;
+                let inflight = if tx_head >= tail_now {
+                    tx_head - tail_now
+                } else {
+                    sz479 - tail_now + tx_head
+                };
+                if inflight > 4096 {
+                    unsafe { TF_DX = TF_DX.wrapping_add(1) };
+                    return;
+                }
                 let cur = base.wrapping_add(unsafe { TF_WSENT });
                 let off = unsafe { TF_SEEK }
                     .saturating_add(cur.saturating_mul(blk_sz as u32));
@@ -7475,16 +7643,15 @@ fn tf_reply(ufs: &mut Ufs, at478: u64, at479: u64, sz479: u64) {
         // 后全静）。stock 对带选项 WRQ 回 OACK（tqftpserv.c:713
         // handle_wrq），OACK 后客户端从块 1 发 DATA，本侧 tf_note_data/
         // 写泵接手。会话参数镜像 stock：块序从 1、wsz 缺省 1。
-        tf_apply_saved();
+        // 刀 G21：改 tf_w_parse 元组——tf_apply_saved 会清 TF_WSENT 破坏
+        // G19 读窗不变式、且此前解析的是陈旧 RRQ 选项（op2 从不存盘），
+        // 两毒齐避；TF_OPTBUF 已由 walker 的 op2 分支随 pend 换血。
+        let (wblk, wwsz, wtmo, wtsz, wrs, wsk) = tf_w_parse();
         unsafe {
             TF_W_ACTIVE = true;
             TF_W_EXP = 1;
-            TF_W_BLK = TF_REQ_BLK;
-            TF_W_WSZ = if TF_REQ_WSZ == 0 {
-                1
-            } else {
-                TF_REQ_WSZ.min(16)
-            };
+            TF_W_BLK = wblk;
+            TF_W_WSZ = if wwsz == 0 { 1 } else { wwsz.min(16) };
             TF_W_PEND = false;
             TF_W_SHORT = false;
         }
@@ -7497,31 +7664,27 @@ fn tf_reply(ufs: &mut Ufs, at478: u64, at479: u64, sz479: u64) {
         q[1] = 6;
         n = 2;
         tf_put_cstr(&mut q, &mut n, b"blksize");
-        tf_put_dec(&mut q, &mut n, unsafe { TF_REQ_BLK });
+        tf_put_dec(&mut q, &mut n, wblk);
         if n < q.len() {
             q[n] = 0;
             n += 1;
         }
         tf_put_cstr(&mut q, &mut n, b"timeoutms");
-        tf_put_dec(&mut q, &mut n, unsafe { TF_REQ_TMO });
+        tf_put_dec(&mut q, &mut n, wtmo);
         if n < q.len() {
             q[n] = 0;
             n += 1;
         }
-        if unsafe { TF_REQ_TSZ } != 0 {
+        if wtsz != 0 {
             tf_put_cstr(&mut q, &mut n, b"tsize");
-            tf_put_dec(&mut q, &mut n, unsafe { TF_REQ_TSZ });
+            tf_put_dec(&mut q, &mut n, wtsz);
             if n < q.len() {
                 q[n] = 0;
                 n += 1;
             }
         }
         {
-            let wsv = if unsafe { TF_REQ_WSZ } > 0 {
-                unsafe { TF_REQ_WSZ }.min(16)
-            } else {
-                1
-            };
+            let wsv = if wwsz > 0 { wwsz.min(16) } else { 1 };
             tf_put_cstr(&mut q, &mut n, b"wsize");
             tf_put_dec(&mut q, &mut n, wsv);
             if n < q.len() {
@@ -7529,17 +7692,17 @@ fn tf_reply(ufs: &mut Ufs, at478: u64, at479: u64, sz479: u64) {
                 n += 1;
             }
         }
-        if unsafe { TF_HAS_RS } != 0 && unsafe { TF_RSIZE } != 0 {
+        if wrs != 0 {
             tf_put_cstr(&mut q, &mut n, b"rsize");
-            tf_put_dec(&mut q, &mut n, unsafe { TF_RSIZE });
+            tf_put_dec(&mut q, &mut n, wrs);
             if n < q.len() {
                 q[n] = 0;
                 n += 1;
             }
         }
-        if unsafe { TF_HAS_SK } != 0 && unsafe { TF_SEEK } != 0 {
+        if wsk != 0 {
             tf_put_cstr(&mut q, &mut n, b"seek");
-            tf_put_dec(&mut q, &mut n, unsafe { TF_SEEK });
+            tf_put_dec(&mut q, &mut n, wsk);
             if n < q.len() {
                 q[n] = 0;
                 n += 1;
@@ -12043,6 +12206,11 @@ fn scan_new_servers(fifo: u64, rh: u64) {
                                 TF_SEEK = skv;
                                 tf_save_so(fifo, off, chunk);
                             }
+                            if op == 2 {
+                                // 刀 G21：WRQ 选项抄盘（读腿专用 TF_OPTBUF 在
+                                // pend 时随请求换血，单 pend 槽无竞态）。
+                                tf_save_opts(fifo, off, chunk);
+                            }
                         }
                     }
                 }
@@ -12689,6 +12857,39 @@ fn ctrl_service(
                                 push_hex(reply, &mut rn, unsafe { TF_W_BYTES });
                                 push_str(reply, &mut rn, ".");
                                 push_hex(reply, &mut rn, unsafe { TF_W_ERRS } as u64);
+                                // 刀 G21：xl=TX 台账 —— count[.sport.size.head×≤4]
+                                // + .rkick —— glink_tx_payload 成功记录最近 4 笔
+                                // （sport=源口，size=总字节含 28B 头，head=写后
+                                // 环 head 指针），rkick=tx_rekick 重发门铃次数。
+                                // #20 教训：tt 间隙 5048B > 会话 2850B —— TX
+                                // 在 TFTP 会话前就冻住，台账定位冻结 Frontier。
+                                push_str(reply, &mut rn, " xl=");
+                                push_hex(reply, &mut rn, unsafe { TXL_N } as u64);
+                                let xl_n = unsafe { TXL_N };
+                                let mut xl_k = xl_n.saturating_sub(4);
+                                while xl_k < xl_n {
+                                    push_str(reply, &mut rn, ".");
+                                    push_hex(
+                                        reply,
+                                        &mut rn,
+                                        unsafe { TXL_S[(xl_k & 3) as usize] } as u64,
+                                    );
+                                    push_str(reply, &mut rn, ".");
+                                    push_hex(
+                                        reply,
+                                        &mut rn,
+                                        unsafe { TXL_Z[(xl_k & 3) as usize] } as u64,
+                                    );
+                                    push_str(reply, &mut rn, ".");
+                                    push_hex(
+                                        reply,
+                                        &mut rn,
+                                        unsafe { TXL_H[(xl_k & 3) as usize] } as u64,
+                                    );
+                                    xl_k += 1;
+                                }
+                                push_str(reply, &mut rn, ".");
+                                push_hex(reply, &mut rn, unsafe { TXK_N } as u64);
                                 push_str(reply, &mut rn, " rx=");
                                 // 滚动备忘：总数.随后最多 4 槽 port.op.arg（时间序，旧→新；
                                 // arg=op5 错误码/op4 块号，刀 G6）
