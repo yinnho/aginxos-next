@@ -4328,3 +4328,77 @@ intent」、标 in_use、无则计数让路；③认 modem 的 RX_DONE/W_REUSE
 （7/14）归还；④池干发 RX_INTENT_REQ 求批；⑤sm 加 ii= 台账
 （ads/freed/inuse/dry）+观测还 rl=/px=/rs=。READ_NOTIF 催件、
 W_REUSE 分品、自由回卷继续挂账排后——三靴判读均未指向它们。
+
+## 刀 G22 收据（靴 #22，s21 在机）——intent 池闭合、写腿 DATA 全盲定谳
+
+s21 = intent 池+归还追踪（cmd5 广告展开 id..id+count-1、TX 盖最小可容
+free intent、认 RX_DONE(7)/W_REUSE(14) 归还、池干发 RX_INTENT_REQ、
+ii= 台账）。靴 #22 实战：
+
+- **读腿活**：OACK 答出、窗泵开始——T2（intent 投递层死）闭案。
+- **写腿开而 DATA 全盲定谳**：WRQ 会话开（active=1），客户端 DATA
+  永远不被看见——大包（>512B，blksize 7680→chunk 7712）在 walker
+  撞 G14 的「>512 跳步不解析」直接跳过，op3 无从记账。cmd7 催件
+  （voucher 要价 7784B=7680+头）无应答=对端预算耗尽即哑死。
+- **意图经济面**：归还链活但 cmd12 CONT 落 else break——首片续片
+  当场楔死步进器（#23 复现定谳）。
+
+G23 单刀材料齐：大包两件照办（还 intent + tf_note_ack/data 记账）。
+
+## 刀 G23 收据（靴 #23，s22 在机）——三层洋葱再剥：非 so 请求静默死
+
+s22 = 大包两件照办（还 intent + tftp 记账，QMI 深解析仍小包专属）。
+靴 #23 判读（G23b 提交 3b0967c 定谳三案）：
+
+1. **modem_efs RRQ 撞 !tf_is_so() 静默 drop**——客户端 walk 至
+   /readwrite/modem_efs，6+ 笔换源口（0x21→0x25 一带）重试全被
+   7916 门吞掉：TF_N=4、ox=1.0 恒定、阶梯全 op1，无一 ERROR 无一
+   OACK → 客户端弃线全静。真机产线本无 tqftpserv，客户端对「服务
+   在、文件无」早已兼容（ruleset ERROR 后换 WRQ 重来先例在案）。
+2. **cmd7 入站哑跳**：voucher 请求（0xe68）无人应——写腿 OACK 后
+   零 DATA 的主嫌。
+3. **cmd12 CONT 楔死步进器**：与 G22 靴互证。
+
+G23b 三修+台账一刀定案（详见提交 3b0967c 与下节）。
+
+## 刀 G23b 收据（靴 #24，s23 在机）——.so 完整送达（S4 线核心目标闭环）+ 写腿知名口定谳
+
+s23 四件：①非 so RRQ 一律 ERROR-1（旧刀只 ruleset）；②cmd7 催件
+应答（cmd5 补一枚+cmd8 granted，lpass 同款，IIP_NEXT 11+）；
+③cmd12 CONT 与 cmd9 同框入步进器；④意图经济台账 rg=/c9=/bg=/i7=。
+靴 #24（06:24:15 刷入，+595s 整准点撞天花板死=第四次实证 595–600s
+铁律）：
+
+**历史性破局——.so 完整送达**：
+- 客户端 walk 过 modem_efs（tr=1：一笔 ERROR-1 后客户端接受裁决
+  换轨）→ 真 .so RRQ（px= 全文：blksize7680/timeoutms1000/seek0/
+  wsize10/rsize52）→ OACK → 窗泵 → **客户端 ERROR-9 收幕**（tb=3、
+  rr=1.00050009）。方言发现：客户端不逐块 ACK，op5/9=会话终语。
+- **意图经济闭合**：rg=4f.4f.0（79 入队=79 归还、深度 0 零泄漏）；
+  cmd7 topup 实战 5 发 5 应（i7=5.e68.5.5.0），7784B 大包如约而至。
+- 阶梯六槽全景：**1×WRQ（sport 0x1f）+ 5×RRQ（sport 0x21..0x25）**
+  ——一靴内客户端做了 1 写 5 读，.so 是最后一笔（带选项）。
+
+**写腿死因定谳（G24 刀案）**：
+- 阶梯首槽 dst=**0x1011**（TF_RL 原样记账）＝客户端写方言 WRQ 发
+  知名口 **0x1000+0x11**，读腿才用我们 NEW_SERVER 广告的 0x11。旧
+  武装门（dst==0x11）整段吞 WRQ → 写会话无 OACK 无 ERROR 全静。
+- 7784B→0x16 大包实为 **IPA QMI**（本侧 ipa 腿已应 64B，xl 台账
+  sport 0x16/64B 与 ipa_cfg/ir/ind 三腿字节量吻合；IPA_SVC_PORT=
+  0x11+5 常量在案）——「写 DATA 错口投递」假说作废。
+- 读腿四笔 plain RRQ 中只有一笔得 ERROR（tr=1）之谜挂账（TF_PEND
+  占用窗与 II_ST==2 闸的时序挤压，次要）。
+
+**w45=0 仍在**：modem 吃到 .so 但 WLFW 0x45 未起——嫌疑序重排：
+①写会话（EFS 同步）楔死拖住启动序（G24 主刀）；②PIL 后续段/更多
+文件未供（pr= 路径环下一靴回答）；③IPA 会话半接。
+
+## 刀 G24（s24，链 #25 已布）——写腿知名口上监听 + 观察三件
+
+- 武装门/note_data 门收 TF_ALT_PORT(0x1011)；写 OACK/ACK 回程口
+  镜像来程（TF_W_VIA 武装时记，读写互不污染）；读腿主道 0x11 一字
+  不动；ERROR 腿仍走 tf_new_port 新口（stock 象）。
+- 观察三件：pr= 请求路径环（6×28B，px 只存 so——非 so 要哪个文件
+  从此可见）；bx= 首枚大包源口+载荷头三字；wx= 写腿三账
+  （WRQ 武装.写 OACK 发出.来程口）。
+- 码 75b1615 已推（先码后收据+码尖位舞步，本地 ahead=27 纯收据）。
