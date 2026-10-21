@@ -3755,3 +3755,36 @@ ACK_PEND/ack==expect/stat 门/blk≤8192/off<limit）全该过；G6w2 同分支�
 判读表：读零>0＝UFS 早期读失败（G6w2 +2s 能读、G7 +0.5s 不能？）；
 tx拒>0＝glink 内闸；环闸挡>0＝容量；全 0 而 tt 仍无 DATA＝tt 读数另解。
 G7 的立即 synth 保留，行为零改动。
+
+### 刀 G8 收据（10:54 刷、窗 10:58–11:0x）：立即 DATA 路径健康＋st=2 饿死机理定谳
+
+刷机链 bvkofwxwk（10:54:26 FLASHED），ping up 10:58:26，首样 +0.7s 已是
+终态——整个 12 笔交换在 ping 前打完，窗口到 +168s 全冻。dv 四计数器：
+
+- **dv=1.0.0.0 → 1.0.0.1**：DATA 分支全程只进 1 次、so_read 成功（dz=0）、
+  glink_tx 成功（dx=0）、环闸挡 0→1（后段一次性，无关）。G7 的立即
+  DATA 机制本身完全健康——tb=2.1.11、tt 0x27f0→0x2978（一块 7680＋OACK
+  ＋stat 期零头真上环）。G7 靴的「零上环」与本靴「秒上环」同代码不同靴
+  ＝靴间方差实锤。
+- **dv=1 vs 7 OACK 之谜解开＝不是谜是死锁**：tf=NAME.1.7＝7 笔 pend 只
+  服务了 1 笔。首笔 OACK+DATA#1 后 st=2、BLKNO=1、ACK_PEND=false，等
+  ACK；rx=0（客户端全靴零回包）→ 后续 6 笔 pend 进来时
+  `retarget`(st==1&&blk==0)/`fresh`(st==0||4) **两头不沾全被丢**。
+  客户端 12 笔 RRQ（rl=12，槽 11.21/22/23/24…）只吃到 1 份应答。
+- **客户端方言排雷收口**：ob=1e00.0.0＋tm=3e8＝只要 blksize=7680+
+  timeoutms=1000；rl 槽 fl=0（无 rsize/seek 键）——**rsize 段落读方言
+  假说死**，纯 RRQ。OACK 内容 G6 起与 stock 逐字节一致。
+- **靴间情绪表更新**：G8w1＝静默型＋首靴（破「首靴反应型」规律）——
+  情绪不由靴序决定。静默靴对 OACK+DATA 双双在环零反应。
+- **EOT-9 另解立案**：G5 的 16×EOT-9 若是「每弃一次口礼貌收摊」而非
+  「对 OACK 的反应」，则**出站投递从未被证明过**（NEW_SERVER 广播可达
+  ＝客户端找得到 0x11；单播 DATA/OACK 到 (node,0x21+) 是否进客户端
+  socket 未知）。G9 若 12 笔全服务仍 rx=0 → 转投递层审计
+  （qrtr 头 dst_node/端口注册）。
+
+**G9 立案**：armed 的 SO RRQ pend 一律服务（stock handle_rrq 语义＝每笔
+RRQ 独立会话全新 OACK）——retarget/fresh 区分退役，饿死机理直接消灭。
+G7 立即 DATA 保留（stock 是 OACK→等 ACK-0→DATA#1，我们不等；静默靴里
+立即 DATA 把信号最大化，且 stock 客户端在 Linux 上必发 ACK-0＝ACK-0
+缺席本身即客户端侧问题铁证）。判读：12 笔全服务后 rx>0（任一 ACK/EOT）
+＝投递通、转内容/时序；rx 仍=0＝投递死、转 G10 投递层审计。
