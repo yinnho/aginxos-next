@@ -3936,3 +3936,28 @@ tqftpserv 本就每客户 qrtr_open(0) 新临时口应答（qrtr_publish 只发
 的 on_xfer 监听腿已在役（walker 11408）**。若临时口活、pq= 显示 pump
 放行、dv>0、客户端仍静默——下一刀转 qrtr 头字节级对 stock（confirm
 位/节点编码）。
+
+## 刀 G12 收据：镜像杀靴定谳＝首查 sm 即死（两窗复现）→ G13 二分回退
+
+**镜像**：94b127b（boot-s20.img 14:58 烤，flash 窗 16:42 / 17:25 两发）。
+**两窗判别数据**（g12b 判别采样器：ping 1s 精判 up 时刻 → 20s 纯 ping
+存活段 → 每 4s sm 至 +120s）：
+
+- 窗1（16:42 刷）：ping up 16:50:43（等 8.6 分钟——**Mac 侧 USB 枚举
+  抖动**，非靴期病：窗2 同镜像 29s 即起）；[+0.7s] 首查 sm 即
+  TimeoutError；ping 亡 16:50:59（+16s）。
+- 窗2（17:25 刷）：ping up 17:26:37（29s，正常）；**纯 ping 20s 全稳**
+  （soak 环在跑、idle smem_scan 每 ~200ms 一圈）；[+20s] 首查 sm →
+  TimeoutError；ping 亡 17:27:05（+8s）。**17:32 仍无 ping——死后
+  5.5 分钟不回靴**：非 panic-reset（panic 面会 PS_HOLD 复位、二靴
+  ping 早回），是**硬锁死或 tries 烧穿**（s20 无看门狗兜底的死形状）。
+
+**判别结论**：sm → smem_scan(ufs,true)@12160 → do_glink → tf_reply
+（G12 码）路径杀靴，可复现；G11 同路径数百次 sm 无恙——**行为增量唯
+临时口**（pq=/ox= 是纯 wrapping 算术）。读面全排清：push_str/push_hex
+皆有界护栏、ctrl_reply=send_slice 无定长雷、渲染峰值 ~500B 距 2560
+极远。嫌疑归 OACK-from-tf_new_port() 腿（或客户端对其反应的级联）。
+
+**G13 二分回退（21b50cb，镜像 17:35 md5 4ce92dc0…）**：sport 复位
+0x11，pq=/ox= 全留——一刀两用：若 sm 复活 → 临时口腿定罪＋pq= 直接
+实测 dv=0 矛盾；若仍死 → 计数/渲染/console 路径翻案再查。
