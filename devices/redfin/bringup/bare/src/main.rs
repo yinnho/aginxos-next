@@ -7093,7 +7093,8 @@ fn so_read(ufs: &mut Ufs, off: u32, n: usize) -> usize {
 }
 
 /// tftp。WRQ 仍在监听口回 ACK block 0。
-/// SO 的 RRQ 等第一次 `sm` 之后发 OACK。rsize 键存在且值为 0 时不发 DATA，等 code 9。
+/// SO 的 RRQ 在 II_ST=2（IPA INIT 完成）后立即发 OACK（刀 G4：不再等第一次 sm）。
+/// rsize 键存在且值为 0 时不发 DATA，等 code 9。
 fn tf_reply(ufs: &mut Ufs, at478: u64, at479: u64, sz479: u64) {
     if at478 == 0 || at479 == 0 {
         return;
@@ -7105,10 +7106,17 @@ fn tf_reply(ufs: &mut Ufs, at478: u64, at479: u64, sz479: u64) {
         TF_TXT = tx_tail as u32;
         TF_TXSZ = sz479 as u32;
     }
-    if tx_head != tx_tail {
+    // 刀 G4：环非空不再一刀切回。G3 实测：一笔不被消费的包（CTRL 副本）落在环里，
+    // head≠tail 门把后续 grace/DATA 全部冻死（tt=a00.960 永冻、tb 停在 1）。改
+    // 「免回卷容量闸」：head≠tail 时只要最大包（整包 8192）不回卷也放得下就继续；
+    // 回卷纪律（非空不许绕回 0）与 glink_tx_payload 内闸保持一致。
+    if tx_head != tx_tail && tx_head + 8192 > sz479 {
         return;
     }
-    let armed = unsafe { SM_ARMED };
+    // 刀 G4：武装改 II_ST=2——G3 实测 rd=19f3(6.6s) 对 tm=3e8(1s)：SM_ARMED 等
+    // 第一次主机 sm 纯属观察纪律，客户端早超时闭口。本靴 +0.7s 首样已 ii=2、
+    // rf=3：rmtfs 回复早已在 glink TX 上流动，无主机也活。
+    let armed = unsafe { II_ST } == 2;
     let st = unsafe { TF_ST };
     // 宽限刀（假设 E）：OACK 已发、ACK-0 未到、块 0 未动，满 2s 合成 ack=0，
     // 落进下面的正常分支直发 DATA 块 1。若期间真 ACK-0 已到则此门不进。
@@ -7273,7 +7281,7 @@ fn tf_reply(ufs: &mut Ufs, at478: u64, at479: u64, sz479: u64) {
     let st_now = unsafe { TF_ST };
     let retarget = st_now == 1 && unsafe { TF_BLKNO } == 0;
     let fresh = st_now == 0 || st_now == 4;
-    // 游标不再回头。sm 之前把 SO 请求丢掉，后面就没有第二次机会。
+    // 游标不回头纪律保持：fresh（st 0/4）之外照旧丢。armed 已是 II_ST=2（刀 G4）。
     if op == 1 && !armed && tf_is_so() && unsafe { TZ_ST } == 1 && fresh {
         return;
     }
@@ -7339,26 +7347,9 @@ fn tf_reply(ufs: &mut Ufs, at478: u64, at479: u64, sz479: u64) {
             TF_ACK_OFF = 0xffff_ffff;
             TF_OACK_AT = time::cntvct();
         }
-        // 刀 G2 探针：此刻环刚排空、双份 OACK 总量 <300B 远小于 16K 环容——直接从
-        // CTRL 口(0xfffffffe) 再排一份同载荷同目的址的副本，只换源口。一次性。
-        // 答 LOOKUP 的 NEW_SERVER 就是 (1,CTRL)→客户端 这个形状；若 TFTP 客户端
-        // 只收这种源址，副本一落地它就有反应（tf 冻结 / rx 现形）。
-        if unsafe { TF_CTRL_PROBE } == 0 && n > 0 {
-            let padded = (n + 3) & !3;
-            let total = (16 + (32 + padded) + 7) & !7;
-            if glink_tx_payload(
-                at478,
-                at479,
-                tx_head + total as u64,
-                sz479,
-                0xffff_fffe,
-                unsafe { TF_NODE },
-                unsafe { TF_PORT },
-                &q[..n],
-            ) {
-                unsafe { TF_CTRL_PROBE = 1; }
-            }
-        }
+        // 刀 G4：CTRL 副本探针删除。G3 实测它一笔不被消费即冻环（tt 卡 a00.960、
+        // grace/DATA 连带冻死）；且其落位公式与 glink_tx_payload 内部回卷纪律
+        // 不一致，疑自我写坏。G2 问题已答（cp=1 无反应），不再需要。
         tf_drop_pend();
     }
 }
