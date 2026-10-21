@@ -3631,3 +3631,34 @@ elf_loader 的段落读（stock README：stat 后 `RRQ rsize=52 seek=0` 读 ELF 
 
 判读表：静默期若 rl= 冒新槽（非 0x11 口）→ 假设 (b) 成立，看 fl/rs/sk 按
 stock 舞应答；rl= 也零新笔 → 假设 (a)，下一刀对准 NEW_LOOKUP 应答面。
+
+### 刀 G5 收据（09:10 窗，活过 +63s 冻结）：rl= 盲洞闭合——没有换口请求，断点回 OACK 内容本身
+
+镜像 09:03 刷入（09:09:18），窗 09:10:17 开。+0.7s 首样即定谳：
+
+- **rl=0x10（16 笔请求）**，最新 6 槽全 dst=0x11（src 0x21–0x25）、**op=1、fl=0**
+  ——请求只带 blksize=7680+timeoutms=1000，**没有 rsize 也没有 seek 键**
+  （ob=1e00.0.0 旁证：无 tsize 无 wsize）。还有一笔 op2 WRQ（src=0x1f）——
+  stock 有正经 handle_wrq，非偏；
+- rx=3：两笔 op5（tb=4 证明至少末笔 code9-while-st1）+一笔 op1；
+- 之后完全冻结（+63s 同形）：tt=bd8.bd8 环清空、pr=2→3（tms/pddump_disabled
+  →kernel/elf_loader 各问一次域，均答、pe=1）、w45=0。
+
+**判读**：假设 (b)（客户端换口重试、旧扫描盲）**死**——stall 期零新请求，全
+部 16 笔都在 0x11 眼皮底下。客户端是**收到我们 OACK 后主动 EOT 收摊**再换
+口重试 16 次后弃。断点=OACK 内容不满足客户端。G4w2 静默同根。
+
+**stock 对齐复核**（tqftpserv.c handle_rrq/tftp_send_oack 逐行）三个差异：
+
+1. **wsize 恒回显**：stock `wsize` 缺省 1，`wsize ? &wsize : NULL` 恒真——
+   请求没带 wsize 也回 `wsize=1`。我们「请求带才回」→ 本靴客户端每笔 OACK
+   都缺 wsize。**首要嫌疑**；
+2. rsize/seek 只在**值非零**时回显（stat 的 rsize=0 键在也不回）——G5 的
+   「键在就回」比 stock 多（本靴未触发，一并修）；
+3. tsize 只在请求带时回（我们已对齐）。
+
+### 刀 G6（09:14 镜像 114688B）：wsize 恒回显（缺省 1）+ rsize/seek 改值非零门 + rx 第三元（op5 错误码/op4 块号）——待上机
+
+判读表：rx= 槽第三元直接看 op5 码——9=EOT 正常收摊、其他码=真错误；tb 离开
+4 进 2/3=客户端开始 ACK DATA（wsize 补齐奏效）；rl 再冒新槽+fl 含 rsize/seek
+位=进入段落读舞（stock README 的 rsize=52 读 ELF 头）。
