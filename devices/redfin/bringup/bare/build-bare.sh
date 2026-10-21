@@ -116,6 +116,7 @@ MODE="heartbeat"
 [ "${1:-}" = "--s20" ] && MODE="s20"
 [ "${1:-}" = "--s21" ] && MODE="s21"
 [ "${1:-}" = "--s22" ] && MODE="s22"
+[ "${1:-}" = "--s23" ] && MODE="s23"
 mkdir -p "${OUTDIR}"
 ELF="${OUTDIR}/heartbeat.elf"
 
@@ -882,6 +883,16 @@ elif [ "${MODE}" = "s22" ]; then
   ELF="${OUTDIR}/s22.elf"
   cp "${HERE}/target/aarch64-unknown-none-softfloat/release/redfin-bare" "${ELF}"
   BIN="${OUTDIR}/s22.bin"; IMG="${OUTDIR}/boot-s22.img"
+elif [ "${MODE}" = "s23" ]; then
+  # 刀 G23b：s22 同面，四件——①非 so RRQ 一律 ERROR-1 新口（#23 定谳：
+  # modem_efs 撞 !tf_is_so() 静默 drop，6+ 笔换源口重试全吞→客户端弃线）；
+  # ②入站 cmd7 催件应答（cmd5 补一枚+cmd8 granted，lpass 同款；旧哑跳=
+  # 对端预算耗尽即哑死）③cmd12 CONT 入步进器（旧落 break 楔死洞）；
+  # ④意图经济台账 rg=/c9=/bg=/i7=（入还队/还清/cmd9 liid/大包五元组）。
+  (cd "${HERE}" && cargo build --release --target aarch64-unknown-none-softfloat)
+  ELF="${OUTDIR}/s23.elf"
+  cp "${HERE}/target/aarch64-unknown-none-softfloat/release/redfin-bare" "${ELF}"
+  BIN="${OUTDIR}/s23.bin"; IMG="${OUTDIR}/boot-s23.img"
 elif [ "${MODE}" = "s21" ]; then
   # 刀 G22：s20 同面，intent 池+归还追踪（cmd5 全量入池、TX 池挑、
   # RX_DONE/W_REUSE 归还、池干 RX_INTENT_REQ、cmd3/11 入 8B 集、ii= 台账）。

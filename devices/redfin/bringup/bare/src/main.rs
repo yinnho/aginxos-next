@@ -4368,6 +4368,23 @@ static mut GLINK_RXLEN: u64 = 0;
 static mut RX_LIID: [u32; 16] = [0; 16];
 static mut RX_LIID_N: u32 = 0;
 static mut RX_DONE_N: u32 = 0;
+// 刀 G23b：意图经济台账——Q9_N=累计入还队笔数、C9_N/C9_LIID=cmd9 计数/
+// 末枚 liid（对端 liid=0=无凭证发送，一眼可辨）、BG_N/BG_DUMP=大包数+
+// 首包五元组、I7_N/I7_SIZE=入站 cmd7 计数/要的尺寸、I7_PEND=待补发尺寸、
+// I12_N=CONT 续片数、TX5_N/TX8_N=补发广告/ack 已发数、IIP_NEXT=补发新
+// intent id（11 起，避开首播 1..=10）。
+static mut Q9_N: u32 = 0;
+static mut C9_N: u32 = 0;
+static mut C9_LIID: u32 = 0;
+static mut BG_N: u32 = 0;
+static mut BG_DUMP: [u32; 5] = [0; 5];
+static mut I7_N: u32 = 0;
+static mut I7_SIZE: u32 = 0;
+static mut I7_PEND: u32 = 0;
+static mut I12_N: u32 = 0;
+static mut IIP_NEXT: u32 = 11;
+static mut TX5_N: u32 = 0;
+static mut TX8_N: u32 = 0;
 /// confirm_rx 置位时要回 RESUME_TX，否则对方这条流的下一包不发。
 static mut CF_VIS: u64 = 0;
 static mut CF_PEND: bool = false;
@@ -5493,6 +5510,7 @@ fn smem_scan(ufs: &mut Ufs, do_glink: bool) {
                 }
                 glink_resume(at478, at479, sz479);
                 glink_rx_reuse(at478, at479, sz479);
+                glink_intent_topup(at478, at479, sz479);
                 glink_rx_advance(at478, unsafe { GLINK_RXLEN });
             }
             l2_swap(index, old, toc >> 12);
@@ -6142,6 +6160,50 @@ fn glink_rx_reuse(at478: u64, at479: u64, sz479: u64) {
         unsafe { RX_DONE_N = RX_DONE_N.wrapping_add(1) };
         n += 1;
     }
+}
+
+/// 刀 G23b：入站 cmd7 的补发——镜像 qcom_glink_handle_intent_req 与 lpass
+/// 线同款（10943 收据在案）：先 cmd5 广告一枚（尺寸取要价、地板 0x40、
+/// 新 id），再 cmd8 granted（param1=本机 lcid 2，不是对方 cid）。旧刀对
+/// cmd7 整步哑跳——对端预算耗尽时唯一的催件通道没人接（#23 写腿 OACK
+/// 后零 DATA 主嫌）。walker 只记 I7_PEND，TX 由主循环本函数做（环纪律
+/// 同 glink_rx_reuse；环满则 I7_PEND 留待下轮）。
+fn glink_intent_topup(at478: u64, at479: u64, sz479: u64) {
+    let size = unsafe { I7_PEND };
+    if size == 0 || at478 == 0 || at479 == 0 || sz479 < 32 {
+        return;
+    }
+    let tx_head = rd32((at478 + 4) as usize) as u64;
+    let tx_tail = rd32(at478 as usize) as u64;
+    let avail = if tx_tail <= tx_head {
+        sz479 - tx_head + tx_tail
+    } else {
+        tx_tail - tx_head
+    };
+    if avail < 24 || tx_head + 24 > sz479 {
+        return;
+    }
+    let sz = if size < 0x40 { 0x40 } else { size };
+    let id = unsafe { IIP_NEXT };
+    let p = at479 + tx_head;
+    wr32(p as usize, 5 | (2 << 16));
+    wr32((p + 4) as usize, 1);
+    wr32((p + 8) as usize, sz);
+    wr32((p + 12) as usize, id);
+    wr32((p + 16) as usize, 8 | (2 << 16));
+    wr32((p + 20) as usize, 1);
+    unsafe {
+        core::arch::asm!("dsb sy", options(nostack));
+        IIP_NEXT = IIP_NEXT.wrapping_add(1);
+        I7_PEND = 0;
+        TX5_N = TX5_N.wrapping_add(1);
+        TX8_N = TX8_N.wrapping_add(1);
+    }
+    wr32((at478 + 4) as usize, (tx_head + 24) as u32);
+    if at478 < 0x80A0_0000 {
+        dcache_civac(at478, 16);
+    }
+    wr32(0x4080_0c, 2 << 16);
 }
 
 fn glink_tx_payload(
@@ -7871,7 +7933,12 @@ fn tf_reply(ufs: &mut Ufs, at478: u64, at479: u64, sz479: u64) {
     }
     // tqftpserv：请求一到就换一个新口回 ERROR 1。不等 sm。
     // INIT 完成前不发：早发 ERROR 会把发送环卡住。
-    if op == 1 && tf_is_ruleset() {
+    // 刀 G23b：非 so 一律 ERROR（旧刀只 ruleset）——#23 定谳：modem_efs
+    // RRQ 撞 7916 门 !tf_is_so() 静默 drop，6+ 笔换源口重试全吞 → 客户端
+    // 弃线全静。stock open 失败即 ERROR file not found；真机产线本就无
+    // tqftpserv，客户端对「服务在、文件无」本就该走人（ruleset ERROR 后
+    // 换 WRQ 重来的先例在案）。
+    if op == 1 && !tf_is_so() {
         if unsafe { II_ST } != 2 {
             return;
         }
@@ -11918,11 +11985,26 @@ fn scan_new_servers(fifo: u64, rh: u64) {
         let step = if cmd == 0
             || cmd == 1
             || cmd == 4
-            || cmd == 7
             || cmd == 8
             || cmd == 13
             || cmd == 15
         {
+            8
+        } else if cmd == 7 {
+            // 刀 G23b：入站催件记账——对端要发没凭证（内核语义：查复用
+            // intent→无则新广告一枚→cmd8 granted）。旧刀整步哑跳，对端
+            // 预算干涸即哑死；补发在主循环 glink_intent_topup。
+            let cid7 = w0 >> 16;
+            let size7 = rd32((fifo + off + 4) as usize);
+            unsafe {
+                if qrtr_lcid(cid7) {
+                    I7_N = I7_N.wrapping_add(1);
+                    I7_SIZE = size7;
+                    if I7_PEND == 0 && size7 != 0 && size7 <= 0x10000 {
+                        I7_PEND = size7;
+                    }
+                }
+            }
             8
         } else if cmd == 3 || cmd == 11 {
             // 刀 G22：CLOSE/CLOSE_ACK 入 8B 集（旧缺位=楔死向量）。
@@ -11962,12 +12044,27 @@ fn scan_new_servers(fifo: u64, rh: u64) {
                 k += 1;
             }
             8 + (count as u64) * 8
-        } else if cmd == 9 {
+        } else if cmd == 9 || cmd == 12 {
+            // 刀 G23b：CONT(12) 与 TX_DATA(9) 同框——内核 qcom_glink_rx_data
+            // 同一读法（16B 头，chunk_size@+8）。CONT 是续片：不另耗 intent、
+            // 无 QRTR 头，只记账跳步。旧刀落 else break，首片 CONT 当场把
+            // 步进器楔死。
             let chunk = rd32((fifo + off + 8) as usize) as u64;
             if chunk == 0 || off + 16 + chunk > rh + 16 {
                 break;
             }
             let step = (16 + chunk + 7) & !7;
+            if cmd == 12 {
+                unsafe { I12_N = I12_N.wrapping_add(1); }
+                off += step;
+                continue;
+            }
+            // 刀 G23b：cmd9 台账——c9= 笔数.末枚 liid；对端 liid=0（无凭证
+            // 发送）与凭证耗尽干涸一眼可辨。
+            unsafe {
+                C9_N = C9_N.wrapping_add(1);
+                C9_LIID = rd32((fifo + off + 4) as usize);
+            }
             // 刀 G23：大包两件照办，其余仍小包专属——
             // ① 还 intent：写客户端整块 DATA（blksize 7680→chunk 7712）
             //   吃我们广告的 intent，不还=modem 发 10 块就干涸停口；
@@ -11979,6 +12076,14 @@ fn scan_new_servers(fifo: u64, rh: u64) {
                 let lcid = w0 >> 16;
                 let liid = rd32((fifo + off + 4) as usize);
                 unsafe {
+                    BG_N = BG_N.wrapping_add(1);
+                    if BG_N == 1 {
+                        BG_DUMP[0] = chunk as u32;
+                        BG_DUMP[1] = 0xffff_ffff;
+                        BG_DUMP[2] = 0xffff_ffff;
+                        BG_DUMP[3] = 0xffff_ffff;
+                        BG_DUMP[4] = 0xffff_ffff;
+                    }
                     if GLINK_INTENTS
                         && HOST_ADV >= 4
                         && qrtr_lcid(lcid)
@@ -11988,6 +12093,7 @@ fn scan_new_servers(fifo: u64, rh: u64) {
                     {
                         RX_LIID[RX_LIID_N as usize] = liid;
                         RX_LIID_N += 1;
+                        Q9_N = Q9_N.wrapping_add(1);
                         RX_VIS = off + step;
                     }
                 }
@@ -11995,6 +12101,15 @@ fn scan_new_servers(fifo: u64, rh: u64) {
                     let typ = rd32((fifo + off + 20) as usize);
                     let dst_node = rd32((fifo + off + 40) as usize);
                     let dst_port = rd32((fifo + off + 44) as usize);
+                    unsafe {
+                        if BG_N == 1 {
+                            BG_DUMP[1] = typ;
+                            BG_DUMP[2] = dst_node;
+                            BG_DUMP[3] = dst_port;
+                            BG_DUMP[4] = ((rd8(fifo + off + 48) as u32) << 8)
+                                | (rd8(fifo + off + 49) as u32);
+                        }
+                    }
                     let xfer_port = unsafe { TF_XFER_PORT };
                     let on_xfer = xfer_port != 0 && dst_port == xfer_port;
                     if typ == 1
@@ -12028,6 +12143,7 @@ fn scan_new_servers(fifo: u64, rh: u64) {
                 {
                     RX_LIID[RX_LIID_N as usize] = liid;
                     RX_LIID_N += 1;
+                    Q9_N = Q9_N.wrapping_add(1);
                     RX_VIS = off + step;
                 }
             }
@@ -13132,6 +13248,44 @@ fn ctrl_service(
                                 push_hex(reply, &mut rn, unsafe { IIP_DONE } as u64);
                                 push_str(reply, &mut rn, ".");
                                 push_hex(reply, &mut rn, unsafe { IIP_SFIX } as u64);
+                                // 刀 G23b：意图经济四联——rg=累计入队.已还.
+                                // 现存深度（闭合则前两数相等）；c9=cmd9 笔数.
+                                // 末枚 liid（0=对端无凭证裸发）；bg=大包数.
+                                // 首包五元组(chunk.typ.node.port.op，ffff=没
+                                // 读到)；i7=cmd7 计数.要的尺寸.补发5.补发8.
+                                // CONT 续片数。
+                                push_str(reply, &mut rn, " rg=");
+                                push_hex(reply, &mut rn, unsafe { Q9_N } as u64);
+                                push_str(reply, &mut rn, ".");
+                                push_hex(reply, &mut rn, unsafe { RX_DONE_N } as u64);
+                                push_str(reply, &mut rn, ".");
+                                push_hex(reply, &mut rn, unsafe { RX_LIID_N } as u64);
+                                push_str(reply, &mut rn, " c9=");
+                                push_hex(reply, &mut rn, unsafe { C9_N } as u64);
+                                push_str(reply, &mut rn, ".");
+                                push_hex(reply, &mut rn, unsafe { C9_LIID } as u64);
+                                push_str(reply, &mut rn, " bg=");
+                                push_hex(reply, &mut rn, unsafe { BG_N } as u64);
+                                {
+                                    let mut bgi = 0usize;
+                                    while bgi < 5 {
+                                        if bgi != 0 {
+                                            push_str(reply, &mut rn, ".");
+                                        }
+                                        push_hex(reply, &mut rn, unsafe { BG_DUMP[bgi] } as u64);
+                                        bgi += 1;
+                                    }
+                                }
+                                push_str(reply, &mut rn, " i7=");
+                                push_hex(reply, &mut rn, unsafe { I7_N } as u64);
+                                push_str(reply, &mut rn, ".");
+                                push_hex(reply, &mut rn, unsafe { I7_SIZE } as u64);
+                                push_str(reply, &mut rn, ".");
+                                push_hex(reply, &mut rn, unsafe { TX5_N } as u64);
+                                push_str(reply, &mut rn, ".");
+                                push_hex(reply, &mut rn, unsafe { TX8_N } as u64);
+                                push_str(reply, &mut rn, ".");
+                                push_hex(reply, &mut rn, unsafe { I12_N } as u64);
                                 push_str(reply, &mut rn, " rx=");
                                 // 滚动备忘：总数.随后最多 4 槽 port.op.arg（时间序，旧→新；
                                 // arg=op5 错误码/op4 块号，刀 G6）
