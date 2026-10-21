@@ -4181,3 +4181,42 @@ w45>0 → wlan_pd UP。
 CTRL_REPLY/TCP_TX 2560→3072（xl≈96B 余量防截尾）。
 胜判不变：xl frontier 在 TFTP 会话包上＋TXK_N>0 后 tail 动 → tt 爬升
 → rx 见 op4 → 126 块 964092B → w45>0 → wlan_pd UP。
+
+## 离线内核 glink 契约审计（2026-10-22 ~00:30，无刀）——#20 冻结三家嫌疑+READ_NOTIF 端药方
+
+源：`kernel-src/redbull/drivers/rpmsg/qcom_glink_native.c` +
+`qcom_glink_smem.c`（本地内核树，只读）。裸机 TX 与内核契约三处结构性
+错位，全部指向 #20「tail 冻死先于会话」家族：
+
+1. **内核 TX 随时回卷**（`glink_smem_tx_write_one`：写时分两段、
+   `head-=length` 回卷）；可用量只让
+   `FIFO_FULL_RESERVE 8 + TX_BLOCKED_CMD_RESERVE 8`。我们的「单飞纪律」
+   （只在 head==tail 整环排空才回卷）更严——head 近环尾+tail 停摆＝
+   永久写死（#20 入场门自锁的根，G21 ⑤ 只是止血不是正法）。
+2. **内核 TX 吃远端 intent 池**（`__qcom_glink_send`：`riids` idr 里挑
+   最小够用空闲 intent、标 `in_use`，远端 RX_DONE 才归还；池干则发
+   `RX_INTENT_REQ` 并阻塞等批）。我们每包都盖同一个 `LAST_IID`、不追踪
+   modem 对我们 iid 的 RX_DONE 归还、池干不发请求——**同一 iid 连发
+   在飞**是常驻违约。
+3. **内核收包循环遇坏 iid 即弃坑**（`qcom_glink_rx_data`：intent 查无
+   →`-ENOENT`，本包消费掉但 `if(ret) break` 收包循环退出，等下一个
+   doorbell/READ_NOTIF 再进）。QDSP6 侧 glink 非 Linux 移植，违约反应
+   未知；10-18 已实证「某包一出、DSP 读端停死、跳过即复活」——
+   同族。
+4. **RX_DONE 品种**：内核只对 `reuse=true` intent 回
+   RX_DONE_W_REUSE(14)，非 reuse 用 RX_DONE(6)；我们 `glink_rx_reuse`
+   一律 W_REUSE——对非 reuse intent 也是常驻违约（10-18 定谳的
+   「RX_DONE_W_REUSE(liid=1) 楔死」与此吻合）。
+5. **READ_NOTIF(13)＝「环里有货来读」催件**：内核 TX 环满等位时发之
+   （`qcom_glink_tx` while 循环+`sent_read_notify` 一次性），对端收到
+   即 `mbox_send_message` 自踢收包循环——正是「收包循环 bail 后」的
+   复活通道。包形：cmd13、param1=0、param2=0、12B。
+   （10-18 试过 cmd13 无效——但当时毒包是自家 W_REUSE，催件救不了
+   中毒；#20 若是 bail 型冻结，催件才是正药。）
+
+**对 #21 判读的先验**：xl= 首照 frontier 坐标＋TXK_N 是否动 tail——
+- re-kick 动 tail → 纯 doorbell 丢（T3）；
+- 不动、frontier 是 TX_DATA(重复 iid) → intent 池干（T2）；
+- 不动、frontier 是控制包（W_REUSE）→ 毒包（T1，10-18 同族）。
+**G22 候选刀序**（按判读定）：READ_NOTIF 催件腿 / intent 池+归还追踪 /
+W_REUSE 分品 / 自由回卷。禁在三嫌疑未定谳前混刀。
