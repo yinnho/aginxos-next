@@ -7346,14 +7346,15 @@ fn tf_reply(ufs: &mut Ufs, at478: u64, at479: u64, sz479: u64) {
     }
     // 状态 1 且还没送出 DATA：旧端口的 OACK 没人 ACK。新 RRQ 换端口再发一次。
     // 状态 4：stat 的 End of Transfer 已经收到，下一笔 SO 重新 OACK。
-    let st_now = unsafe { TF_ST };
-    let retarget = st_now == 1 && unsafe { TF_BLKNO } == 0;
-    let fresh = st_now == 0 || st_now == 4;
-    // 游标不回头纪律保持：fresh（st 0/4）之外照旧丢。armed 已是 II_ST=2（刀 G4）。
-    if op == 1 && !armed && tf_is_so() && unsafe { TZ_ST } == 1 && fresh {
+    // 刀 G9：armed 的 SO RRQ pend 一律服务——stock handle_rrq 语义＝每笔
+    // RRQ 独立会话全新 OACK。G8 实测旧门饿死重试：首笔 OACK+DATA 后 st=2
+    // 等不到 ACK（rx=0），后续 6 笔 pend retarget/fresh 两头不沾全丢
+    // （tf=NAME.1.7 只服务 1/7）。retarget/fresh 区分退役；st=8 读失败也
+    // 重试（FAT 走查可能瞬时失败，stock 同样每笔新开 fd）。
+    if op == 1 && !armed && tf_is_so() && unsafe { TZ_ST } == 1 {
         return;
     }
-    if op != 1 || !armed || (!retarget && !fresh) || !tf_is_so() || unsafe { TZ_ST } != 1 {
+    if op != 1 || !armed || !tf_is_so() || unsafe { TZ_ST } != 1 {
         tf_drop_pend();
         return;
     }
