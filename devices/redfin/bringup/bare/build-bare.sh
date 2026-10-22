@@ -128,6 +128,7 @@ MODE="heartbeat"
 [ "${1:-}" = "--s32" ] && MODE="s32"
 [ "${1:-}" = "--s33" ] && MODE="s33"
 [ "${1:-}" = "--s34" ] && MODE="s34"
+[ "${1:-}" = "--s35" ] && MODE="s35"
 mkdir -p "${OUTDIR}"
 ELF="${OUTDIR}/heartbeat.elf"
 
@@ -1016,6 +1017,17 @@ elif [ "${MODE}" = "s34" ]; then
   ELF="${OUTDIR}/s34.elf"
   cp "${HERE}/target/aarch64-unknown-none-softfloat/release/redfin-bare" "${ELF}"
   BIN="${OUTDIR}/s34.bin"; IMG="${OUTDIR}/boot-s34.img"
+elif [ "${MODE}" = "s35" ]; then
+  # 刀 G34（观察刀，零协议行为变更）：#39 假说——modem PD 机制拿不到
+  # PD map（svc 64@0x12 公告无应答 po= 0x12×4、rmtfs 0x10×8）→ wlan_pd
+  # 不生 → 无 0x45。定向包环：0x12/0x10 各末 2 包 ×96B；pd= 解码
+  # n.tf.msg.txn.service_name（参照=redbull service-locator*.c：
+  # GET_DOMAIN_LIST_REQ=0x0021 TLV 0x01=名字串）、pdh= 96B 全hex
+  # （G35 应答刀逐字节参照）、rm= 0x10 末包头解码。
+  (cd "${HERE}" && cargo build --release --target aarch64-unknown-none-softfloat) || { echo "cargo build FAILED (${MODE}) -- 不拷陈旧件" >&2; exit 1; }
+  ELF="${OUTDIR}/s35.elf"
+  cp "${HERE}/target/aarch64-unknown-none-softfloat/release/redfin-bare" "${ELF}"
+  BIN="${OUTDIR}/s35.bin"; IMG="${OUTDIR}/boot-s35.img"
 elif [ "${MODE}" = "s21" ]; then
   # 刀 G22：s20 同面，intent 池+归还追踪（cmd5 全量入池、TX 池挑、
   # RX_DONE/W_REUSE 归还、池干 RX_INTENT_REQ、cmd3/11 入 8B 集、ii= 台账）。

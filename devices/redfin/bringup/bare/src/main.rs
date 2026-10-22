@@ -4750,6 +4750,17 @@ static mut TF_PO_C: [u32; 8] = [0; 8];
 /// 「它递的信长什么样」——答不答、怎么答，看完信再裁。
 static mut TF_PC: [u8; 64] = [0; 64];
 static mut TF_PC_PORT: u32 = 0;
+/// 刀 G34（纯观察）：0x12(pd-mapper)/0x10(rmtfs) 定向包环——各末 2 包
+/// ×96B（qrtr 头 48B+载荷首 48B）。#39 假说：modem PD 机制拿不到 PD map
+/// （我们公告 svc 64@0x12 但无人应答，po= 0x12×4/0x10×8）→ wlan_pd 不生
+/// → 无 0x45 WLFW。协议参照=redbull drivers/soc/qcom/service-locator*.c
+/// （APSS 侧客户端镜像真源）：SERVREG_LOC svc 0x40、GET_DOMAIN_LIST_REQ=
+/// msg 0x0021、req TLV 0x01=service_name 字符串（≤64B）。先拿请求真字节
+/// （txn+service_name），答不答=下一刀的事。
+static mut TF_PD12: [[u8; 96]; 2] = [[0; 96]; 2];
+static mut TF_PD12_N: u32 = 0;
+static mut TF_RM10: [[u8; 96]; 2] = [[0; 96]; 2];
+static mut TF_RM10_N: u32 = 0;
 /// 刀 G30b（纯观察）：QRTR 控制面正账——#34 po=fffffffe.38 定谳那不是
 /// 底噪，是 QRTR_PORT_CTRL(0xfffffffe) 的控制报文（uapi qrtr.h 实锤），
 /// 整条线 56 封信只计数没读过。ch= 各 typ 计数（下标 typ-2，2..=13），
@@ -12414,6 +12425,21 @@ fn scan_new_servers(fifo: u64, rh: u64) {
                         TF_PC.copy_from_slice(pb);
                         TF_PC_PORT = dst_port;
                     }
+                    // 刀 G34：0x12/0x10 定向包环（末 2 包滚存，96B=整 qrtr
+                    // 头 48B+载荷首 48B；>=96 才抄防截断帧）。
+                    if chunk >= 96 && (dst_port == 0x12 || dst_port == 0x10) {
+                        let src = (fifo + off) as *const u8;
+                        let pb = core::slice::from_raw_parts(src, 96);
+                        if dst_port == 0x12 {
+                            TF_PD12[0] = TF_PD12[1];
+                            TF_PD12[1].copy_from_slice(pb);
+                            TF_PD12_N = TF_PD12_N.saturating_add(1);
+                        } else {
+                            TF_RM10[0] = TF_RM10[1];
+                            TF_RM10[1].copy_from_slice(pb);
+                            TF_RM10_N = TF_RM10_N.saturating_add(1);
+                        }
+                    }
                     // 刀 G30b：控制面包记账——dst 口 0xfffffffe=QRTR_PORT_CTRL，
                     // typ(uapi qrtr_pkt_type) 2..=13 入直方图；五元组抄
                     // typ.svc.inst.node.port（载荷≥56 才有 svc/inst、≥68 才有
@@ -13840,6 +13866,85 @@ fn ctrl_service(
                                     push_str(reply, &mut rn, ".64");
                                 } else {
                                     push_str(reply, &mut rn, "-");
+                                }
+                                // 刀 G34：pd= 0x12 末包解码（n.tf.msg.txn.name；
+                                // QMI 头 tf@48 txn@49..51 msg@51..53，SERVREG
+                                // GET_DOMAIN_LIST TLV0x01 type@55 len@56..58
+                                // strlen@58 name@59..——name 只出可印字符，
+                                // 37B 上限=96B 环窗）+ pdh= 末包 96B 全hex
+                                // （G35 应答刀的逐字节参照）+ rm= 0x10 末包
+                                // 同解码（无 name 段）。
+                                push_str(reply, &mut rn, " pd=");
+                                if unsafe { TF_PD12_N } == 0 {
+                                    push_str(reply, &mut rn, "-");
+                                } else {
+                                    push_hex(reply, &mut rn, unsafe { TF_PD12_N } as u64);
+                                    push_str(reply, &mut rn, ".");
+                                    push_hex(reply, &mut rn, unsafe { TF_PD12[1][48] } as u64);
+                                    push_str(reply, &mut rn, ".");
+                                    push_hex(
+                                        reply,
+                                        &mut rn,
+                                        (unsafe { TF_PD12[1][51] } as u64)
+                                            | ((unsafe { TF_PD12[1][52] } as u64) << 8),
+                                    );
+                                    push_str(reply, &mut rn, ".");
+                                    push_hex(
+                                        reply,
+                                        &mut rn,
+                                        (unsafe { TF_PD12[1][49] } as u64)
+                                            | ((unsafe { TF_PD12[1][50] } as u64) << 8),
+                                    );
+                                    if unsafe { TF_PD12[1][55] } == 1 && unsafe { TF_PD12[1][51] } == 0x21 {
+                                        push_str(reply, &mut rn, ".");
+                                        let slen = unsafe { TF_PD12[1][58] } as usize;
+                                        let mut ni = 0usize;
+                                        while ni < slen && 59 + ni < 96 {
+                                            let c = unsafe { TF_PD12[1][59 + ni] };
+                                            if c < 0x20 || c >= 0x7f {
+                                                break;
+                                            }
+                                            if rn < reply.len() {
+                                                reply[rn] = c;
+                                                rn += 1;
+                                            }
+                                            ni += 1;
+                                        }
+                                    }
+                                }
+                                push_str(reply, &mut rn, " pdh=");
+                                if unsafe { TF_PD12_N } == 0 {
+                                    push_str(reply, &mut rn, "-");
+                                } else {
+                                    let mut phi = 0u32;
+                                    while phi < 96 {
+                                        let pb = unsafe { TF_PD12[1][phi as usize] };
+                                        push_hex(reply, &mut rn, (pb >> 4) as u64);
+                                        push_hex(reply, &mut rn, (pb & 0xF) as u64);
+                                        phi += 1;
+                                    }
+                                }
+                                push_str(reply, &mut rn, " rm=");
+                                if unsafe { TF_RM10_N } == 0 {
+                                    push_str(reply, &mut rn, "-");
+                                } else {
+                                    push_hex(reply, &mut rn, unsafe { TF_RM10_N } as u64);
+                                    push_str(reply, &mut rn, ".");
+                                    push_hex(reply, &mut rn, unsafe { TF_RM10[1][48] } as u64);
+                                    push_str(reply, &mut rn, ".");
+                                    push_hex(
+                                        reply,
+                                        &mut rn,
+                                        (unsafe { TF_RM10[1][51] } as u64)
+                                            | ((unsafe { TF_RM10[1][52] } as u64) << 8),
+                                    );
+                                    push_str(reply, &mut rn, ".");
+                                    push_hex(
+                                        reply,
+                                        &mut rn,
+                                        (unsafe { TF_RM10[1][49] } as u64)
+                                            | ((unsafe { TF_RM10[1][50] } as u64) << 8),
+                                    );
                                 }
                                 // 刀 G30b：ch= 控制面 typ 直方图（typ:cnt 只列
                                 // 非零，typ 语义=uapi qrtr_pkt_type）、cc= 最近
