@@ -5382,3 +5382,74 @@ G38 码 5f44b39、G39 码 04657ce 先后码尖位上推（9d07c11→5f44b39→
 - 死亡延迟=错误码：裸件寿命本身就是遥测通道，间隔对表先于新理论。
 - probe 沉降窗设计要和死形赛跑对齐——沉降 130s 恰好全程错过 133s 命。
 - 接口名不是恒量：USB 重枚举换 en 号，探针必须动态发现接口。
+
+## 靴 #49（10-22 晚）：链 #49 自动回收成功 + 命 7 黄金长寿 + G42 双假象定谳
+
+### 链 #49 自动回收：全链自愈跑通
+
+- 20:56:10 暗机烧完 slot-a tries → PMIC 滚 b（L0，current-slot=b、
+  retry:a=0）→ 链检测到 adb → 闸门过串号 → 刷 /tmp/s42padded.img
+  （md5 6e530ab7）→ set_active a → reboot → **20:57:38 命 7 ping 起**。
+- 自动链四步（触发→闸门→刷→复活）零人工。串号全程未回显；零填
+  68,157,440B、七命律（set_active a）照册执行。
+
+### 命 7+ = s42 首命 = 史上最长裸命
+
+- 20:57:38 起连续活着（probe5 的 300s 窗把同一条命重贴 L8/L9/L10/L11
+  标签，u=12390 不变=同一命），25 分钟+ 仍活、控制台能答。
+- **rw=0 全程**——G43 会计活：暖命 ring 写停摆（#48 死链）未复发。
+  L0 全量初始化清滞态的遗传说再添一证：这条命前正好滚过 b→L0→刷。
+- elf_loader 阶段到站：dq=3 含 kernel/elf_loader（命 6 死于 t+11 未及）；
+  modem 侧用户态起动（af=err_qdi sensor_process fatal = 最深起动标记）；
+  42 服务注册、rg=51。w45 仍 0、sr=7fffffff（wlan_pd 未生）。
+
+### G42 定谳：SO「烂头」= 双假象，盘/读路径/供数全净
+
+待验项「th=/sh= 定 SO 头字节真伪」 就此关案：
+
+- **假象一 push_hex 极简渲染**：push_hex 对 v==0 即停——字节 <0x10 只出
+  1 字符（01→"1"、00→"0"）。sh=（74 字符）与 sh2=（63 字符，奇数长度
+  即铁证：整字节 hex 不可能奇长）用工厂好件的极简渲染对照——**逐字符
+  全等**。设备盘上 549_38_0.mbn 头 64B + 0xa0:52B 与工厂件逐字节一致。
+- **假象二进制换算错**：0xEB43C = 963,644（917504+46140）。此前误算
+  963,654 造出「+10」悬案。设备 tz=1.eb43c.1a67、工厂目录项、.local
+  件（963,644B）**三方全等**，零差。
+- 推论链：设备 modem_a 完好（簇号 0x1a67、尺寸、116 采样字节全对）
+  → UFS 读路径无罪、FAT 行走无罪、so_read/供数路径无罪 →
+  **#47 elf_loader 沉默与数据损坏无关**，方向改判（见下）。
+- 附带修正：WRQ 实为 `/readwrite/ota_**firewall**/ruleset`（此前两处
+  误记 ota_firmware）。modem_efs RRQ → ERROR file-not-found（G23b、
+  #23 定谳在案，非堵点）。
+
+### 工厂 ground truth 定稿（radio g7250-00264-230619-b）
+
+- FAT16 卷 @img+0x8c；BPB：bps=4096、spc=4、res=1、nfats=2、
+  **spf=6（@22 不在 @17——@17 是 rootents=512，本案自踩复踩两次）**、
+  root@LBA13、data@LBA17。MODEM_LBA=115208 与固件常量合。
+- so/（簇 6504）= **LFN+短名别名布局**：真名走 LFN，8.3 是
+  ORERCP~2.MBN 之类别名——固件 hitlfn 路径（fat_dir_find LFN 装配）
+  是命中的正路。61 条全录：549_38_0.mbn→ORERCP~2.MBN cl=0x1a67
+  sz=0xeb43c；549_36_0.mbn→Y5F5FE~2.MBN cl=0x21a3 sz=0xeb434。
+- .local/device/redfin/modem/so/549_38_0.mbn（963,644B、md5
+  293765b3…）在厂 img 0x69a508c 起逐字节存在。
+
+### 新刀口（G44 方向）：SO 服死于 OACK 段，早服/晚服分野
+
+- 命 7 帧 tb=**4**.0.11.0：TF_ST=4=OACK 后对端 error（blk=0 零数据块）
+  ——最后一笔 SO 服没送出一个块。pr= 包环四笔全解码：WRQ
+  ota_firewall/ruleset、RRQ modem_efs、**RRQ SO ×2**（两笔都死在
+  OACK 段）。
+- OACK 内容经查全对：blksize/timeoutms 回显、tsize=TZ_SZ=963,644
+  （真值）、wsize 恒回显（G6 正典）。**内容无罪 → 嫌 OACK 未达**
+  （glink TX 段丢失/晚段环态）——与 G9c 注释「op5 code8=从未收到
+  我们 OACK」腔调合。
+- 刀口分野：**早段 17 笔 mbn 服全成（modem 起动到 42 服务）vs 晚段
+  SO 服连死两笔**——同一 OACK 构造代码，差在时序/环态（晚段 TX 环
+  head/tail、端口复用、elf_loader 的 sport）。G44 侦察目标：SO OACK
+  的 TX ok/no 计数（pq=/ox= 分读）、对端 error 码字节捕获、OACK 重发。
+- 教训沉淀：**观测层先于本体层**——sh= 假烂头烧掉一轮 UFS 竞态假设；
+  极简渲染器读谱前先数奇偶。进制换算要用工具不要心算（0xEB43C≠96,654）。
+
+### 链 #50 挂账（在跑）
+
+probe5 多命观察继续（动态接口）；G44 刀案：SO OACK 送达性分辨+补发。
