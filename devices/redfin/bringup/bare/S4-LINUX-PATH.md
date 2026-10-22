@@ -5201,3 +5201,78 @@ pk14 的 192 字 hex 洪峰把尾部字段（w45=/tt=/rq=）**挤过 TCP_TX 帽*
 G38 码 5f44b39、G39 码 04657ce 先后码尖位上推（9d07c11→5f44b39→
 04657ce）；收据堆 45 件垫顶（本地 ahead=45，纯收据）。盲区律在本靴
 的完整谱系：#43（白名单滤）→ #44（截尾）→ #45（胖字段挤帽+看错环）。
+
+## 靴 #46（s39/G39，2026-10-22 晚）——毒环拔除定谳+RP 往返+rmtfs 翻案
+
+### 时间线
+
+- 19:0x 用户手动进 fastboot（12s 断电→Power+VolDown），链 #46b 双触发
+  接管：GATE OK → **19:08:07 FLASHED boot_a s39 → SET_ACTIVE a →
+  REBOOTED** → 19:09:04 ping up。**55s 全 boot，快车道成型**（对照等
+  滚命 3h：用户手动入口+链自动闸门刷=200 倍速）。
+- 命 1 up 19:09:04 → down 19:19:13 = **+609s 天花板第十九证**（594s
+  狗杀+收尾）。多命 ICMP 跟踪器在录命 2+。
+
+### G39 四刀全验
+
+- **② w45= 头部在位**：全部观察帧可见（#45 盲区根除）。
+- **④ pk14 瘦身**：本靴全帧无截尾。
+- **③ mh= 探针**：基线 `mh=d90.d90`（h==t 空环）。
+- **① ind 拔毒定谳**：基线 xl 尾 `TXK=0` 全命零 rekick（#45 同形时段
+  14f→1f1 ≈1.2/s 常踢）——REGISTER-RESP 后环回空，**G38② ind 毒环
+  根因钉死、G39① 拔毒有效**。tx_rekick 只在环非空时踢，全命零踢=
+  全命空环。
+
+### rp 首发全程往返（首发+整往返首收据）
+
+- `rp` → xl 台账增 **`14.50.de0`**（sport 0x14/整包 0x50B/发后 head
+  =de8）+ `mh=de8.de8`——RESTART_PD 首次真正离站且环保持空。
+- `rpm=1.1.90001`（MAN=1/N=1/ERR）+ **0x24 RESTART RESP 回来**
+  SR_RP_ERR=0x00090001 = **result=1 FAILURE + error=9**。error 9 不在
+  QMI 标准表（1/2/3/5/41/53/58/69/90/94，qmi.h）=SERVREG 方言码。
+- 配套 `sr=1.7fffffff` = **wlan_pd 域状态 UNINIT**（0x7FFFFFFF，
+  SERVREG STATE 枚举）。
+- **因果定谳**：UNINIT 是因、error 9 是果——对从未启动的 PD 发
+  RESTART 被合法拒绝。RESTART 腿通路全通（QMI 编码/对端/回程全活）。
+  **主线瓶颈正式移出 PDR 层**：w45=0 的问题改写为「modem 为什么
+  不 spawn wlan_pd」，不是「怎么重启它」。_kernel 对照：service-notifier.c
+  对 DISABLED(69) 特判，其余错误原样上抛——modem 侧方言码语义未译，
+  REA 语料可考（低优先）。
+
+### rmtfs 全绿翻案（本窗口险案，差点重复造轮）
+
+初读 `rm=8.0.3.1` 曾误判「8 个 IOVEC 无应答=EFS 主卡点」。全字段
+解码后翻案：
+
+- `rh=8.0.9000101.a000101.d000104.e000103`——8 包全入队/零丢弃/
+  hist 序列 = sport09 OPEN → sport0a OPEN → sport0d ALLOC →
+  sport0e IOVEC（多客户端各 txn=1，G36 判例复现）。
+- `rf=3..3.8.280000.0`（字段=RF_MSG.path.RF_ID.RF_N.RF_SZ.RF_AS）
+  ——末包 msgid3/caller_id=3(fsg)/**8 次全 drain**/ALLOC buff_size=
+  0x280000 全窗/SCM assign r0=0 成功。
+- `ik=4.0`——**4 笔 IOVEC 影子读写成功零失败**。
+- 结论：8 请求全应答、EFS 影子数据搬运活。**#44「rmtfs 无罪」
+  复确认**。末包恰为另一客户端首个 IOVEC(txn=1) 是误读来源。
+- **教训入册**：TF_RM10 只存末 2 包，末包形状≠全集形状；判「无应答」
+  必须先看 drain 计数（rf 第三段 RF_N）与丢弃计数（rh 第二段 RD）。
+
+### 服务图跃进
+
+`q=42`（渲染 cap 40，40 unique 一次闩齐 @+20s）——#45 全命才 30。
+**毒环拔除后我们的应答真正离站，modem 初始化多走 1/3**。0x44.1 在
+列、0x45 仍缺（#43「距一格」复确认）。`wd=51.51.0`（rfs DATA 时间戳
+族）。40 项名册全串已在 /tmp/s46-probe.log（G40 差分素材）。
+
+### G40 方向改判
+
+- **不写 rmtfs 应答器**——已存在（rf_reply 全 msgid 1-5+队列+去重）
+  且全绿。
+- 新方向 = **0x44→0x45 缺口侦察**：① 40 项名册 vs Linux 在役 qrtr
+  名册差分（内核 qrtr.h 服务号定名）② 0x44 归属与 0x45 的服务定义
+  ③ modem spawn wlan_pd 的触发件（REA 语料）④ tftp 腿（svc 4096，
+  po=1000.2 仅 2 包——pil 分段加载是否卡 tftp 应答不足）。
+
+### Git
+
+- 本收据本地提交（收据不推）。G40 码件出来后走码尖位舞步。
+- 观察面新增字段本靴全验：rpm=/pdi=/mh=/pk14= 每帧可见。
