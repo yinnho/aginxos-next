@@ -4735,6 +4735,12 @@ static mut TF_W_ECHO: [u8; 64] = [0; 64];
 static mut TF_W_ECHO_N: u8 = 0;
 static mut TF_PO_P: [u32; 8] = [0; 8];
 static mut TF_PO_C: [u32; 8] = [0; 8];
+/// 刀 G30（纯观察，零行为变更）：pc= 探针捕获——G29 直方图只给「口×次数」，
+/// 本刀把落在未应答口（非 0x11/0x1011/xfer/wx 且真 16 位口）上的**最近一枚包**
+/// 的 头 64B（src/dst 口+载荷首 48B）抄盘。po= 说出「它在敲门」，pc= 说出
+/// 「它递的信长什么样」——答不答、怎么答，看完信再裁。
+static mut TF_PC: [u8; 64] = [0; 64];
+static mut TF_PC_PORT: u32 = 0;
 /// 刀 G21：TX 台账 4 槽——每笔 glink_tx_payload 成功记 (sport, 整包
 /// 字节数, 发后 head)。靴 #20 定谳需要：modem 消费停在 tail=28b8，
 /// 却不知道 frontier 上卡的是哪笔。台账按时间序滚存，渲染进 xl=。
@@ -12368,6 +12374,22 @@ fn scan_new_servers(fifo: u64, rh: u64) {
                             poe += 1;
                         }
                     }
+                    // 刀 G30：未应答口上的包抄 64B（+32..+96=src/dst 口+载荷首
+                    // 48B）。chunk>=96 才抄（截断帧不抄）；fffffffe/ffff 哨兵
+                    // 不抄（非 UDP 底噪，量大会刷掉真探针）。
+                    if chunk >= 96
+                        && dst_port <= 0xffff
+                        && dst_port != TF_DATA_PORT
+                        && dst_port != TF_SVC_PORT
+                        && dst_port != TF_ALT_PORT
+                        && !on_xfer
+                        && !on_wx
+                    {
+                        let src = (fifo + off + 32) as *const u8;
+                        let pb = core::slice::from_raw_parts(src, 64);
+                        TF_PC.copy_from_slice(pb);
+                        TF_PC_PORT = dst_port;
+                    }
                 }
                 if typ == 1
                     && (dst_port == TF_DATA_PORT || dst_port == TF_SVC_PORT || on_xfer || on_wx)
@@ -13701,6 +13723,23 @@ fn ctrl_service(
                                     if pfirst {
                                         push_str(reply, &mut rn, "-");
                                     }
+                                }
+                                // 刀 G30：pc=探针捕获（未应答口最近一包：
+                                // 口 . 64B 半字节hex . 长度；无捕获打 -）。
+                                push_str(reply, &mut rn, " pc=");
+                                if unsafe { TF_PC_PORT } != 0 {
+                                    push_hex(reply, &mut rn, unsafe { TF_PC_PORT } as u64);
+                                    push_str(reply, &mut rn, ".");
+                                    let mut pci = 0u32;
+                                    while pci < 64 {
+                                        let pb = unsafe { TF_PC[pci as usize] };
+                                        push_hex(reply, &mut rn, (pb >> 4) as u64);
+                                        push_hex(reply, &mut rn, (pb & 0xF) as u64);
+                                        pci += 1;
+                                    }
+                                    push_str(reply, &mut rn, ".64");
+                                } else {
+                                    push_str(reply, &mut rn, "-");
                                 }
                                 push_str(reply, &mut rn, " i2=");
                                 push_hex(reply, &mut rn, unsafe { I2_N } as u64);
