@@ -4594,3 +4594,42 @@ ka 立活；cyc=112 +527s 硬死（5 粒 ICMP 全死、无软复活）——第�
 - 风险在册：G12/G13 读腿临时口实验曾「纯 ping 活、首查 sm 即死」——但
   彼时无 on_xfer/on_wx 收口闸（G20+ 才有），写腿单发 OACK 暴露面一包；
   若 #29 早死即回查此分岔。
+
+## 靴 #29（10-22 晨，G28 在机 boot-s28）——wo= 首见全解 + 读腿越 #28 冻点 +1 + 天花板第九证 + 狗属主翻案 modem 侧
+
+- 刷写链：FASTBOOT UP 08:49:45、GATE OK、boot-s28 → FLASHED 08:49:47、
+  ping up 08:50:35；**keep-alive FAILED cyc=127 +595s**=天花板第九证
+  （前八证 +594s 级）。
+- **wo= 首见（五靴零观测盲区清零）**：op0002 `/readwrite/server_check.txt`
+  octet `blksize=7680 timeoutms=1000 wsize=1`（73B，无 tsize/rsize/seek
+  键）。px= 同场读腿选项全貌：`blksize=7680 timeoutms=1000 seek=52
+  wsize=10 rsize=160`——**读腿 wsize=10、写腿 wsize=1**，两方言不同窗。
+- G28 观测件全落地：rl 逗号修生效（N=0x11=17 笔槽间逗号）；顶部「rl=4000」
+  定谳名字撞车=GLINK_RXLEN（环形 0x4000）非阶梯；**G24 0x1011 悬案闭案**
+  （干净仪器下再无 0x1011）。
+- 读腿对账 #28→#29：阶梯 16→17 笔、xl 14→15、tf 尾 .1.5(#28 终态) vs
+  .1.6(#29 全程)。**#28 冻点（sport 25 fl=3 rsize=0x34 seek=0）#29 被答掉**
+  客户端推进 sport 26（fl=3 rsize=0xa0 seek=0x34）后静止至死。G28 未动
+  读腿——越冻点+1 属客户端侧变数，非我方改动之功。
+- 写腿判决：wx 单发无重试、OX=1（会话口 OACK 已发）、ww=1.1.0.0.0
+  （active.exp.acks.bytes.errs——bytes=0）——**OACK 从 0x11(#28) 与从
+  会话口(#29) 客户端同样全静零重试：源口方言假说排除**，客户端根本不在
+  等我们的 OACK，写腿卡点在客户端内部时序或另一前置。
+- w45=0、ic=0.0、im=27.27.1 全程不变。
+- stock 校对补两锤：parse_options 域 blksize 8..65464——7680 合法、echo
+  原样即 stock 行为；无选项 WRQ 分支 `tftp_send_data(client,1,0,0)` 是
+  退化路（O_WRONLY fd 上 pread 必败→ERROR）——Qualcomm 客户端恒带选项，
+  **ACK0 无 stock 先例**（跟发 ACK0 双方言实验降级为备选）。
+- **狗属主翻案（收据考古三处合证）**：SMEM 421 崩溃区首 32B=
+  `dog_hal_common.c:180:[tmr_slave3`（10-17/10-18 两窗同串）；radio-
+  bringup 老账明写 qrtr-ns/pd-mapper/tftp_server/rmt_storage 不在听→
+  DOG 判初始化卡住→硬重置；「tmr_slave3 DOG=init 在 EFS 未真正 IOVEC
+  服务时的看门狗」。**+594/595s 天花板=modem 侧 EFS/init 狗，非 APSS
+  WDT 0x17c10000——APSS 喂狗刀方向作废**，出路=解卡 modem init（写腿/
+  rmtfs 链），server_check.txt 写腿=EFS 探针正是当前卡点。
+- **刀 G29 在册（纯观察、零行为变更，保基线净）**：①po= 全口 RX 直方图
+  （dst_port 8 槽计数——QMI-14/servreg 探测若被静默丢弃从此可见；仓里
+  rfs_iovec 与 GPT 四块 rmtfs 影像在位，旧窗「OPEN 成功后不再发 ALLOC」
+  的观测缺口正在此）；②oe= 写 OACK 字节回显（≤64B，对 stock
+  0006"blksize\0"7680"timeoutms\0"1000"wsize\0"1 逐字节审计）；③ws=
+  会话口值渲染（TF_W_XFER 闩至今不可见）。写腿行为零改动。
