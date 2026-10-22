@@ -5453,3 +5453,30 @@ G38 码 5f44b39、G39 码 04657ce 先后码尖位上推（9d07c11→5f44b39→
 ### 链 #50 挂账（在跑）
 
 probe5 多命观察继续（动态接口）；G44 刀案：SO OACK 送达性分辨+补发。
+
+### 靴 #49 附录：G43 现场验证 + G44 根因定谳（21:17–21:40 观察窗）
+
+- **G43 生存刀现场成立**：命 7（20:57:38 起，史上最长裸命 40min+）~30min
+  首现环写败——rw 0→2→3→4，码全 362（WRITE FUA 超时签名，暖命死链
+  复发）；**设备全程存活**，sm 全帧照答。#48 家族「首笔写败=ping 即死」
+  的自杀腿（report_reset 自旋）确认被 s42 切断。**rw 败拍周期=600s 整**
+  （21:27:39→21:37:41 恰 602s）——对 #48「10min 采样环写」判读，周期
+  写者就是采样环本身。
+- **G44 根因定谳（调度饿死竞态）**：SO 服死于「OACK 后 1s 无 DATA」。
+  全计数互证：dv=0+nopend=0（泵从未在 st∈{1,2} 时被调）+BLKNO=0/
+  WSENT=0（DATA-1 从未上环）+ox=2（两笔 OACK 都 TX 成功）+rx=
+  [efs RRQ, so RRQ#1, so RRQ#2, EOT]。时序：轮 X 发 OACK#1（st=1，
+  同轮泵段已跑过 st=0）→ 客户端等 DATA-1 至 1s 超时 → RRQ 重试 →
+  EOT 由 walker 的 tf_note_ack **即时**置 st=4 → 下一服务轮（均值
+  1.16s，0.86/s）赶到时 st 已 4 → nost 桶 + fresh 腿把 OACK#2 发给
+  空场。早段 17 笔小 mbn 能成=赢到同一竞态。rs=0.0 排除 stat 探针。
+- **rx= 槽注释两处过期实证**：op1 槽第三元=文件名首 2 字节（2f72="/r"，
+  /readonly 与 /readwrite 同形）；op5 裸 EOT（op2B+code2B，chunk=52）
+  被 `>=54` 门误标 ffff——tf_note_ack 无此门，code9 读得正确。
+- **写腿挂账新观察**：ruleset WRQ 已被 OACK（oe= 回显 blksize7680/
+  timeoutms1000/wsize1），但 ww=1.1.0.0.0——客户端一块 DATA 未发，
+  写会话悬空。疑客户端等 SO 读完成后才推进写腿（同一启动序关卡）。
+- **刀 s44（G44）**：G19 窗口泵抽成 tf_pump_window（->bool 保真原内
+  联块「dv++ 即整个 tf_reply 提前退场」控制流），OACK TX 成功且非
+  retry 腿原地启泵送首窗 DATA；ox= 加第三格 kick 计数。21:40 出件，
+  68,157,440B 零填待刷。
