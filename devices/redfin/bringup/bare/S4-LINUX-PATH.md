@@ -4697,3 +4697,16 @@ ww=1.1.0.0.0（写腿至死零 DATA）、po=fffffffe.38(=56),10.8,**12.4**,14.1,
 先跑有界采样器再落账**。链 #35（零填 s30）已挂等 fastboot——padded 无论环态
 都保险。自旋每圈 ~10.3min 烧一命，估剩 4–5（烧尽落 b=L0 救生艇，届时可试
 L0 ssh `aginx-reboot bootloader` 免物理复位）。
+
+**增记（11:24，G30b 叠刀换链）**：桌研翻案——#34 的 `po=fffffffe.38`
+不是底噪，**0xfffffffe=uapi qrtr.h 的 `QRTR_PORT_CTRL`**：56 封全是
+QRTR 控制报文（HELLO/NEW_SERVER/NEW_LOOKUP…），整条线只计数没读过；
+且 `SMEM_LOOK`（NEW_LOOKUP 目击闩）G3 起只写不读——**modem 每靴在
+LOOKUP 什么服务从未见过**（G2 起只答 host_svc_port 命中的自家服务，
+没命中的静默）。刀 **G30b**（码 589bb22 已推）叠在 G30 上同刷：
+ch= 控制包 typ 直方图、cc= 最近一枚 typ.svc.inst.node.port、lk=
+SMEM_LOOK 上屏；watch 表同刀加三字段（白名单律）。s30 未曾上机——
+链 #35 退役、**链 #36 在挂**（零填 s31，IMG=/tmp/s31padded.img 68MB，
+elf 字面量验真 ch=/cc=/lk= 全在）。自动循环哨兵同挂（60s 绑定 ping 沿沿
+落账，15min 死=AUTOCYCLE-STOP→a 命烧尽落 b/L0，届时试 L0 ssh
+`aginx-reboot bootloader` 免物理复位）。
