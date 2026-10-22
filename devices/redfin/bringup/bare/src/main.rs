@@ -4818,6 +4818,11 @@ static mut PD_IND_ARM: u32 = 0;
 /// （UNINIT 不自发 RESTART 是 Linux pdr 语义；要不要人为踢一脚=实验
 /// 变量，观察器/人工都能发）。rpm= 计手动次数。
 static mut SR_RP_MAN: u32 = 0;
+/// 刀 G39：③ MPSS TX 环现场读数——smem_scan 每拍走查到 478 就抄
+/// head/tail（ffff=还没走查到）。#45 悟出：环卡死是 sr_tick 全部后续
+/// （ACK/RP）的总闸，却没有任何一栏能看见它——mh= 每帧可见。
+static mut MPSS_H: u32 = 0xffff_ffff;
+static mut MPSS_T: u32 = 0xffff_ffff;
 static mut TF_DCL_N: u32 = 0;
 /// 刀 G21：TX 台账 4 槽——每笔 glink_tx_payload 成功记 (sport, 整包
 /// 字节数, 发后 head)。靴 #20 定谳需要：modem 消费停在 tail=28b8，
@@ -5633,6 +5638,13 @@ fn smem_scan(ufs: &mut Ufs, do_glink: bool) {
                 glink_rx_reuse(at478, at479, sz479);
                 glink_intent_topup(at478, at479, sz479);
                 glink_rx_advance(at478, unsafe { GLINK_RXLEN });
+            }
+            // 刀 G39③：走查到 478 就抄环现场（mh= 渲染源）。
+            if at478 != 0 {
+                unsafe {
+                    MPSS_H = rd32((at478 + 4) as usize);
+                    MPSS_T = rd32(at478 as usize);
+                }
             }
             l2_swap(index, old, toc >> 12);
             unsafe {
@@ -8906,11 +8918,11 @@ fn pd_reply(at478: u64, at479: u64, sz479: u64) {
             }
             PD_PEND = false;
             PD_N += 1;
-            // 刀 G38：② 第 3 笔答成→武装 DB_UPDATED ind 探针（sr_tick
-            // 下一轮发；不发在 pd_reply 里是为避免与二队列晋升抢环序）。
-            if PD_N == 3 && PD_IND_ARM == 0 {
-                PD_IND_ARM = 1;
-            }
+            // 刀 G39①：G38② 的自动武装退役——#45 两命实锤 ind（写给 modem
+            // 自己的 0x12 客户口）毒死 TX 消费：xl= 尾笔两命同形 12.38.cb8、
+            // TXK_N ~1/s 常踢（环非空 tail 永驻）→ sr_tick 空环门 8377 永
+            // 早退 → rp 发不出。探针结论已收（client 不理 DB_UPDATED）；
+            // 观察者效应病族第二刀——要再探须 `pi` 显式臂。
             // 刀 G36：二队列晋升——PD2 里有待答即接管 PD 槽（下一轮
             // pd_reply 就答它；TX 环闸同门）。
             if PD2_PEND {
@@ -13521,6 +13533,10 @@ fn ctrl_service(
                             17
                         } else if ctrl_line_is(b"rp") {
                             18
+                        } else if ctrl_line_is(b"pi") {
+                            19
+                        } else if ctrl_line_is(b"pk") {
+                            20
                         } else if unsafe { CTRL_LINE_N } == 0 {
                             3
                         } else {
@@ -13617,6 +13633,17 @@ fn ctrl_service(
                                 push_hex(reply, &mut rn, s.rx0 as u64);
                                 push_str(reply, &mut rn, " rk=");
                                 push_hex(reply, &mut rn, unsafe { RX_DONE_N } as u64);
+                                // 刀 G39②：w45= 提前到头部——#45 pk14 的
+                                // 192 字 hex 洪峰把尾部的 w45= 挤过 TCP_TX
+                                // 帽，本线头条指标整靴不可见（盲区律第四犯）。
+                                push_str(reply, &mut rn, " w45=");
+                                push_hex(reply, &mut rn, unsafe { SAW_45 } as u64);
+                                // 刀 G39③：MPSS TX 环现场——h==t 空闲可发；
+                                // h!=t 且 t 不动=消费卡死（#45 ind 毒案形状）。
+                                push_str(reply, &mut rn, " mh=");
+                                push_hex(reply, &mut rn, unsafe { MPSS_H } as u64);
+                                push_str(reply, &mut rn, ".");
+                                push_hex(reply, &mut rn, unsafe { MPSS_T } as u64);
                                 push_str(reply, &mut rn, " cf=");
                                 push_hex(reply, &mut rn, unsafe { CF_N } as u64);
                                 push_str(reply, &mut rn, " hh=");
@@ -13771,20 +13798,10 @@ fn ctrl_service(
                                     push_str(reply, &mut rn, ".");
                                     push_u64(reply, &mut rn, unsafe { TF_W_AT2 } / freq as u64);
                                 }
+                                // 刀 G39④：pk14 瘦身——只渲染计数；96B 全hex
+                                // 移 `pk` 命令。#45 实锤 192 字 hex 洪峰把
+                                // w45=/tt=/rq= 挤过 TCP_TX 帽（盲区律第四犯）。
                                 push_str(reply, &mut rn, " pk14=");
-                                {
-                                    let mut i = 0usize;
-                                    while i < 96 && rn + 2 <= reply.len() {
-                                        let b = unsafe { TF_PK14[i] };
-                                        let hi = b >> 4;
-                                        let lo = b & 0xf;
-                                        reply[rn] = if hi < 10 { b'0' + hi } else { b'a' + (hi - 10) };
-                                        reply[rn + 1] = if lo < 10 { b'0' + lo } else { b'a' + (lo - 10) };
-                                        rn += 2;
-                                        i += 1;
-                                    }
-                                }
-                                push_str(reply, &mut rn, ".");
                                 push_hex(reply, &mut rn, unsafe { TF_PK14_N } as u64);
                                 push_str(reply, &mut rn, " cfa=");
                                 push_hex(reply, &mut rn, unsafe { CFG_ARM } as u64);
@@ -14819,8 +14836,8 @@ fn ctrl_service(
                                         unsafe { SMEM_LOOK[i as usize * 2 + 1] } as u64,
                                     );
                                 }
-                                push_str(reply, &mut rn, " w45=");
-                                push_hex(reply, &mut rn, unsafe { SAW_45 } as u64);
+                                // 刀 G39②：w45= 已移头部（rk= 后）；此处旧位
+                                // 退役——尾部会被 pk14/wo= 洪峰挤过 TCP_TX 帽。
                                 // 刀 G10：px=保存的 SO RRQ 原文（定宽 nibble）——
                                 // 文件名+mode+选项区逐字节，解析器盲区的尾巴直接可见，
                                 // 方言真图。tf_save_so 只存 SO 文件（TF_OPTBUF/TF_OPTLEN）。
@@ -15194,6 +15211,12 @@ fn ctrl_service(
                                 push_hex(reply, &mut rn, tt);
                                 push_str(reply, &mut rn, " rn=");
                                 push_hex(reply, &mut rn, unsafe { FP_RNOTIF } as u64);
+                                // 刀 G39③：MPSS 环现场一并给（tx 原本只见
+                                // LPASS gq=——#45 悟坑：看错环下了空环结论）。
+                                push_str(reply, &mut rn, " mh=");
+                                push_hex(reply, &mut rn, unsafe { MPSS_H } as u64);
+                                push_str(reply, &mut rn, ".");
+                                push_hex(reply, &mut rn, unsafe { MPSS_T } as u64);
                                 push_str(reply, &mut rn, " gd=");
                                 push_hex(reply, &mut rn, unsafe { FP_GDONE } as u64);
                                 push_str(reply, &mut rn, ".");
@@ -15260,6 +15283,33 @@ fn ctrl_service(
                                 }
                                 push_str(reply, &mut rn, "rp fired ");
                                 push_hex(reply, &mut rn, unsafe { SR_RP_MAN } as u64);
+                                push_str(reply, &mut rn, "\n");
+                            }
+                            19 => {
+                                // 刀 G39①：pi——显式臂 DB_UPDATED ind 探针
+                                // （G38 自动臂因毒死 TX 消费退役；发仍走 sr_tick
+                                // 空窗，pdi= 收果）。
+                                unsafe { PD_IND_ARM = 1; }
+                                push_str(reply, &mut rn, "pi armed ");
+                                push_hex(reply, &mut rn, unsafe { PD_IND_ARM } as u64);
+                                push_str(reply, &mut rn, "\n");
+                            }
+                            20 => {
+                                // 刀 G39④：pk——0x14 末包 96B 全hex + 计数
+                                // （sm 里只留计数）。
+                                push_str(reply, &mut rn, "pk ");
+                                let mut i = 0usize;
+                                while i < 96 && rn + 2 <= reply.len() {
+                                    let b = unsafe { TF_PK14[i] };
+                                    let hi = b >> 4;
+                                    let lo = b & 0xf;
+                                    reply[rn] = if hi < 10 { b'0' + hi } else { b'a' + (hi - 10) };
+                                    reply[rn + 1] = if lo < 10 { b'0' + lo } else { b'a' + (lo - 10) };
+                                    rn += 2;
+                                    i += 1;
+                                }
+                                push_str(reply, &mut rn, ".");
+                                push_hex(reply, &mut rn, unsafe { TF_PK14_N } as u64);
                                 push_str(reply, &mut rn, "\n");
                             }
                             3 => {}

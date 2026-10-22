@@ -132,6 +132,7 @@ MODE="heartbeat"
 [ "${1:-}" = "--s36" ] && MODE="s36"
 [ "${1:-}" = "--s37" ] && MODE="s37"
 [ "${1:-}" = "--s38" ] && MODE="s38"
+[ "${1:-}" = "--s39" ] && MODE="s39"
 mkdir -p "${OUTDIR}"
 ELF="${OUTDIR}/heartbeat.elf"
 
@@ -1063,6 +1064,18 @@ elif [ "${MODE}" = "s38" ]; then
   ELF="${OUTDIR}/s38.elf"
   cp "${HERE}/target/aarch64-unknown-none-softfloat/release/redfin-bare" "${ELF}"
   BIN="${OUTDIR}/s38.bin"; IMG="${OUTDIR}/boot-s38.img"
+elif [ "${MODE}" = "s39" ]; then
+  # 刀 G39（#45 两命同形铁证后的拔毒+可见性刀）：①ind 探针降级 pi 显式臂
+  # （G38② 自动臂实锤毒死 TX 消费：xl= 尾笔两命同 12.38.cb8、TXK_N ~1/s
+  # 常踢=环非空 tail 永驻 → sr_tick 空环门永早退 → rp 发不出——观察者效应
+  # 病族第二刀）②w45= 提前到 sm 头部（pk14 192 字 hex 洪峰把尾部 w45=
+  # 挤过 TCP_TX 帽，本线头条指标整靴不可见=盲区律第四犯）③mh= MPSS TX
+  # 环现场读数（sm 头部+tx 命令各一份；环卡死是 sr_tick 全部后续的总闸
+  # 却从无一栏可见）④pk14 瘦身（sm 只留计数，96B 全hex 移 pk 命令）。
+  (cd "${HERE}" && cargo build --release --target aarch64-unknown-none-softfloat) || { echo "cargo build FAILED (${MODE}) -- 不拷陈旧件" >&2; exit 1; }
+  ELF="${OUTDIR}/s39.elf"
+  cp "${HERE}/target/aarch64-unknown-none-softfloat/release/redfin-bare" "${ELF}"
+  BIN="${OUTDIR}/s39.bin"; IMG="${OUTDIR}/boot-s39.img"
 elif [ "${MODE}" = "s21" ]; then
   # 刀 G22：s20 同面，intent 池+归还追踪（cmd5 全量入池、TX 池挑、
   # RX_DONE/W_REUSE 归还、池干 RX_INTENT_REQ、cmd3/11 入 8B 集、ii= 台账）。
