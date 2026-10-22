@@ -4438,6 +4438,11 @@ static mut HELLO_VIS: u64 = 0;
 static mut HELLO_RX: u32 = 0;
 static mut PD_NAME: [u8; 64] = [0; 64];
 static mut PD_NAME_N: u8 = 0;
+/// 刀 G41：GET_DOMAIN_LIST 问句名环（6 槽 ×24B，旧→新）。pn= 只闩
+/// elf_loader 类（PD_SAW_ELF），其余问句名全盲——modem 在找谁从此可见。
+static mut DQ: [[u8; 24]; 6] = [[0; 24]; 6];
+static mut DQ_N: u32 = 0;
+static mut DQ_I: u32 = 0xffff_ffff;
 /// 任一笔 GET_DOMAIN_LIST 要过 kernel/elf_loader 就记 1。pn 只留最后一次。
 static mut PD_SAW_ELF: u8 = 0;
 /// 上次编进应答的命中数，以及 QMI 载荷长度（不含 7 字节头）。
@@ -12314,6 +12319,20 @@ fn pd_take_name(fifo: u64, off: u64, chunk: u64, w1: u32) -> bool {
                         PD_SAW_ELF = 1;
                     }
                 }
+                // 刀 G41：每笔问句名入环（截 24B，字节原样）。
+                if DQ_I == 0xffff_ffff {
+                    DQ_I = 0;
+                } else {
+                    DQ_I = (DQ_I + 1) % 6;
+                }
+                let mut dq = [0u8; 24];
+                let mut q4 = 0usize;
+                while q4 < n && q4 < 24 {
+                    dq[q4] = PD_NAME[q4];
+                    q4 += 1;
+                }
+                DQ[DQ_I as usize] = dq;
+                DQ_N = DQ_N.wrapping_add(1);
             }
             return true;
         }
@@ -13777,6 +13796,41 @@ fn ctrl_service(
                                 push_hex(reply, &mut rn, unsafe { PD_QLEN } as u64);
                                 push_str(reply, &mut rn, " pe=");
                                 push_hex(reply, &mut rn, unsafe { PD_SAW_ELF } as u64);
+                                // 刀 G41：问句名环 dq=<N>,<hex 名>…（旧→新，末 min(6,N) 槽）。
+                                push_str(reply, &mut rn, " dq=");
+                                push_hex(reply, &mut rn, unsafe { DQ_N } as u64);
+                                push_str(reply, &mut rn, ",");
+                                {
+                                    let total = unsafe { DQ_N } as usize;
+                                    let shown = total.min(6);
+                                    let start = total.saturating_sub(6);
+                                    let mut k = 0usize;
+                                    while k < shown {
+                                        let idx = (start + k) % 6;
+                                        if k != 0 {
+                                            push_str(reply, &mut rn, ",");
+                                        }
+                                        let mut j = 0usize;
+                                        let mut wrote = false;
+                                        while j < 24 {
+                                            let b = unsafe { DQ[idx][j] };
+                                            if b == 0 {
+                                                break;
+                                            }
+                                            push_hex(reply, &mut rn, b as u64);
+                                            wrote = true;
+                                            j += 1;
+                                        }
+                                        if !wrote && rn < reply.len() {
+                                            reply[rn] = b'-';
+                                            rn += 1;
+                                        }
+                                        k += 1;
+                                    }
+                                    if shown == 0 {
+                                        push_str(reply, &mut rn, "-");
+                                    }
+                                }
                                 // 刀 G36：0x20/0x22 小应答腿计数。
                                 push_str(reply, &mut rn, " pr20=");
                                 push_hex(reply, &mut rn, unsafe { PD_R20 } as u64);

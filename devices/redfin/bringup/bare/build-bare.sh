@@ -134,6 +134,7 @@ MODE="heartbeat"
 [ "${1:-}" = "--s38" ] && MODE="s38"
 [ "${1:-}" = "--s39" ] && MODE="s39"
 [ "${1:-}" = "--s40" ] && MODE="s40"
+[ "${1:-}" = "--s41" ] && MODE="s41"
 mkdir -p "${OUTDIR}"
 ELF="${OUTDIR}/heartbeat.elf"
 
@@ -1089,6 +1090,16 @@ elif [ "${MODE}" = "s40" ]; then
   ELF="${OUTDIR}/s40.elf"
   cp "${HERE}/target/aarch64-unknown-none-softfloat/release/redfin-bare" "${ELF}"
   BIN="${OUTDIR}/s40.bin"; IMG="${OUTDIR}/boot-s40.img"
+elif [ "${MODE}" = "s41" ]; then
+  # 刀 G41（#47 后·问句名环·纯观察）：G40 四键双排除（sd 保真、OPEN 全
+  # matched）后瓶颈=「modem 48-63s 全静后在等谁」。GET_DOMAIN_LIST 的
+  # 问句服务名 pd_take_name 早已解析进 PD_NAME，但 pn= 只闩 elf_loader
+  # 类（PD_SAW_ELF）——其余问句名全盲。本刀唯一事：dq= 6 槽问句名环
+  # （24B 截断、旧→新、附 DQ_N 总数）插在 pe= 后。零行为变化。
+  (cd "${HERE}" && cargo build --release --target aarch64-unknown-none-softfloat) || { echo "cargo build FAILED (${MODE}) -- 不拷陈旧件" >&2; exit 1; }
+  ELF="${OUTDIR}/s41.elf"
+  cp "${HERE}/target/aarch64-unknown-none-softfloat/release/redfin-bare" "${ELF}"
+  BIN="${OUTDIR}/s41.bin"; IMG="${OUTDIR}/boot-s41.img"
 elif [ "${MODE}" = "s21" ]; then
   # 刀 G22：s20 同面，intent 池+归还追踪（cmd5 全量入池、TX 池挑、
   # RX_DONE/W_REUSE 归还、池干 RX_INTENT_REQ、cmd3/11 入 8B 集、ii= 台账）。
