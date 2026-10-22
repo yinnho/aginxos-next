@@ -122,6 +122,7 @@ MODE="heartbeat"
 [ "${1:-}" = "--s26" ] && MODE="s26"
 [ "${1:-}" = "--s27" ] && MODE="s27"
 [ "${1:-}" = "--s28" ] && MODE="s28"
+[ "${1:-}" = "--s29" ] && MODE="s29"
 mkdir -p "${OUTDIR}"
 ELF="${OUTDIR}/heartbeat.elf"
 
@@ -952,6 +953,17 @@ elif [ "${MODE}" = "s28" ]; then
   ELF="${OUTDIR}/s28.elf"
   cp "${HERE}/target/aarch64-unknown-none-softfloat/release/redfin-bare" "${ELF}"
   BIN="${OUTDIR}/s28.bin"; IMG="${OUTDIR}/boot-s28.img"
+elif [ "${MODE}" = "s29" ]; then
+  # 刀 G29（纯观察，零行为变更，保 #29 基线净）：#29 判决 wo= 首见
+  # (blksize7680/tmo1000/wsize1)、写腿 OACK 两种源口客户端同样全静零
+  # 重试、+595s 第九证、狗属主翻案 modem 侧 tmr_slave3（APSS 喂狗刀
+  # 作废）。观察三件：po= 全口 RX 直方图（QMI-14/servreg 静默丢弃的
+  # 探测口有账）、oe= 写 OACK 字节回显（对 stock 逐字节审计）、
+  # ws= 会话口闩值直读。
+  (cd "${HERE}" && cargo build --release --target aarch64-unknown-none-softfloat)
+  ELF="${OUTDIR}/s29.elf"
+  cp "${HERE}/target/aarch64-unknown-none-softfloat/release/redfin-bare" "${ELF}"
+  BIN="${OUTDIR}/s29.bin"; IMG="${OUTDIR}/boot-s29.img"
 elif [ "${MODE}" = "s21" ]; then
   # 刀 G22：s20 同面，intent 池+归还追踪（cmd5 全量入池、TX 池挑、
   # RX_DONE/W_REUSE 归还、池干 RX_INTENT_REQ、cmd3/11 入 8B 集、ii= 台账）。

@@ -4726,6 +4726,15 @@ static mut TF_W_ERRS: u32 = 0;
 static mut TF_W_XFER: u32 = 0;
 static mut TF_W_OPTS: [u8; 96] = [0; 96];
 static mut TF_W_OPTS_N: u8 = 0;
+/// 刀 G29（纯观察，零行为变更）：TF_W_ECHO[N]=写 OACK 发送字节回显
+/// （≤64B，发成功时抄盘——对 stock 0006"blksize\0"… 逐字节审计）；
+/// TF_PO_P/C=全口 RX 直方图（dst_port 8 槽线性计数——TFTP/QMI 应答面
+/// 之外被静默丢弃的探测口从此可见：QMI-14/servreg/pd-mapper 打到哪、
+/// 打多少，一读便知；旧窗「OPEN 后不再发 ALLOC」的观测缺口正在此）。
+static mut TF_W_ECHO: [u8; 64] = [0; 64];
+static mut TF_W_ECHO_N: u8 = 0;
+static mut TF_PO_P: [u32; 8] = [0; 8];
+static mut TF_PO_C: [u32; 8] = [0; 8];
 /// 刀 G21：TX 台账 4 槽——每笔 glink_tx_payload 成功记 (sport, 整包
 /// 字节数, 发后 head)。靴 #20 定谳需要：modem 消费停在 tail=28b8，
 /// 却不知道 frontier 上卡的是哪笔。台账按时间序滚存，渲染进 xl=。
@@ -8018,6 +8027,10 @@ fn tf_reply(ufs: &mut Ufs, at478: u64, at479: u64, sz479: u64) {
             unsafe {
                 TF_W_OX = TF_W_OX.wrapping_add(1);
                 TF_W_XFER = wport;
+                // 刀 G29：OACK 字节回显抄盘（≤64B）。
+                let en = n.min(64);
+                TF_W_ECHO[..en].copy_from_slice(&q[..en]);
+                TF_W_ECHO_N = en as u8;
             }
             tf_drop_pend();
         }
@@ -12333,6 +12346,29 @@ fn scan_new_servers(fifo: u64, rh: u64) {
                 let on_xfer = xfer_port != 0 && dst_port == xfer_port;
                 // 刀 G28：写会话口同权收——客户端 DATA/ACK/ERROR 回会话口。
                 let on_wx = unsafe { TF_W_XFER } != 0 && dst_port == unsafe { TF_W_XFER };
+                // 刀 G29：全口 RX 直方图——8 槽线性计数，每包一笔（≤16 次
+                // 比较，热路径可忽略）。静默丢弃的探测口从此有账。
+                unsafe {
+                    let mut poi = 0usize;
+                    while poi < 8 {
+                        if TF_PO_C[poi] != 0 && TF_PO_P[poi] == dst_port {
+                            TF_PO_C[poi] = TF_PO_C[poi].wrapping_add(1);
+                            break;
+                        }
+                        poi += 1;
+                    }
+                    if poi == 8 {
+                        let mut poe = 0usize;
+                        while poe < 8 {
+                            if TF_PO_C[poe] == 0 {
+                                TF_PO_P[poe] = dst_port;
+                                TF_PO_C[poe] = 1;
+                                break;
+                            }
+                            poe += 1;
+                        }
+                    }
+                }
                 if typ == 1
                     && (dst_port == TF_DATA_PORT || dst_port == TF_SVC_PORT || on_xfer || on_wx)
                 {
@@ -13626,6 +13662,45 @@ fn ctrl_service(
                                 while wni < unsafe { TF_W_NAME_N } as u32 {
                                     push_hex(reply, &mut rn, unsafe { TF_W_NAME[wni as usize] } as u64);
                                     wni += 1;
+                                }
+                                // 刀 G29：ws=写会话口直读（TF_W_XFER 闩值
+                                // 此前只暗闩不渲染——OACK 从哪口出去一读便知）。
+                                push_str(reply, &mut rn, " ws=");
+                                push_hex(reply, &mut rn, unsafe { TF_W_XFER } as u64);
+                                // 刀 G29：oe=写 OACK 字节回显（nibble hex +
+                                // .len，同 wo= 形状）——对 stock 逐字节审计。
+                                push_str(reply, &mut rn, " oe=");
+                                let mut oei = 0u32;
+                                let oel = unsafe { TF_W_ECHO_N } as u32;
+                                while oei < oel {
+                                    let ob = unsafe { TF_W_ECHO[oei as usize] };
+                                    push_hex(reply, &mut rn, (ob >> 4) as u64);
+                                    push_hex(reply, &mut rn, (ob & 0xF) as u64);
+                                    oei += 1;
+                                }
+                                push_str(reply, &mut rn, ".");
+                                push_hex(reply, &mut rn, oel as u64);
+                                // 刀 G29：po=全口 RX 直方图（非零槽 port.count
+                                // 逗号分隔；全空打 -）。
+                                push_str(reply, &mut rn, " po=");
+                                {
+                                    let mut pfirst = true;
+                                    let mut pori = 0usize;
+                                    while pori < 8 {
+                                        if unsafe { TF_PO_C[pori] } != 0 {
+                                            if !pfirst {
+                                                push_str(reply, &mut rn, ",");
+                                            }
+                                            pfirst = false;
+                                            push_hex(reply, &mut rn, unsafe { TF_PO_P[pori] } as u64);
+                                            push_str(reply, &mut rn, ".");
+                                            push_hex(reply, &mut rn, unsafe { TF_PO_C[pori] } as u64);
+                                        }
+                                        pori += 1;
+                                    }
+                                    if pfirst {
+                                        push_str(reply, &mut rn, "-");
+                                    }
                                 }
                                 push_str(reply, &mut rn, " i2=");
                                 push_hex(reply, &mut rn, unsafe { I2_N } as u64);
