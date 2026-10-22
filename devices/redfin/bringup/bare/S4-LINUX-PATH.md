@@ -4710,3 +4710,56 @@ SMEM_LOOK 上屏；watch 表同刀加三字段（白名单律）。s30 未曾上
 elf 字面量验真 ch=/cc=/lk= 全在）。自动循环哨兵同挂（60s 绑定 ping 沿沿
 落账，15min 死=AUTOCYCLE-STOP→a 命烧尽落 b/L0，届时试 L0 ssh
 `aginx-reboot bootloader` 免物理复位）。
+
+## 靴 #36（G30+G30b 首刷，链 #36 全自主闭环）——12:08 收
+
+**链 #36 全自主闭环（首例零人工刷机）**：12s 强断→VolDown+Power 进 fastboot
+是仅剩物理步（11:5x 用户手进）；之后链自动：串号闸门→getvars→零填 s31
+68,157,440B→boot_a→set_active a→reboot→观察器 12s 采样。11:57:17 FLASHED，
+11:58:24 ping up（起网 67s，历史带内）。
+
+**天花板第十二证**：cyc=127 **+595s** keep-alive 首败（11:58:24+595≈12:08:31
+死），5 粒全 dead 实锤——#29–#34 十一证 +594/595s 后第四连（594×3→595，
+带内稳）。终值 ww=1.1.0.0.0、读梯 rl=17 冻结、wl/wo/oe/ws 全带内同 #34。
+
+**G30 首数（pc= 递信）**：`pc=16.<hex>.64` ——口 0x16（未应答口之一）收到
+100B，解 QMI SDU：**msgid 0x27 = QMI_IPA_CONFIG_REQ、txn=3、len=0x38**。
+即 modem 问 AP 要 IPA 配置——正是 CFG_ARM 故意不答的那条（保 USB 不被
+mismatch 配死）。「敲门」升格「递信」成功：信的内容=IPA 初始化握手。
+
+**G30b 首数（ch=/cc= 控制面正账）**：`ch=2:1,4:28,6:f` ——**1×HELLO +
+40(0x28)×NEW_SERVER + 15(0xf)×DEL_CLIENT = 56**，与 po=fffffffe.38 精确
+对账（那 56 封全数读完，无一漏）。三首数：
+- **NEW_SERVER=40**：modem 单靴广播 40 个服务——但 SMEM_SVC 只存 8 对、
+  q= 渲染被 CTRL_REPLY(3072) 截尾，**服务图自 ~#27 起从没上过屏**（#36
+  现场发现：sm 行稳超 3072，q=/iq=/ig=/im=/jx=/ic= 全截；控制台 16 命令
+  id/ping/up/fb/log/bat/sm/pv/px/qm/qn/qc/qs/fr/tx 无一独立吐服务图，
+  fr=SFR 读非重启，**无 fastboot 动词**——L0 腿是唯一免物理复位路）。
+- **NEW_LOOKUP=0 + 旧 lk=0.0.5**：modem 从不查我们的服务（它只收我们的
+  NEW_SERVER 广播）；SMEM_LOOK 暗闛空 =「modem 在找什么」答案=什么都不找。
+- **DEL_CLIENT×15（首见）**：modem 侧客户端 socket 15 次开→超时→关——
+  服务使用失败指纹（疑与 IPA REQ 无答同根：开完等不到回应用就关）。
+
+**cc=4.0.0.0.0 判读**：最后一枚控制包=NEW_SERVER 五元组全零。两解留判：
+(a) modem 临终真空通告（qrtr 语义里零端口=退场）；(b) 短包(<56B)守卫置零
+（同偏移 +52/+56 在 IQ 闩上读到过真值 svc=0x31，字段本身是实数据）。
+G31 ccz= 计零组+守卫只存非零组，下刷即分。
+
+**lk= 撞名现场抓获**：sm 行出现两个 lk=（旧 LOOK_N.PEND.HOST_ADV=0.0.5 +
+新 SMEM_LOOK=-）——grep 引号转义漏查旧名所致。G31 改名 ml=。
+
+**G31 已推（76feff6，码尖位舞步 34 收据垫顶）**：CTRL_REPLY 3072→8192
+（q= 服务图解锁）+ SMEM_SVC 8→40 对 + cc= 零值守卫/ccz= + dc=
+DEL_CLIENT client{node.port}（15 连闭是谁）+ ml= 改名；--s32 出件
+（字面量 ccz=/dc=/ml= 验真全在）；零填 /tmp/s32padded.img 68MB
+（md5 3b2f80e536449e22e2eeeef729832309）。静态名撞车现场：新 TF_DC
+撞既有 TF_DC(u32)——改名 TF_DCL；**撞名律升格：static 名同 render 名
+一律先 grep**。
+
+**链 #37 在挂（12:16:08 武装）**：#36 烧 try1 12:08 → 剩 6 tries ×
+~10min，估 ~13:10 落 b/L0（旧哨兵 11:41 已停判过期——11:57 重刷后七命
+重灌）。链等 `adb devices` 现身（serial=aginxosredfin）→
+`/usr/bin/aginx-reboot bootloader`（绝对路径律）→ fastboot →闸门→刷
+s32padded→set_active a→重启→观察器（白名单已带 ccz=/dc=/ml=）。
+全程零人工；en10=02:00:00:00:00:01 持续在=仍是 bare 自旋（12:15 无
+adb、无 ping——7min 慢自愈在案先不下结论）。
