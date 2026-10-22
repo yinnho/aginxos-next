@@ -129,6 +129,7 @@ MODE="heartbeat"
 [ "${1:-}" = "--s33" ] && MODE="s33"
 [ "${1:-}" = "--s34" ] && MODE="s34"
 [ "${1:-}" = "--s35" ] && MODE="s35"
+[ "${1:-}" = "--s36" ] && MODE="s36"
 mkdir -p "${OUTDIR}"
 ELF="${OUTDIR}/heartbeat.elf"
 
@@ -1028,6 +1029,15 @@ elif [ "${MODE}" = "s35" ]; then
   ELF="${OUTDIR}/s35.elf"
   cp "${HERE}/target/aarch64-unknown-none-softfloat/release/redfin-bare" "${ELF}"
   BIN="${OUTDIR}/s35.bin"; IMG="${OUTDIR}/boot-s35.img"
+elif [ "${MODE}" = "s36" ]; then
+  # 刀 G34b（G34 致盲自修）：#40 靴实证 pdh= 恒空而 po=12.4 有包——96 门
+  # 对 ~76B 的 GET_DOMAIN_LIST 永不真（G33 短包守卫律复发，自家法自家撞）。
+  # 修=捕获门 52+off 界守卫（union 全在 fifo）；pd= 名解改 @58 无前缀可打印
+  # 串（pe=1 定谳的 modem 方言，与 pd_take_name 同位）。
+  (cd "${HERE}" && cargo build --release --target aarch64-unknown-none-softfloat) || { echo "cargo build FAILED (${MODE}) -- 不拷陈旧件" >&2; exit 1; }
+  ELF="${OUTDIR}/s36.elf"
+  cp "${HERE}/target/aarch64-unknown-none-softfloat/release/redfin-bare" "${ELF}"
+  BIN="${OUTDIR}/s36.bin"; IMG="${OUTDIR}/boot-s36.img"
 elif [ "${MODE}" = "s21" ]; then
   # 刀 G22：s20 同面，intent 池+归还追踪（cmd5 全量入池、TX 池挑、
   # RX_DONE/W_REUSE 归还、池干 RX_INTENT_REQ、cmd3/11 入 8B 集、ii= 台账）。

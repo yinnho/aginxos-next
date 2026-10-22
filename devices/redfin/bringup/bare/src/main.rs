@@ -12425,9 +12425,15 @@ fn scan_new_servers(fifo: u64, rh: u64) {
                         TF_PC.copy_from_slice(pb);
                         TF_PC_PORT = dst_port;
                     }
-                    // 刀 G34：0x12/0x10 定向包环（末 2 包滚存，96B=整 qrtr
-                    // 头 48B+载荷首 48B；>=96 才抄防截断帧）。
-                    if chunk >= 96 && (dst_port == 0x12 || dst_port == 0x10) {
+                    // 刀 G34b：0x12/0x10 定向包环（末 2 包滚存，96B=整 qrtr
+                    // 头 48B+载荷首 48B）。门=52+off 界守卫——G33 短包律：
+                    // transport 报 chunk 偏短（GET_DOMAIN_LIST 全 union 才
+                    // ~76B，chunk 到不了 96）而 union 全在 fifo；#40 靴实证
+                    // 96 门全靴致盲（po=12.4 有包、pdh=- 恒空）。
+                    if chunk >= 52
+                        && off + 96 <= unsafe { GLINK_RXLEN }
+                        && (dst_port == 0x12 || dst_port == 0x10)
+                    {
                         let src = (fifo + off) as *const u8;
                         let pb = core::slice::from_raw_parts(src, 96);
                         if dst_port == 0x12 {
@@ -13897,10 +13903,13 @@ fn ctrl_service(
                                     );
                                     if unsafe { TF_PD12[1][55] } == 1 && unsafe { TF_PD12[1][51] } == 0x21 {
                                         push_str(reply, &mut rn, ".");
-                                        let slen = unsafe { TF_PD12[1][58] } as usize;
+                                        // G34b：modem 方言名起 @58 无 strlen 前缀
+                                        // （pe=1 定谳：pd_take_name 同位拷出 17B
+                                        // 全等才闩——若有前缀则 18B 永不闩）。
+                                        // 可打印串直渲，与 pn= 逐字一致。
                                         let mut ni = 0usize;
-                                        while ni < slen && 59 + ni < 96 {
-                                            let c = unsafe { TF_PD12[1][59 + ni] };
+                                        while 58 + ni < 96 {
+                                            let c = unsafe { TF_PD12[1][58 + ni] };
                                             if c < 0x20 || c >= 0x7f {
                                                 break;
                                             }
