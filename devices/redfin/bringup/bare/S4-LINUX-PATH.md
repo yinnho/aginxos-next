@@ -6012,3 +6012,137 @@ FUN_8c110eb8）与 loader 侧 0x314 同源。
 
 （收据完；工具产物：/tmp/modem-patched.elf、/tmp/modproj、
 /tmp/b22scripts/*.java、/tmp/mod-{opscan,magic,decomp*}.log）
+
+## 靴 #55：s54 行为刀——p_memsz 阶梯探针（2026-10-23 06:17–，v1 缺陷现场+v2 修正）
+
+### 一、刀设计（离线定谳的死点 → 行为证法）
+
+靴 #54 逆向收口后的死点图：root 侧装载腿 FUN_8c5f0f98 走查 phdr
+找 hash 段（我 SO 的 phdr1：flags=0x02200000 ✓、off=0x1000、
+filesz=0x1a98、memsz=0x2000）→ `alloc(p_memsz)`（FUN_8c7d712c 虚调
+→ 池实现 FUN_8c7d7a90 → QDI (8,4,0x3c) 内核调用，软败=err 0xb）→
+成功才 seek 0x1000 读段。线上从未见过 0x1000 偏移读 ⇒ **死点=alloc
+一步**（rtld 静默退场，与 +1ms 弃单、+11.1s 讣告全签名吻合）。
+
+**证法**：送数时覆写 SO 的 phdr1.p_memsz（文件偏移 104）/p_filesz
+（偏移 100）成阶梯值 [0x2000, 0x1000, 0x800, 0x400, 0x100, 0x20,
+8, 4]（rung0=原值=对照靴；filesz 只缩不涨）。若 alloc 是堵点、更小
+尺寸能过 → hash 段读 RRQ（rl= 里 seek=1000）上线现形 = 实锤 + 池
+尺寸二分。补丁只在 DATA 泵单点注入（块盖住 100..108 才写），boot
+探针读（64B@0/52B@0xa0）不经此路。
+
+**推档双锚**：① 讣告簇（chunk=52 且 ctrl cmd=4）8s 门推档；② 兜底
+=距上次首服 ≥25s 的新首服推档（防讣告假说错）。渲染 s54=档位.档值.
+补丁数.推档数.源 + ob= 讣告末 2 笔 52B 全保真（qrtr 头 ver.type.
+src_node.src_port.pad.size.dst_node.dst_port + 体 cmd.service.
+instance.node.port）——放 rqr= 邻位=行中段，避开 TCP_TX 帽挤尾。
+
+### 二、v1 刷机与缺陷现场（命 = 06:17:50 起）
+
+刷机：s54 v1（126,976B ✓ 尺寸类，垫 68,157,440B，md5 01b438fd…）
+→ boot_a → set_active a → reboot。控制台 06:20:20 起（+170s），
+命 1 异常长（>20min，modem 干净死透反而不触发 EFS/init 狗——与
+#47 的「卡 init 才 +594s 狗杀」互补证）。
+
+**v1 现场（两帧冻结一致）**：
+- 装载器整靴**只发 stat 会话**：tev 双场 `.befd.1.1/.befd.4.0/
+  .befd.8.1/.befd.c.0/.beff.3.9`（+48.9s 与 +49.9s，k=12=stat 只回
+  OACK、客户端 op5 code9 收口）——**从不读文件头**（s53 命 28 的
+  160B phdr 读这靴零出现，装载进度逐靴漂移、非确定）。
+- +62.0s 讣告簇 DEL_SERVER×7（距末会话 +11.1s 死亡节律吻合）；
+  到 +163s **ob=40 笔** ≈ 2 簇 × ~20 服务（modem 全名册拆台）=
+  **modem SSR 死环 ~50s/周期**，其后环停摆（ob 冻结 40）、全网静默。
+- 讣告解码样本：`DEL_SERVER(svc=7,inst=1,port=83)`、
+  `DEL_SERVER(svc=16,inst=2,port=85)`（src_node=0=modem、dst_node=1
+  =host、src_port=QRTR_PORT_CTRL ✓；52B=32B qrtr 头+20B ctrl 体，
+  与 glink_tx_payload TX 布局逐字对上）。
+- **v1 缺陷实锤**：`s54=2.800.0.2.1`——纯 stat 周期也推档（讣告/
+  兜底两锚都无「本档真送过补丁」门），档烧到 2 而 patchN=0，探针
+  空转。用户手动重启进 fastboot（06:37 许可）。
+
+### 三、v2 修正（06:31 建、06:39:01 刷）
+
+新静态 `SO_PATCHED`（补丁送达旗）：补丁块真送出置 1；**两锚推档
+都以旗为门、推档即消费清 0**。语义=「档位只在一次真实的头读尝试
+完成后前进一级」：stat-only 周期不烧档；装载器若在某档走通则旗
+留着、同档续跑不推。v2 产物：126,976B ✓、垫 68,157,440B、md5
+270021a2…；串号闸门过（值不回显）→ boot_a → set_active a（七命
+重置）→ reboot 06:39:01。30s/帧观察循环在跑（/tmp/s54v2-watch.log）。
+
+### 四、v2 现场（命 1，06:41–07:0x）——阶梯守住，骰子不再滚
+
+- 阶梯门修复**实证有效**：连续多帧 `s54=0.2000.0.0.0`（rung0 对照
+  档原位、patchN=0）——stat-only 周期零烧档（对照 v1 同期已烧到 2）。
+- 命 1 形状与 v1 命 1 全同：tev 双 stat 场（+48.8s/+49.8s，op5 code9
+  收口）、ob=28 后冻结、rqr=55 后冻结、全网静默挂死（狗不咬）。
+- `rl=4000` 判读修正：rl=（刀G5 六槽全口请求日志）位于 sm 行尾、
+  TCP 3072 同步窗截半——**截断尾巴不是读记录**，s54/ob/rqr/tev 才是
+  可靠判据（观察器高亮 grep 不受影响）。
+- **结构性堵点定谳**：装载器骰子只在 modem SSR 时重掷；崩溃环停摆
+  + 狗不咬 = 命内骰子停滚 → 探针等不到「真读头的场」。
+
+### 五、两杠杆（07:0x，本窗口转折）
+
+1. **rp→root_pd（rm 命令，s54v3）**：现值 `rp` 打
+   `msm/modem/wlan_pd`——#46 全腿通但域 UNINIT 被拒（error 9）。
+   本命实证 modem servreg 仍活：发 rp 后 `rpm=1.1.90001` 往返在、
+   且 rqr 55→58 冒三笔新入站（RESTART RESP 48B + 0x65→0x10 72B +
+   ctrl type6 52B）——**对活 servreg 发根域 RESTART_PD 即令 modem
+   自我 SSR → PIL 重载 → 新 loader 场，不烧手机命**。根域名
+   `msm/modem/root_pd` 就在固件 pd-mapper 域名表（DOMS，6421 一带）。
+2. **fb 控制台命令实为「热复位进 fastboot」**（msm-poweroff
+   bootloader 语义：IMEM 0x77665500 + PON 配置 + PS_HOLD 清零）——
+   先前「无 handler」记忆有误，fb_check→CTRL_FB 武装→fb_tick 链
+   全在。刷机闭环从此自主：fb → fastboot → 闸门 → 刷 → set_active a。
+
+### 六、s54v3（07:00 建、链 #55 自主刷）
+
+- 码刀三处：①静态 `SR_ROOT`（rm 选靶旗）；②控制台 `rm`（码 21：
+  SR_ROOT=1 + 走 rp 同路 RESTART_PD）；③sr_tick 发送块按旗选靶
+   `b"msm/modem/root_pd"`（发成即清旗）。观察面 rpm= 加末位 root。
+- 产物 126,976B ✓ 尺寸类；垫 68,157,440B、md5 e2e7c7a9…。
+- **链 #55**（/tmp/s54v3-chain.sh）：控制台 fb → 等 fastboot（120s）
+  → 串号闸门（值不落日志）→ flash boot_a → set_active a → reboot。
+  首条全自主刷（无用户手动入口）。
+- 战术：v3 起每命开场即 `rm` 造 SSR 场 → 观察装载器骰子；真读头的
+  场里阶梯才开步。WIN=rl/rqr 现 seek=1000；LOSS=档走 7 无 hash 读
+  （alloc 池缺失实锤，转 QDI 池后援/parent PD 内存区，离线逆向）。
+
+### 七、链 #55 后续事故：fw 重启 USB 全灭（07:0x）
+
+- 刷+set_active a+reboot 全 OKAY（07:04:15–18），但 fw 起机后
+  **Pixel 全程不上 USB 总线**（ioreg 只有用户 iPhone 0x05AC；
+  fastboot/adb 皆空、en4-6 无 IP）——比 #54 的「半活：描述符答/
+  字符串 STALL」更死，连半枚举都没有。
+- 判读：PS_HOLD 热复位链（fb→flash→reboot）把 dwc3/phy 留在坏态，
+  fw 的 USB gadget 起不来；与 #54 同族、「唯物理断电可解」。
+  v3 码刀只动控制台/sr_tick/渲染，boot 路径与 v2 逐字相同（v2 于
+  06:39 正常起机），固件自身挂死概率低——phy 坏态为主假说。
+- 处置：请用户物理重启（首选 Power+VolDown 进 fastboot=多一次
+  phy 重初始化；备选长按电源强制重启 boot_a）。**探活循环已武装：
+  ping 通即自动发 rm**（root_pd SSR 造场），观察循环在录。
+- 教训入册：**fb 热复位链有 USB phy 卡死风险，非物理断电不可靠
+  ——fb 只能当快车道，不能当唯一车道**；刷后若 2min 内 USB 不上
+  总线，即判 phy 卡死，别等。
+
+### 八、07:28 TCP 黑洞事故定谳 + s54v4（Established 自愈刀）
+
+- **现场**：07:19:30 fastboot reboot 后 fw 正常起机（Aginx ECM 枚举、
+  ICMP 0.9ms 活）；07:28:00 老观察循环还拿到一帧，07:28:30 起 2323
+  **SYN 黑洞**（连 RST 都不回）且整命不恢复。
+- **定谳**：ICMP 活=主环活着在 poll iface → smoltcp 在跑 → 唯一
+  能造出此形状的是 **socket 停在 Established 死对端态**：状态机只
+  给半关态（CloseWait/LastAck/FinWait×2/TimeWait→abort+relisten）
+  留了出口，Established 无超时无敲门检测；smoltcp 对不上四元组的
+  新 SYN 静默丢（不回 RST）→ 后来者永久黑洞。诱因=本窗口我犯的
+  **客户端纪律错误**：双探活循环（4s+5s）+ dd-kill 粗暴断开抢
+  单连接槽位。
+- **s54v4 两路自愈**（`TCP_RX_AT`/`TCP_KNOCK` 新静态）：①Established
+  空闲 180s（无 RX 字节）撤桌；②SYN 敲门累计 8 次撤桌（对端来字节
+  即清零计数）。撤桌姿势与半关态一致（abort+listen+CTRL 全清），
+  旧两分支同步清新计数。观察面 tcp heal=0x 记 1=敲门/2=空闲。
+- **客户端纪律同时收紧**：单消费者——常驻观察循环独占，ad-hoc 命令
+  单发快撤，禁双循环并发探测。
+- 产物 126,976B ✓；垫 68,157,440B、md5 2eda6f1f…。链 #56
+  （/tmp/s54v4-chain.sh）等物理 fastboot 现场 → 闸门 → 刷 v4 →
+  set_active a → reboot；起机后单探活循环点 rm。
