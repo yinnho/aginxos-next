@@ -4928,3 +4928,45 @@ adb、无 ping——7min 慢自愈在案先不下结论）。
   已入册 push-dance-recipe.md。
 - **链 #41 在挂**（15:09:12 pid 3636，img=/tmp/s36padded md5
   8454fc60…，等 L0 自动刷）——靴 #41=G34b 真观察窗。
+
+### 靴 #41（10-22 15:52–16:03）——G34b 首真字节：qrtr 布局疑云当场破解（+32/+36=size 非 src）+ 敲问漂移（2 敲/未问 elf_loader）+ 三个潜伏缺口浮出 → G36 刀案
+
+- **链 #41 全自主闭环五号**：L0 adb 15:51:28 → L0 READY 15:51:58 →
+  FASTBOOT/GATE 15:52:11 → FLASHED 15:52:14 → SET_ACTIVE a → REBOOTED
+  15:52:15 → ping up 15:53:28（73s）→ ICMP dead +596s（keep-alive
+  FAILED cyc=127）=**天花板第十七证**（593..596 全程未破）。链脚本
+  止于 watcher（无自动续靴），靴 #42 待 G36。
+- **pdh= 首真字节（G34b 验收通过）**：捕获门 52+界守卫全靴工作正常，
+  pd=/pdh=/rm= 三面全活。首获 96B（末敲）解码定谳：
+  `src=0.0x0b dst=1.0x12 QMI tf=0 txn=2 msg=0x21 len=22 TLV01
+  name='tms/pddump_disabled'`——TLV len=0x13=19 **恰等于名字长**
+  （值首字节即 't'，无 strlen 前缀、无 NUL），PDMAP ⑺ 的 @58 方言
+  论证实；QMI len=22=3+19 恰好。
+- **qrtr 头布局疑云破解（读法清单第 1 项，当场两案对账）**：
+  PD 包 `+32/+36=0x00000000.0000001d`=29=**QMI 总长 7+22**；IPA 包
+  （pc=）`+32/+36=…3f`=63=**7+56**。两案全中 ⇒ **+32..+39=u64
+  payload size，不是第二地址**。方言布局定谳：`{+0..+15 传输前缀
+  （0x00020009,4,0x40,0）, +16 ver=1, +20 type=1, +24/+28 src,
+  +32..+39 size(u64), +40/+44 dst, +48 QMI}`——内核 qrtr_hdr_v1 的
+  src/dst/size/confirm 在此被重排（size 提前、无 confirm 槽）。**回址
+  +24/+28 无罪**（tftp 多回合铁证成立），G36 双发刀不需要了。
+- **敲问漂移（本靴最大意外）**：po=12.2 终值（**仅 2 敲**，#39/#40
+  均 12.4）、两敲全答（pr=2）、末敲名=tms/pddump_disabled、**pe 不闩
+  =本靴根本没问 kernel/elf_loader**。敲问数与名字逐靴漂移 ⇒ modem
+  侧 tms/PD-manager 的查库时机/顺序非确定（随内部时序走），4 敲 vs
+  2 敲非「重试」差。语料 grep 证 tms/pddump_disabled 不在六 jsn——
+  我们答空表（nh=0→TLV10 total=0、无 TLV12，main.rs pd_reply 静读
+  定谳）与厂库一致（或厂库亦空）。
+- **三潜伏缺口浮出（G36 刀案，boot #42 装）**：
+  ①**去重键裸 txn**：PD 腿 PD_SEEN 只比 txn，而 0x10 rmtfs 腿注释
+  明证「多客户端各自从 txn=1 起算，必须进去重键」——PD 多客户端
+  txn 撞号即错杀（#39/#40「4 敲 3 答 1 丢」的丢可解释）；
+  ②**应答腿只认 0x21**：msgid 0x20（INDICATION_REGISTER）/0x22
+  （REGISTER_SERVICE_LIST）敲来无声吞——canon（service-locator-
+  private.h）两 resp 都=TLV02(0,0) 极小（MAX_LEN 7），被吞的第 4 敲
+  完全可能是 0x20/0x22，客户端等超时整条查库作废；
+  ③**PD_PEND 占位期丢敲**：早窗突发两敲同扫一圈即丢一（无队列）。
+  G36=三修+pd0=/pm= 渲染（末 2 敲名字/txn/msgid 全见）。
+- **FLASHED 行标签假警报**：链日志印「s35padded」=sed 只换 IMG= 没换
+  echo 死串——实刷 `$IMG`=/tmp/s36padded.img（md5 8454…已核），
+  纯标签伪影，靴有效。
