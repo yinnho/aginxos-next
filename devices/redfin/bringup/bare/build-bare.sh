@@ -696,7 +696,7 @@ elif [ "${MODE}" = "s01" ]; then
   # 走 bare.toml→build.rs→facts.rs；rust.ld 链 ABL 落点+0x40。
   # 注：S0-2 起 main.rs 已换日志环正身——本模式出的件即当前 main.rs；
   # 复现 S0-1 行为 checkout 42aa96c。
-  (cd "${HERE}" && cargo build --release --target aarch64-unknown-none-softfloat)
+  (cd "${HERE}" && cargo build --release --target aarch64-unknown-none-softfloat) || { echo "cargo build FAILED (${MODE}) -- 不拷陈旧件" >&2; exit 1; }
   ELF="${OUTDIR}/s01.elf"
   cp "${HERE}/target/aarch64-unknown-none-softfloat/release/redfin-bare" "${ELF}"
   BIN="${OUTDIR}/s01.bin"; IMG="${OUTDIR}/boot-s01.img"
@@ -705,7 +705,7 @@ elif [ "${MODE}" = "s02" ]; then
   # 心跳落盘、成功即复位）。同一设备 crate 换 main.rs 内容出件。
   # 注：S0-3 起 main.rs 已换异常向量正身——本模式出的件即当前 main.rs；
   # 复现 S0-2 行为 checkout 83135c7。
-  (cd "${HERE}" && cargo build --release --target aarch64-unknown-none-softfloat)
+  (cd "${HERE}" && cargo build --release --target aarch64-unknown-none-softfloat) || { echo "cargo build FAILED (${MODE}) -- 不拷陈旧件" >&2; exit 1; }
   ELF="${OUTDIR}/s02.elf"
   cp "${HERE}/target/aarch64-unknown-none-softfloat/release/redfin-bare" "${ELF}"
   BIN="${OUTDIR}/s02.bin"; IMG="${OUTDIR}/boot-s02.img"
@@ -714,7 +714,7 @@ elif [ "${MODE}" = "s03" ]; then
   # ESR/ELR/FAR/CurrentEL 落环 → 复位）。
   # 注：S0-4 起 main.rs 已换 MMU 正身——本模式出的件即当前 main.rs；
   # 复现 S0-3 行为 checkout 53cb818。
-  (cd "${HERE}" && cargo build --release --target aarch64-unknown-none-softfloat)
+  (cd "${HERE}" && cargo build --release --target aarch64-unknown-none-softfloat) || { echo "cargo build FAILED (${MODE}) -- 不拷陈旧件" >&2; exit 1; }
   ELF="${OUTDIR}/s03.elf"
   cp "${HERE}/target/aarch64-unknown-none-softfloat/release/redfin-bare" "${ELF}"
   BIN="${OUTDIR}/s03.bin"; IMG="${OUTDIR}/boot-s03.img"
@@ -723,7 +723,7 @@ elif [ "${MODE}" = "s04" ]; then
   # DMA 窗 NC；cache-off/on GPT 双 CRC 计时对比落环 + 256 块扫环计时）。
   # 注：S0-5 起 main.rs 已换中断正身——本模式出的件即当前 main.rs；
   # 复现 S0-4 行为 checkout e5776e8。
-  (cd "${HERE}" && cargo build --release --target aarch64-unknown-none-softfloat)
+  (cd "${HERE}" && cargo build --release --target aarch64-unknown-none-softfloat) || { echo "cargo build FAILED (${MODE}) -- 不拷陈旧件" >&2; exit 1; }
   ELF="${OUTDIR}/s04.elf"
   cp "${HERE}/target/aarch64-unknown-none-softfloat/release/redfin-bare" "${ELF}"
   BIN="${OUTDIR}/s04.bin"; IMG="${OUTDIR}/boot-s04.img"
@@ -731,7 +731,7 @@ elif [ "${MODE}" = "s05" ]; then
   # NOLINUX-PLAN S0-5：GICv3 + 通用定时器中断（RD 唤醒/dist 使能/SRE/
   # PMR/IGRPEN1；虚拟定时器 INTID 19 武装 1s → daifclr → WFI → 槽 5
   # IRQ 入口记 id/dt/ctl 落环复位）。复现 S0-5 行为 checkout 69e6885。
-  (cd "${HERE}" && cargo build --release --target aarch64-unknown-none-softfloat)
+  (cd "${HERE}" && cargo build --release --target aarch64-unknown-none-softfloat) || { echo "cargo build FAILED (${MODE}) -- 不拷陈旧件" >&2; exit 1; }
   ELF="${OUTDIR}/s05.elf"
   cp "${HERE}/target/aarch64-unknown-none-softfloat/release/redfin-bare" "${ELF}"
   BIN="${OUTDIR}/s05.bin"; IMG="${OUTDIR}/boot-s05.img"
@@ -739,7 +739,7 @@ elif [ "${MODE}" = "s06" ]; then
   # NOLINUX-PLAN S0-6：PSCI CPU_ON 拉起 7 副核（version 落环→清
   # mailbox→CPU_ON×7 rc 落环→3s WFI→IRQ 入口收割 7 槽心跳落环）。
   # 复现 S0-6 行为 checkout 2f511f4。
-  (cd "${HERE}" && cargo build --release --target aarch64-unknown-none-softfloat)
+  (cd "${HERE}" && cargo build --release --target aarch64-unknown-none-softfloat) || { echo "cargo build FAILED (${MODE}) -- 不拷陈旧件" >&2; exit 1; }
   ELF="${OUTDIR}/s06.elf"
   cp "${HERE}/target/aarch64-unknown-none-softfloat/release/redfin-bare" "${ELF}"
   BIN="${OUTDIR}/s06.bin"; IMG="${OUTDIR}/boot-s06.img"
@@ -747,7 +747,7 @@ elif [ "${MODE}" = "s06b" ]; then
   # NOLINUX-PLAN S0-6b：RD_TYPER 全表探针（S0-6 链路 + 主核裸 MPIDR
   # 落环 + 8 帧 RD_TYPER 逐帧落环——帧↔真 MPIDR↔DT target 三角定谳）。
   # 复现 S0-6b 行为 checkout d0dcc91。
-  (cd "${HERE}" && cargo build --release --target aarch64-unknown-none-softfloat)
+  (cd "${HERE}" && cargo build --release --target aarch64-unknown-none-softfloat) || { echo "cargo build FAILED (${MODE}) -- 不拷陈旧件" >&2; exit 1; }
   ELF="${OUTDIR}/s06b.elf"
   cp "${HERE}/target/aarch64-unknown-none-softfloat/release/redfin-bare" "${ELF}"
   BIN="${OUTDIR}/s06b.bin"; IMG="${OUTDIR}/boot-s06b.img"
@@ -755,7 +755,7 @@ elif [ "${MODE}" = "s11" ]; then
   # NOLINUX-PLAN S1-1：SPMI v5 运输层只读探针（S0 链路 + ⑩ v5 判定/
   # CHGR+MISC 全副本 owner 落环/充电状态三寄存器 5 采样×4s——喂狗写
   # 路径留 S1-2）。复现 S1-1 行为 checkout 1880663。
-  (cd "${HERE}" && cargo build --release --target aarch64-unknown-none-softfloat)
+  (cd "${HERE}" && cargo build --release --target aarch64-unknown-none-softfloat) || { echo "cargo build FAILED (${MODE}) -- 不拷陈旧件" >&2; exit 1; }
   ELF="${OUTDIR}/s11.elf"
   cp "${HERE}/target/aarch64-unknown-none-softfloat/release/redfin-bare" "${ELF}"
   BIN="${OUTDIR}/s11.bin"; IMG="${OUTDIR}/boot-s11.img"
@@ -764,7 +764,7 @@ elif [ "${MODE}" = "s12" ]; then
   # 基线读→解挂 RMW 0x1340 bit0←0+读回→使能 RMW 0x1042 bit0←1+读回→
   # 后采样 5×4s——判 PLUGIN 能否无 TCPM 抬起）。复现 S1-2 行为 checkout 62d7f71。
   # 注：S1-2 自身寻址错（flat 高字节=外设号），判读无效——S1-2b 为修正刀。
-  (cd "${HERE}" && cargo build --release --target aarch64-unknown-none-softfloat)
+  (cd "${HERE}" && cargo build --release --target aarch64-unknown-none-softfloat) || { echo "cargo build FAILED (${MODE}) -- 不拷陈旧件" >&2; exit 1; }
   ELF="${OUTDIR}/s12.elf"
   cp "${HERE}/target/aarch64-unknown-none-softfloat/release/redfin-bare" "${ELF}"
   BIN="${OUTDIR}/s12.bin"; IMG="${OUTDIR}/boot-s12.img"
@@ -773,7 +773,7 @@ elif [ "${MODE}" = "s12b" ]; then
   # USBIN=PPID 0x213、TYPEC=PPID 0x215；真 0x1310 PLUGIN + Type-C
   # 0x1506/09/0B/0D/0F/0x1544 面 + 解挂写真身 0x213+0x40）。
   # 复现 S1-2b 行为 checkout 6d3c98c。
-  (cd "${HERE}" && cargo build --release --target aarch64-unknown-none-softfloat)
+  (cd "${HERE}" && cargo build --release --target aarch64-unknown-none-softfloat) || { echo "cargo build FAILED (${MODE}) -- 不拷陈旧件" >&2; exit 1; }
   ELF="${OUTDIR}/s12b.elf"
   cp "${HERE}/target/aarch64-unknown-none-softfloat/release/redfin-bare" "${ELF}"
   BIN="${OUTDIR}/s12b.bin"; IMG="${OUTDIR}/boot-s12b.img"
@@ -782,7 +782,7 @@ elif [ "${MODE}" = "s13" ]; then
   # 喂 0x1643×5@4s→停喂观察 12×5s 判 bark/bite→幸存解除武装）。
   # 注：S1-3 短命令只带 5 位地址（0x51→0x11 错位），aw=0x0 悬案——
   # S1-3b 为 EXT 重制刀。复现 S1-3 行为 checkout 8adcc38。
-  (cd "${HERE}" && cargo build --release --target aarch64-unknown-none-softfloat)
+  (cd "${HERE}" && cargo build --release --target aarch64-unknown-none-softfloat) || { echo "cargo build FAILED (${MODE}) -- 不拷陈旧件" >&2; exit 1; }
   ELF="${OUTDIR}/s13.elf"
   cp "${HERE}/target/aarch64-unknown-none-softfloat/release/redfin-bare" "${ELF}"
   BIN="${OUTDIR}/s13.bin"; IMG="${OUTDIR}/boot-s13.img"
@@ -792,7 +792,7 @@ elif [ "${MODE}" = "s13b" ]; then
   # →武装梯 aw2（+0ms/+1s/+5s 回读）→喂×2@4s→停喂观察 8×5s→幸存解除。
   # 注：S1-3b 判读=8 位 EXT 空间在 PM7250B 是死区（写 ACK 全弃/读疑似
   # 低页别名）——S1-3c 为 EXT-LONG 重制刀。复现 S1-3b 行为 checkout 9ee4014。
-  (cd "${HERE}" && cargo build --release --target aarch64-unknown-none-softfloat)
+  (cd "${HERE}" && cargo build --release --target aarch64-unknown-none-softfloat) || { echo "cargo build FAILED (${MODE}) -- 不拷陈旧件" >&2; exit 1; }
   ELF="${OUTDIR}/s13b.elf"
   cp "${HERE}/target/aarch64-unknown-none-softfloat/release/redfin-bare" "${ELF}"
   BIN="${OUTDIR}/s13b.bin"; IMG="${OUTDIR}/boot-s13b.img"
@@ -800,7 +800,7 @@ elif [ "${MODE}" = "s13c" ]; then
   # NOLINUX-PLAN S1-3c：狗面刀 EXT-LONG 重制（8 位 EXT 死区案定谳，
   # 运输层换 WRITEL=op0/READL=op1——内核 charger regmap flat 16 位地址
   # >0xFF 的唯一走法）：梯子同 S1-3b，观察窗 12×5s+解除前补喂。
-  (cd "${HERE}" && cargo build --release --target aarch64-unknown-none-softfloat)
+  (cd "${HERE}" && cargo build --release --target aarch64-unknown-none-softfloat) || { echo "cargo build FAILED (${MODE}) -- 不拷陈旧件" >&2; exit 1; }
   ELF="${OUTDIR}/s13c.elf"
   cp "${HERE}/target/aarch64-unknown-none-softfloat/release/redfin-bare" "${ELF}"
   BIN="${OUTDIR}/s13c.bin"; IMG="${OUTDIR}/boot-s13c.img"
@@ -810,7 +810,7 @@ elif [ "${MODE}" = "s13d" ]; then
   # CHGR 0x1054 官方 CHARGER_SPARE 翻位读回判「页死 vs 寄存器个案」；
   # 对照 c42 + 武装梯 aw3 + 喂一记 + 150s 停喂观察（POR BARK=128s 档，
   # bark 升起截环落 bk）+ 解除武装。复现 S1-3c 行为 checkout 472b071。
-  (cd "${HERE}" && cargo build --release --target aarch64-unknown-none-softfloat)
+  (cd "${HERE}" && cargo build --release --target aarch64-unknown-none-softfloat) || { echo "cargo build FAILED (${MODE}) -- 不拷陈旧件" >&2; exit 1; }
   ELF="${OUTDIR}/s13d.elf"
   cp "${HERE}/target/aarch64-unknown-none-softfloat/release/redfin-bare" "${ELF}"
   BIN="${OUTDIR}/s13d.bin"; IMG="${OUTDIR}/boot-s13d.img"
@@ -819,7 +819,7 @@ elif [ "${MODE}" = "s14" ]; then
   # −100mV 观察 0x1006 bits[2:0] 行为变（近满预期 4 TAPER→5 TERMINATE、
   # 还原回 4）+ ICL 0x1341/FCC 0x1061 旋钮写驻 + QG VBAT 对照读。
   # 编码律=battery-truth §1 单字节 (µ值−min)/step。复现 s13d checkout 1c36568。
-  (cd "${HERE}" && cargo build --release --target aarch64-unknown-none-softfloat)
+  (cd "${HERE}" && cargo build --release --target aarch64-unknown-none-softfloat) || { echo "cargo build FAILED (${MODE}) -- 不拷陈旧件" >&2; exit 1; }
   ELF="${OUTDIR}/s14.elf"
   cp "${HERE}/target/aarch64-unknown-none-softfloat/release/redfin-bare" "${ELF}"
   BIN="${OUTDIR}/s14.bin"; IMG="${OUTDIR}/boot-s14.img"
@@ -829,7 +829,7 @@ elif [ "${MODE}" = "s15" ]; then
   # 0xC2/MSOC 0xBF/双 OCV/S2 平均 + HOLD 协议示范 + SDAM 三读 +
   # 5×2s 自走活性窗。换算 V=raw×194637/1000µV、I=raw×152588/1000µA
   # （subtype 3）。复现 s14 checkout cd7c2cc。
-  (cd "${HERE}" && cargo build --release --target aarch64-unknown-none-softfloat)
+  (cd "${HERE}" && cargo build --release --target aarch64-unknown-none-softfloat) || { echo "cargo build FAILED (${MODE}) -- 不拷陈旧件" >&2; exit 1; }
   ELF="${OUTDIR}/s15.elf"
   cp "${HERE}/target/aarch64-unknown-none-softfloat/release/redfin-bare" "${ELF}"
   BIN="${OUTDIR}/s15.bin"; IMG="${OUTDIR}/boot-s15.img"
@@ -841,7 +841,7 @@ elif [ "${MODE}" = "s16" ]; then
   # 4×2s die_temp 活性窗。换算 full_scale=0x70e4（V=raw×1875000/28900
   # ×den；die m°C=raw×…/2−273150；chg=377500−V/4；smb=419400−V×100/356）。
   # 复现 s15 checkout 32f27b1。
-  (cd "${HERE}" && cargo build --release --target aarch64-unknown-none-softfloat)
+  (cd "${HERE}" && cargo build --release --target aarch64-unknown-none-softfloat) || { echo "cargo build FAILED (${MODE}) -- 不拷陈旧件" >&2; exit 1; }
   ELF="${OUTDIR}/s16.elf"
   cp "${HERE}/target/aarch64-unknown-none-softfloat/release/redfin-bare" "${ELF}"
   BIN="${OUTDIR}/s16.bin"; IMG="${OUTDIR}/boot-s16.img"
@@ -850,7 +850,7 @@ elif [ "${MODE}" = "s16b" ]; then
   # 节名 @2 是旧 VADC 编号残影，真值=qcom,spmi-vadc.h ADC_DIE_TEMP=0x06）
   # 读成浮脚 1.874V；本刀 die→0x06 + ref_gnd 0x00/vref_1p25 0x01 锚点
   # （应 0V/1.25V 免费刻度校准）。复现 s16 checkout 5bd86bc。
-  (cd "${HERE}" && cargo build --release --target aarch64-unknown-none-softfloat)
+  (cd "${HERE}" && cargo build --release --target aarch64-unknown-none-softfloat) || { echo "cargo build FAILED (${MODE}) -- 不拷陈旧件" >&2; exit 1; }
   ELF="${OUTDIR}/s16b.elf"
   cp "${HERE}/target/aarch64-unknown-none-softfloat/release/redfin-bare" "${ELF}"
   BIN="${OUTDIR}/s16b.bin"; IMG="${OUTDIR}/boot-s16b.img"
@@ -860,7 +860,7 @@ elif [ "${MODE}" = "s17" ]; then
   # 0x1006/0x1042 + VADC die/chg/bat_therm/vbat），永续 loop 不复位。
   # S1「常驻≥1 天电量不降」真考体；环 256 块 ≈ 1.7 天滚动历史；病发
   # PMIC 硬复位烧一命、3 发自动回 b 槽自愈。复现 s16b checkout 20eb767。
-  (cd "${HERE}" && cargo build --release --target aarch64-unknown-none-softfloat)
+  (cd "${HERE}" && cargo build --release --target aarch64-unknown-none-softfloat) || { echo "cargo build FAILED (${MODE}) -- 不拷陈旧件" >&2; exit 1; }
   ELF="${OUTDIR}/s17.elf"
   cp "${HERE}/target/aarch64-unknown-none-softfloat/release/redfin-bare" "${ELF}"
   BIN="${OUTDIR}/s17.bin"; IMG="${OUTDIR}/boot-s17.img"
@@ -869,7 +869,7 @@ elif [ "${MODE}" = "s18" ]; then
   # ext4 只读正题——GPT 名查 userdata → UfsDev（read10 弹 DATA NC 窗）
   # → ext4::Fs::open → 三靶 resolve+64KB 分段读+增量 crc32 落环。验收=
   # 同晚 L0 侧 md5/crc 对账「读出与 L0 一致」。复现 s17 checkout b198974。
-  (cd "${HERE}" && cargo build --release --target aarch64-unknown-none-softfloat)
+  (cd "${HERE}" && cargo build --release --target aarch64-unknown-none-softfloat) || { echo "cargo build FAILED (${MODE}) -- 不拷陈旧件" >&2; exit 1; }
   ELF="${OUTDIR}/s18.elf"
   cp "${HERE}/target/aarch64-unknown-none-softfloat/release/redfin-bare" "${ELF}"
   BIN="${OUTDIR}/s18.bin"; IMG="${OUTDIR}/boot-s18.img"
@@ -880,7 +880,7 @@ elif [ "${MODE}" = "s19" ]; then
   # QSCRATCH 三步+事件缓冲+DCTL 上线 → 2s 枚举窗后 DSTS/GEVTCOUNT/首
   # 事件字落环。验收=Mac 端 system_profiler 见新高速设备 + 环读数互证。
   # 复现 s18 checkout 217612b。宿主先 check.sh（crates/bare 平台面）。
-  (cd "${HERE}" && cargo build --release --target aarch64-unknown-none-softfloat)
+  (cd "${HERE}" && cargo build --release --target aarch64-unknown-none-softfloat) || { echo "cargo build FAILED (${MODE}) -- 不拷陈旧件" >&2; exit 1; }
   ELF="${OUTDIR}/s19.elf"
   cp "${HERE}/target/aarch64-unknown-none-softfloat/release/redfin-bare" "${ELF}"
   BIN="${OUTDIR}/s19.bin"; IMG="${OUTDIR}/boot-s19.img"
@@ -888,7 +888,7 @@ elif [ "${MODE}" = "s22" ]; then
   # 刀 G23：s21 同面，大包（>512）两件照办——还 intent + tftp 记账
   # （tf_note_ack/tf_note_data），QMI 深解析仍小包专属。#22 定谳：G14
   # 的 512 跳步把写客户端整块 DATA 全弄瞎，WRQ 会话开而 DATA 永不见。
-  (cd "${HERE}" && cargo build --release --target aarch64-unknown-none-softfloat)
+  (cd "${HERE}" && cargo build --release --target aarch64-unknown-none-softfloat) || { echo "cargo build FAILED (${MODE}) -- 不拷陈旧件" >&2; exit 1; }
   ELF="${OUTDIR}/s22.elf"
   cp "${HERE}/target/aarch64-unknown-none-softfloat/release/redfin-bare" "${ELF}"
   BIN="${OUTDIR}/s22.bin"; IMG="${OUTDIR}/boot-s22.img"
@@ -898,7 +898,7 @@ elif [ "${MODE}" = "s23" ]; then
   # ②入站 cmd7 催件应答（cmd5 补一枚+cmd8 granted，lpass 同款；旧哑跳=
   # 对端预算耗尽即哑死）③cmd12 CONT 入步进器（旧落 break 楔死洞）；
   # ④意图经济台账 rg=/c9=/bg=/i7=（入还队/还清/cmd9 liid/大包五元组）。
-  (cd "${HERE}" && cargo build --release --target aarch64-unknown-none-softfloat)
+  (cd "${HERE}" && cargo build --release --target aarch64-unknown-none-softfloat) || { echo "cargo build FAILED (${MODE}) -- 不拷陈旧件" >&2; exit 1; }
   ELF="${OUTDIR}/s23.elf"
   cp "${HERE}/target/aarch64-unknown-none-softfloat/release/redfin-bare" "${ELF}"
   BIN="${OUTDIR}/s23.bin"; IMG="${OUTDIR}/boot-s23.img"
@@ -910,7 +910,7 @@ elif [ "${MODE}" = "s24" ]; then
   # 完整送达（tb=3+客户端 ERROR-9 收幕）。观察：pr= 请求路径环（非 so
   # 要哪个文件）、bx= 首枚大包源口+载荷头（0x16 IPA 说 vs 写 DATA 说）、
   # wx= 写腿三账。
-  (cd "${HERE}" && cargo build --release --target aarch64-unknown-none-softfloat)
+  (cd "${HERE}" && cargo build --release --target aarch64-unknown-none-softfloat) || { echo "cargo build FAILED (${MODE}) -- 不拷陈旧件" >&2; exit 1; }
   ELF="${OUTDIR}/s24.elf"
   cp "${HERE}/target/aarch64-unknown-none-softfloat/release/redfin-bare" "${ELF}"
   BIN="${OUTDIR}/s24.bin"; IMG="${OUTDIR}/boot-s24.img"
@@ -920,7 +920,7 @@ elif [ "${MODE}" = "s25" ]; then
   # 户端等回全静（.so 收幕即哑）。0x20/0x27/0x35 三腿先例：小 RESP TLV
   # 0x02 成功。观察加宽：wx= 扩武装源口/撞门数/撞门口（两发 WRQ 判据）、
   # pr= 28→56B（modem_pr/so/549_38_0.mbn 全长可罩）、i2= 0x23 腿三账。
-  (cd "${HERE}" && cargo build --release --target aarch64-unknown-none-softfloat)
+  (cd "${HERE}" && cargo build --release --target aarch64-unknown-none-softfloat) || { echo "cargo build FAILED (${MODE}) -- 不拷陈旧件" >&2; exit 1; }
   ELF="${OUTDIR}/s25.elf"
   cp "${HERE}/target/aarch64-unknown-none-softfloat/release/redfin-bare" "${ELF}"
   BIN="${OUTDIR}/s25.bin"; IMG="${OUTDIR}/boot-s25.img"
@@ -931,7 +931,7 @@ elif [ "${MODE}" = "s26" ]; then
   # 装 IC（ic=0.0 各靴恒零疑同因）。观察：wx= 扩第 7 位 op2 总数、wl=
   # op2 全量环（最近 4 发 dst.sport，#26 三方矛盾 VIA=11/BLV=11/阶梯槽
   # 1011 在 N/BL 两账内无法自洽）。
-  (cd "${HERE}" && cargo build --release --target aarch64-unknown-none-softfloat)
+  (cd "${HERE}" && cargo build --release --target aarch64-unknown-none-softfloat) || { echo "cargo build FAILED (${MODE}) -- 不拷陈旧件" >&2; exit 1; }
   ELF="${OUTDIR}/s26.elf"
   cp "${HERE}/target/aarch64-unknown-none-softfloat/release/redfin-bare" "${ELF}"
   BIN="${OUTDIR}/s26.bin"; IMG="${OUTDIR}/boot-s26.img"
@@ -941,7 +941,7 @@ elif [ "${MODE}" = "s27" ]; then
   # wn= 武装 WRQ 文件名快照（写目标从未被捕——客户端想写什么）；
   # wl= 环 4→6 槽+op 位+tftp 口过滤（#27 假阳=打 0x12 的 QMI REQ 头
   # 00 02 撞 op2）+钳位修。
-  (cd "${HERE}" && cargo build --release --target aarch64-unknown-none-softfloat)
+  (cd "${HERE}" && cargo build --release --target aarch64-unknown-none-softfloat) || { echo "cargo build FAILED (${MODE}) -- 不拷陈旧件" >&2; exit 1; }
   ELF="${OUTDIR}/s27.elf"
   cp "${HERE}/target/aarch64-unknown-none-softfloat/release/redfin-bare" "${ELF}"
   BIN="${OUTDIR}/s27.bin"; IMG="${OUTDIR}/boot-s27.img"
@@ -952,7 +952,7 @@ elif [ "${MODE}" = "s28" ]; then
   # qrtr_open(0)，tf_new_port 0x1000+）、客户端回会话口全闸收（on_wx）、
   # tsize 键在场即回、wsize 去 min(16)。观察：wo= WRQ 选项段快照（五靴
   # 零观测盲区）+ rl N/首槽补分隔。
-  (cd "${HERE}" && cargo build --release --target aarch64-unknown-none-softfloat)
+  (cd "${HERE}" && cargo build --release --target aarch64-unknown-none-softfloat) || { echo "cargo build FAILED (${MODE}) -- 不拷陈旧件" >&2; exit 1; }
   ELF="${OUTDIR}/s28.elf"
   cp "${HERE}/target/aarch64-unknown-none-softfloat/release/redfin-bare" "${ELF}"
   BIN="${OUTDIR}/s28.bin"; IMG="${OUTDIR}/boot-s28.img"
@@ -963,7 +963,7 @@ elif [ "${MODE}" = "s29" ]; then
   # 作废）。观察三件：po= 全口 RX 直方图（QMI-14/servreg 静默丢弃的
   # 探测口有账）、oe= 写 OACK 字节回显（对 stock 逐字节审计）、
   # ws= 会话口闩值直读。
-  (cd "${HERE}" && cargo build --release --target aarch64-unknown-none-softfloat)
+  (cd "${HERE}" && cargo build --release --target aarch64-unknown-none-softfloat) || { echo "cargo build FAILED (${MODE}) -- 不拷陈旧件" >&2; exit 1; }
   ELF="${OUTDIR}/s29.elf"
   cp "${HERE}/target/aarch64-unknown-none-softfloat/release/redfin-bare" "${ELF}"
   BIN="${OUTDIR}/s29.bin"; IMG="${OUTDIR}/boot-s29.img"
@@ -972,7 +972,7 @@ elif [ "${MODE}" = "s30" ]; then
   # 39B 逐字节全同仍被客户端无视、ws=1000 会话口、po= 五未应答口
   # (10/12/14/15/16)+底噪 fffffffe 爬升。本刀 pc=：未应答口最近一包
   # 抄 64B（口.半字节hex.64）——「敲门」升格「递信」，答什么看完信再裁。
-  (cd "${HERE}" && cargo build --release --target aarch64-unknown-none-softfloat)
+  (cd "${HERE}" && cargo build --release --target aarch64-unknown-none-softfloat) || { echo "cargo build FAILED (${MODE}) -- 不拷陈旧件" >&2; exit 1; }
   ELF="${OUTDIR}/s30.elf"
   cp "${HERE}/target/aarch64-unknown-none-softfloat/release/redfin-bare" "${ELF}"
   BIN="${OUTDIR}/s30.bin"; IMG="${OUTDIR}/boot-s30.img"
@@ -982,7 +982,7 @@ elif [ "${MODE}" = "s31" ]; then
   # 数没读过。三件：ch= 控制包 typ 直方图（HELLO/NEW_SERVER/LOOKUP…）、
   # cc= 最近一枚五元组 typ.svc.inst.node.port、lk= NEW_LOOKUP 目击闩
   # SMEM_LOOK 上屏（G3 起只写不读的暗闩——modem 在找什么服务从此可见）。
-  (cd "${HERE}" && cargo build --release --target aarch64-unknown-none-softfloat)
+  (cd "${HERE}" && cargo build --release --target aarch64-unknown-none-softfloat) || { echo "cargo build FAILED (${MODE}) -- 不拷陈旧件" >&2; exit 1; }
   ELF="${OUTDIR}/s31.elf"
   cp "${HERE}/target/aarch64-unknown-none-softfloat/release/redfin-bare" "${ELF}"
   BIN="${OUTDIR}/s31.bin"; IMG="${OUTDIR}/boot-s31.img"
@@ -992,14 +992,14 @@ elif [ "${MODE}" = "s32" ]; then
   # NEW_SERVER 锁在暗闛）；② cc=4.0.0.0.0 末枚全零（真空通告 vs 短包守卫
   # 两解）——ccz= 计零组、cc= 只存末枚有肉的；③ DEL_CLIENT×15 是谁在关
   # ——dc= client{node.port}；④ lk= 撞名改 ml=；⑤ SMEM_SVC 8→40 对全量。
-  (cd "${HERE}" && cargo build --release --target aarch64-unknown-none-softfloat)
+  (cd "${HERE}" && cargo build --release --target aarch64-unknown-none-softfloat) || { echo "cargo build FAILED (${MODE}) -- 不拷陈旧件" >&2; exit 1; }
   ELF="${OUTDIR}/s32.elf"
   cp "${HERE}/target/aarch64-unknown-none-softfloat/release/redfin-bare" "${ELF}"
   BIN="${OUTDIR}/s32.bin"; IMG="${OUTDIR}/boot-s32.img"
 elif [ "${MODE}" = "s21" ]; then
   # 刀 G22：s20 同面，intent 池+归还追踪（cmd5 全量入池、TX 池挑、
   # RX_DONE/W_REUSE 归还、池干 RX_INTENT_REQ、cmd3/11 入 8B 集、ii= 台账）。
-  (cd "${HERE}" && cargo build --release --target aarch64-unknown-none-softfloat)
+  (cd "${HERE}" && cargo build --release --target aarch64-unknown-none-softfloat) || { echo "cargo build FAILED (${MODE}) -- 不拷陈旧件" >&2; exit 1; }
   ELF="${OUTDIR}/s21.elf"
   cp "${HERE}/target/aarch64-unknown-none-softfloat/release/redfin-bare" "${ELF}"
   BIN="${OUTDIR}/s21.bin"; IMG="${OUTDIR}/boot-s21.img"
@@ -1007,7 +1007,7 @@ elif [ "${MODE}" = "s20" ]; then
   # NOLINUX-PLAN S3 第二刀：s19 上电面不变，⑩-4 加 EP0 + CDC-ECM 枚举
   # （配方 S3-USB.md「EP0 → CDC-ECM/NCM」）。先断线再武装 SETUP，清
   # SFTDISCONNECT 后枚举在 soak 的 30s 窗里轮询。未刷：收线窗仍先 s18。
-  (cd "${HERE}" && cargo build --release --target aarch64-unknown-none-softfloat)
+  (cd "${HERE}" && cargo build --release --target aarch64-unknown-none-softfloat) || { echo "cargo build FAILED (${MODE}) -- 不拷陈旧件" >&2; exit 1; }
   ELF="${OUTDIR}/s20.elf"
   cp "${HERE}/target/aarch64-unknown-none-softfloat/release/redfin-bare" "${ELF}"
   BIN="${OUTDIR}/s20.bin"; IMG="${OUTDIR}/boot-s20.img"
