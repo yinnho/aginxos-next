@@ -4962,6 +4962,12 @@ static mut TZ_CL: u32 = 0;
 /// TZ_EH 低 16 位 e_type，高 16 位 e_machine。Hexagon 是 164（0xa4）。
 static mut TZ_MAG: u32 = 0;
 static mut TZ_EH: u32 = 0;
+/// 刀 G42：SO 头保真窗——elf_loader 实读过的两个偏移（0 与 0xa0）的
+/// 原字节。th= 的魔数只 4B，这里整窗可见：头两读内容是否合法 ELF/
+/// MBN 一翻便知。SH_OK 位0=SH1 成功、位1=SH2 成功。
+static mut SH1: [u8; 64] = [0; 64];
+static mut SH2: [u8; 52] = [0; 52];
+static mut SH_OK: u8 = 0;
 /// cx addr/sel/sts，mss addr/sel/sts，xo addr/data/sts。sel 0x100 没找到，
 /// 0x101 不是 ARC，0x102 aux 里没有 384。
 static mut PROXY: [u32; 9] = [0; 9];
@@ -7265,6 +7271,30 @@ fn tf_boot_probe(ufs: &mut Ufs) {
                     TZ_EH = eh;
                     // st=1 命中；若 sz==0 仍标 1（上层看 sz 判空文件/错解析）
                     TZ_ST = 1;
+                }
+                // 刀 G42：头保真窗自读（elf_loader 两读偏移 0/0xa0）。
+                // boot 期 TF_BLKBUF 尚无会话，借道安全。
+                let n1 = so_read(ufs, 0, 64);
+                if n1 == 64 {
+                    unsafe {
+                        core::ptr::copy_nonoverlapping(
+                            (TF_BLKBUF.as_ptr() as *const u8).add(4),
+                            SH1.as_mut_ptr(),
+                            64,
+                        );
+                        SH_OK |= 1;
+                    }
+                }
+                let n2 = so_read(ufs, 0xa0, 52);
+                if n2 == 52 {
+                    unsafe {
+                        core::ptr::copy_nonoverlapping(
+                            (TF_BLKBUF.as_ptr() as *const u8).add(4),
+                            SH2.as_mut_ptr(),
+                            52,
+                        );
+                        SH_OK |= 2;
+                    }
                 }
                 return;
             }
@@ -14028,6 +14058,39 @@ fn ctrl_service(
                                 push_hex(reply, &mut rn, unsafe { TZ_SZ } as u64);
                                 push_str(reply, &mut rn, ".");
                                 push_hex(reply, &mut rn, unsafe { TZ_CL } as u64);
+                                // 刀 G42：th= ELF 魔数+e_type/e_machine（采集
+                                // 已久从未渲染的盲区）；sh=/sh2= 头保真窗
+                                // （elf_loader 实读偏移 0/0xa0 的原字节）。
+                                push_str(reply, &mut rn, " th=");
+                                push_hex(reply, &mut rn, unsafe { TZ_MAG } as u64);
+                                push_str(reply, &mut rn, ".");
+                                push_hex(reply, &mut rn, unsafe { TZ_EH } as u64);
+                                push_str(reply, &mut rn, " sh=");
+                                {
+                                    let ok = unsafe { SH_OK };
+                                    let mut j = 0usize;
+                                    if ok & 1 != 0 {
+                                        while j < 64 {
+                                            push_hex(reply, &mut rn, unsafe { SH1[j] } as u64);
+                                            j += 1;
+                                        }
+                                    } else {
+                                        push_str(reply, &mut rn, "-");
+                                    }
+                                }
+                                push_str(reply, &mut rn, " sh2=");
+                                {
+                                    let ok = unsafe { SH_OK };
+                                    let mut j = 0usize;
+                                    if ok & 2 != 0 {
+                                        while j < 52 {
+                                            push_hex(reply, &mut rn, unsafe { SH2[j] } as u64);
+                                            j += 1;
+                                        }
+                                    } else {
+                                        push_str(reply, &mut rn, "-");
+                                    }
+                                }
                                 // tb=st.blk.xfer.wsent — 0 空闲 1 OACK 2 DATA 3 送完 8 读失败
                                 // 9 对端 ERROR；wsent=刀 G19 本窗已推块数（blk=base+wsent）
                                 push_str(reply, &mut rn, " tb=");

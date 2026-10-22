@@ -1091,11 +1091,12 @@ elif [ "${MODE}" = "s40" ]; then
   cp "${HERE}/target/aarch64-unknown-none-softfloat/release/redfin-bare" "${ELF}"
   BIN="${OUTDIR}/s40.bin"; IMG="${OUTDIR}/boot-s40.img"
 elif [ "${MODE}" = "s41" ]; then
-  # 刀 G41（#47 后·问句名环·纯观察）：G40 四键双排除（sd 保真、OPEN 全
-  # matched）后瓶颈=「modem 48-63s 全静后在等谁」。GET_DOMAIN_LIST 的
-  # 问句服务名 pd_take_name 早已解析进 PD_NAME，但 pn= 只闩 elf_loader
-  # 类（PD_SAW_ELF）——其余问句名全盲。本刀唯一事：dq= 6 槽问句名环
-  # （24B 截断、旧→新、附 DQ_N 总数）插在 pe= 后。零行为变化。
+  # 刀 G41+G42（#47 后·纯观察·合弹）：G41=GET_DOMAIN_LIST 问句名环
+  # dq=（6 槽×24B 旧→新+总数；pn= 只闩 elf_loader 类的盲区补洞）。
+  # G42=SO 头保真窗：th= ELF 魔数+e_type/e_machine（采集已久从未渲染），
+  # sh=/sh2= elf_loader 实读偏移 0(64B)/0xa0(52B) 的原字节——#47 实锤
+  # elf_loader 头两读后静默弃单（17 笔 RRQ 全自家 mbn、tb=3.1），送出的
+  # 字节是否合法 ELF/MBN 一翻便知。零行为变化。
   (cd "${HERE}" && cargo build --release --target aarch64-unknown-none-softfloat) || { echo "cargo build FAILED (${MODE}) -- 不拷陈旧件" >&2; exit 1; }
   ELF="${OUTDIR}/s41.elf"
   cp "${HERE}/target/aarch64-unknown-none-softfloat/release/redfin-bare" "${ELF}"
