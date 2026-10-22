@@ -5745,3 +5745,78 @@ s47（纯插桩：glink_tx_payload 三拒绝点当场快照 GX 4 槽 site=1 caps
   盲区，数据假说终审）；② 入站 qrtr 控制包 type 记录（52B
   控制包的 ctrl type 字段——区分 DEL_SERVER/RESUME/LOOKUP，
   讣告假说终审）。
+
+## 靴 #52 附录：案头三件——root PD 逆向前置 + SO 段图 + RMB09 真源（2026-10-23 凌晨，设备网络面死等物理重启期间）
+
+背景：s53 双证刀已建未刷（设备 en10 ECM 活但 DHCP 沉默=IP 栈死，
+重插 USB 无效，等用户断电重启；自动哨已布：网络一回来自动刷）。
+夜间案头三件，全部围绕「phdrs 回调死点」收窄。
+
+### ① RMB09 真源（MPSS.HA.1.1 root_task_init.h）
+
+- `RMB09_POLL_PERIOD = 500µs`，`RMB09_POLL_EXPIRY_TIME = 2s`，
+  `MPSS_RMB_REG_BASE = MSS_TOP_BASE + 0x0018_0000`，
+  `HWIO_MSS_RELAY_MSG_BUFFER_09_ADDR = base + 0x24`。
+  （sm7250 的 MSS_TOP_BASE 仍需查——HA.1.1 是老代，基址会挪，
+  段内偏移 +0x18_0000+0x24 的结构可作起点。）
+- **ramfs_detect 超时只杀检测线程，但 spawn 在 while 循环后**——
+  RMB09 两秒不来，`pd_mon_spawn(elf_loader)` 根本不执行。我们设备的
+  elf_loader 明明活着（tftp RRQ 就是它发的）→ 本代固件 ramfs 腿要么
+  已走通、要么不在此路径。**环境假说里的 ramfs 缺口降权**（bare fw
+  零 RMB 处理仍是事实，但不是当前死点——当前死点在 phdrs 之后）。
+
+### ② SO（549_38_0.mbn）段图——「两读合并=hash 表全量」合并律
+
+段表（Ehdr 32 位 Hexagon ET_DYN，e_phnum=5）：
+
+| 段 | 类型 | file 偏移 | vaddr | 大小 |
+|----|------|-----------|-------|------|
+| 0 | PT_NULL(hash) | 0x0 | — | **0xd4=212B** |
+| 1 | PT_NULL(证书) | 0x1000 | 0x0e900000 | 0x1a98 |
+| 2 | PT_LOAD **RX** | 0x3000 | 0x0 | 0x11753（69.8KB） |
+| 3 | PT_LOAD **RW** | 0x15000 | 0x12000 | **0xd643c（877.6KB）** |
+| 4 | PT_DYNAMIC | 0x15000 | 0x12000 | 0x80 |
+
+- PD 像总内存 ≈ 0x12000+0xd6488 ≈ **0xe8488≈952KB**——dlopen 在
+  phdr 解析后要一次性划这么大。
+- **合并律**：Ehdr 读（52B@0）+ phdrs 读（160B@0x34）合起来恰好
+  覆盖 0x0..0xd4 = **hash 段全量**（0x34+160=0xd4，分毫不���）。
+  即 s52 死亡时客户端手里已有完整 hash 表。下一读（从未发出）=
+  真段字节（Seg2 seek 0x3000 rsize 0x11753，或哈希验证触发的读）。
+- **死点收窄**：phdrs 回调内 = fstat 断言（stat 已退 0，会过）→
+  hash 表解析 → 952KB 页划分/进程创建，之间。
+
+### ③ root PD 布局 + loader 定位（b22 段）
+
+- `modem.b00` = 1172B 纯头（Ehdr+35 phdr，ET_EXEC Hexagon）。码基
+  **0x8c000000**，35 段跨到 0x9b81f000≈260MB 虚拟（含大片 BSS）。
+  b01=hash 段@0x9d800000；b04=224K/b05=180K/b06=204K 与段表对上。
+- **loader 在 b22**（25.6MB 段，vaddr 0x9325c000）。铁字符串三组：
+  - phdr 断言三连（fstat 基）：
+    `(pEh->e_phnum * sizeof(Elf32_Phdr)) < (fstat_buf.st_size - pEh->e_phoff)` /
+    `pPhdr[index].p_offset < fstat_buf.st_size` /
+    `pPhdr[index].p_filesz < (fstat_buf.st_size - pPhdr[index].p_offset)`
+  - **逐段哈希验证**：`Hash matched for segment %d` /
+    `Hash verification failed for segment: %d`——phdr 过了就验哈希，
+  验败即 dlopen 错（rtld_main 的 QDI_OS_PROCESS_EXIT 静默路径）。
+  - `ELF_LOADER CAN SPWAN User PD:%s`（QCOM 原版错拼 SPWAN）、
+    `Elf_Phdr header not found in first page in %s`（首页律）。
+  - tftp 客户端全套文件名（tftp_protocol.c / tftp_msg_modem.c /
+    tftp_socket_ipcr_modem.c / rfs_tftp.c）同段——rfs↔tftp 粘合
+    与 loader 同居 b22，逆向时一段通吃。
+
+### ④ w45 前置证据：WLAN PD 生成门走 rfs/tftp
+
+`RFS_ENOENT - cannot find Wlan image, CANNOT spawn a PD`——
+wlan_pd 的生成路径本身要 rfs（tftp 后端）找 wlan 镜像文件。即未来
+链路=本 fw 除 549_38_0.mbn 外还要伺服 wlan 镜像路径（w45>0 的
+前置）；同段还有 `rfs_gateway retry (auth fail)`——rfs 有鉴权层，
+到时可能要应。
+
+### 对 s53 判读的意义
+
+- s3= 四值不等 → TX 写坏 phdr 字节 → p_offset/p_filesz 疯 →
+  fstat 断言亡（数据假说具体化，修 TX 环写路径）。
+- s3= 四值相等 + rqr type=4（DEL_SERVER）→ 环境假说上位
+  （952KB 页池/进程创建失败），b22 段逆向（rea/Ghidra Hexagon）
+  成主战场——找 dlopen 在 hash 表解析与页划分间的失败分支。
