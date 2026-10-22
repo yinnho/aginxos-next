@@ -4317,11 +4317,20 @@ static mut IIP_REQ_AT: u64 = 0;
 /// 靴内见过的 count>1 广告数（步进修复前会踩 desync 的形状计数）。
 static mut IIP_SFIX: u32 = 0;
 
+/// 刀 G48：广告台账三计——见过最大尺寸（对端到底批没批过 ≥chunk 的
+/// 件，#51 悬案「cmd7 无人理 vs 满池丢件」的判据）、满池丢弃数、腾挪数。
+static mut IIP_SEEN_MAX: u32 = 0;
+static mut IIP_DROP: u32 = 0;
+static mut IIP_EVICT: u32 = 0;
+
 fn iip_add(iid: u32, size: u32) {
     if iid == 0 {
         return;
     }
     unsafe {
+        if size > IIP_SEEN_MAX {
+            IIP_SEEN_MAX = size;
+        }
         for s in IIP.iter_mut() {
             if s[0] == iid {
                 s[1] = size;
@@ -4329,14 +4338,35 @@ fn iip_add(iid: u32, size: u32) {
                 return;
             }
         }
-        for s in IIP.iter_mut() {
+        let mut slot = usize::MAX;
+        for (i, s) in IIP.iter().enumerate() {
             if s[0] == 0 {
-                s[0] = iid;
-                s[1] = size;
-                s[2] = 0;
-                return;
+                slot = i;
+                break;
             }
         }
+        if slot == usize::MAX {
+            // 刀 G48：满池不丢——#51 现场 16/16 全被 0x80 小件占满，
+            // 对端应答 cmd7 的大件广告若带新 iid 到达即死于此。腾出
+            // 最小 free 槽（未用的最小批件，损失最小）；全 in_use 才丢。
+            let mut bi = usize::MAX;
+            let mut bs = u32::MAX;
+            for (i, s) in IIP.iter().enumerate() {
+                if s[2] == 0 && s[1] < bs {
+                    bi = i;
+                    bs = s[1];
+                }
+            }
+            if bi == usize::MAX {
+                IIP_DROP = IIP_DROP.wrapping_add(1);
+                return;
+            }
+            IIP_EVICT = IIP_EVICT.wrapping_add(1);
+            slot = bi;
+        }
+        IIP[slot][0] = iid;
+        IIP[slot][1] = size;
+        IIP[slot][2] = 0;
     }
 }
 
@@ -4882,10 +4912,35 @@ static mut TF_DCL_N: u32 = 0;
 /// 刀 G21：TX 台账 4 槽——每笔 glink_tx_payload 成功记 (sport, 整包
 /// 字节数, 发后 head)。靴 #20 定谳需要：modem 消费停在 tail=28b8，
 /// 却不知道 frontier 上卡的是哪笔。台账按时间序滚存，渲染进 xl=。
-static mut TXL_S: [u32; 4] = [0; 4];
-static mut TXL_Z: [u32; 4] = [0; 4];
-static mut TXL_H: [u32; 4] = [0; 4];
+static mut TXL_S: [u32; 8] = [0; 8];
+static mut TXL_Z: [u32; 8] = [0; 8];
+static mut TXL_H: [u32; 8] = [0; 8];
+/// s52：TX 台账加毫秒戳、4→8 槽——#52 现场 S3 DATA1(216B@0x11) 后
+/// 紧跟 104B@0x12 + 64B@0x16 两笔非 tftp 发射，但 xl= 无时刻，与
+/// 「客户端零 ACK 永静默」 murder 窗的先后无法对读。8 槽恰好罩住
+/// [S2-OACK..0x12/0x16..后续] 全窗。
+static mut TXL_M: [u32; 8] = [0; 8];
 static mut TXL_N: u32 = 0;
+/// s52：入站 qrtr 环 16 槽 (ms.源口.宿口.尺寸)——0x12/0x16 若是
+/// 应答，其触发来包必在 cmd9 流里；与 xl= 出站毫秒对读即定谳
+/// 「装载器停在等谁」。
+static mut RXQ_M: [u32; 16] = [0; 16];
+static mut RXQ_SP: [u32; 16] = [0; 16];
+static mut RXQ_DP: [u32; 16] = [0; 16];
+static mut RXQ_Z: [u32; 16] = [0; 16];
+/// s53：入站包 type 字（qrtr payload 首 word——控制包=ctrl type，
+/// DEL_SERVER=4 之类；#52 悬案：DATA1 后 +11.1s 的 7 笔 52B 控制包
+/// 若是 elf_loader PD 的死亡讣告即定谳 dlopen 放弃）。
+static mut RXQ_T: [u32; 16] = [0; 16];
+static mut RXQ_N: u32 = 0;
+/// s53：tftp 大 DATA 端到端环回读校验（数据假说终审）。SH1/SH2 只证
+/// 块缓冲对（boot 期文件直读），没证 woff 写环后的字节。四值=源
+/// xor32 全文/源 xor32 首 108B/环回读 xor32 全文/环回读 首 108B。
+/// s3=A.B.C.D——A≠C 或 B≠D 即 TX 写坏实锤。
+static mut S3A: u32 = 0;
+static mut S3B: u32 = 0;
+static mut S3C: u32 = 0;
+static mut S3D: u32 = 0;
 /// 刀 G21：doorbell 重踢。靴 #20：环非空、tail 冻结、客户端零回——
 /// modem 侧消费死。若死因是丢 doorbell（USB LPM/竞态），重发布 head
 /// + 重敲 doorbell（全幂等）可救活；若死因在 intent 记账，重踢无害。
@@ -4925,6 +4980,9 @@ static mut TF_RX_LOG_A: [u32; 4] = [0; 4];
 // tf_reply 顶环容量闸挡（head≠tail 且 head+8192>环）。
 static mut TF_DV: u32 = 0;
 static mut TF_DZ: u32 = 0;
+// 刀 G45：so_read 单命令连读（跨扇区）与逐扇区退路计数。
+static mut TF_SO2: u32 = 0;
+static mut TF_SOFB: u32 = 0;
 static mut TF_DX: u32 = 0;
 static mut TF_DC: u32 = 0;
 // 刀 G12：tf_reply 四分位计数＋OACK TX 成败（pq=call.noarm.nost.nopend、
@@ -4937,6 +4995,64 @@ static mut TF_PQ_NOST: u32 = 0;
 static mut TF_PQ_NOPEND: u32 = 0;
 static mut TF_PQ_TXOK: u32 = 0;
 static mut TF_PQ_TXNO: u32 = 0;
+// 刀 G44：OACK 落环原地启泵次数（ox= 第三格）。
+static mut TF_OKICK: u32 = 0;
+// 刀 G46：毫秒事件时间线（纯插桩，零行为改动）。24 槽滚动环。
+// kind: 1=RRQ/WRQ到 2=ACK到 3=EOT到 4=OACK发 5=DATA发 6=DATA发拒
+//       7=ST迁 8=泵进 9=so_read返回 10=环闸挡 11=读零 12=stat门退
+static mut TF_EV_MS: [u32; 24] = [0; 24];
+static mut TF_EV_K: [u8; 24] = [0; 24];
+static mut TF_EV_A: [u16; 24] = [0; 24];
+static mut TF_EV_I: usize = 0;
+
+/// 刀 G46：TFTP 事件毫秒时间线记账（#50 计数器粒度到头后的量先于刀）。
+/// a 的语义随 kind（op/blk/n/inflight），渲染 tev= 时按 k 对读。
+fn tf_ev(kind: u8, a: u16) {
+    let freq = time::freq_or(FREQ_FALLBACK as u32) as u64;
+    if freq == 0 {
+        return;
+    }
+    let ms = (time::cntvct() / (freq / 1000).max(1)) as u32;
+    unsafe {
+        let i = TF_EV_I;
+        TF_EV_MS[i] = ms;
+        TF_EV_K[i] = kind;
+        TF_EV_A[i] = a;
+        TF_EV_I = (i + 1) % 24;
+    }
+}
+// 刀 G47：TX 拒绝现场快照（纯插桩，零行为改动，#50 悬案
+// 「DATA拒=①回卷闸/②池干」的判刀）。glink_tx_payload 三拒绝点当场
+// 抓环境，4 槽滚动：site 1=caps（n.chunk.isz.total）、2=回卷闸
+// （head.tail.total.sz479）、3=池干（chunk.freeN.freeMax.usedN）。
+// 池干另存全池 16 槽 dump（iid.size.in_use）；判据：site=3 时 free
+// 槽尺寸谱 ⇒ 池干=无 free 可挑还是 free 全 < chunk（对端只批小的）。
+static mut GX_MS: [u32; 4] = [0; 4];
+static mut GX_SITE: [u8; 4] = [0; 4];
+static mut GX_ARG: [[u32; 4]; 4] = [[0; 4]; 4];
+static mut GX_I: usize = 0;
+static mut IPD: [[u32; 3]; 16] = [[0; 3]; 16];
+static mut IPN: u32 = 0;
+
+/// 刀 G47：拒绝点记账。site=3 时顺手 dump 全池（最近一次池干为准）。
+fn gx_snap(site: u8, a: [u32; 4]) {
+    let freq = time::freq_or(FREQ_FALLBACK as u32) as u64;
+    if freq == 0 {
+        return;
+    }
+    let ms = (time::cntvct() / (freq / 1000).max(1)) as u32;
+    unsafe {
+        let i = GX_I;
+        GX_MS[i] = ms;
+        GX_SITE[i] = site;
+        GX_ARG[i] = a;
+        GX_I = (i + 1) % 4;
+        if site == 3 {
+            IPD = IIP;
+            IPN = IPN.wrapping_add(1);
+        }
+    }
+}
 // 刀 G10：转录插桩（零行为变化）——最近 2 笔 op4/op5 入站包原文 ≤24B
 // （op+码+错误消息串）。op5 的消息文本＝客户端拒收理由原文，一眼定谳。
 static mut TF_RXR: [[u8; 24]; 2] = [[0; 24]; 2];
@@ -4944,6 +5060,8 @@ static mut TF_RXR_L: [u8; 2] = [0; 2];
 static mut TF_RXR_N: u32 = 0;
 // 刀 G9c：retry 路 OACK 服务计数（st=2/3 新到 pend 的应答数）。
 static mut TF_DR: u32 = 0;
+/// 刀 G49③：TX 泵世代——每块 DATA 发成 +1，服务内环活性判据。
+static mut TF_TXGEN: u32 = 0;
 static mut TF_RX_LOG_N: u32 = 0;
 /// DATA 缓冲。8200 = 4 字节 TFTP 头 + 8192 上限（so_read 单发双扇区 4096×2）。
 static mut TF_BLKBUF: [u8; 8200] = [0; 8200];
@@ -5667,6 +5785,10 @@ fn smem_scan(ufs: &mut Ufs, do_glink: bool) {
                     pd_reply(at478, at479, sz479);
                     pd_small_reply(at478, at479, sz479);
                     let before = unsafe { RF_N };
+                    // 刀 G49③：TX 泵进度也计入内环活性——旧只认 RF_N（RX
+                    // 前进），窗口爆发期客户端静默等整窗，纯 TX 推进会被
+                    // 内环当「无进展」退出、等外圈 2s 拍（BUG-B 形）掐死。
+                    let txgen_before = unsafe { TF_TXGEN };
                     rf_reply(at478, at479, sz479);
                     tf_reply(ufs, at478, at479, sz479);
                     tx_rekick(at478);
@@ -5681,7 +5803,10 @@ fn smem_scan(ufs: &mut Ufs, do_glink: bool) {
                     round += 1;
                     // Linux：fs1/fs2/fsg/fsc 连续 OPEN 后再 ALLOC。
                     // 发送环不空就停；没答的留在队列里，接收 tail 不推过队头。
-                    if unsafe { RF_N } == before || round >= 8 {
+                    // 刀 G49③：TX 泵有推进（TF_TXGEN 动了）也算进展续圈。
+                    if (unsafe { RF_N } == before && unsafe { TF_TXGEN } == txgen_before)
+                        || round >= 8
+                    {
                         break;
                     }
                     let next = smem_payloads(at435, sz435, at478, sz478, at480, sz480);
@@ -6420,51 +6545,81 @@ fn glink_tx_payload(
     // 扩容刀：载荷上限 7684（TFTP 4 头+7680 块），整包 8192。
     // 真协议闸是 isz（对端批的 intent）与环界；这两个帽只是本方缓冲界。
     if n > 7684 || chunk > isz || total > 8192 {
+        gx_snap(1, [n as u32, chunk as u32, isz as u32, total as u32]);
         return false;
     }
-    // 环尾放不下时回卷。各发送者都守 head==tail 单飞纪律，到这必是整环已排空。
-    let mut head = tx_head;
-    if head + total as u64 > sz479 {
-        let tail = rd32(at478 as usize) as u64;
-        if head == tail {
-            head = 0;
-        }
-        if head + total as u64 > sz479 {
-            return false;
-        }
+    // 刀 G50：环界改内核式分段写（s49 定谳）。旧「放不下且 head==tail
+    // 则 head=0 重写」是自造协议：对端读侧按 tail→end→0→head 连续解包，
+    // 重置后 tail..end 全是陈旧字节——DATA1 total=7736 从 head≈0x2ca8 起
+    // 100% 跨界（环 0x4000），modem 先吞垃圾解包错乱，客户端 +1ms
+    // op5/9 弃单（小块不跨界全活=同一发射器无罪）。内核 glink_smem_tx
+    // 同律：包跨界两段写，head=(head+total)%sz，读侧原生支持分段。
+    // free 闸改按 used（tail→head 绕环数据量）算，不再要求环空。
+    let head = tx_head;
+    let tail = rd32(at478 as usize) as u64;
+    let used = if head >= tail { head - tail } else { sz479 - tail + head };
+    if sz479 - used < total as u64 {
+        gx_snap(2, [head as u32, tail as u32, total as u32, sz479 as u32]);
+        return false;
     }
+    if head + total as u64 > sz479 {
+        tf_ev(13, head as u16);
+    }
+    // 刀 G50：绕环写助手——偏移超过环长即回卷（total≤free≤sz，单减足够）。
+    let woff = |o: u64, w: u32| {
+        let mut a = head + o;
+        if a >= sz479 {
+            a -= sz479;
+        }
+        wr32((at479 + a) as usize, w);
+    };
     // 刀 G22：从池里挑「最小 free 且 size>=chunk」；池干（T2 形）则
     // 求批让路，下拍重试。不碰 LAST_IID（hello 期发送者仍走旧章）。
     let pick = iip_pick(chunk as u32);
     if pick == 0 {
+        let (mut free_n, mut free_max, mut used_n) = (0u32, 0u32, 0u32);
+        unsafe {
+            for s in IIP.iter() {
+                if s[0] != 0 {
+                    if s[2] == 0 {
+                        free_n += 1;
+                        if s[1] > free_max {
+                            free_max = s[1];
+                        }
+                    } else {
+                        used_n += 1;
+                    }
+                }
+            }
+        }
+        gx_snap(3, [chunk as u32, free_n, free_max, used_n]);
         iip_req_maybe(at478, at479, sz479, chunk as u32);
         return false;
     }
-    let p = at479 + head;
     let mut i = 0usize;
     while i < total {
-        wr32((p + i as u64) as usize, 0);
+        woff(i as u64, 0);
         i += 4;
     }
-    wr32(p as usize, 9 | (2 << 16));
-    wr32((p + 4) as usize, pick);
-    wr32((p + 8) as usize, chunk as u32);
-    wr32((p + 12) as usize, 0);
-    wr32((p + 16) as usize, 1);
-    wr32((p + 20) as usize, 1);
-    wr32((p + 24) as usize, 1);
-    wr32((p + 28) as usize, src_port);
-    wr32((p + 32) as usize, 0);
-    wr32((p + 36) as usize, n as u32);
-    wr32((p + 40) as usize, dst_node);
-    wr32((p + 44) as usize, dst_port);
+    woff(0, 9 | (2 << 16));
+    woff(4, pick);
+    woff(8, chunk as u32);
+    woff(12, 0);
+    woff(16, 1);
+    woff(20, 1);
+    woff(24, 1);
+    woff(28, src_port);
+    woff(32, 0);
+    woff(36, n as u32);
+    woff(40, dst_node);
+    woff(44, dst_port);
     let mut o = 0usize;
     while o + 4 <= n {
         let w = q[o] as u32
             | (q[o + 1] as u32) << 8
             | (q[o + 2] as u32) << 16
             | (q[o + 3] as u32) << 24;
-        wr32((p + 48 + o as u64) as usize, w);
+        woff(48 + o as u64, w);
         o += 4;
     }
     if o < n {
@@ -6474,23 +6629,62 @@ fn glink_tx_payload(
             w |= (q[o + k] as u32) << (8 * k);
             k += 1;
         }
-        wr32((p + 48 + o as u64) as usize, w);
+        woff(48 + o as u64, w);
     }
     unsafe {
         core::arch::asm!("dsb sy", options(nostack));
     }
-    wr32((at478 + 4) as usize, (head + total as u64) as u32);
+    // 刀 G50：head 发布改模环长（跨界两段写的续位）。
+    let nhead = (head + total as u64) % sz479;
+    wr32((at478 + 4) as usize, nhead as u32);
     if at478 < 0x80A0_0000 {
         dcache_civac(at478, 16);
     }
     wr32(0x4080_0c, 2 << 16);
     // 刀 G21：TX 台账（时间序 4 槽滚存）。
     unsafe {
-        let i = (TXL_N & 3) as usize;
+        let i = (TXL_N & 7) as usize;
         TXL_S[i] = src_port;
         TXL_Z[i] = total as u32;
-        TXL_H[i] = (head + total as u64) as u32;
+        TXL_H[i] = nhead as u32;
+        // s52：毫秒戳（tf_ev 同款时基）。
+        let freqq = time::freq_or(FREQ_FALLBACK as u32) as u64;
+        if freqq != 0 {
+            TXL_M[i] = (time::cntvct() / (freqq / 1000).max(1)) as u32;
+        }
         TXL_N = TXL_N.wrapping_add(1);
+    }
+    // s53：tftp 大 DATA 端到端环回读校验——写环后从环里读回刚写的
+    // payload，与源 q 比 xor32。只验不跨界包（现场 216B 不跨界）；
+    // src_port=tftp 服务口、n≥164（160 读 DATA 形）才记，末次留档。
+    if src_port == 0x11 && n >= 164 && head + total as u64 <= sz479 {
+        let mut a: u32 = 0;
+        let mut b: u32 = 0;
+        let mut c: u32 = 0;
+        let mut d: u32 = 0;
+        let mut j = 0usize;
+        while j + 4 <= n {
+            let w = q[j] as u32
+                | (q[j + 1] as u32) << 8
+                | (q[j + 2] as u32) << 16
+                | (q[j + 3] as u32) << 24;
+            a ^= w;
+            if j < 108 {
+                b ^= w;
+            }
+            let r = rd32((at479 + head + 48 + j as u64) as usize);
+            c ^= r;
+            if j < 108 {
+                d ^= r;
+            }
+            j += 4;
+        }
+        unsafe {
+            S3A = a;
+            S3B = b;
+            S3C = c;
+            S3D = d;
+        }
     }
     true
 }
@@ -7765,6 +7959,7 @@ fn tf_note_ack(off: u64, fifo: u64) {
     let op = ((rd8(fifo + off + 48) as u32) << 8) | (rd8(fifo + off + 49) as u32);
     if op == 4 {
         let blk = ((rd8(fifo + off + 50) as u32) << 8) | (rd8(fifo + off + 51) as u32);
+        tf_ev(2, blk as u16);
         unsafe {
             TF_ACK_OFF = off as u32;
             TF_ACK_BLK = blk as u16;
@@ -7772,6 +7967,7 @@ fn tf_note_ack(off: u64, fifo: u64) {
         }
     } else if op == 5 {
         let code = ((rd8(fifo + off + 50) as u32) << 8) | (rd8(fifo + off + 51) as u32);
+        tf_ev(3, code as u16);
         unsafe {
             TF_ACK_OFF = off as u32;
             // 9 = End of Transfer。tqftpserv 日志里 stat（rsize=0）的 OACK 之后就是它。
@@ -7853,43 +8049,237 @@ fn so_read(ufs: &mut Ufs, off: u32, n: usize) -> usize {
     let sec = (within / 4096) as u32;
     let bo = within % 4096;
     let lba = MODEM_LBA + 17 + (cl - 2) * 4 + sec;
-    if ufs.read10(lba, 1, DATA).is_err() {
-        return 0;
-    }
-    let avail = 4096 - bo;
-    let take = n.min(avail);
-    unsafe {
-        core::ptr::copy_nonoverlapping(
-            (DATA as *const u8).add(bo),
-            TF_BLKBUF.as_mut_ptr().add(4),
-            take,
-        );
-    }
-    if take == n {
+    // 刀 G45：跨扇区一律单命令连读。#50 首验（s44）实证 blksize 7680 首
+    // 块（bo=0）死在双笔背靠背 read10 的第二笔（tb=3.1 短块收口，唯一短
+    // 块路径=第二笔 Err）——单槽 UTRD/UCD 复用无完成同步，第二笔的
+    // OCS/resp 读在设备写回前落空。且老数学只罩 2 扇区：bo+7680 最大
+    // 11775>8192，第三扇区字节从来就是陈旧读。改法：连续 LBA（簇内恒连
+    // 续；跨簇须 fat_next==cl+1）一笔 read10 读 ceil((bo+n)/4096)≤3 扇区
+    // 进 DATA..DATA+0x2fff（ARRAY 运行时死件=boot GPT 台；STAGING 单线
+    // 程时序无跨调用持有），再从 DATA+bo 平切。非连续链退逐扇区老路
+    // （TF_SOFB 计数，工厂 FAT 连续分配下应恒 0）。
+    let need = ((bo + n + 4095) / 4096) as u32;
+    let contig = sec + need <= 4 || fat_next(cl) as u32 == cl + 1;
+    if contig {
+        unsafe { TF_SO2 = TF_SO2.wrapping_add(1) };
+        if ufs.read10(lba, need as u16, DATA).is_err() {
+            return 0;
+        }
+        unsafe {
+            core::ptr::copy_nonoverlapping(
+                (DATA + bo) as *const u8,
+                TF_BLKBUF.as_mut_ptr().add(4),
+                n,
+            );
+        }
         return n;
     }
-    let rest = n - take;
-    let lba2 = if sec + 1 < 4 {
-        lba + 1
-    } else {
-        let nxt = fat_next(cl) as u32;
-        if nxt < 2 || nxt >= 0xfff8 {
-            return take;
+    unsafe { TF_SOFB = TF_SOFB.wrapping_add(1) };
+    let mut got = 0usize;
+    let mut cur_lba = lba;
+    let mut cur_cl = cl;
+    let mut cur_sec = sec;
+    while got < n {
+        if ufs.read10(cur_lba, 1, DATA).is_err() {
+            return got;
         }
-        MODEM_LBA + 17 + (nxt - 2) * 4
-    };
-    if ufs.read10(lba2, 1, DATA).is_err() {
-        return take;
+        let bo2 = if got == 0 { bo } else { 0 };
+        let chunk = (n - got).min(4096 - bo2);
+        unsafe {
+            core::ptr::copy_nonoverlapping(
+                (DATA + bo2) as *const u8,
+                TF_BLKBUF.as_mut_ptr().add(4 + got),
+                chunk,
+            );
+        }
+        got += chunk;
+        cur_sec += 1;
+        if cur_sec >= 4 {
+            cur_sec = 0;
+            let nxt = fat_next(cur_cl) as u32;
+            if nxt < 2 || nxt >= 0xfff8 {
+                return got;
+            }
+            cur_cl = nxt;
+            cur_lba = MODEM_LBA + 17 + (nxt - 2) * 4;
+        } else {
+            cur_lba += 1;
+        }
     }
-    unsafe {
-        core::ptr::copy_nonoverlapping(DATA as *const u8, TF_BLKBUF.as_mut_ptr().add(4 + take), rest);
-    }
-    take + rest
+    got
 }
 
 /// tftp。WRQ 仍在监听口回 ACK block 0。
 /// SO 的 RRQ 在 II_ST=2（IPA INIT 完成）后立即发 OACK（刀 G4：不再等第一次 sm）。
 /// rsize 键存在且值为 0 时不发 DATA，等 code 9。
+/// 刀 G44：RFC 7440 窗口泵（G19 身子原样迁出 tf_reply 内联块，泵内语
+/// 义零变化）。独立成函数的唯一动机：OACK 落环那一拍可以就地开火——
+/// #48/#49 现场定谳：服务轮 ~0.86/s 赶不上客户端 timeoutms=1000 的等
+/// 待窗，OACK 与下一轮之间客户端已 RRQ 重试+EOT（EOT 由 walker 的
+/// tf_note_ack 即时置 st=4），泵永无开火机会（dv=0/nopend=0/BLKNO=0
+/// 全零互证，OACK#2 落进空场）。同轮把首窗 DATA 推上环，「OACK 后
+/// 1s 无 DATA」竞态归零。返回 true=dv++ 分支进过（原内联块此形=整个
+/// tf_reply 提前退场，调用点以此保真）；tx_head 自读（调用点可能刚发
+/// 布过新头——OACK kick 首块不得复写 OACK 槽）。
+fn tf_pump_window(ufs: &mut Ufs, at478: u64, at479: u64, sz479: u64, armed: bool) -> bool {
+    let mut tx_head = rd32((at478 + 4) as usize) as u64;
+    let st = unsafe { TF_ST };
+    if !armed || (st != 1 && st != 2) {
+        return false;
+    }
+    let wsz = {
+        let w = unsafe { TF_REQ_WSZ };
+        if w == 0 {
+            1
+        } else {
+            w.min(16) as usize
+        }
+    };
+    let resume = st == 2
+        && !unsafe { TF_ACK_PEND }
+        && unsafe { TF_WSENT } > 0
+        && (unsafe { TF_WSENT } as usize) < wsz;
+    if unsafe { TF_ACK_PEND } || resume {
+        unsafe { TF_DV = TF_DV.wrapping_add(1) };
+        // 刀 G46：泵进（a=进泵时 ST，分辨 synth-ACK0/真 ACK/resume 腿）。
+        tf_ev(8, st as u16);
+        // 窗基：真 ACK（含宽限 synth ACK-0）从 ack 重开整窗；resume
+        // 腿从 TF_BLKNO-WSENT 续推。ack>expect=不可能事件丢；ack<expect
+        // =合法重传/客户端重启，从 ack+1 重开。
+        let base: u32 = if unsafe { TF_ACK_PEND } {
+            let ack = unsafe { TF_ACK_BLK };
+            let expect = unsafe { TF_BLKNO };
+            if ack > expect {
+                unsafe { TF_ACK_PEND = false };
+                return true;
+            }
+            unsafe {
+                TF_ACK_PEND = false;
+                TF_WSENT = 0;
+            }
+            ack as u32
+        } else {
+            (unsafe { TF_BLKNO } as u32).wrapping_sub(unsafe { TF_WSENT })
+        };
+        // s51：stat= rsize 键缺席（tftp_client.c populate :417 只有 read_size
+        // !=0 才带 rsize——stat 传 0，键整个不发）。旧判式「键在值 0」永不
+        // 命中真 stat，synth-ACK0 kick 照泵 7680B DATA 进无人读的会话，
+        // 留 0x2080 孤儿 intent 30 分钟不释（#51 IPD 实证）。stat 一律只回
+        // OACK 等客户端 code 9（stock 同款零 DATA）。
+        if unsafe { TF_HAS_RS } == 0 || unsafe { TF_RSIZE } == 0 {
+            tf_ev(12, 0);
+            return true;
+        }
+        // 对方要的块超过本方缓冲/环上限（8192）才拒。7680 是本机实测请求值，
+        // TX 扩容刀后 glink 按 isz(8320 intent) 与环界双闸放行。
+        if unsafe { TF_REQ_BLK } > 8192 {
+            unsafe { TF_ST = 7 };
+            return true;
+        }
+        let blk_sz = unsafe { TF_REQ_BLK } as usize;
+        // 刀 G5：DATA 从 seek 起算（stock tftp_send_data 同款：文件偏移 =
+        // seek + cur*blksize，块号在窗口内从 1 数）。
+        let limit = {
+            let sz = unsafe { TZ_SZ };
+            let rs = unsafe { TF_RSIZE };
+            // rsize 是「从 seek 起要多少」，窗口尾 = seek+rsize，夹在文件尾内。
+            if rs > 0 {
+                unsafe { TF_SEEK }.saturating_add(rs).min(sz)
+            } else {
+                sz
+            }
+        };
+        loop {
+            // 刀 G21→G49①：在途闸——旧固定帽 4096 是小 blksize 时代的尺寸；
+            // blksize 7680 单块占环 7736，发完首块即自闭嘴（#51 现场
+            // 环闸7736、客户端 px= 要 wsize=10 窗口爆发只拿到 1 块后弃）。
+            // 改随环容量：预留 4096 给小包（retry OACK/写 ACK 自有 head
+            // 位闸），下限 8192。resume 下圈续。
+            let tail_now = rd32(at478 as usize) as u64;
+            let inflight = if tx_head >= tail_now {
+                tx_head - tail_now
+            } else {
+                sz479 - tail_now + tx_head
+            };
+            let cap = if sz479 > 12288 { sz479 - 4096 } else { 4096 };
+            if inflight > cap {
+                unsafe { TF_DX = TF_DX.wrapping_add(1) };
+                // 刀 G46：环闸挡（a=inflight 低位字节）。
+                tf_ev(10, inflight as u16);
+                return true;
+            }
+            let cur = base.wrapping_add(unsafe { TF_WSENT });
+            let off = unsafe { TF_SEEK }
+                .saturating_add(cur.saturating_mul(blk_sz as u32));
+            if off >= limit {
+                unsafe { TF_ST = 3 };
+                return true;
+            }
+            let mut want = blk_sz;
+            if off + blk_sz as u32 > limit {
+                want = (limit - off) as usize;
+            }
+            let n = so_read(ufs, off, want);
+            // 刀 G46：so_read 返回值（a=n；n<want 即短读=EOF 形收口的直证）。
+            tf_ev(9, n as u16);
+            if n == 0 {
+                unsafe {
+                    TF_DZ = TF_DZ.wrapping_add(1);
+                    TF_ST = 8;
+                }
+                tf_ev(11, want as u16);
+                return true;
+            }
+            let blk = (cur + 1) as u16;
+            unsafe {
+                TF_BLKBUF[0] = 0;
+                TF_BLKBUF[1] = 3;
+                TF_BLKBUF[2] = (blk >> 8) as u8;
+                TF_BLKBUF[3] = blk as u8;
+            }
+            let pkt = unsafe { &TF_BLKBUF[..4 + n] };
+            if !glink_tx_payload(
+                at478,
+                at479,
+                tx_head,
+                sz479,
+                unsafe { TF_XFER_PORT },
+                unsafe { TF_NODE },
+                unsafe { TF_PORT },
+                pkt,
+            ) {
+                // 环满/回卷闸拒绝：DX++ 让路。TF_WSENT/TF_BLKNO 保留在
+                // 途进度，下圈 resume 腿续推。
+                unsafe { TF_DX = TF_DX.wrapping_add(1) };
+                // 刀 G46：DATA 发拒（a=块号）。
+                tf_ev(6, blk);
+                return true;
+            }
+            unsafe {
+                TF_BLKNO = blk;
+                TF_WSENT = TF_WSENT.wrapping_add(1);
+                TF_ST = if n < blk_sz || off + n as u32 >= limit {
+                    3
+                } else {
+                    2
+                };
+                TF_N += 1;
+                // 刀 G49③：TX 世代+1——服务内环活性判据（见走查循环）。
+                TF_TXGEN = TF_TXGEN.wrapping_add(1);
+            }
+            // 刀 G46：DATA 发成（a=块号）+ ST 迁（a=新 ST；3=EOF 形收口）。
+            tf_ev(5, blk);
+            tf_ev(7, unsafe { TF_ST } as u16);
+            if unsafe { TF_ST } == 3 || unsafe { TF_WSENT } as usize >= wsz {
+                return true;
+            }
+            // glink_tx_payload 已内部发布新环头——重读再推下一块。
+            tx_head = rd32((at478 + 4) as usize) as u64;
+        }
+    }
+    false
+}
+
 fn tf_reply(ufs: &mut Ufs, at478: u64, at479: u64, sz479: u64) {
     if at478 == 0 || at479 == 0 {
         return;
@@ -7948,140 +8338,12 @@ fn tf_reply(ufs: &mut Ufs, at478: u64, at479: u64, sz479: u64) {
     } else if !unsafe { TF_ACK_PEND } {
         unsafe { TF_PQ_NOPEND = TF_PQ_NOPEND.wrapping_add(1) };
     }
-    // 刀 G19：RFC 7440 窗口泵。G18 定谳死锁形：方言 wsize=10，客户端
-    // 攒满整窗（10 块）才回 ACK；老泵单块在飞（发块 1 等 ACK-1），客户
-    // 端等块 2..10，双方零报错（rr=0）——dv 永冻 1、nopend 独大。改法：
-    // 每个窗尾 ACK/续推腿把整窗 min(wsz, EOF) 连推。环闸撞上（TX 拒绝）
-    // 即 DX++ 让路，TF_WSENT 保留在途数，下圈浸泡节奏续推。
-    if armed && (st == 1 || st == 2) {
-        let wsz = {
-            let w = unsafe { TF_REQ_WSZ };
-            if w == 0 {
-                1
-            } else {
-                w.min(16) as usize
-            }
-        };
-        let resume = st == 2
-            && !unsafe { TF_ACK_PEND }
-            && unsafe { TF_WSENT } > 0
-            && (unsafe { TF_WSENT } as usize) < wsz;
-        if unsafe { TF_ACK_PEND } || resume {
-            unsafe { TF_DV = TF_DV.wrapping_add(1) };
-            // 窗基：真 ACK（含宽限 synth ACK-0）从 ack 重开整窗；resume
-            // 腿从 TF_BLKNO-WSENT 续推。ack>expect=不可能事件丢；ack<expect
-            // =合法重传/客户端重启，从 ack+1 重开。
-            let base: u32 = if unsafe { TF_ACK_PEND } {
-                let ack = unsafe { TF_ACK_BLK };
-                let expect = unsafe { TF_BLKNO };
-                if ack > expect {
-                    unsafe { TF_ACK_PEND = false };
-                    return;
-                }
-                unsafe {
-                    TF_ACK_PEND = false;
-                    TF_WSENT = 0;
-                }
-                ack as u32
-            } else {
-                (unsafe { TF_BLKNO } as u32).wrapping_sub(unsafe { TF_WSENT })
-            };
-            // stat：rsize 键在，值为 0。停在状态 1，等 opcode 5 code 9。不发 DATA。
-            if unsafe { TF_HAS_RS } != 0 && unsafe { TF_RSIZE } == 0 {
-                return;
-            }
-            // 对方要的块超过本方缓冲/环上限（8192）才拒。7680 是本机实测请求值，
-            // TX 扩容刀后 glink 按 isz(8320 intent) 与环界双闸放行。
-            if unsafe { TF_REQ_BLK } > 8192 {
-                unsafe { TF_ST = 7 };
-                return;
-            }
-            let blk_sz = unsafe { TF_REQ_BLK } as usize;
-            // 刀 G5：DATA 从 seek 起算（stock tftp_send_data 同款：文件偏移 =
-            // seek + cur*blksize，块号在窗口内从 1 数）。
-            let limit = {
-                let sz = unsafe { TZ_SZ };
-                let rs = unsafe { TF_RSIZE };
-                // rsize 是「从 seek 起要多少」，窗口尾 = seek+rsize，夹在文件尾内。
-                if rs > 0 {
-                    unsafe { TF_SEEK }.saturating_add(rs).min(sz)
-                } else {
-                    sz
-                }
-            };
-            loop {
-                // 刀 G21：在途闸——未消费 >4096B 停推（resume 下圈续）。
-                // 窗口泵不许自己把环尾填满：单飞纪律下环近端+非空=全锁，
-                // 小包（retry OACK/写 ACK）会被饿死。
-                let tail_now = rd32(at478 as usize) as u64;
-                let inflight = if tx_head >= tail_now {
-                    tx_head - tail_now
-                } else {
-                    sz479 - tail_now + tx_head
-                };
-                if inflight > 4096 {
-                    unsafe { TF_DX = TF_DX.wrapping_add(1) };
-                    return;
-                }
-                let cur = base.wrapping_add(unsafe { TF_WSENT });
-                let off = unsafe { TF_SEEK }
-                    .saturating_add(cur.saturating_mul(blk_sz as u32));
-                if off >= limit {
-                    unsafe { TF_ST = 3 };
-                    return;
-                }
-                let mut want = blk_sz;
-                if off + blk_sz as u32 > limit {
-                    want = (limit - off) as usize;
-                }
-                let n = so_read(ufs, off, want);
-                if n == 0 {
-                    unsafe {
-                        TF_DZ = TF_DZ.wrapping_add(1);
-                        TF_ST = 8;
-                    }
-                    return;
-                }
-                let blk = (cur + 1) as u16;
-                unsafe {
-                    TF_BLKBUF[0] = 0;
-                    TF_BLKBUF[1] = 3;
-                    TF_BLKBUF[2] = (blk >> 8) as u8;
-                    TF_BLKBUF[3] = blk as u8;
-                }
-                let pkt = unsafe { &TF_BLKBUF[..4 + n] };
-                if !glink_tx_payload(
-                    at478,
-                    at479,
-                    tx_head,
-                    sz479,
-                    unsafe { TF_XFER_PORT },
-                    unsafe { TF_NODE },
-                    unsafe { TF_PORT },
-                    pkt,
-                ) {
-                    // 环满/回卷闸拒绝：DX++ 让路。TF_WSENT/TF_BLKNO 保留在
-                    // 途进度，下圈 resume 腿续推。
-                    unsafe { TF_DX = TF_DX.wrapping_add(1) };
-                    return;
-                }
-                unsafe {
-                    TF_BLKNO = blk;
-                    TF_WSENT = TF_WSENT.wrapping_add(1);
-                    TF_ST = if n < blk_sz || off + n as u32 >= limit {
-                        3
-                    } else {
-                        2
-                    };
-                    TF_N += 1;
-                }
-                if unsafe { TF_ST } == 3 || unsafe { TF_WSENT } as usize >= wsz {
-                    return;
-                }
-                // glink_tx_payload 已内部发布新环头——重读再推下一块。
-                tx_head = rd32((at478 + 4) as usize) as u64;
-            }
-        }
+    // 刀 G19→G44：窗口泵抽成 tf_pump_window（G44 起 OACK 落环原地启泵
+    // 与常规轮泵共用一身，泵内语义零变化）。四分位（pq=）仍按 tf_reply
+    // 调用计——kick 产生的 dv++ 是泵计数不是调用计数，账不串。true=泵
+    // dv++ 分支进过（原内联块此形=整个 tf_reply 提前退场，此处保真）。
+    if tf_pump_window(ufs, at478, at479, sz479, armed) {
+        return;
     }
     // 刀 G20：写泵。tf_note_data 只记账，ACK 在这里持 TX 上下文应答
     // （浸泡节奏 ~130ms ≪ 客户端 timeoutms≥1000，安全）。短块 ACK 完
@@ -8385,9 +8647,17 @@ fn tf_reply(ufs: &mut Ufs, at478: u64, at479: u64, sz479: u64) {
         &q[..n],
     ) {
         unsafe { TF_PQ_TXOK = TF_PQ_TXOK.wrapping_add(1) };
+        // 刀 G46：OACK 发成（a=retry 腿 0/1）。
+        tf_ev(4, retry as u16);
         // 刀 G9c：retry 服务只投 OACK，不碰游标/synth——原会话状态原样保留，
         // 重试口的任何回包（ACK/EOT）由 rx 滚动备忘捕获即达判读目的。
-        if !retry {
+        // 刀 G49②：终态（3=送完/7/8/9）重 RRQ=新读——px 实证 RRQ 无 offset
+        // 选项、会话各自独立（rsize 探针后整文件 RRQ 仍从 seek 0 起服）；
+        // #51 现场 op5/9 后客户端两次重 RRQ 全死于「retry 只喂 OACK 不喂
+        // DATA」（52464 OACK 无泵进、52666 再弃）。终态重 RRQ 按首服重置
+        // +kick；st=2 半程保持游标（DR 只计半程重试），kick 走 resume 续推。
+        let fresh = !retry || matches!(st_now, 3 | 7 | 8 | 9);
+        if fresh {
             unsafe {
                 TF_XFER_PORT = sport;
                 TF_ST = 1;
@@ -8411,6 +8681,14 @@ fn tf_reply(ufs: &mut Ufs, at478: u64, at479: u64, sz479: u64) {
         // grace/DATA 连带冻死）；且其落位公式与 glink_tx_payload 内部回卷纪律
         // 不一致，疑自我写坏。G2 问题已答（cp=1 无反应），不再需要。
         tf_drop_pend();
+        // 刀 G44：OACK 落环即启泵。#48/#49 定谳的调度饿死竞态（服务轮
+        // ~0.86/s × 客户端 timeoutms=1000 等待窗）：泵在 OACK 那一拍就
+        // 地把首窗 DATA 推上环，客户端 1s 窗内见数即续线。G49② 起 st=2
+        // 半程重试也 kick（resume 续推）；返回值弃——本函数已到尾。
+        if fresh || st_now == 2 {
+            unsafe { TF_OKICK = TF_OKICK.wrapping_add(1) };
+            tf_pump_window(ufs, at478, at479, sz479, true);
+        }
     } else {
         // 刀 G12：OACK TX 失败计数（环满/回卷闸）。pend 不丢——下圈原样重试
         // 服务，ox=ok.no 与 pq= 合读即知服务环是否在空转。
@@ -12496,6 +12774,25 @@ fn scan_new_servers(fifo: u64, rh: u64) {
             unsafe {
                 C9_N = C9_N.wrapping_add(1);
                 C9_LIID = rd32((fifo + off + 4) as usize);
+                // s52：入站 qrtr 环——每笔 cmd9 记 (ms.源口.宿口.尺寸)。
+                // #52 悬案：S3 DATA1 后我方 0x12/0x16 有应答形发射，其
+                // 触发来包时刻与 xl= 对读定谳装载器死相位。
+                let freqq = time::freq_or(FREQ_FALLBACK as u32) as u64;
+                if freqq != 0 {
+                    let qi = (RXQ_N & 15) as usize;
+                    RXQ_M[qi] = (time::cntvct() / (freqq / 1000).max(1)) as u32;
+                    RXQ_SP[qi] = rd32((fifo + off + 28) as usize);
+                    RXQ_DP[qi] = rd32((fifo + off + 44) as usize);
+                    RXQ_Z[qi] = chunk as u32;
+                    // s53：payload 首 word——控制包即 ctrl type（讣告
+                    // 假说：DEL_SERVER=4）。chunk≥4 才有得读。
+                    if chunk >= 4 {
+                        RXQ_T[qi] = rd32((fifo + off + 48) as usize);
+                    } else {
+                        RXQ_T[qi] = 0;
+                    }
+                    RXQ_N = RXQ_N.wrapping_add(1);
+                }
             }
             // 刀 G23：大包两件照办，其余仍小包专属——
             // ① 还 intent：写客户端整块 DATA（blksize 7680→chunk 7712）
@@ -13256,6 +13553,8 @@ fn scan_new_servers(fifo: u64, rh: u64) {
                             TF_NAME = name;
                             TF_NAME_N = nn as u8;
                             TF_PEND = true;
+                            // 刀 G46：请求到达时刻（op1 RRQ/op2 WRQ，a=op）。
+                            tf_ev(1, op as u16);
                             if op == 1 {
                                 let (has, saw_rs, rsz, saw_sk, skv) = tf_rrq_rsize(fifo, off, chunk);
                                 TF_HASOPT = if has { 1 } else { 0 };
@@ -14091,6 +14390,11 @@ fn ctrl_service(
                                 push_hex(reply, &mut rn, unsafe { TZ_SZ } as u64);
                                 push_str(reply, &mut rn, ".");
                                 push_hex(reply, &mut rn, unsafe { TZ_CL } as u64);
+                                // 刀 G45：so= 单命令连读.逐扇区退路。
+                                push_str(reply, &mut rn, " so=");
+                                push_hex(reply, &mut rn, unsafe { TF_SO2 } as u64);
+                                push_str(reply, &mut rn, ".");
+                                push_hex(reply, &mut rn, unsafe { TF_SOFB } as u64);
                                 // 刀 G42：th= ELF 魔数+e_type/e_machine（采集
                                 // 已久从未渲染的盲区）；sh=/sh2= 头保真窗
                                 // （elf_loader 实读偏移 0/0xa0 的原字节）。
@@ -14156,30 +14460,74 @@ fn ctrl_service(
                                 push_str(reply, &mut rn, " xl=");
                                 push_hex(reply, &mut rn, unsafe { TXL_N } as u64);
                                 let xl_n = unsafe { TXL_N };
-                                let mut xl_k = xl_n.saturating_sub(4);
+                                let mut xl_k = xl_n.saturating_sub(8);
                                 while xl_k < xl_n {
                                     push_str(reply, &mut rn, ".");
                                     push_hex(
                                         reply,
                                         &mut rn,
-                                        unsafe { TXL_S[(xl_k & 3) as usize] } as u64,
+                                        unsafe { TXL_M[(xl_k & 7) as usize] } as u64,
                                     );
                                     push_str(reply, &mut rn, ".");
                                     push_hex(
                                         reply,
                                         &mut rn,
-                                        unsafe { TXL_Z[(xl_k & 3) as usize] } as u64,
+                                        unsafe { TXL_S[(xl_k & 7) as usize] } as u64,
                                     );
                                     push_str(reply, &mut rn, ".");
                                     push_hex(
                                         reply,
                                         &mut rn,
-                                        unsafe { TXL_H[(xl_k & 3) as usize] } as u64,
+                                        unsafe { TXL_Z[(xl_k & 7) as usize] } as u64,
+                                    );
+                                    push_str(reply, &mut rn, ".");
+                                    push_hex(
+                                        reply,
+                                        &mut rn,
+                                        unsafe { TXL_H[(xl_k & 7) as usize] } as u64,
                                     );
                                     xl_k += 1;
                                 }
                                 push_str(reply, &mut rn, ".");
                                 push_hex(reply, &mut rn, unsafe { TXK_N } as u64);
+                                // s52：rqr= 入站 qrtr 环末 8 槽（ms.源口.
+                                // 宿口.尺寸，旧→新）；pd2= G38 ind 探针
+                                // 状态（arm.n——探针是否在本靴发过）。
+                                push_str(reply, &mut rn, " rqr=");
+                                push_hex(reply, &mut rn, unsafe { RXQ_N } as u64);
+                                {
+                                    let qn = unsafe { RXQ_N };
+                                    let mut qk = qn.saturating_sub(8);
+                                    while qk < qn {
+                                        let qi = (qk & 15) as usize;
+                                        push_str(reply, &mut rn, ".");
+                                        push_hex(reply, &mut rn, unsafe { RXQ_M[qi] } as u64);
+                                        push_str(reply, &mut rn, ".");
+                                        push_hex(reply, &mut rn, unsafe { RXQ_SP[qi] } as u64);
+                                        push_str(reply, &mut rn, ".");
+                                        push_hex(reply, &mut rn, unsafe { RXQ_DP[qi] } as u64);
+                                        push_str(reply, &mut rn, ".");
+                                        push_hex(reply, &mut rn, unsafe { RXQ_Z[qi] } as u64);
+                                        push_str(reply, &mut rn, ".");
+                                        push_hex(reply, &mut rn, unsafe { RXQ_T[qi] } as u64);
+                                        qk += 1;
+                                    }
+                                }
+                                push_str(reply, &mut rn, " pd2=");
+                                push_hex(reply, &mut rn, unsafe { PD_IND_ARM } as u64);
+                                push_str(reply, &mut rn, ".");
+                                push_hex(reply, &mut rn, unsafe { PD_IND_N } as u64);
+                                // s53：s3= 源xor32.源头108.环xor32.环头108
+                                // （tftp 大 DATA 端到端环回读校验——A≠C/B≠D
+                                // 即 TX 写坏实锤）。
+                                push_str(reply, &mut rn, " s3=");
+                                push_hex(reply, &mut rn, unsafe { S3A } as u64);
+                                push_str(reply, &mut rn, ".");
+                                push_hex(reply, &mut rn, unsafe { S3B } as u64);
+                                push_str(reply, &mut rn, ".");
+                                push_hex(reply, &mut rn, unsafe { S3C } as u64);
+                                push_str(reply, &mut rn, ".");
+                                push_hex(reply, &mut rn, unsafe { S3D } as u64);
                                 // 刀 G22：ii=intent 池台账——广告数.free数.in_use数.
                                 // 池干脚.求批脚.对端归还数.count>1广告数（T2 的直接读数）。
                                 let (mut ii_free, mut ii_used) = (0u64, 0u64);
@@ -14206,6 +14554,14 @@ fn ctrl_service(
                                 push_hex(reply, &mut rn, unsafe { IIP_DONE } as u64);
                                 push_str(reply, &mut rn, ".");
                                 push_hex(reply, &mut rn, unsafe { IIP_SFIX } as u64);
+                                // 刀 G48：广告三计尾接——见过最大尺寸.腾挪数.
+                                // 满池丢弃数（#51「cmd7 无人理 vs 满池丢件」判据）。
+                                push_str(reply, &mut rn, ".");
+                                push_hex(reply, &mut rn, unsafe { IIP_SEEN_MAX } as u64);
+                                push_str(reply, &mut rn, ".");
+                                push_hex(reply, &mut rn, unsafe { IIP_EVICT } as u64);
+                                push_str(reply, &mut rn, ".");
+                                push_hex(reply, &mut rn, unsafe { IIP_DROP } as u64);
                                 // 刀 G23b：意图经济四联——rg=累计入队.已还.
                                 // 现存深度（闭合则前两数相等）；c9=cmd9 笔数.
                                 // 末枚 liid（0=对端无凭证裸发）；bg=大包数.
@@ -14686,6 +15042,78 @@ fn ctrl_service(
                                     );
                                     k_log += 1;
                                 }
+                                // 刀 G46：tev= 毫秒事件时间线（s47 起改名，
+                                // 根治与 #47 停点全景 tl= 的撞名；时间序旧→新，
+                                // 24 槽全量，空槽跳过；条目=ms.k.a，k 语义
+                                // 见 TF_EV_K 注释）。
+                                push_str(reply, &mut rn, " tev=");
+                                {
+                                    let mut j = unsafe { TF_EV_I };
+                                    for _ in 0..24 {
+                                        let idx = j % 24;
+                                        let k = unsafe { TF_EV_K[idx] };
+                                        if k != 0 {
+                                            push_str(reply, &mut rn, ".");
+                                            push_hex(reply, &mut rn, unsafe { TF_EV_MS[idx] } as u64);
+                                            push_str(reply, &mut rn, ".");
+                                            push_hex(reply, &mut rn, k as u64);
+                                            push_str(reply, &mut rn, ".");
+                                            push_hex(reply, &mut rn, unsafe { TF_EV_A[idx] } as u64);
+                                        }
+                                        j = (j + 1) % 24;
+                                    }
+                                }
+                                // 刀 G47：gx=TX 拒绝现场 4 槽（时间序旧→新，
+                                // 条目=ms.site.a0.a1.a2.a3，site 语义见 GX_SITE
+                                // 注释）；ipn=池干 dump 次数；ipd=最近一次池干
+                                // 时全池（iid.size.in_use 点隔，空槽跳过）。
+                                push_str(reply, &mut rn, " gx=");
+                                {
+                                    let mut j = unsafe { GX_I };
+                                    for _ in 0..4 {
+                                        let idx = j % 4;
+                                        let site = unsafe { GX_SITE[idx] };
+                                        if site != 0 {
+                                            push_str(reply, &mut rn, ".");
+                                            push_hex(reply, &mut rn, unsafe { GX_MS[idx] } as u64);
+                                            push_str(reply, &mut rn, ".");
+                                            push_hex(reply, &mut rn, site as u64);
+                                            let mut f = 0;
+                                            while f < 4 {
+                                                push_str(reply, &mut rn, ".");
+                                                push_hex(
+                                                    reply,
+                                                    &mut rn,
+                                                    unsafe { GX_ARG[idx][f] } as u64,
+                                                );
+                                                f += 1;
+                                            }
+                                        }
+                                        j = (j + 1) % 4;
+                                    }
+                                }
+                                push_str(reply, &mut rn, " ipn=");
+                                push_hex(reply, &mut rn, unsafe { IPN } as u64);
+                                push_str(reply, &mut rn, " ipd=");
+                                {
+                                    let mut si = 0usize;
+                                    let mut any = false;
+                                    while si < 16 {
+                                        let slot = unsafe { IPD[si] };
+                                        if slot[0] != 0 {
+                                            if any {
+                                                push_str(reply, &mut rn, ".");
+                                            }
+                                            push_hex(reply, &mut rn, slot[0] as u64);
+                                            push_str(reply, &mut rn, ".");
+                                            push_hex(reply, &mut rn, slot[1] as u64);
+                                            push_str(reply, &mut rn, ".");
+                                            push_hex(reply, &mut rn, slot[2] as u64);
+                                            any = true;
+                                        }
+                                        si += 1;
+                                    }
+                                }
                                 // 刀 G8：dv=进入.读零.tx拒.环闸挡——DATA 路径堵点
                                 // 实测（G7 立即 DATA 零上环的定位插桩）。
                                 push_str(reply, &mut rn, " dv=");
@@ -14714,6 +15142,9 @@ fn ctrl_service(
                                 push_hex(reply, &mut rn, unsafe { TF_PQ_TXOK } as u64);
                                 push_str(reply, &mut rn, ".");
                                 push_hex(reply, &mut rn, unsafe { TF_PQ_TXNO } as u64);
+                                // 刀 G44：第三格=OACK 落环原地启泵次数。
+                                push_str(reply, &mut rn, ".");
+                                push_hex(reply, &mut rn, unsafe { TF_OKICK } as u64);
                                 // ob=blk.wsz.ts — 写进 OACK 的数。wsz=0 表示请求没带 wsize。
                                 // rs=有键.值。rs=1.0 是 stat。
                                 push_str(reply, &mut rn, " ob=");
@@ -16858,12 +17289,16 @@ extern "C" fn rust_main() -> ! {
                 // HELLO 之后把三包公告赶在 modem 的 RFS 客户超时之前。
                 // 传输中每 2 圈扫一次，ACK 要在 timeoutms 里回来。
                 let xfer = TF_ST == 1 || TF_ST == 2 || (TF_PEND && TF_OP == 1 && tf_is_ruleset());
+                // s51：空闲 200→5。#51 现场 S3(160B phdr 读)的 RRQ 落在
+                // 空闲拍，应答被拖 +200ms（BUG-B 主峰）——S1/S2 同拍服务
+                // 全活、唯独 S3 死：装载器层读窗口容不下 200ms。5ms=HELLO
+                // 公告期同款拍（全网拥堵下验证过安全）。
                 let every = if GLINK_HELLO && HOST_ADV < 4 {
                     5
                 } else if xfer {
                     2
                 } else {
-                    200
+                    5
                 };
                 if LISTEN_TICK >= every {
                     LISTEN_TICK = 0;

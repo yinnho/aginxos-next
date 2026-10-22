@@ -136,6 +136,16 @@ MODE="heartbeat"
 [ "${1:-}" = "--s40" ] && MODE="s40"
 [ "${1:-}" = "--s41" ] && MODE="s41"
 [ "${1:-}" = "--s42" ] && MODE="s42"
+[ "${1:-}" = "--s44" ] && MODE="s44"
+[ "${1:-}" = "--s45" ] && MODE="s45"
+[ "${1:-}" = "--s46" ] && MODE="s46"
+[ "${1:-}" = "--s47" ] && MODE="s47"
+[ "${1:-}" = "--s48" ] && MODE="s48"
+[ "${1:-}" = "--s49" ] && MODE="s49"
+[ "${1:-}" = "--s50" ] && MODE="s50"
+[ "${1:-}" = "--s51" ] && MODE="s51"
+[ "${1:-}" = "--s52" ] && MODE="s52"
+[ "${1:-}" = "--s53" ] && MODE="s53"
 mkdir -p "${OUTDIR}"
 ELF="${OUTDIR}/heartbeat.elf"
 
@@ -1112,6 +1122,136 @@ elif [ "${MODE}" = "s42" ]; then
   ELF="${OUTDIR}/s42.elf"
   cp "${HERE}/target/aarch64-unknown-none-softfloat/release/redfin-bare" "${ELF}"
   BIN="${OUTDIR}/s42.bin"; IMG="${OUTDIR}/boot-s42.img"
+elif [ "${MODE}" = "s44" ]; then
+  # 刀 G44（#49 后·竞态刀）：SO 服死于「OACK 后 1s 无 DATA」调度饿死——
+  # 服务轮 ~0.86/s 赶不上客户端 timeoutms=1000 等待窗，EOT 由 walker 即
+  # 时置 st=4，泵永无开火（dv=0/nopend=0/BLKNO=0 全零互证，ox=2=第二笔
+  # OACK 落进空场）。本刀把 G19 窗口泵抽成 tf_pump_window，OACK 落环成
+  # 功那一拍就地启泵送首窗 DATA；ox= 加第三格 kick 计数。其余同 s42
+  # （G41 dq= + G42 th=/sh=/sh2= + G43 rw= 台账全保留）。
+  (cd "${HERE}" && cargo build --release --target aarch64-unknown-none-softfloat) || { echo "cargo build FAILED (${MODE}) -- 不拷陈旧件" >&2; exit 1; }
+  ELF="${OUTDIR}/s44.elf"
+  cp "${HERE}/target/aarch64-unknown-none-softfloat/release/redfin-bare" "${ELF}"
+  BIN="${OUTDIR}/s44.bin"; IMG="${OUTDIR}/boot-s44.img"
+elif [ "${MODE}" = "s45" ]; then
+  # 刀 G45（#50 后·so_read 双刀）：①跨扇区单命令连读——#50 首验实证
+  # blksize 7680 首块死在双笔背靠背 read10 第二笔（tb=3.1 短块收口），
+  # 单槽 UTRD/UCD 复用无完成同步；且老数学只罩 2 扇区（bo+7680 最大
+  # 11775>8192，第三扇区从来是陈旧读）。连续 LBA 一笔 read10 读
+  # ceil((bo+n)/4096)≤3 扇区进 DATA..DATA+0x2fff（ARRAY=boot 死件、
+  # STAGING 单线程时序安全），从 DATA+bo 平切。②so= 新渲染
+  # （单命令连读数.逐扇区退路数，工厂 FAT 连续分配下退路应恒 0）。
+  # 其余同 s44（G44 OACK 落环原地启泵全保留）。
+  (cd "${HERE}" && cargo build --release --target aarch64-unknown-none-softfloat) || { echo "cargo build FAILED (${MODE}) -- 不拷陈旧件" >&2; exit 1; }
+  ELF="${OUTDIR}/s45.elf"
+  cp "${HERE}/target/aarch64-unknown-none-softfloat/release/redfin-bare" "${ELF}"
+  BIN="${OUTDIR}/s45.bin"; IMG="${OUTDIR}/boot-s45.img"
+elif [ "${MODE}" = "s46" ]; then
+  # 刀 G46（#50 方法论翻案后第一刀·纯插桩零行为改动）：#50 悬案
+  # tb=4.0(ST=1 态收 EOT) 与 N=5/so=4/DV=2/DX=2 合不拢——6~12s 粒度
+  # 标量计数器无法分辨 1~4s 协议交互。本刀只加毫秒事件时间线：
+  # TF_EV 24 槽滚动环（cntvct→ms），记 RRQ/WRQ 到、ACK 到、EOT 到、
+  # OACK 发、DATA 发/发拒、ST 迁、泵进（a=进泵 ST）、so_read 返回
+  # （a=n，短读直证）、环闸挡、读零、stat 门退；sm= 帧内 rx= 后渲染
+  # tl=ms.k.a×24。泵/臂/读写路径逻辑零改动（s45 连读刀全保留）。
+  # 纪律：无时间线不定谳，插桩先于行为刀。
+  (cd "${HERE}" && cargo build --release --target aarch64-unknown-none-softfloat) || { echo "cargo build FAILED (${MODE}) -- 不拷陈旧件" >&2; exit 1; }
+  ELF="${OUTDIR}/s46.elf"
+  cp "${HERE}/target/aarch64-unknown-none-softfloat/release/redfin-bare" "${ELF}"
+  BIN="${OUTDIR}/s46.bin"; IMG="${OUTDIR}/boot-s46.img"
+elif [ "${MODE}" = "s47" ]; then
+  # 刀 G47（#50 附录一悬案判刀·纯插桩零行为改动）：BUG-A 定谳到
+  # glink_tx_payload 拒发 7680B DATA 块（小包活大包死），但三拒绝点
+  # （caps/回卷闸/池干）二选一未定。本刀在三拒绝点当场抓快照：
+  # GX 4 槽滚动（ms.site.a0..a3；site=1 caps:n.chunk.isz.total、
+  # 2 回卷闸:head.tail.total.sz479、3 池干:chunk.freeN.freeMax.usedN），
+  # 池干另 dump 全池 16 槽（iid.size.in_use）；sm= 渲染 gx=/ipn=/ipd=。
+  # site=3 时 free 槽尺寸谱直接分「无 free 可挑」vs「free 全 < chunk
+  # （对��只批小的）」。附带 G46 tl= 改名 tev=（根治与 #47 停点全景
+  # tl= 撞名——22:14 那波整文件重试的 TL 解码即死于此）。
+  # 泵/臂/读写路径逻辑零改动。纪律：插桩先于行为刀。
+  (cd "${HERE}" && cargo build --release --target aarch64-unknown-none-softfloat) || { echo "cargo build FAILED (${MODE}) -- 不拷陈旧件" >&2; exit 1; }
+  ELF="${OUTDIR}/s47.elf"
+  cp "${HERE}/target/aarch64-unknown-none-softfloat/release/redfin-bare" "${ELF}"
+  BIN="${OUTDIR}/s47.bin"; IMG="${OUTDIR}/boot-s47.img"
+elif [ "${MODE}" = "s48" ]; then
+  # 刀 G48（#51 判刀后果·计数+腾挪捆绑刀）：s47 首帧定谳 DATA拒=②池干
+  # （freeMax=0x200<chunk=0x1e24，对端只批 15×0x80+1×0x200）；次悬案=
+  # 「cmd7 无人理 vs 满池丢件」——IPD 现场全池 16/16 小件占满、iid2 缺席，
+  # iip_add 只填空槽，对端 cmd7 应答的大件广告若带新 iid 即被静默丢。
+  # 本刀：iip_add 满池腾最小 free 槽（全 in_use 才丢）+三计（SEEN_MAX=
+  # 见过最大批件尺寸/EVICT/DROP）尾接 ii=——计数器保归因，捆绑省一轮闪。
+  # 其余同 s47（G46 tev= / G47 gx=ipn=ipd= 全保留）。
+  (cd "${HERE}" && cargo build --release --target aarch64-unknown-none-softfloat) || { echo "cargo build FAILED (${MODE}) -- 不拷陈旧件" >&2; exit 1; }
+  ELF="${OUTDIR}/s48.elf"
+  cp "${HERE}/target/aarch64-unknown-none-softfloat/release/redfin-bare" "${ELF}"
+  BIN="${OUTDIR}/s48.bin"; IMG="${OUTDIR}/boot-s48.img"
+elif [ "${MODE}" = "s49" ]; then
+  # 刀 G49（#51 首块 DATA 后新墙=窗口饿死，三刀捆绑·证据各有出处）：
+  # ①泵在途闸 4096 是小 blksize 时代尺寸——px= 实证客户端要 blksize7680/
+  # wsize10 突发，7736B 一块即触闸停泵；改随环容量（sz479−4096 预留小
+  # 包，下限 8192）。②retry 臂只投 OACK 不 kick（G9c 游标纪律）——
+  # op5/9 后客户端两次重 RRQ 全饿死在 52464 OACK；终态（3/7/8/9）重
+  # RRQ=新读按首服重置+kick，st=2 半程保游标也 kick。③泵进度（TXGEN）
+  # 计入服务内环活性——否则突发被 BUG-B 外圈 2s 拍掐死（旧判据只看
+  # RX 游标）。s47/s48 插桩（tev/gx/ipn/ipd/ii 三计）全保留。
+  (cd "${HERE}" && cargo build --release --target aarch64-unknown-none-softfloat) || { echo "cargo build FAILED (${MODE}) -- 不拷陈旧件" >&2; exit 1; }
+  ELF="${OUTDIR}/s49.elf"
+  cp "${HERE}/target/aarch64-unknown-none-softfloat/release/redfin-bare" "${ELF}"
+  BIN="${OUTDIR}/s49.bin"; IMG="${OUTDIR}/boot-s49.img"
+elif [ "${MODE}" = "s50" ]; then
+  # 刀 G50（s49 定谳：大包回卷自造协议写坏）：TX 环界改内核式分段写
+  # ——旧「放不下且 head==tail 则 head=0 重写」让对端在 tail..end 吞
+  # 4952B 陈旧字节（DATA1 total=7736 从 head≈0x2ca8 起 100% 跨界，环
+  # 0x4000），modem 解包错乱→客户端 +1ms op5/9 弃单；小块不跨界全活。
+  # 新法=内核 glink_smem_tx 同律：包跨界两段写（woff 绕环助手）、
+  # head=(head+total)%sz、free 闸按 used 算不再要求环空；TEV 新事件
+  # 13=跨界写发生（arg=旧 head）。s47-s49 插桩全保留。
+  (cd "${HERE}" && cargo build --release --target aarch64-unknown-none-softfloat) || { echo "cargo build FAILED (${MODE}) -- 不拷陈旧件" >&2; exit 1; }
+  ELF="${OUTDIR}/s50.elf"
+  cp "${HERE}/target/aarch64-unknown-none-softfloat/release/redfin-bare" "${ELF}"
+  BIN="${OUTDIR}/s50.bin"; IMG="${OUTDIR}/boot-s50.img"
+elif [ "${MODE}" = "s51" ]; then
+  # 刀 G51（源码定谳后双刀）：读了真客户端源码（MPSS.HA.1.1
+  # tftp_client.c）——①stat= rsize 键缺席（populate :417 只有
+  # read_size!=0 才带），旧判式「键在值 0」永不命中，synth-ACK0
+  # kick 照泵 7680B 进 stat 会话，孤儿 intent 0x2080 30 分钟不释
+  # （#51 IPD 实证）；stat 门改「无键或值 0」→ 只回 OACK 等 code 9
+  # （stock 同款零 DATA）。②空闲 listen 节拍 200→5ms：#51 现场
+  # S3(160B phdr 读) RRQ 落空闲拍应答 +200ms（BUG-B 主峰），S1/S2
+  # 同拍全活唯 S3 死——装载器层读窗容不下 200ms。s47-s50 全保留。
+  (cd "${HERE}" && cargo build --release --target aarch64-unknown-none-softfloat) || { echo "cargo build FAILED (${MODE}) -- 不拷陈旧件" >&2; exit 1; }
+  ELF="${OUTDIR}/s51.elf"
+  cp "${HERE}/target/aarch64-unknown-none-softfloat/release/redfin-bare" "${ELF}"
+  BIN="${OUTDIR}/s51.bin"; IMG="${OUTDIR}/boot-s51.img"
+elif [ "${MODE}" = "s52" ]; then
+  # 刀 G52（纯插桩，零行为改动）：#52 现场服务端全链洗清（内���
+  # SH1/SH2 与宿主件字节全等、offset 台账 160@0x34 对、216B DATA1
+  # 无跨界、TX 环 head==tail 全排空、同拍应答），客户端仍在 S3 RRQ
+  # 后零 ACK 零 code9 永静默；而 xl= 尾窗实锤 DATA1 后紧跟两笔非
+  # tftp 发射（104B@0x12 假 pd-mapper 口 + 64B@0x16 假 IPA 口），
+  # 但无时刻无法与静默窗对读。三插桩：TXL 4→8 槽加毫秒戳、入站
+  # qrtr 环 rqr=（ms.源口.宿口.尺寸×16）、pd2=（G38 ind 探针
+  # arm.n——探针是否落进装载窗一靴可见）。s44-s51 全保留。
+  (cd "${HERE}" && cargo build --release --target aarch64-unknown-none-softfloat) || { echo "cargo build FAILED (${MODE}) -- 不拷陈旧件" >&2; exit 1; }
+  ELF="${OUTDIR}/s52.elf"
+  cp "${HERE}/target/aarch64-unknown-none-softfloat/release/redfin-bare" "${ELF}"
+  BIN="${OUTDIR}/s52.bin"; IMG="${OUTDIR}/boot-s52.img"
+elif [ "${MODE}" = "s53" ]; then
+  # 刀 G53（纯插桩双证）：#52 三问全答——0x12/0x16 在 DATA1+11.1s
+  # （谋杀假说死）、0x12 前零入站（自发）、死点=客户端收 216B DATA1
+  # 后暴死（连最终 ACK 都无=死在 cb_func 内=dlopen 放弃，rtld_main
+  # 官方静默退出路径 QDI_OS_PROCESS_EXIT）。两证收口：① s3= 端到端
+  # 环回读校验——SH1/SH2 只证块缓冲对（boot 期文件直读），没证
+  # woff 写环后的字节；大 DATA 写完从环读回 xor32 与源比，A≠C 即
+  # TX 写坏实锤（数据假说终审）。② rqr 槽加 type 字（qrtr payload
+  # 首 word，控制包=ctrl type）——DATA1+11.1s 的 7 笔 52B 控制包
+  # 若是 DEL_SERVER(4)=elf_loader PD 死亡讣告，dlopen 放弃实锤。
+  # s44-s52 全保留。
+  (cd "${HERE}" && cargo build --release --target aarch64-unknown-none-softfloat) || { echo "cargo build FAILED (${MODE}) -- 不拷陈旧件" >&2; exit 1; }
+  ELF="${OUTDIR}/s53.elf"
+  cp "${HERE}/target/aarch64-unknown-none-softfloat/release/redfin-bare" "${ELF}"
+  BIN="${OUTDIR}/s53.bin"; IMG="${OUTDIR}/boot-s53.img"
 elif [ "${MODE}" = "s21" ]; then
   # 刀 G22：s20 同面，intent 池+归还追踪（cmd5 全量入池、TX 池挑、
   # RX_DONE/W_REUSE 归还、池干 RX_INTENT_REQ、cmd3/11 入 8B 集、ii= 台账）。
