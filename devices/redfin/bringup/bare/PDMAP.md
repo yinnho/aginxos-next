@@ -67,3 +67,50 @@ modem 拿不到 PD map（0x12 无应答）→ PD 框架卡 → wlan_pd 不拉起
 无 WLFW 0x45。注意 modemuw 服务表含 **kernel/elf_loader**：wlan_pd 的
 固件装载依赖 APSS 的 elf_loader 服务（Linux 世=cnss/PIL）——裸世界若
 走到那步，我们还要供这个面（远期，先答 PD map）。
+
+---
+
+## 10-22 下午翻案节（重要——上节假说已部分证伪）
+
+**「0x12 无人应」是误读，应答器早已在役。** 翻 main.rs 定谳：
+
+1. **应答器全套已存在**（此前的刀已铸）：RX 武装腿（dst_port==0x12,
+   chunk>=56, qtype==0 && msgid==33=0x21, txn 去重 PD_SEEN, 闩
+   PD_TXN/PD_NODE/PD_PORT/PD_PEND）→ `pd_take_name`（TLV1 解名，
+   **无 strlen 前缀、尾部多带 NUL——按真捕获写的**；名字==kernel/
+   elf_loader 时置 PD_SAW_ELF）→ `pd_reply`（TLV 02 成功 + 10
+   total_domains + 11 db_rev_count=1 + 12 域表 put_dom；qmi_finish
+   tf=2 ✓；从 0x12 发往 PD_NODE.PD_PORT）。DOMS 表=jsn 十映射全量
+   在编（6144–6155）。
+2. **#39 实测**（live log 直读，watcher 面早有）：`pr=3
+   pn=kernel/elf_loader.1.30 pe=1`——modem 问的就是 kernel/
+   elf_loader，我们答了 3 次（1 命中=msm/modem/wlan_pd inst 180，
+   qlen 0x30=48B），rf= rmtfs 腿也在动。**但 w45 仍 0**。
+3. **#39 收据勘误**：po= 是 RX 直方图（应答了也计数），「0x12×4
+   无人应」错；正确读法=「4 敲 3 答 1 丢（PD_PEND 串行占位期丢），
+   且客户端反复问」。
+4. **新问题（#40 主猎物）**：答了 3 次客户端为何还问/wlan_pd 仍不
+   生？候选序：①应答编码有客户端不认的细节（静态审计全过——tf=2/
+   TLV 序/entry 四件套/strlen 全对账过 service-locator ei 表，暂无
+   把柄）②3 问=3 个不同客户端各问一次（非重试），答已收下，卡点在
+   下游（elf_loader 真装载=PIL，裸世界没人干）③应答虽 TX 成功但
+   送达问题（见下条布局疑云）。
+5. **qrtr 头布局疑云（G34 pdh= 正好定谳）**：pc= 真实字节（#36 IPA
+   CONFIG_REQ 捕获，+32 起）：`+32=0 +36=0x3f +40=1 +44=0x16
+   +48=QMI(tf=0! txn3 msg27 len38)`。dst@+40/+44 与 src@+24/+28 双
+   双被「活线」证明（tftp 用 +24/+28 回信且 .so 全量送达=#24；全体
+   分派用 +40/+44 且 po= 桶全对）——但 +32/+36 也呈 (node0,port63)
+   的 src 形状。qrtrhdr_v1 标准布局（ver@+16 type@+20 src@+24/28
+   dst@+32/36 size@+40 confirm@+44）与观测矛盾（dst 在 +40/+44）。
+   **唯一裁决=G34 的 pdh=（从 +0 抄 96B）**：看 +24/+28 与 +32/+36
+   是否同值（src 双写）还是各异。
+6. **G35 修订方向**：不再是「起应答器」而是——①看 #40 pd= 真名与
+   重试形状 ②若答已被收下：下一堵墙大概率=elf_loader 装载本身
+   （modemuw 依赖表的头一条）——那就是 PIL 线（wlan bXX 分段装载），
+   或者先看 rmtfs 腿（rf=）是否齐活。
+
+## 判读器
+
+`/tmp/decode-pd.py`（自测过）：吃 sm 行抽 `pdh=` 96B hex → qrtr 源
+/目的 + QMI 头 + TLV 全解。注意其假设 src@+32/+36（疑云未决，#40
+数据落地后按真相修正）。

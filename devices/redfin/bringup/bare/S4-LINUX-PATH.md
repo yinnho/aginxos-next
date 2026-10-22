@@ -4880,3 +4880,21 @@ adb、无 ping——7min 慢自愈在案先不下结论）。
   G34（观察刀）=0x10/0x12 定向包环（每口末 2 包 96B 原文上屏）拿到
   GET_PD_MAP 请求真字节；G35（行为刀）=按真字节应答 PD map 表。
 - 死 +593s = **天花板第十五证**（带 593-596）。
+
+#### 勘误（10-22 15:00 补，翻 main.rs 定谳）——「0x12 无人应」错，应答器早已在役
+
+- 上条「rmtfs/pd-mapper 无人应」**错**：po= 是 RX 直方图（应答了也计数），
+  不辨答否。真相=**固件里 pd_reply()/DOMS/pd_take_name 全套早铸**（此
+  前刀已落），#39 live 行 `pr=3 pn=kernel/elf_loader.1.30 pe=1` 证明
+  modem 问 kernel/elf_loader、我们答了 3 次（1 命中=msm/modem/wlan_pd
+  inst 180，qlen 0x30）——4 敲 3 答 1 丢（PD_PEND 串行占位期丢），且
+  客户端反复问。rf= rmtfs 腿同帧也在应（3..3.8.280000.0）。
+- **w45=0 的真问题改写**：不是「无人应」而是「答了为何还问/wlan_pd 仍
+  不生」。候选：应答编码瑕疵（静态审计 tf=2/TLV 序/entry 四件套全过
+  service-locator ei 表，暂无把柄）/ 3 问=3 客户端非重试、答已收下、
+  卡点在下游（kernel/elf_loader 真装载=PIL，裸世界没人干）/ 送达问题
+  （qrtr 头布局疑云：+32/+36 呈 src 形状，#40 pdh= 定谳）。
+- 案头全料（协议真源=redbull service-locator-private.h、厂 pd-mapper
+  二进制、jsn 全 6 PD 表、判读器 /tmp/decode-pd.py）已落
+  `devices/redfin/bringup/bare/PDMAP.md`。G34（链 #40 在挂）拿请求
+  真字节裁决。
