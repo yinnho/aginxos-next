@@ -4763,3 +4763,46 @@ DEL_CLIENT client{node.port}（15 连闭是谁）+ ml= 改名；--s32 出件
 s32padded→set_active a→重启→观察器（白名单已带 ccz=/dc=/ml=）。
 全程零人工；en10=02:00:00:00:00:01 持续在=仍是 bare 自旋（12:15 无
 adb、无 ping——7min 慢自愈在案先不下结论）。
+
+---
+
+### 靴 #37（10-22 12:32–12:51）——G31 首刷：ccz=38 定谳短包守卫 + q= 双挡实测 + G32 同步刀
+
+- **刷入**：s32padded 12:32:12（md5 3b2f80e536449e22e2eeeef729832309，串号闸门过、
+  set_active a 重灌七命、reboot 12:32:21）。ping up 12:41:29 = **181s 慢**
+  （en 界面中途重枚举翻牌，非盒行为；对照 #36 ~90s）。死 +594/595/596s =
+  **天花板第十三证**（594–596s 带内，钟一样）。
+- **ccz=38 定谳**：cc=4.0.0.0.0 全程不动 + ccz=38（56 枚控制包中 38 次五元组
+  全零读）→ **#36 两解闭案：短包守卫坐实（b 解），非真空通告（a 解）**。
+  旁证链完整：IQ 闩曾在 chunk≥52 下于 +52 偏移读到真值 svc=0x31——fifo 里
+  union 字段全在，是 transport 报的 chunk 偏短，守卫（≥56/60/64）全数误吞。
+- **dc=0.0.f**：DEL_CLIENT 15 连闭的 client{node.port} 同被守卫置零——「15 次
+  关的是谁」仍无名。G33 候选：守卫降 chunk≥52。
+- **ml=-**：SMEM_LOOK（G30b 暗闩，G31 自 lk= 改名）全靴空——modem 从不发
+  NEW_LOOKUP，#36 判读复证：modem 只收我们的 NEW_SERVER 广播，从不查我们。
+- **ch=2:1,4:28,6:f**：G30b 对账面在场（HELLO 1 / NEW_SERVER 28 / DEL_CLIENT
+  15，渲染时点计数）。
+- **q= 双挡实测**（G31 主货没上屏的两层原因，同日两犯白名单律）：
+  1. 观察器白名单漏列 q=/iq=——G31 加了 ccz=/dc=/ml= 偏漏了主货（sm 行
+     1785 字=过滤后残影的另一半真相）。已补：SM 元组现带 q=/iq=/ig=。
+  2. 固件 TCP_TX 3072 帽：直连探针（单连接，盒活时合法）回 **LEN=3072 整**，
+     行切在 `rpl=71.`——渲染序 rpl=→rr=→q=→iq=→ig=，后四段全被切。
+     G31 只扩了 CTRL_REPLY 忘了配对 → **配对尺寸律**：CTRL_REPLY↔TCP_TX
+     必同改（G21「TX 随 CTRL_REPLY 同步」的尺寸版）。
+- **G32 已推（f1f3020）**：TCP_TX 3072→8192（入向 2560 不动）；--s33 出件
+  s33.elf md5 15ccef4789b16288543212e4c5b4b5c2 ≠ s32 df252d7e…（新鲜验）+
+  s33padded 68,157,440B（md5 e72908baaa4eaf2a606d0d1fd554953e）。字面量
+  q=/iq=/ig= 在 s33.elf strings 验真。
+- **build-bare.sh 失败门全铺（0afa1e0=34 处，G32 增 s33=35 处）**：cargo 失败
+  即 exit 1 不拷陈旧件——G31 构建时 cargo 失败而脚本照拷陈旧 s30 的险情堵死。
+  出件后仍须 strings 验字面量（双保险）。
+- **舞后对账律立档（G32 实跑=空）**：⑤步后必跑
+  `git diff origin/master master --stat -- ':!*.md' ':!docs/'`——G31 舞后曾
+  漂移（收据堆盖掉 build-bare.sh 全部门，checkout origin 侧+amend 救回）；
+  G32 舞后实跑空、build-bare.sh 门 35 处俱在。
+- **链 #38 在挂**（pid 74576，12:47:03 武装，img=s33padded；日志标签笔误
+  chain#37，img 为准）：等 L0 adb（本靴烧 try1，剩 6 命 × ~2-3min 快烧，
+  估 ~13:05-13:10 落 b）→ 自动 reboot bootloader→闸门→刷 s33→set_active a→
+  重启→观察器。**靴 #38 = q= 服务图真首屏**：40 对 svc.inst + iq= 四元 +
+  ig= 11 格全量——0x45 WLFW 在不在 40 窗内即见分晓；iq= 若闩上则 IPA QMI
+  0x31 的 node:port 首次有名字。
