@@ -133,6 +133,7 @@ MODE="heartbeat"
 [ "${1:-}" = "--s37" ] && MODE="s37"
 [ "${1:-}" = "--s38" ] && MODE="s38"
 [ "${1:-}" = "--s39" ] && MODE="s39"
+[ "${1:-}" = "--s40" ] && MODE="s40"
 mkdir -p "${OUTDIR}"
 ELF="${OUTDIR}/heartbeat.elf"
 
@@ -1076,6 +1077,18 @@ elif [ "${MODE}" = "s39" ]; then
   ELF="${OUTDIR}/s39.elf"
   cp "${HERE}/target/aarch64-unknown-none-softfloat/release/redfin-bare" "${ELF}"
   BIN="${OUTDIR}/s39.bin"; IMG="${OUTDIR}/boot-s39.img"
+elif [ "${MODE}" = "s40" ]; then
+  # 刀 G40（#46 后 EFS 挂载死亡组·四查·纯观察）：rmtfs 应答链已全绿
+  # （ik=4.0/rd=0/8 请求全 drain），modem 在 +51s 停发 rfs 后静默 9 分钟
+  # 等狗杀——本刀把「它到底在等谁」照亮：①r8= 0x10 口末 4 包摘要环
+  # （末包形状≠全集教训）②tl= 每口最后包到达秒（51s 停点全景）③ro=
+  # OPEN 流水（sport.pathlen.matched.cid ≤4 笔——两笔 OPEN 各是谁）
+  # ④sd= seed 抽块保真对账（首/尾块重读 vs 影子；seed 搬坏=EFS 挂载
+  # 死第一嫌疑）。
+  (cd "${HERE}" && cargo build --release --target aarch64-unknown-none-softfloat) || { echo "cargo build FAILED (${MODE}) -- 不拷陈旧件" >&2; exit 1; }
+  ELF="${OUTDIR}/s40.elf"
+  cp "${HERE}/target/aarch64-unknown-none-softfloat/release/redfin-bare" "${ELF}"
+  BIN="${OUTDIR}/s40.bin"; IMG="${OUTDIR}/boot-s40.img"
 elif [ "${MODE}" = "s21" ]; then
   # 刀 G22：s20 同面，intent 池+归还追踪（cmd5 全量入池、TX 池挑、
   # RX_DONE/W_REUSE 归还、池干 RX_INTENT_REQ、cmd3/11 入 8B 集、ii= 台账）。

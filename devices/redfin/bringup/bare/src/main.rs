@@ -3202,7 +3202,24 @@ fn rfs_seed_efs(ufs: &mut Ufs) {
             }
             if ok {
                 dcache_civac(dest, (nblk as u64) * 4096);
+                // 刀 G40：抽块保真对账（首/尾块重读 vs 影子逐字节）。
+                // 搬运循环刚结束，DATA 可复用；坏块计差异字节数。
+                let mut bad = 0u32;
+                let probes = if nblk > 1 { [0u32, nblk - 1] } else { [0u32, 0u32] };
+                for probe in probes {
+                    if ufs.read10_lun(lun, start + probe, 1, DATA).is_ok() {
+                        let sh = dest + (probe as u64) * 4096;
+                        let mut b = 0u64;
+                        while b < 4096 {
+                            if rd8(DATA as u64 + b) != rd8(sh + b) {
+                                bad += 1;
+                            }
+                            b += 1;
+                        }
+                    }
+                }
                 unsafe {
+                    RFS_SD[slot as usize] = bad;
                     RFS_Z |= 1 << slot;
                     RFS_SEED |= 1 << slot;
                 }
@@ -4480,6 +4497,10 @@ static mut RF_DROP: u32 = 0;
 /// 最近 8 次 msgid（低 8 位）| txn<<8。
 static mut RF_HIST: [u32; 8] = [0; 8];
 static mut RF_HIST_N: u32 = 0;
+/// 刀 G40：OPEN 流水（≤4 笔）——#46 两笔 OPEN 各是谁/路径多长/匹配
+/// 与否。packed：sport<<24|pathlen<<16|matched<<8|caller_id 低 8。
+static mut RF_RO: [u32; 4] = [0; 4];
+static mut RF_RO_N: u32 = 0;
 /// IOVEC rfs_iovec 成功/失败次数（冲 0x45：影子过短曾全失败）。
 static mut RF_IOK: u32 = 0;
 static mut RF_IFAIL: u32 = 0;
@@ -4581,6 +4602,10 @@ static mut GPT_ENTRIES: usize = 0;
 /// 扫到的 EFS 相关 GPT 名（拼接，供 sm gn=）。
 static mut RFS_GN: [u8; 64] = [0; 64];
 static mut RFS_GNN: u8 = 0;
+/// 刀 G40：seed 抽块保真对账——每槽 seed 完成后重读 UFS 首/尾块 vs
+/// 影子，差异数累进（ffff=该槽未 seed）。#46 假说组：EFS 挂载死在
+/// 4 IOVEC 后=影子内容可能非 modem 所期（seed 搬坏=第一嫌疑）。
+static mut RFS_SD: [u32; 4] = [0xffff_ffff; 4];
 
 /// IPA fws（pas-id 0xf @ 0x8BC00000 / 0x10000）。ADSP PAS 成功之后才跑。
 /// sm ip=st.p0.p1.p2 — st 同 ADSP（高位置位=段数）；p0/1/2 = INIT/MEM/AUTH x0。
@@ -4766,6 +4791,9 @@ static mut TF_W_ECHO: [u8; 64] = [0; 64];
 static mut TF_W_ECHO_N: u8 = 0;
 static mut TF_PO_P: [u32; 8] = [0; 8];
 static mut TF_PO_C: [u32; 8] = [0; 8];
+/// 刀 G40：po 各槽最后包到达时刻（CNTVCT 计数；tl= 渲染除 freq 成秒）。
+/// #46 wd=51.51 只见 rfs 停点——「51s 后 modem 在等谁」需要每口停点。
+static mut TF_PO_T: [u64; 8] = [0; 8];
 /// 刀 G30（纯观察，零行为变更）：pc= 探针捕获——G29 直方图只给「口×次数」，
 /// 本刀把落在未应答口（非 0x11/0x1011/xfer/wx 且真 16 位口）上的**最近一枚包**
 /// 的 头 64B（src/dst 口+载荷首 48B）抄盘。po= 说出「它在敲门」，pc= 说出
@@ -4781,8 +4809,12 @@ static mut TF_PC_PORT: u32 = 0;
 /// （txn+service_name），答不答=下一刀的事。
 static mut TF_PD12: [[u8; 96]; 2] = [[0; 96]; 2];
 static mut TF_PD12_N: u32 = 0;
-static mut TF_RM10: [[u8; 96]; 2] = [[0; 96]; 2];
+/// 刀 G40：0x10 口末 4 包环（#46 rm=8 只见末包，「末包形状≠全集」教训
+/// ——rh hist 证 8 请求全应答，但 4 IOVEC 后 modem 为何停发仍黑）。
+/// TF_RM10_I=最新槽。
+static mut TF_RM10: [[u8; 96]; 4] = [[0; 96]; 4];
 static mut TF_RM10_N: u32 = 0;
+static mut TF_RM10_I: u32 = 0xffff_ffff;
 /// 刀 G30b（纯观察）：QRTR 控制面正账——#34 po=fffffffe.38 定谳那不是
 /// 底噪，是 QRTR_PORT_CTRL(0xfffffffe) 的控制报文（uapi qrtr.h 实锤），
 /// 整条线 56 封信只计数没读过。ch= 各 typ 计数（下标 typ-2，2..=13），
@@ -6709,6 +6741,16 @@ fn rf_reply(at478: u64, at479: u64, sz479: u64) {
             // result 已经写成 0。改成失败。
             put_u16_at(&mut q, 10, 1);
             put_u16_at(&mut q, 12, 1);
+        }
+        // 刀 G40：OPEN 流水入账（sport/路径长/匹配/caller_id）。
+        unsafe {
+            if RF_RO_N < 4 {
+                RF_RO[RF_RO_N as usize] = ((RF_PORT & 0xff) << 24)
+                    | ((name_n as u32) << 16)
+                    | (if RF_ID == 0xffff_ffff { 0 } else { 1 } << 8)
+                    | (RF_ID & 0xff);
+                RF_RO_N += 1;
+            }
         }
     } else if msg == 2 {
         let id = qmi_tlv_u32(fifo, off, chunk, 1).unwrap_or(0xffff_ffff);
@@ -12536,6 +12578,7 @@ fn scan_new_servers(fifo: u64, rh: u64) {
                     while poi < 8 {
                         if TF_PO_C[poi] != 0 && TF_PO_P[poi] == dst_port {
                             TF_PO_C[poi] = TF_PO_C[poi].wrapping_add(1);
+                            TF_PO_T[poi] = time::cntvct();
                             break;
                         }
                         poi += 1;
@@ -12546,6 +12589,7 @@ fn scan_new_servers(fifo: u64, rh: u64) {
                             if TF_PO_C[poe] == 0 {
                                 TF_PO_P[poe] = dst_port;
                                 TF_PO_C[poe] = 1;
+                                TF_PO_T[poe] = time::cntvct();
                                 break;
                             }
                             poe += 1;
@@ -12590,8 +12634,14 @@ fn scan_new_servers(fifo: u64, rh: u64) {
                             TF_PD12[1].copy_from_slice(pb);
                             TF_PD12_N = TF_PD12_N.saturating_add(1);
                         } else {
-                            TF_RM10[0] = TF_RM10[1];
-                            TF_RM10[1].copy_from_slice(pb);
+                            // 刀 G40：环形 4 槽（旧 2 槽滑动改写）。
+                            let ni = if TF_RM10_I == 0xffff_ffff {
+                                0
+                            } else {
+                                (TF_RM10_I + 1) % 4
+                            };
+                            TF_RM10[ni as usize].copy_from_slice(pb);
+                            TF_RM10_I = ni;
                             TF_RM10_N = TF_RM10_N.saturating_add(1);
                         }
                     }
@@ -13769,6 +13819,39 @@ fn ctrl_service(
                                 push_hex(reply, &mut rn, unsafe { RF_IOK } as u64);
                                 push_str(reply, &mut rn, ".");
                                 push_hex(reply, &mut rn, unsafe { RF_IFAIL } as u64);
+                                // 刀 G40：ro= OPEN 流水（sport.pathlen.matched.cid，
+                                // ≤4 笔逗号分隔；无 OPEN 打 -）。
+                                push_str(reply, &mut rn, " ro=");
+                                if unsafe { RF_RO_N } == 0 {
+                                    push_str(reply, &mut rn, "-");
+                                } else {
+                                    let mut roi = 0u32;
+                                    while roi < unsafe { RF_RO_N } {
+                                        if roi != 0 {
+                                            push_str(reply, &mut rn, ",");
+                                        }
+                                        let v = unsafe { RF_RO[roi as usize] };
+                                        push_hex(reply, &mut rn, (v >> 24) as u64);
+                                        push_str(reply, &mut rn, ".");
+                                        push_hex(reply, &mut rn, ((v >> 16) & 0xff) as u64);
+                                        push_str(reply, &mut rn, ".");
+                                        push_hex(reply, &mut rn, ((v >> 8) & 1) as u64);
+                                        push_str(reply, &mut rn, ".");
+                                        push_hex(reply, &mut rn, (v & 0xff) as u64);
+                                        roi += 1;
+                                    }
+                                }
+                                // 刀 G40：sd= seed 抽块差异（槽序 fs1.fs2.fsc.fsg；
+                                // ffff=未 seed，0=逐字节全等）。
+                                push_str(reply, &mut rn, " sd=");
+                                let mut sdi = 0usize;
+                                while sdi < 4 {
+                                    if sdi != 0 {
+                                        push_str(reply, &mut rn, ".");
+                                    }
+                                    push_hex(reply, &mut rn, unsafe { RFS_SD[sdi] } as u64);
+                                    sdi += 1;
+                                }
                                 push_str(reply, &mut rn, " rs=");
                                 {
                                     let rn0 = unsafe { RF_RSP_N } as usize;
@@ -14116,6 +14199,38 @@ fn ctrl_service(
                                         push_str(reply, &mut rn, "-");
                                     }
                                 }
+                                // 刀 G40：tl= 各口最后包到达秒（与 po= 同槽序；
+                                // freq=0 打 -）。
+                                push_str(reply, &mut rn, " tl=");
+                                if freq == 0 {
+                                    push_str(reply, &mut rn, "-");
+                                } else {
+                                    let mut tlany = false;
+                                    let mut tli = 0usize;
+                                    while tli < 8 {
+                                        if unsafe { TF_PO_C[tli] } != 0 {
+                                            if tlany {
+                                                push_str(reply, &mut rn, ",");
+                                            }
+                                            tlany = true;
+                                            push_hex(
+                                                reply,
+                                                &mut rn,
+                                                unsafe { TF_PO_P[tli] } as u64,
+                                            );
+                                            push_str(reply, &mut rn, ".");
+                                            push_u64(
+                                                reply,
+                                                &mut rn,
+                                                unsafe { TF_PO_T[tli] } / freq as u64,
+                                            );
+                                        }
+                                        tli += 1;
+                                    }
+                                    if !tlany {
+                                        push_str(reply, &mut rn, "-");
+                                    }
+                                }
                                 // 刀 G30：pc=探针捕获（未应答口最近一包：
                                 // 口 . 64B 半字节hex . 长度；无捕获打 -）。
                                 push_str(reply, &mut rn, " pc=");
@@ -14234,23 +14349,72 @@ fn ctrl_service(
                                 if unsafe { TF_RM10_N } == 0 {
                                     push_str(reply, &mut rn, "-");
                                 } else {
+                                    let mi = if unsafe { TF_RM10_I } == 0xffff_ffff {
+                                        1
+                                    } else {
+                                        (unsafe { TF_RM10_I }) as usize
+                                    };
                                     push_hex(reply, &mut rn, unsafe { TF_RM10_N } as u64);
                                     push_str(reply, &mut rn, ".");
-                                    push_hex(reply, &mut rn, unsafe { TF_RM10[1][48] } as u64);
+                                    push_hex(reply, &mut rn, unsafe { TF_RM10[mi][48] } as u64);
                                     push_str(reply, &mut rn, ".");
                                     push_hex(
                                         reply,
                                         &mut rn,
-                                        (unsafe { TF_RM10[1][51] } as u64)
-                                            | ((unsafe { TF_RM10[1][52] } as u64) << 8),
+                                        (unsafe { TF_RM10[mi][51] } as u64)
+                                            | ((unsafe { TF_RM10[mi][52] } as u64) << 8),
                                     );
                                     push_str(reply, &mut rn, ".");
                                     push_hex(
                                         reply,
                                         &mut rn,
-                                        (unsafe { TF_RM10[1][49] } as u64)
-                                            | ((unsafe { TF_RM10[1][50] } as u64) << 8),
+                                        (unsafe { TF_RM10[mi][49] } as u64)
+                                            | ((unsafe { TF_RM10[mi][50] } as u64) << 8),
                                     );
+                                }
+                                // 刀 G40：r8= 0x10 口末 4 包摘要（旧→新，
+                                // 每包 qtype.msgid.txn.sport；只包到达过
+                                // N<4 时按 N 出槽数）。
+                                push_str(reply, &mut rn, " r8=");
+                                if unsafe { TF_RM10_N } == 0 {
+                                    push_str(reply, &mut rn, "-");
+                                } else {
+                                    let n = unsafe { TF_RM10_N }.min(4);
+                                    let cur = unsafe { TF_RM10_I } as usize;
+                                    let mut si = 0u32;
+                                    while si < n {
+                                        let slot = (cur + 4 - (n - si) as usize) % 4;
+                                        if si != 0 {
+                                            push_str(reply, &mut rn, ",");
+                                        }
+                                        push_hex(
+                                            reply,
+                                            &mut rn,
+                                            unsafe { TF_RM10[slot][48] } as u64,
+                                        );
+                                        push_str(reply, &mut rn, ".");
+                                        push_hex(
+                                            reply,
+                                            &mut rn,
+                                            (unsafe { TF_RM10[slot][51] } as u64)
+                                                | ((unsafe { TF_RM10[slot][52] } as u64) << 8),
+                                        );
+                                        push_str(reply, &mut rn, ".");
+                                        push_hex(
+                                            reply,
+                                            &mut rn,
+                                            (unsafe { TF_RM10[slot][49] } as u64)
+                                                | ((unsafe { TF_RM10[slot][50] } as u64) << 8),
+                                        );
+                                        push_str(reply, &mut rn, ".");
+                                        push_hex(
+                                            reply,
+                                            &mut rn,
+                                            (unsafe { TF_RM10[slot][28] } as u64)
+                                                | ((unsafe { TF_RM10[slot][29] } as u64) << 8),
+                                        );
+                                        si += 1;
+                                    }
                                 }
                                 // 刀 G30b：ch= 控制面 typ 直方图（typ:cnt 只列
                                 // 非零，typ 语义=uapi qrtr_pkt_type）、cc= 最近
