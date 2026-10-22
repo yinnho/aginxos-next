@@ -5023,3 +5023,74 @@ adb、无 ping——7min 慢自愈在案先不下结论）。
   （tms 敲实际 +32=29=QMI总长、+36=1），布局案挂小额，不阻塞主线。
   tms 敲尾现第二 TLV `0e 0002 001e`（type=0x0e len=2 val=30，
   canon 无此 TLV——modem 方言再添谜）。
+
+## 靴 #44 补收据（18:14–18:26 命 2 全字段直查）+ G38 刀案（10-22 晚）
+
+观察器 SM 白名单漏字段（盲区律第三犯），命 2 用裸 TCP 直连一次
+`sm` 拿全量渲染，四大定谳 + 一谜底：
+
+- **rmtfs 完全无罪（ik=4.0）**：`rf=3..3.8.280000.0 rh=8.0.9000101.
+  a000101.d000104.e000103 ik=4.0`——8 敲 0 丢，OPEN 答过
+  （rs=02010001000e0002 回显）、ALLOC_BUFF 准 2.5MB@0x9E000000、
+  hyp 分配成（RF_AS=0）、4 枚 RW_IOVEC 全 OK。rmtfs 腿出局。
+- **wlan_pd=UNINIT（sr=1.7fffffff.0）**：我们的 REGISTER_LISTENER
+  被收下（sr=1），modem 报 PD 状态 0x7fffffff=UNINIT——PD 从未拉起。
+  rp=0.ffffffff：RESTART_PD 从未发（main.rs 8336 Linux pdr 语义：
+  只对 DOWN 发，不对 UNINIT 发）。**「spawn 是否可请求」升为下猎物**
+  ——G38⑥ rp 手动杆直接实验。
+- **CFG_ARM 耦合发现（观察者效应实锤）**：sm 命令处理里藏着
+  `CFG_ARM=1`（13524）——每个观察命都在臂 IPA CONFIG 应答
+  （「成功的 CONFIG 应答会在几秒内弄掉 USB」旧注）。命 2 证据：
+  应答 ~+90s 已发（im=27.27.1）而 USB 活到 +593s——「秒杀 USB」
+  本靴未复现，但耦合必须拆：G38① cf 命令显式臂，sm 恒不臂。
+- **0x15 敲豁免**：jx=15.2.21 定谳=它是对**我们自己** IPA
+  INIT_MODEM_DRIVER_REQ（0x21）的 RESPONSE——po= 直方图计数无嫌疑。
+- **谜底：SM 白名单盲区律**——观察器 SM 元组滤掉固件已渲染的
+  pn/pe/pr20/pr22/rf/rh/ik/pd0/pm/sr/si/sp/rp，造成「固件不渲染」
+  假象（#30/#37 同根）。直查所见 rf=/rh=/ik=/sr= 全在场。教训固化：
+  **新渲染字段与观察器白名单必须同刀同改**（G38⑤ 已改，19 字段在列）。
+- **命间确定性**：命 1/命 2 的 q=/po=/pd=/rm= 逐字全同（42 服务、
+  po=fffffffe.38、pd=4.0.21.4.kernel/elf_loader）——modulo 时钟字段。
+- **控制台 22 连楔死（天花板判读修正）**：两命都在第 22 次查询
+  （sm22）控制台 RST 拒连而 ICMP 仍活数分钟——**单套接字 TCP 状态
+  楔死**（main.rs 15228 注释在案的 abort 表盖不到 SynReceived 类
+  状态），控制台死≠盒死。天花板 18 证全走 ICMP（判据不受污染），
+  但**每命 sm 样本上限 ~22 帧**——天花板与控制台楔死是否同根
+  （资源耗尽类）挂账，G39 候选（abort 表补全/SynReceived 超时腿）。
+
+### REA 傍证（modem.mdt 静态侦察，为 elf_loader 线备料）
+
+- **bNN↔phNN 映射钉死**：modem.mdt 是 ELF32（phoff 0x34，35 段），
+  bNN 文件长==phNN filesz 逐段全中（b22=RO 数据段 flags 0x8000004：
+  off 0x15b8000/vaddr 0xc2623000/filesz 0x9d423c）。exec 段=
+  b02/b04/b05/b08/b09/b10/b13/b14/b30。
+- **REA 对本模块死路**：串走 MSG 消息表（无 ADRP+ADD、无 movz 端口
+  立即数、无绝对指针表）——tftp 客户端串在 b22@0xed06e（选项表
+  @0xed108）/@0x10342（文件名表），但代码侧无锚。资产存档：
+  /tmp/b22.elf（ELF64 壳，vaddr 对齐，可 llvm-objdump 复用）。
+- **厂 pd-mapper 数据面**：libpdmapper.so 无内嵌 DB，只读
+  /vendor/firmware{,_mnt}/image[/sdx55m]/*.jsn——我们的 6-jsn 语料
+  ==厂 DB；tms/pddump_disabled 敲空表=厂一致行为，非堵点。
+
+### G38 刀案（s38，boot #45）——四观察一解耦一杆
+
+1. **① CFG_ARM 解耦**：sm 不再臂 IPA CONFIG 应答；新 `cf` 命令显式
+   臂 + `cfa=` 渲染。观察命从此不带观察者效应；CONFIG 应答时序对
+   天花板的影响成为可控变量。
+2. **② DB_UPDATED ind 探针**：第 3 笔 0x21 答成后向末敲者发一发
+   0x23 ind（tf=4 空 TLV，`pdi=` 收果）——客户端重查
+   GET_DOMAIN_LIST=ind 道活着，PD 框架卡点下移到 spawn 侧。
+3. **③ 写腿三时刻 wd=**：WRQ 见/OACK 发成/末枚 DATA（cntvct 秒）——
+   「+3s 全静」只有结论没时刻，天花板分析要「控制台死前写腿最后
+   动作在第几秒」。
+4. **④ pk14= 0x14 定向抄盘**：po= 0x14×1 是五未解口唯一无腿者；
+   52 门+界守卫（G33 短包律），末包 96B hex。
+5. **⑥ rp 手动杆**：`rp` 命令置 SR_NEED_RP 绕 DOWN 门（UNINIT 人为
+   踢）——agent-in-the-loop spawn 杆，`rpm=` 计数 + SR_RP_ERR 收果。
+6. **⑤ 观察器白名单**：+13 旧字段 +5 新字段（wd/pk14/cfa/rpm/pdi）。
+
+出件：boot-s38.img 122,880B（LZ4 帧 117,638B，HC=0xb9 roundtrip 全等）；
+**零填 68,157,440B**（122 环毒律）→ /tmp/s38padded.img。链 #44：
+L0 现身 18:32:44（s37 命尽回滚 b，current-slot:b/retry:a=0 实证）
+→ 闸门 OK → **18:32:59 刷入 boot_a → set_active a → 重启**，
+观察器 pid 48681 挂上（白名单已扩）——boot #45 出发。
