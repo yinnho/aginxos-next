@@ -197,6 +197,19 @@ struct Ring {
     slot: u32,
 }
 static mut RING: Ring = Ring { base: 0, seq: 0, slot: 0 };
+// 刀 G43：环败台账（取代 report_reset 自杀遥测）——计数+末 4 码。
+static mut RW_FAIL: u32 = 0;
+static mut RW_CODE: [u32; 4] = [0; 4];
+static mut RW_CI: u32 = 0xffff_ffff;
+
+/// 刀 G43：环写/验失败记账（码表沿 write_code/read_code/392）。
+fn rw_fail(code: u32) {
+    unsafe {
+        RW_FAIL = RW_FAIL.wrapping_add(1);
+        RW_CI = RW_CI.wrapping_add(1) % 4;
+        RW_CODE[RW_CI as usize] = code;
+    }
+}
 
 /// 武装时刻（CNTVCT）——irq_entry 对拍 dt 用；0 = 尚未武装。
 static mut ARMED_AT: u64 = 0;
@@ -396,21 +409,26 @@ fn hex_text<'a>(buf: &'a mut [u8; 96], seq: u64, label: &str, v: u64) -> &'a str
 }
 
 /// 写一条环记录（组包 → WRITE(10) FUA → 回读验 seq），游标自增。
-fn ring_put(ufs: &mut Ufs, freq: u32, level: u32, txt: &str) {
+/// 刀 G43：环败不再自杀——暖启 UFS 写卡滞（FUA 滞态疑似跨暖复位遗传，
+/// 读全活写必死）曾让每条暖命死于自己的第一笔环写（命6=首 sm 后 ~5s、
+/// 命2-5=~133s），362s 自旋把 600s 观察窗烧成 11s。写败记 rw= 后留原
+/// 槽返回（不进位不验读）；验败也只记账照常进位。
+fn ring_put(ufs: &mut Ufs, _freq: u32, level: u32, txt: &str) {
     let ring = unsafe { &mut RING };
     let buf = unsafe { core::slice::from_raw_parts_mut(STAGING as *mut u8, 4096) };
     logring::write_record(buf, ring.seq, time::cntvct(), level, txt);
     let lba = ring.base + ring.slot;
     if let Err(e) = ufs.write10(lba, 1, STAGING) {
-        instrument::report_reset(PS_HOLD, write_code(e), freq);
+        rw_fail(write_code(e));
+        return;
     }
     match ufs.read10(lba, 1, DATA) {
-        Err(e) => instrument::report_reset(PS_HOLD, read_code(e, 472), freq),
+        Err(e) => rw_fail(read_code(e, 472)),
         Ok(()) => {
             let blk = unsafe { core::slice::from_raw_parts(DATA as *const u8, 4096) };
             match logring::parse(blk) {
                 Some((s, _, _)) if s == ring.seq => {}
-                _ => instrument::report_reset(PS_HOLD, 392, freq),
+                _ => rw_fail(392),
             }
         }
     }
@@ -14026,6 +14044,21 @@ fn ctrl_service(
                                 push_hex(reply, &mut rn, unsafe { RFS_SEED } as u64);
                                 push_str(reply, &mut rn, ".");
                                 push_hex(reply, &mut rn, unsafe { GPT_ENTRIES } as u64);
+                                // 刀 G43：环败台账 rw=<计数>.<末4码 旧→新（十进制）。
+                                push_str(reply, &mut rn, " rw=");
+                                push_u64(reply, &mut rn, unsafe { RW_FAIL } as u64);
+                                if unsafe { RW_FAIL } > 0 {
+                                    let total = unsafe { RW_FAIL } as usize;
+                                    let shown = total.min(4);
+                                    let start = total.saturating_sub(4);
+                                    let mut k = 0usize;
+                                    while k < shown {
+                                        let idx = (start + k) % 4;
+                                        push_str(reply, &mut rn, ".");
+                                        push_u64(reply, &mut rn, unsafe { RW_CODE[idx] } as u64);
+                                        k += 1;
+                                    }
+                                }
                                 push_str(reply, &mut rn, " gn=");
                                 let gnn = unsafe { RFS_GNN } as usize;
                                 let mut gi = 0usize;

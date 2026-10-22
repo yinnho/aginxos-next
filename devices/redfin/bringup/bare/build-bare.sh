@@ -135,6 +135,7 @@ MODE="heartbeat"
 [ "${1:-}" = "--s39" ] && MODE="s39"
 [ "${1:-}" = "--s40" ] && MODE="s40"
 [ "${1:-}" = "--s41" ] && MODE="s41"
+[ "${1:-}" = "--s42" ] && MODE="s42"
 mkdir -p "${OUTDIR}"
 ELF="${OUTDIR}/heartbeat.elf"
 
@@ -1101,6 +1102,16 @@ elif [ "${MODE}" = "s41" ]; then
   ELF="${OUTDIR}/s41.elf"
   cp "${HERE}/target/aarch64-unknown-none-softfloat/release/redfin-bare" "${ELF}"
   BIN="${OUTDIR}/s41.bin"; IMG="${OUTDIR}/boot-s41.img"
+elif [ "${MODE}" = "s42" ]; then
+  # 刀 G43（#48 命6 黄金帧后·生存刀）：环写/验失败不再 report_reset 自杀
+  # ——暖启 UFS 写卡滞（读全活写必死、疑 FUA 滞态跨暖复位遗传）曾让每条
+  # 暖命死于自己的第一笔环写（命6=首 sm 后 ~5s、命2-5=~133s），362s 自旋
+  # 把 600s 观察窗烧成 11s。失败改记 rw= 台账（计数+末4码）；写败留原槽。
+  # 其余与 s41 同面（G41 dq= + G42 th=/sh=/sh2= 合弹）。
+  (cd "${HERE}" && cargo build --release --target aarch64-unknown-none-softfloat) || { echo "cargo build FAILED (${MODE}) -- 不拷陈旧件" >&2; exit 1; }
+  ELF="${OUTDIR}/s42.elf"
+  cp "${HERE}/target/aarch64-unknown-none-softfloat/release/redfin-bare" "${ELF}"
+  BIN="${OUTDIR}/s42.bin"; IMG="${OUTDIR}/boot-s42.img"
 elif [ "${MODE}" = "s21" ]; then
   # 刀 G22：s20 同面，intent 池+归还追踪（cmd5 全量入池、TX 池挑、
   # RX_DONE/W_REUSE 归还、池干 RX_INTENT_REQ、cmd3/11 入 8B 集、ii= 台账）。
