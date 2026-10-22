@@ -127,6 +127,7 @@ MODE="heartbeat"
 [ "${1:-}" = "--s31" ] && MODE="s31"
 [ "${1:-}" = "--s32" ] && MODE="s32"
 [ "${1:-}" = "--s33" ] && MODE="s33"
+[ "${1:-}" = "--s34" ] && MODE="s34"
 mkdir -p "${OUTDIR}"
 ELF="${OUTDIR}/heartbeat.elf"
 
@@ -1005,6 +1006,16 @@ elif [ "${MODE}" = "s33" ]; then
   ELF="${OUTDIR}/s33.elf"
   cp "${HERE}/target/aarch64-unknown-none-softfloat/release/redfin-bare" "${ELF}"
   BIN="${OUTDIR}/s33.bin"; IMG="${OUTDIR}/boot-s33.img"
+elif [ "${MODE}" = "s34" ]; then
+  # 刀 G33（观察域两修，零协议行为变更）：#38 现场 q= 空 + iq= 闩上同窗
+  # 矛盾定谳——scan_new_servers 每轮清零 SMEM_SVC/LOOK=窗口域，宣告风暴
+  # 在开机头几秒、渲染时早翻页。① q=/ml= 改累计+去重闩；② 守卫
+  # 56/60/64/68 全降 52（iq= 以 52 读 +64 拿到真 port 旁证），仅 union
+  # 型别（4/5/6/10/11）读元组——cc=/dc= 首读真值，15 连闭身份解锁。
+  (cd "${HERE}" && cargo build --release --target aarch64-unknown-none-softfloat) || { echo "cargo build FAILED (${MODE}) -- 不拷陈旧件" >&2; exit 1; }
+  ELF="${OUTDIR}/s34.elf"
+  cp "${HERE}/target/aarch64-unknown-none-softfloat/release/redfin-bare" "${ELF}"
+  BIN="${OUTDIR}/s34.bin"; IMG="${OUTDIR}/boot-s34.img"
 elif [ "${MODE}" = "s21" ]; then
   # 刀 G22：s20 同面，intent 池+归还追踪（cmd5 全量入池、TX 池挑、
   # RX_DONE/W_REUSE 归还、池干 RX_INTENT_REQ、cmd3/11 入 8B 集、ii= 台账）。

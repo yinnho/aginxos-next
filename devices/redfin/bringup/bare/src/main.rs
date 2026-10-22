@@ -4164,6 +4164,8 @@ static mut SMEM_RX: [u32; 22] = [0; 22];
 /// NEW_SERVER 的服务号、实例，最多 8 对。刀 G31：16→80（40 对）——
 /// #36 ch=4:28 实测 modem 单靴广播 40 枚 NEW_SERVER，8 槽只够头两成，
 /// 服务图（尤其 0x45 WLFW 是否晚到）一直被截。q= 全量上屏随之放开。
+/// 刀 G33：改累计闩（去重）——#38 实测宣告风暴在开机头几秒，渲染时
+/// 扫窗早翻页（q= 空而同窗 iq= 闩上定谳窗口域缺陷）。
 static mut SMEM_SVC: [u32; 80] = [0; 80];
 static mut SMEM_NSVC: u32 = 0;
 /// WLFW（svc 0x45）目击闩。扫描每轮只留 8 个 NEW_SERVER，槽 b 的
@@ -12126,12 +12128,11 @@ fn pd_take_name(fifo: u64, off: u64, chunk: u64, w1: u32) -> bool {
 }
 
 /// 顺着 GLINK 命令走，把 TX_DATA 里的 QRTR NEW_SERVER 服务号记下来。
+/// 刀 G33：q=/ml= 改累计域——服务宣告风暴在开机头几秒，ping up（~70s）
+/// 时扫窗早已翻页（#38 实测 q= 空而同窗 iq= 闩上，矛盾定谳窗口域缺陷）。
+/// 去重闩防 fifo 回卷重扫翻倍；QSTOP/QCMD 仍每次清（诊断字段）。
 fn scan_new_servers(fifo: u64, rh: u64) {
     unsafe {
-        SMEM_NSVC = 0;
-        SMEM_SVC = [0; 80];
-        SMEM_NLOOK = 0;
-        SMEM_LOOK = [0; 16];
         SMEM_QSTOP = 0;
         SMEM_QCMD = 0;
     }
@@ -12423,22 +12424,28 @@ fn scan_new_servers(fifo: u64, rh: u64) {
                     if dst_port == 0xfffffffe && typ >= 2 && typ <= 13 {
                         let ci = (typ - 2) as usize;
                         TF_CH[ci] = TF_CH[ci].saturating_add(1);
-                        let csvc = if chunk >= 56 {
+                        // 刀 G33：守卫 56/60/64/68 全降 52——#37 ccz=38 定谳
+                        // transport 报的 chunk 偏短而 fifo 里 union 全在（iq=
+                        // 闩以 chunk>=52 读 +64 拿到真 port 0x1d 旁证）。仅
+                        // union 型别（4/5/6/10/11）读元组：HELLO 短包不抄邻包。
+                        let union_typ =
+                            typ == 4 || typ == 5 || typ == 6 || typ == 10 || typ == 11;
+                        let csvc = if chunk >= 52 && union_typ {
                             rd32((fifo + off + 52) as usize)
                         } else {
                             0
                         };
-                        let cinst = if chunk >= 60 {
+                        let cinst = if chunk >= 52 && union_typ {
                             rd32((fifo + off + 56) as usize)
                         } else {
                             0
                         };
-                        let cnode = if chunk >= 64 {
+                        let cnode = if chunk >= 52 && union_typ {
                             rd32((fifo + off + 60) as usize)
                         } else {
                             0
                         };
-                        let cport = if chunk >= 68 {
+                        let cport = if chunk >= 52 && union_typ {
                             rd32((fifo + off + 64) as usize)
                         } else {
                             0
@@ -12453,16 +12460,9 @@ fn scan_new_servers(fifo: u64, rh: u64) {
                             TF_CCZ = TF_CCZ.saturating_add(1);
                         }
                         if typ == 6 {
-                            TF_DCL[0] = if chunk >= 56 {
-                                rd32((fifo + off + 52) as usize)
-                            } else {
-                                0
-                            };
-                            TF_DCL[1] = if chunk >= 60 {
-                                rd32((fifo + off + 56) as usize)
-                            } else {
-                                0
-                            };
+                            // 刀 G33：dc= 同降 52——15 连闭的 client 身份首读。
+                            TF_DCL[0] = rd32((fifo + off + 52) as usize);
+                            TF_DCL[1] = rd32((fifo + off + 56) as usize);
                             TF_DCL_N = TF_DCL_N.saturating_add(1);
                         }
                     }
@@ -12963,7 +12963,19 @@ fn scan_new_servers(fifo: u64, rh: u64) {
                         if svc == 0x45 {
                             unsafe { SAW_45 = 0x8000_0000 | (inst & 0x7fff_ffff) };
                         }
-                        if n < 40 {
+                        // 刀 G33：累计闩+去重（fifo 回卷重扫同对只记一次）。
+                        let mut dup = false;
+                        let mut di = 0usize;
+                        while di < n as usize {
+                            if unsafe { SMEM_SVC[di * 2] } == svc
+                                && unsafe { SMEM_SVC[di * 2 + 1] } == inst
+                            {
+                                dup = true;
+                                break;
+                            }
+                            di += 1;
+                        }
+                        if !dup && n < 40 {
                             unsafe {
                                 SMEM_SVC[n as usize * 2] = svc;
                                 SMEM_SVC[n as usize * 2 + 1] = inst;
@@ -13004,8 +13016,20 @@ fn scan_new_servers(fifo: u64, rh: u64) {
                             }
                         }
                     } else {
+                        // 刀 G33：ml= 同改累计+去重（原窗域同 q= 缺陷）。
                         let n = unsafe { SMEM_NLOOK };
-                        if n < 8 {
+                        let mut dup = false;
+                        let mut di = 0usize;
+                        while di < n as usize {
+                            if unsafe { SMEM_LOOK[di * 2] } == svc
+                                && unsafe { SMEM_LOOK[di * 2 + 1] } == inst
+                            {
+                                dup = true;
+                                break;
+                            }
+                            di += 1;
+                        }
+                        if !dup && n < 8 {
                             unsafe {
                                 SMEM_LOOK[n as usize * 2] = svc;
                                 SMEM_LOOK[n as usize * 2 + 1] = inst;
