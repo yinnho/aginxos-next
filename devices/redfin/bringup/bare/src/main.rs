@@ -4798,6 +4798,26 @@ static mut TF_CC: [u32; 5] = [0; 5];
 /// 是谁在关：node=0 是 modem 本node，别处则是远端）。
 static mut TF_CCZ: u32 = 0;
 static mut TF_DCL: [u32; 2] = [0; 2];
+/// 刀 G38：④ 0x14 定向抄盘——po= 0x14×1 是五未解口里唯一无腿的；G33
+/// 短包律（门 52+off 界守卫，非 TF_PC 的 96 门——transport 报的 chunk
+/// 偏短而 union 全在 fifo）。末 1 包 96B 滚存。
+static mut TF_PK14: [u8; 96] = [0; 96];
+static mut TF_PK14_N: u32 = 0;
+/// 刀 G38：③ 写腿时刻表（cntvct 原始刻，渲染除 freq）——WRQ 见/OACK
+/// 发成/末枚 DATA。#24–#43 写腿「+3s 内 WRQ+OACK 后全静」只有结论没有
+/// 时刻；天花板分析要「控制台死前写腿最后动作在几秒」。
+static mut TF_W_AT0: u64 = 0;
+static mut TF_W_AT1: u64 = 0;
+static mut TF_W_AT2: u64 = 0;
+/// 刀 G38：② DB_UPDATED ind 探针——第 3 笔 0x21 答成后补一发 0x23 ind
+/// （tf=4 空 TLV，0x12→末敲者）。pr20=0（无人登记 ind）但协议面在；
+/// 客户端若重查 GET_DOMAIN_LIST=ind 道活着，PD 框架卡点下移。
+static mut PD_IND_N: u32 = 0;
+static mut PD_IND_ARM: u32 = 0;
+/// 刀 G38：⑥ rp 手动杆——控制台 rp 命令置 SR_NEED_RP 绕过 DOWN 门
+/// （UNINIT 不自发 RESTART 是 Linux pdr 语义；要不要人为踢一脚=实验
+/// 变量，观察器/人工都能发）。rpm= 计手动次数。
+static mut SR_RP_MAN: u32 = 0;
 static mut TF_DCL_N: u32 = 0;
 /// 刀 G21：TX 台账 4 槽——每笔 glink_tx_payload 成功记 (sport, 整包
 /// 字节数, 发后 head)。靴 #20 定谳需要：modem 消费停在 tail=28b8，
@@ -7694,6 +7714,8 @@ fn tf_note_data(off: u64, fifo: u64, chunk: u32) {
     unsafe {
         TF_W_EXP = TF_W_EXP.wrapping_add(1);
         TF_W_BYTES = TF_W_BYTES.wrapping_add(plen as u64);
+        // 刀 G38：③ 写腿末枚 DATA 时刻。
+        TF_W_AT2 = time::cntvct();
         let wsz = if TF_W_WSZ == 0 { 1 } else { TF_W_WSZ };
         if TF_W_EXP % wsz == 0 || plen < TF_W_BLK {
             TF_W_PEND = true;
@@ -8009,6 +8031,8 @@ fn tf_reply(ufs: &mut Ufs, at478: u64, at479: u64, sz479: u64) {
         // 两毒齐避；TF_OPTBUF 已由 walker 的 op2 分支随 pend 换血。
         let (wblk, wwsz, wtmo, wtsz, wts_seen, wrs, wsk) = tf_w_parse();
         unsafe {
+            // 刀 G38：③ 写腿三时刻之首——WRQ 见。
+            TF_W_AT0 = time::cntvct();
             TF_W_ACTIVE = true;
             TF_W_EXP = 1;
             TF_W_BLK = wblk;
@@ -8092,6 +8116,8 @@ fn tf_reply(ufs: &mut Ufs, at478: u64, at479: u64, sz479: u64) {
             unsafe {
                 TF_W_OX = TF_W_OX.wrapping_add(1);
                 TF_W_XFER = wport;
+                // 刀 G38：③ OACK 发成时刻。
+                TF_W_AT1 = time::cntvct();
                 // 刀 G29：OACK 字节回显抄盘（≤64B）。
                 let en = n.min(64);
                 TF_W_ECHO[..en].copy_from_slice(&q[..en]);
@@ -8349,6 +8375,28 @@ fn sr_tick(at478: u64, at479: u64, sz479: u64) {
     let tx_head = rd32((at478 + 4) as usize) as u64;
     let tx_tail = rd32(at478 as usize) as u64;
     if tx_head != tx_tail {
+        return;
+    }
+    // 刀 G38：② DB_UPDATED ind 探针——REGISTER/ACK/RP 都不占环的空窗发
+    // （tf=4 空 TLV 7B 整包，0x12→末敲者 PD_NODE/PD_PORT）。发成即终。
+    if unsafe { PD_IND_ARM } == 1 && unsafe { PD_IND_N } == 0 && !unsafe { PD_PEND } {
+        let mut q = [0u8; 16];
+        qmi_finish_typed(&mut q, 7, 4, 0, 0x23);
+        if glink_tx_payload(
+            at478,
+            at479,
+            tx_head,
+            sz479,
+            0x12,
+            unsafe { PD_NODE },
+            unsafe { PD_PORT },
+            &q[..7],
+        ) {
+            unsafe {
+                PD_IND_N = 1;
+                PD_IND_ARM = 2;
+            }
+        }
         return;
     }
     // 一笔 REGISTER。
@@ -8858,6 +8906,11 @@ fn pd_reply(at478: u64, at479: u64, sz479: u64) {
             }
             PD_PEND = false;
             PD_N += 1;
+            // 刀 G38：② 第 3 笔答成→武装 DB_UPDATED ind 探针（sr_tick
+            // 下一轮发；不发在 pd_reply 里是为避免与二队列晋升抢环序）。
+            if PD_N == 3 && PD_IND_ARM == 0 {
+                PD_IND_ARM = 1;
+            }
             // 刀 G36：二队列晋升——PD2 里有待答即接管 PD 槽（下一轮
             // pd_reply 就答它；TX 环闸同门）。
             if PD2_PEND {
@@ -12486,6 +12539,13 @@ fn scan_new_servers(fifo: u64, rh: u64) {
                             poe += 1;
                         }
                     }
+                    // 刀 G38：④ 0x14 定向抄盘（52 门+界守卫，G33 短包律）。
+                    if chunk >= 52 && off + 96 <= unsafe { GLINK_RXLEN } && dst_port == 0x14 {
+                        let src = (fifo + off) as *const u8;
+                        let pb = core::slice::from_raw_parts(src, 96);
+                        TF_PK14.copy_from_slice(pb);
+                        TF_PK14_N = TF_PK14_N.saturating_add(1);
+                    }
                     // 刀 G30：未应答口上的包抄 64B（+32..+96=src/dst 口+载荷首
                     // 48B）。chunk>=96 才抄（截断帧不抄）；fffffffe/ffff 哨兵
                     // 不抄（非 UDP 底噪，量大会刷掉真探针）。
@@ -13457,6 +13517,10 @@ fn ctrl_service(
                             15
                         } else if ctrl_line_is(b"tx") {
                             16
+                        } else if ctrl_line_is(b"cf") {
+                            17
+                        } else if ctrl_line_is(b"rp") {
+                            18
                         } else if unsafe { CTRL_LINE_N } == 0 {
                             3
                         } else {
@@ -13521,7 +13585,9 @@ fn ctrl_service(
                             },
                             8 => {
                                 smem_scan(ufs, true);
-                                unsafe { CFG_ARM = 1; }
+                                // 刀 G38①：CFG_ARM 与 sm 解耦——sm 不再自动臂
+                                // IPA CONFIG 应答（每个观察命都暗改 CONFIG 时
+                                // 序=观察者效应；要臂用新 cf 命令显式来）。
                                 let s = unsafe { &SMEM_SNAP };
                                 push_str(reply, &mut rn, "sm i=");
                                 push_hex(reply, &mut rn, s.init as u64);
@@ -13692,6 +13758,44 @@ fn ctrl_service(
                                         i += 1;
                                     }
                                 }
+                                // 刀 G38 渲染：③ wd= 写腿三时刻（秒，freq 除）
+                                // ④ pk14= 0x14 末包 96B hex+计数 ①⑥ cfa=/rpm=
+                                // /pdi=（CONFIG 手臂/rp 杆果/ind 探针果）。
+                                push_str(reply, &mut rn, " wd=");
+                                if freq == 0 {
+                                    push_str(reply, &mut rn, "-");
+                                } else {
+                                    push_u64(reply, &mut rn, unsafe { TF_W_AT0 } / freq as u64);
+                                    push_str(reply, &mut rn, ".");
+                                    push_u64(reply, &mut rn, unsafe { TF_W_AT1 } / freq as u64);
+                                    push_str(reply, &mut rn, ".");
+                                    push_u64(reply, &mut rn, unsafe { TF_W_AT2 } / freq as u64);
+                                }
+                                push_str(reply, &mut rn, " pk14=");
+                                {
+                                    let mut i = 0usize;
+                                    while i < 96 && rn + 2 <= reply.len() {
+                                        let b = unsafe { TF_PK14[i] };
+                                        let hi = b >> 4;
+                                        let lo = b & 0xf;
+                                        reply[rn] = if hi < 10 { b'0' + hi } else { b'a' + (hi - 10) };
+                                        reply[rn + 1] = if lo < 10 { b'0' + lo } else { b'a' + (lo - 10) };
+                                        rn += 2;
+                                        i += 1;
+                                    }
+                                }
+                                push_str(reply, &mut rn, ".");
+                                push_hex(reply, &mut rn, unsafe { TF_PK14_N } as u64);
+                                push_str(reply, &mut rn, " cfa=");
+                                push_hex(reply, &mut rn, unsafe { CFG_ARM } as u64);
+                                push_str(reply, &mut rn, " rpm=");
+                                push_hex(reply, &mut rn, unsafe { SR_RP_MAN } as u64);
+                                push_str(reply, &mut rn, ".");
+                                push_hex(reply, &mut rn, unsafe { SR_RP_N } as u64);
+                                push_str(reply, &mut rn, ".");
+                                push_hex(reply, &mut rn, unsafe { SR_RP_ERR } as u64);
+                                push_str(reply, &mut rn, " pdi=");
+                                push_hex(reply, &mut rn, unsafe { PD_IND_N } as u64);
                                 push_str(reply, &mut rn, " pm=");
                                 push_hex(reply, &mut rn, unsafe { PM_HIT } as u64);
                                 push_str(reply, &mut rn, ".");
@@ -15136,6 +15240,26 @@ fn ctrl_service(
                                 } else {
                                     push_str(reply, &mut rn, "-");
                                 }
+                                push_str(reply, &mut rn, "\n");
+                            }
+                            17 => {
+                                // 刀 G38①：cf——显式臂 IPA CONFIG 应答（G38 起 sm
+                                // 不再暗臂；观察命不带观察者效应）。
+                                unsafe { CFG_ARM = 1; }
+                                push_str(reply, &mut rn, "cf armed ");
+                                push_hex(reply, &mut rn, unsafe { CFG_ARM } as u64);
+                                push_str(reply, &mut rn, "\n");
+                            }
+                            18 => {
+                                // 刀 G38⑥：rp——手动 RESTART_PD（绕 DOWN 门，
+                                // sr_tick 空窗即发；rpm= 计数、SR_RP_ERR 收果）。
+                                unsafe {
+                                    SR_RP_MAN = SR_RP_MAN.wrapping_add(1);
+                                    SR_NEED_RP = true;
+                                    SR_RP_N = 0;
+                                }
+                                push_str(reply, &mut rn, "rp fired ");
+                                push_hex(reply, &mut rn, unsafe { SR_RP_MAN } as u64);
                                 push_str(reply, &mut rn, "\n");
                             }
                             3 => {}

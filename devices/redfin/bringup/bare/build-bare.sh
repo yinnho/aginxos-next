@@ -131,6 +131,7 @@ MODE="heartbeat"
 [ "${1:-}" = "--s35" ] && MODE="s35"
 [ "${1:-}" = "--s36" ] && MODE="s36"
 [ "${1:-}" = "--s37" ] && MODE="s37"
+[ "${1:-}" = "--s38" ] && MODE="s38"
 mkdir -p "${OUTDIR}"
 ELF="${OUTDIR}/heartbeat.elf"
 
@@ -1049,6 +1050,19 @@ elif [ "${MODE}" = "s37" ]; then
   ELF="${OUTDIR}/s37.elf"
   cp "${HERE}/target/aarch64-unknown-none-softfloat/release/redfin-bare" "${ELF}"
   BIN="${OUTDIR}/s37.bin"; IMG="${OUTDIR}/boot-s37.img"
+elif [ "${MODE}" = "s38" ]; then
+  # 刀 G38（#43 定谳后的四观察一解耦一杆）：①CFG_ARM 与 sm 解耦（旧 sm
+  # 每发暗臂 IPA CONFIG 应答=观察者效应；新 cf 命令显式臂+cfa= 渲染）
+  # ②DB_UPDATED ind 探针（第 3 笔 0x21 答成后 0x23 tf=4 一发→末敲者，
+  # 客户端重查否=PD 框架 ind 道生死）③wd= 写腿三时刻（WRQ/OACK/末
+  # DATA——全静案的「何时」盲区）④pk14= 0x14 定向抄盘（po= 0x14×1
+  # 唯一未解口，52 门非 96——G33 短包律）⑥rp 手动杆（RESTART_PD 绕
+  # DOWN 门，UNINIT 人为踢；rpm= 计数+SR_RP_ERR 果）。观察器白名单
+  # 同步扩（白名单盲区律）。
+  (cd "${HERE}" && cargo build --release --target aarch64-unknown-none-softfloat) || { echo "cargo build FAILED (${MODE}) -- 不拷陈旧件" >&2; exit 1; }
+  ELF="${OUTDIR}/s38.elf"
+  cp "${HERE}/target/aarch64-unknown-none-softfloat/release/redfin-bare" "${ELF}"
+  BIN="${OUTDIR}/s38.bin"; IMG="${OUTDIR}/boot-s38.img"
 elif [ "${MODE}" = "s21" ]; then
   # 刀 G22：s20 同面，intent 池+归还追踪（cmd5 全量入池、TX 池挑、
   # RX_DONE/W_REUSE 归还、池干 RX_INTENT_REQ、cmd3/11 入 8B 集、ii= 台账）。
