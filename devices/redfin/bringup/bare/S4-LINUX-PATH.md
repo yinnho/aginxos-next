@@ -5820,3 +5820,53 @@ wlan_pd 的生成路径本身要 rfs（tftp 后端）找 wlan 镜像文件。即
 - s3= 四值相等 + rqr type=4（DEL_SERVER）→ 环境假说上位
   （952KB 页池/进程创建失败），b22 段逆向（rea/Ghidra Hexagon）
   成主战场——找 dlopen 在 hash 表解析与页划分间的失败分支。
+
+## 靴 #53：s53 双证判词——数据假说终审死刑 + 讣告定谳，环境假说上位（2026-10-23 01:2x，命28）
+
+### 刷机经过
+
+手机重启手势直接落 fastboot（省 console fb 舞）。串号闸门过（值不回
+显）。槽位判读：current=a、successful:a=n、**retry:a 只剩 2**（自
+s52 刷后 7 命烧了 5——夜里按请求反复重启所致，非电池：4444mV/
+soc-ok=yes）。产物三验（尺寸类 126,976B+md5+垫 68,157,440B）→
+flash boot_a → set_active a（七命重置）→ reboot。fw 冷启网络面
+健康（ECM 枚举→DHCP 发 169.254.118.248→ping 通——反证昨夜楔死是
+运行时死非冷启缺陷）。
+
+### 双证判词
+
+**① s3=42009fb.4214949.42009fb.4214949 —— 数据假说死刑（终审）**
+A(源xor32全文)=C(环回读全文)=0x42009fb，B(源头108B)=D(环头
+108B)=0x4214949。TX 环里 216B DATA1 的字节与源**逐位一致**。
+连同 SH1/SH2（boot 期文件直读）与 s51 四证（内容字节/偏移/排空/
+同拍），**服务端整链无罪结案**：so_read→块缓冲→glink_tx→TX 环写，
+无一处写坏。
+
+**② rqr 尾槽 t=4 ×7 —— 讣告假说定谳**
+`ea5b.fffffffe.fffffffe.34.4`×6 + `ea6f.…34.4`：ms≈60027/60079，
+sp=dp=0xfffffffe（QRTR_PORT_CTRL），52B，**t=4=QRTR_TYPE_DEL_SERVER**
+——DATA1 后那 7 笔 52B 控制包就是 **elf_loader PD 的死亡讣告**
+（PD 退出时 qrtr 端口逐个拆台的广播）。rtld_main 的官方静默退出
+路径（dlopen 返回→QDI_OS_PROCESS_EXIT）实锤。
+
+**③ 时序合并**：DATA1(160B)@48854 → **11.17s 双向零包** →
+DEL_SERVER×7 → IPA 3688B@60250 → 死寂。PD 死后 **root PD 仍在活**
+（IPA 应答、rfs 新会话）。
+
+### 意外收获：第二客户端样本
+
+`wo=`（末次 RRQ 记录）= `0002 "/readwrite/server_check.txt" octet
+blksize=7680 timeoutms=1000 wsize=10`，`oe=`= 对它回了 OACK——
+**SO 装载死后 root PD 的 rfs 线路开了新 tftp 会话**要
+/readwrite/server_check.txt。即 qrtr/tftp 栈本身健康、root PD 的
+rfs 线程功能正常——**唯独 elf_loader PD 的 dlopen 死**。第二客户
+端对比样本成立：问题特定于 user PD 创建环境，不是传输层。
+
+### 判决与下一战场
+
+- **环境假说上位**。死点=phdrs 回调内（fstat 断言与 stat 已证会过
+  →hash 表解析/952KB PD 像页分配/进程创建之间）。
+- 下一战场=**b22 loader 段 Ghidra Hexagon 逆向**（12.1.4 自带
+  Hexagon 处理器模块已确认）：找 dlopen 在 phdr 收讫后的失败分支
+  （malloc/页分配/进程创建的错误返回路径），锚点=「Hash
+  verification failed for segment」与 phdr 断言字符串的 xref。
