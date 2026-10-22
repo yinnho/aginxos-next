@@ -4846,3 +4846,37 @@ adb、无 ping——7min 慢自愈在案先不下结论）。
   （md5 c893799d96e8205f295909e9a68dbe75）。**链 #39 在挂**（pid 83047，
   38b 修好模板直系）——靴 #39=累计 q= 服务图真首图 + dc= 15 连闭身份
   首读。
+
+---
+
+### 靴 #39（10-22 14:12–14:23）——G33 首刷：累计 q= 40 对全图 + 0x45 判死本靴 + dc= 身份解锁 + pd-mapper 假说成形
+
+- **链 #39b 全自主闭环三号**（合并模板首跑）：L0 adb 14:11:12 → L0 READY
+  14:11:48（等文件腿 36s 生效）→ FASTBOOT/GATE 14:12:00 → FLASHED s34padded
+  14:12:03 → SET_ACTIVE a → REBOOTED 14:12:04 → ping up 14:13:12（68s 快靴）。
+  链 #39 原版缺 adb 巡腿（裸命期起链 120s 烧完自杀）——**链模板律第三条：
+  起链时盒可能还在裸命，巡腿必须居首**。
+- **累计 q= 全图（40 对，四拍哈希同=去重闩稳、无回卷翻倍）**：
+  qmux 全家 CTL/WDS/DMS/NAS/QOS/AUTH/AT/VOICE(v2)/PBM(v2)/UIM/CAT +
+  SERVREG_NOTIF(.b401)/SSCTL(.1202)/IPA(.201)/DPM?(22)/0x33×2 实例
+  (.201/.b01)/0x37.201/0x16.1001/0xf/0x15/0x17/0x18/0x24/0x2f/0x30/0x44/
+  0x49/0x4a/0x4b/0x4c/0x4d/0x4e/0x1a/0x1d/0xe7/0x11/0x10.2 + 0x1002.0
+  （高位服务号疑错位读，留观）。**modem 处理器=完整活体，QRTR 命名空间
+  全起**。解码存档 /tmp/boot39-svcgraph.txt。
+- **0x45 WLFW 判死本靴（双证）**：全图 40 对无 0x45 + SAW_45 累计闩
+  w45=0——非截尾非窗口假象，**wlan_pd 本靴真没被拉起**。
+- **ccz 38→1 + cc=4.10.2.0.54**：守卫降 52 + union 型别闸全验——38 枚
+  「零五元组」里 37 枚是守卫误吞，仅 1 枚真零（HELLO 短包）；末枚
+  NEW_SERVER=svc 0x10 inst 2 port 84。
+- **dc=0.21.f（15 连闭身份解锁）**：node 0 port 0x21。**我们=node 1**
+  （glink_tx_qrtr …,1,port 直证）→ 15 连闭=modem 侧 node 0 port 0x21 客户端
+  socket 反复开→关（撞号 TF_DATA_PORT=0x21 属每节点端口独立之巧合）。
+- **po= 未应答口对上公告表**：ctrl(fffffffe)×38、0x10(rmtfs)×8、
+  **0x12(pd-mapper)×4**、0x14×1、0x11(tftp svc)×10、0x16(IPA A5)×3
+  （=#36 pc= QMI IPA CONFIG_REQ 不答路）、0x1000×2、0x15×1——modem 在敲
+  我们公告的全部服务口；tftp 线有人应（mbn 在传），rmtfs/pd-mapper 无人应。
+- **pd-mapper 假说成形（G34/G35 方向）**：modem 的 PD 机制拿不到 PD map
+  （我们公告 svc 64@port 0x12 但无应答）→ wlan_pd 不生 → 无 0x45。
+  G34（观察刀）=0x10/0x12 定向包环（每口末 2 包 96B 原文上屏）拿到
+  GET_PD_MAP 请求真字节；G35（行为刀）=按真字节应答 PD map 表。
+- 死 +593s = **天花板第十五证**（带 593-596）。
