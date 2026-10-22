@@ -68,6 +68,13 @@ modem 拿不到 PD map（0x12 无应答）→ PD 框架卡 → wlan_pd 不拉起
 固件装载依赖 APSS 的 elf_loader 服务（Linux 世=cnss/PIL）——裸世界若
 走到那步，我们还要供这个面（远期，先答 PD map）。
 
+**10-22 #41 后增证**：redfin 的 wlan 固件**不在 APSS**（厂
+vendor.img 无 /vendor/firmware；radio FAT=modem.b00..b34+mdt+jsn+
+so/549_38_0.mbn 全套自足）⇒ wlan_pd 装载无 APSS 文件依赖——**0x12
+应答是 APSS 侧唯一依赖面**，修好它+0x20/0x22 后若仍不动，墙必在
+modem 内部（elf_loader 查询语义/应答字段细节），届时对照厂
+pd-mapper 二进制反查。
+
 ---
 
 ## 10-22 下午翻案节（重要——上节假说已部分证伪）
@@ -180,3 +187,16 @@ modem 拿不到 PD map（0x12 无应答）→ PD 框架卡 → wlan_pd 不拉起
 4. **pd0=/pm= 渲染**：TF_PD12[0]（倒数第二敲）名+txn+msgid 上屏，
    pm= 两槽 msgid——此后每靴全敲形状可见，不再只看末敲。
 5. 不动：pdh=（末 2 敲 96B 滚存）、po=/pc=、其余全腿。
+
+## #42 读法清单（s37/G36）
+
+1. **pr20=/pr22=**：>0=0x20/0x22 敲实存（此前被吞的形状现形）；
+   pr22>0 且后续有动静=答已被收下又进一步的硬信号。
+2. **pd0=**：首敲名+msgid——同名重传（txn 异名同=答没到）vs 异名
+   （多客户端各查各的）一屏定谳；msgid 20/21/22 全可见。
+3. **po=12.x vs pr=**：去重键修后应全答（#39/#40 的 4 敲 3 答 →
+   4 敲 4 答）；若仍丢=同圈三敲（队列只一深）。
+4. **w45/q=**：0x45 现身=③到手；q= 图新增对（0x42 之外的 notif/
+   new_server 波动）=PD 框架在动。
+5. **tf=**：出现 wlan/新 RRQ=wlan_pd 装载启动（radio FAT 自足，
+   能供）。
