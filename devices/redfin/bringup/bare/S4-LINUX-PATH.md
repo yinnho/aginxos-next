@@ -5624,3 +5624,124 @@ s47（纯插桩：glink_tx_payload 三拒绝点当场快照 GX 4 槽 site=1 caps
   回卷）、head 发布改模环长、旧「head==tail 重置」删除；TEV 新事件
   13=跨界写发生（arg=旧 head）——预期整文件会话现场必现 13，随后
   客户端不再 1ms 弃单、ACK 到、tb 推进。22:52 刷入（命 24）。
+
+### 靴 #51 附录二：s50 假闪事故 + s51 双修活体验 + 服务端四证脱罪 + 谋杀窗口浮出（22:52–00:09）
+
+- **s50 活体验尸（命 24，跨界写刀）**：刀本身活了（环几何
+  正确），但整文件会话仍死，且**客户端形状突变**——s48/s49 里
+  160B 分段读是被 ACK 的，s50 起 160B DATA1 后**零 ACK、零
+  code9、零重试**。附带把「服务延迟双峰 0/2013ms」里 2013ms 那
+  峰治了（ACK1 提前到 +5ms）。
+- **假闪事故（命 25，23:44）**：一次刷写忘传 `--s50` 参数，
+  build-bare.sh 走了默认分支，把 8192B 心跳 stub 当 boot 刷了
+  进去。三分钟后重刷 s51 真件。**教训：刷前必验产物尺寸类**
+  （真件 ~127KB，stub 8192B——`ls -l` 一眼可辨；此后每次刷前
+  显式对尺寸）。
+- **s51 双修活体验（命 26，23:48）**：① **stat 门活**——
+  `66730:stat退0 66732:EOT9`，客户端对 stat 的 rsize 键确实缺席
+  （对 /tmp/tftpsrc/tftp_protocol.c 逐分支核对：stat 响应不含
+  rsize 字段时不走 tsize 协商，直接 EOT）；② **空闲拍速活**——
+  客户端真 ACK1 落在 +5ms（s50 时 +201ms），等待侧不再被服务
+  延迟卡 200ms。**双修双双验活，但链路第三读仍全哑**：52→160
+  两读成、ACK 齐，第三个 RRQ（读 6808@0x1000 meta 表或
+  52@0x3000 嵌套 ELF 头）发出后服务端照常服务 DATA，客户端
+  却从此零包——**延迟假说（H-E）死刑**：服务同拍、ACK 即时，
+  客户端依然不动。
+- **服务端四证脱罪（s50/s51 现场合证）**：
+  1. **内容字节精确**：SH1（64B@0）与 SH2（52B@0xa0）伺服字节
+     与 host 侧 `.local/device/redfin/modem/so/549_38_0.mbn` 对应
+     偏移**逐字节相同**（minimal-hex 渲染后程序化比对，match 双
+     True——肉眼比对曾产假警报，见下条教训）。
+  2. **偏移运输正确**：rl 台账 session 25=52@0、26=160@0x34
+     （0x34=52=phoff，正是 Ehdr 之后紧跟 phdrs 的读法）；客户端
+     ACK 过 S2 ⇒ 它验过了 52B Ehdr 并主动来读 phdrs。
+  3. **TX 环排空**：`tt=e08.e08.4000` head==tail——modem 读侧把
+     我们发的每个字节都取走了（含 216B DATA1 包，落在环偏移
+     3120，不跨界）。
+  4. **同拍服务**：所有 so_read→DATA 同 ms。
+- **minimal-hex 教训**：push_hex 渲染**最小十六进制**（无前导
+  零：0x00→"0"、0x03→"3"、0xa4→"a4"），sm 的十六进制字段长度
+  可奇可偶，**必须用同款渲染程序化比对**，肉眼按 2 字符切必产
+  假「字节腐坏」警报（本案实错：把 `11100000` 读成 11 10 00 00，
+  真值 01 01 01 00）。
+- **客户端沉默=线程死（定谳）**：客户端源码
+  （tftp_protocol.c）处处是超时重试（wait_pkt_is_timeout、
+  current_timeout_ms、重试环）；活线程必再 ACK/再 RRQ。c9 冻结
+  在 56.6 = S3 RRQ 后 **8 分钟以上零 modem 包** ⇒ **elf_loader
+  线程/socket 在发出 S3 RRQ 后 ≤1ms 内死亡**。这不是传输层能
+  解释的沉默，是进程级死亡。
+- **谋杀窗口主线索（xl 台账）**：S3 DATA1（216B@0x11）之后
+  紧跟两笔**非 tftp 发射**——`0x12:104B` 与 `0x16:64B`。0x12=
+  本固件假 pd-mapper 服务的 svc64 口（ad 表 (64,257,0x12)）；
+  0x16=IPA_SVC_PORT。若其中一笔（对 modem PD 机器的 QMI 应答/
+  ind）落进谋杀窗口，可能正是杀死装载线程的凶器。**但 xl 无
+  时间戳**——0x12/0x16 与 DATA1 的先后 ms 序、以及触发它们的
+  入站查询，都无法定谳。G38 DB_UPDATED 探针只有 56B，不是那笔
+  104B 的发射者；真正发射者待查源。
+- **s52 纯插桩刀（00:12 刷入，命 27）**：零行为变化，三件
+  插桩——① TXL 台账 4→8 槽并加毫秒戳（TXL_M，tf_ev 同款时基），
+  让 xl= 窗口覆盖 [S2-OACK … S3-DATA1 … 0x12/0x16 …]；② 入站
+  qrtr 环 `rqr=` 16 槽（ms.源口.宿口.尺寸，随 cmd9 walker 每笔
+  推入）——抓触发 0x12/0x16 应答的那笔 modem 来包；③ `pd2=`
+  （PD_IND_ARM.PD_IND_N）暴露 G38 探针本启是否点火。判据：若
+  0x12/0x16 发射毫秒落在 S3-DATA1 与（缺席的）ACK 之间，谋杀
+  假说升级为头号；若在 DATA1 之前，转查装载线程环境（栈/优先
+  级/权限）缺口。
+
+### 靴 #52：s52 纯插桩三问全答——谋杀假说死刑 + dlopen 官方静默退出路径浮出（00:09–00:40）
+
+- **s52 三件插桩（TXL ms 戳/rqr 入站环/pd2）00:12 刷入（命 27）
+  首启即复现同形**：stat→S1(52@0)→ACK1(+5ms)→S2(160@0x34,
+  216B 包)→**暴死**（rl 止于 session26，TEV 48839 后零事件）。
+- **三问全答**：
+  1. `xl=`（带 ms）：DATA1(216B@0x11) ms=0xbec7=48839；
+     **0x12:104B ms=0xea3a=59962（+11.1s）**；**0x16:64B
+     ms=0xeb4d=60237（+11.4s）**——两笔发射远在谋杀窗口（≤1ms）
+     之外。**谋杀假说（0x12/0x16 杀线程）死刑**。
+  2. `rqr=`：0x16 的应答与同 ms 入站 `eb4d.20.16.e68`（modem
+     0x20→IPA_SVC 3688B 大包）成对；0x12 的 104B 之前 **C9_N
+     冻结=56 ⇒ 零入站=自发**。
+  3. `pd2=0.0`：G38 探针未 arm，与本案无关。
+- **余波时间线（11 秒静默后）**：DATA1 后 **11.1s 双向零包**（无
+  重试无查询——活 tftp 线程 200ms 超时×4 必重试）→ modem 控制
+  面 52B 包×7（sp=dp=fffffffe，59977–59998ms）→ IPA 3688B 入站
+  （60237ms）→ 死寂。**11s≈modem 侧装载放弃周期**。
+- **客户端源码三案头定谳**（/tmp/tftpsrc + CodeLinaro）：
+  1. **接收缓冲假说死**：`raw_pkt_buff[TFTP_MAX_TFTP_PACKET_SIZE]`
+     =7680+4=7684B，216B 包装得下。
+  2. **协商参数**（px= 实证）：客户端 RRQ 带 `blksize=7680
+     timeoutms=1000 wsize=10` + `seek/rsize` 精确分段读（52=
+     Ehdr 尺寸；160=phentsize 32×5=phdrs 精确尺寸——**52/160
+     读是 dlopen/libdl 的明确请求**）。
+  3. **接收环形状**：recv_data 主环里 `data_size(160)<
+     block_size(7680)`⇒`final_pkt_received`⇒**应发最终 ACK**；
+     cb_func 负返回⇒**发 ERROR 包**（s48/s49 的 ERROR(9)=EBADF
+     正是此路）。s50+ 两者皆无 ⇒ **死在 cb_func 内部**（上层
+     qurtfs/dl 回调把线程弄死），非 tftp 层错误路径。
+- **elf_loader 框架源码（arzekrasr/MPSS.HA.1.1）两大发现**：
+  1. `rtld_main`（framework/src/main.c）：`heapSize=0x1000`
+     （**loader PD 只有 4KB 堆**）→ dlinitex →
+     `qurt_use_qurtfs(1)`（**文件读全部桥 QuRT ramfs，ramfs 页
+     来自 rmtfs 域迁移**）→ `dlopen(USER_PD, 4)` → **无论成败
+     QDI_OS_PROCESS_EXIT(0)+qurt_thread_stop()——官方静默
+     退出路径，错误不外抛不发包**。暴死形状=dlopen 放弃。
+  2. `root_task_init.c`：ramfs_detect_task 先等 RMB09（SBL
+     ramfs 加载握手），超时自杀；握手成功才 `pd_mon_spawn`
+     elf_loader PD——loader 依赖链=RMB09→ramfs→PD→qurtfs→
+     rmtfs→tftp。
+- **形状对比重排**（关键澄清）：s48/s49=160 读 ACK 后发**整文件
+  RRQ**（blksize 7680 无 seek/rsize）→ 7680 DATA1 → +1~2ms
+  ERROR(9)；s50+=160 读 DATA1 后**连 ACK 都没有**。死点从「cb
+  写内存 -9」**前移**到「phdrs 解析完成→发起下一读之间」——
+  dlopen 在 phdrs 之后、下一读之前放弃/崩溃。
+- **新头号嫌疑**：① qurtfs/ramfs 页供给（rmtfs 域）在装载点
+  断供——但 rqr 证 160 读死时 rmtfs qrtr 无活动（rmtfs 走
+  qrtr，入站环该见包）；② **ea49 的 7 笔 52B 控制包=elf_loader
+  PD 死亡讣告（qrtr DEL_SERVER/RESUME 广播）**——若实锤，
+  PD 死亡时刻+官方讣告二合一，死因=dlopen 放弃实锤。rqr 未记
+  控制包 type，**s53 需 type 解码**。
+- **s53 刀案（两件套）**：① SH3=160 读 DATA 前 108B（0x34–0xa0，
+  phdr0/phdr1 头部——SH1/SH2 已证 64+52B 字节精确，前 108B 是
+  盲区，数据假说终审）；② 入站 qrtr 控制包 type 记录（52B
+  控制包的 ctrl type 字段——区分 DEL_SERVER/RESUME/LOOKUP，
+  讣告假说终审）。
