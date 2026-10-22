@@ -130,6 +130,7 @@ MODE="heartbeat"
 [ "${1:-}" = "--s34" ] && MODE="s34"
 [ "${1:-}" = "--s35" ] && MODE="s35"
 [ "${1:-}" = "--s36" ] && MODE="s36"
+[ "${1:-}" = "--s37" ] && MODE="s37"
 mkdir -p "${OUTDIR}"
 ELF="${OUTDIR}/heartbeat.elf"
 
@@ -1038,6 +1039,16 @@ elif [ "${MODE}" = "s36" ]; then
   ELF="${OUTDIR}/s36.elf"
   cp "${HERE}/target/aarch64-unknown-none-softfloat/release/redfin-bare" "${ELF}"
   BIN="${OUTDIR}/s36.bin"; IMG="${OUTDIR}/boot-s36.img"
+elif [ "${MODE}" = "s37" ]; then
+  # 刀 G36（#41 三缺口修）：①PD_SEEN 去重键 (sport<<16)|txn（0x10 腿实证
+  # 多客户端各自 txn=1 起算，裸 txn 撞号错杀）②0x20/0x22 应答腿（此前被
+  # 无声吞；canon=service-locator-private.h 两 resp 皆仅 TLV02，15B 整包）
+  # ③一深二队列（PD_PEND 占位期同圈双敲不丢，先存 slot1 名再解析再对换）
+  # +pd0=/pr20=/pr22= 渲染 + 0x12 武装门 56→55（裸 0x20=48+7 也进门）。
+  (cd "${HERE}" && cargo build --release --target aarch64-unknown-none-softfloat) || { echo "cargo build FAILED (${MODE}) -- 不拷陈旧件" >&2; exit 1; }
+  ELF="${OUTDIR}/s37.elf"
+  cp "${HERE}/target/aarch64-unknown-none-softfloat/release/redfin-bare" "${ELF}"
+  BIN="${OUTDIR}/s37.bin"; IMG="${OUTDIR}/boot-s37.img"
 elif [ "${MODE}" = "s21" ]; then
   # 刀 G22：s20 同面，intent 池+归还追踪（cmd5 全量入池、TX 池挑、
   # RX_DONE/W_REUSE 归还、池干 RX_INTENT_REQ、cmd3/11 入 8B 集、ii= 台账）。

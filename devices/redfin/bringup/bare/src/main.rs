@@ -4433,6 +4433,28 @@ static mut PD_PORT: u32 = 0;
 static mut PD_SEEN: [u32; 8] = [0xffff_ffff; 8];
 static mut PD_SEEN_N: u32 = 0;
 static mut PD_N: u32 = 0;
+/// 刀 G36：去重键 (sport<<16)|txn（0x10 腿实证多客户端各自 txn=1
+/// 起算，裸 txn 撞号错杀——#39/#40「4 敲 3 答 1 丢」一解）。
+static mut PD_SKEY: u32 = 0;
+/// 刀 G36：一深二队列——PD_PEND 占位期（同扫一圈双敲）不丢，存
+/// PD2 待 pd_reply 成功后晋升。名字经 take_name 后与 PD_NAME 换名。
+static mut PD2_PEND: bool = false;
+static mut PD2_TXN: u32 = 0;
+static mut PD2_NODE: u32 = 0;
+static mut PD2_PORT: u32 = 0;
+static mut PD2_SKEY: u32 = 0;
+static mut PD2_NAME: [u8; 64] = [0; 64];
+static mut PD2_NAME_N: u8 = 0;
+/// 刀 G36：0x20 INDICATION_REGISTER / 0x22 REGISTER_SERVICE_LIST
+/// 小应答腿 latch（canon=service-locator-private.h：两 resp 皆仅
+/// TLV02{0,0}，MAX_MSG_LEN 7）。每敲刷新——重试=上答没到，再答为正。
+static mut PD_S_PEND: bool = false;
+static mut PD_S_MSG: u32 = 0;
+static mut PD_S_TXN: u32 = 0;
+static mut PD_S_NODE: u32 = 0;
+static mut PD_S_PORT: u32 = 0;
+static mut PD_R20: u32 = 0;
+static mut PD_R22: u32 = 0;
 /// rmtfs 队列非空。tftp 仍是单槽。同一次 FIFO 里的 OPEN/ALLOC 都要留下。
 static mut RF_PEND: bool = false;
 static mut RF_TXN: u32 = 0;
@@ -5557,6 +5579,7 @@ fn smem_scan(ufs: &mut Ufs, do_glink: bool) {
                 let mut round = 0u32;
                 loop {
                     pd_reply(at478, at479, sz479);
+                    pd_small_reply(at478, at479, sz479);
                     let before = unsafe { RF_N };
                     rf_reply(at478, at479, sz479);
                     tf_reply(ufs, at478, at479, sz479);
@@ -8830,11 +8853,65 @@ fn pd_reply(at478: u64, at479: u64, sz479: u64) {
     ) {
         unsafe {
             if PD_SEEN_N < 8 {
-                PD_SEEN[PD_SEEN_N as usize] = PD_TXN;
+                PD_SEEN[PD_SEEN_N as usize] = PD_SKEY;
                 PD_SEEN_N += 1;
             }
             PD_PEND = false;
             PD_N += 1;
+            // 刀 G36：二队列晋升——PD2 里有待答即接管 PD 槽（下一轮
+            // pd_reply 就答它；TX 环闸同门）。
+            if PD2_PEND {
+                PD_TXN = PD2_TXN;
+                PD_NODE = PD2_NODE;
+                PD_PORT = PD2_PORT;
+                PD_SKEY = PD2_SKEY;
+                core::ptr::copy_nonoverlapping(PD2_NAME.as_ptr(), PD_NAME.as_mut_ptr(), 64);
+                PD_NAME_N = PD2_NAME_N;
+                PD2_PEND = false;
+                PD_PEND = true;
+            }
+        }
+    }
+}
+
+/// 刀 G36：0x20/0x22 小应答——canon（service-locator-private.h）：
+/// INDICATION_REGISTER_RESP 与 REGISTER_SERVICE_LIST_RESP 皆仅
+/// TLV02{result=0,err=0}（resp MAX_MSG_LEN 7 ⇒ 整包 15B）。tf=2 镜像
+/// txn，从 0x12 发往敲源。重试敲=上答没到，再答为正（latch 每敲刷新）。
+fn pd_small_reply(at478: u64, at479: u64, sz479: u64) {
+    if unsafe { !PD_S_PEND } || at478 == 0 || at479 == 0 {
+        return;
+    }
+    let tx_head = rd32((at478 + 4) as usize) as u64;
+    let tx_tail = rd32(at478 as usize) as u64;
+    if tx_head != tx_tail {
+        return;
+    }
+    let mut q = [0u8; 32];
+    let mut n = 7usize;
+    put_u8(&mut q, &mut n, 2);
+    put_u16(&mut q, &mut n, 4);
+    put_u16(&mut q, &mut n, 0);
+    put_u16(&mut q, &mut n, 0);
+    let msg = unsafe { PD_S_MSG };
+    qmi_finish(&mut q, n, unsafe { PD_S_TXN }, msg);
+    if glink_tx_payload(
+        at478,
+        at479,
+        tx_head,
+        sz479,
+        0x12,
+        unsafe { PD_S_NODE },
+        unsafe { PD_S_PORT },
+        &q[..n],
+    ) {
+        unsafe {
+            if msg == 0x20 {
+                PD_R20 += 1;
+            } else {
+                PD_R22 += 1;
+            }
+            PD_S_PEND = false;
         }
     }
 }
@@ -12651,31 +12728,88 @@ fn scan_new_servers(fifo: u64, rh: u64) {
                         }
                     }
                 }
-                if typ == 1 && dst_node == 1 && dst_port == 0x12 && chunk >= 56 {
+                if typ == 1 && dst_node == 1 && dst_port == 0x12 && chunk >= 55 {
                     let w = rd32((fifo + off + 48) as usize);
                     let w1 = rd32((fifo + off + 52) as usize);
                     let qtype = w & 0xff;
                     let txn = (w >> 8) & 0xffff;
                     let msgid = ((w >> 24) & 0xff) | ((w1 & 0xff) << 8);
+                    // 刀 G36：去重键带 sport（0x10 腿实证多客户端各自
+                    // txn=1 起算；裸 txn 撞号错杀）。门 56→55=最短 QMI
+                    // 包（48+7，无 TLV 的裸 0x20 也得进门）。
+                    let skey = (rd32((fifo + off + 28) as usize) << 16) | (txn & 0xffff);
                     let mut seen = false;
                     unsafe {
                         let mut i = 0u32;
                         while i < PD_SEEN_N {
-                            if PD_SEEN[i as usize] == txn {
+                            if PD_SEEN[i as usize] == skey {
                                 seen = true;
                                 break;
                             }
                             i += 1;
                         }
                     }
-                    if qtype == 0 && msgid == 33 && !seen && unsafe { !PD_PEND } {
-                        if pd_take_name(fifo, off, chunk, w1) {
-                            unsafe {
-                                PD_TXN = txn;
-                                PD_NODE = rd32((fifo + off + 24) as usize);
-                                PD_PORT = rd32((fifo + off + 28) as usize);
-                                PD_PEND = true;
+                    if qtype == 0 && msgid == 33 && !seen {
+                        if unsafe { !PD_PEND } {
+                            if pd_take_name(fifo, off, chunk, w1) {
+                                unsafe {
+                                    PD_TXN = txn;
+                                    PD_NODE = rd32((fifo + off + 24) as usize);
+                                    PD_PORT = rd32((fifo + off + 28) as usize);
+                                    PD_SKEY = skey;
+                                    PD_PEND = true;
+                                }
                             }
+                        } else if unsafe { !PD2_PEND } {
+                            // 刀 G36：一深二队列。次序铁律：先存 slot1 名
+                            // 进 PD2（take_name 会覆 PD_NAME），解析成功后
+                            // 两清对换——slot1 留己名、slot2 得新名；解析
+                            // 失败则用存名复原（take_name 可能已部分覆写）。
+                            unsafe {
+                                core::ptr::copy_nonoverlapping(
+                                    PD_NAME.as_ptr(),
+                                    PD2_NAME.as_mut_ptr(),
+                                    64,
+                                );
+                                PD2_NAME_N = PD_NAME_N;
+                            }
+                            if pd_take_name(fifo, off, chunk, w1) {
+                                unsafe {
+                                    let tn = PD_NAME_N;
+                                    PD_NAME_N = PD2_NAME_N;
+                                    PD2_NAME_N = tn;
+                                    for i in 0..64 {
+                                        let t = PD_NAME[i];
+                                        PD_NAME[i] = PD2_NAME[i];
+                                        PD2_NAME[i] = t;
+                                    }
+                                    PD2_TXN = txn;
+                                    PD2_NODE = rd32((fifo + off + 24) as usize);
+                                    PD2_PORT = rd32((fifo + off + 28) as usize);
+                                    PD2_SKEY = skey;
+                                    PD2_PEND = true;
+                                }
+                            } else {
+                                unsafe {
+                                    core::ptr::copy_nonoverlapping(
+                                        PD2_NAME.as_ptr(),
+                                        PD_NAME.as_mut_ptr(),
+                                        64,
+                                    );
+                                    PD_NAME_N = PD2_NAME_N;
+                                }
+                            }
+                        }
+                    } else if qtype == 0 && (msgid == 0x20 || msgid == 0x22) {
+                        // 刀 G36：0x20/0x22 敲此前被无声吞（应答腿只认
+                        // 0x21）——被吞的「第 4 敲」假说的正面修。latch
+                        // 即可，应答在泵里（15B 极小，TX 环闸同门）。
+                        unsafe {
+                            PD_S_MSG = msgid;
+                            PD_S_TXN = txn;
+                            PD_S_NODE = rd32((fifo + off + 24) as usize);
+                            PD_S_PORT = rd32((fifo + off + 28) as usize);
+                            PD_S_PEND = true;
                         }
                     }
                 }
@@ -13500,6 +13634,11 @@ fn ctrl_service(
                                 push_hex(reply, &mut rn, unsafe { PD_QLEN } as u64);
                                 push_str(reply, &mut rn, " pe=");
                                 push_hex(reply, &mut rn, unsafe { PD_SAW_ELF } as u64);
+                                // 刀 G36：0x20/0x22 小应答腿计数。
+                                push_str(reply, &mut rn, " pr20=");
+                                push_hex(reply, &mut rn, unsafe { PD_R20 } as u64);
+                                push_str(reply, &mut rn, " pr22=");
+                                push_hex(reply, &mut rn, unsafe { PD_R22 } as u64);
                                 push_str(reply, &mut rn, " rf=");
                                 push_hex(reply, &mut rn, unsafe { RF_MSG } as u64);
                                 push_str(reply, &mut rn, ".");
@@ -13918,6 +14057,43 @@ fn ctrl_service(
                                                 rn += 1;
                                             }
                                             ni += 1;
+                                        }
+                                    }
+                                }
+                                // 刀 G36：pd0= 倒数第二敲同解码（msg.txn 名）
+                                // ——此后每靴全敲形状可见，不再只看末敲。
+                                push_str(reply, &mut rn, " pd0=");
+                                if unsafe { TF_PD12_N } < 2 {
+                                    push_str(reply, &mut rn, "-");
+                                } else {
+                                    push_hex(
+                                        reply,
+                                        &mut rn,
+                                        (unsafe { TF_PD12[0][51] } as u64)
+                                            | ((unsafe { TF_PD12[0][52] } as u64) << 8),
+                                    );
+                                    push_str(reply, &mut rn, ".");
+                                    push_hex(
+                                        reply,
+                                        &mut rn,
+                                        (unsafe { TF_PD12[0][49] } as u64)
+                                            | ((unsafe { TF_PD12[0][50] } as u64) << 8),
+                                    );
+                                    if unsafe { TF_PD12[0][55] } == 1
+                                        && unsafe { TF_PD12[0][51] } == 0x21
+                                    {
+                                        push_str(reply, &mut rn, ".");
+                                        let mut n0i = 0usize;
+                                        while 58 + n0i < 96 {
+                                            let c0 = unsafe { TF_PD12[0][58 + n0i] };
+                                            if c0 < 0x20 || c0 >= 0x7f {
+                                                break;
+                                            }
+                                            if rn < reply.len() {
+                                                reply[rn] = c0;
+                                                rn += 1;
+                                            }
+                                            n0i += 1;
                                         }
                                     }
                                 }
