@@ -125,6 +125,7 @@ MODE="heartbeat"
 [ "${1:-}" = "--s29" ] && MODE="s29"
 [ "${1:-}" = "--s30" ] && MODE="s30"
 [ "${1:-}" = "--s31" ] && MODE="s31"
+[ "${1:-}" = "--s32" ] && MODE="s32"
 mkdir -p "${OUTDIR}"
 ELF="${OUTDIR}/heartbeat.elf"
 
@@ -985,6 +986,16 @@ elif [ "${MODE}" = "s31" ]; then
   ELF="${OUTDIR}/s31.elf"
   cp "${HERE}/target/aarch64-unknown-none-softfloat/release/redfin-bare" "${ELF}"
   BIN="${OUTDIR}/s31.bin"; IMG="${OUTDIR}/boot-s31.img"
+elif [ "${MODE}" = "s32" ]; then
+  # 刀 G31（纯观察，零行为变更，叠在 G30/G30b 之上）：#36 三盲一次补齐——
+  # ① sm 行稳超 CTRL_REPLY(3072)，q= 服务图自 ~#27 起被截尾（40 枚
+  # NEW_SERVER 锁在暗闛）；② cc=4.0.0.0.0 末枚全零（真空通告 vs 短包守卫
+  # 两解）——ccz= 计零组、cc= 只存末枚有肉的；③ DEL_CLIENT×15 是谁在关
+  # ——dc= client{node.port}；④ lk= 撞名改 ml=；⑤ SMEM_SVC 8→40 对全量。
+  (cd "${HERE}" && cargo build --release --target aarch64-unknown-none-softfloat)
+  ELF="${OUTDIR}/s32.elf"
+  cp "${HERE}/target/aarch64-unknown-none-softfloat/release/redfin-bare" "${ELF}"
+  BIN="${OUTDIR}/s32.bin"; IMG="${OUTDIR}/boot-s32.img"
 elif [ "${MODE}" = "s21" ]; then
   # 刀 G22：s20 同面，intent 池+归还追踪（cmd5 全量入池、TX 池挑、
   # RX_DONE/W_REUSE 归还、池干 RX_INTENT_REQ、cmd3/11 入 8B 集、ii= 台账）。

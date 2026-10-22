@@ -533,7 +533,9 @@ static mut CTRL_OVERFLOW: bool = false;
 // 首 sm 若逢 so 传输活窗即溢栈楔死（三窗死形同构：首查超时+ping 亡+USB 链
 // 仍活）。零行为差，纯栈形改。
 // 刀 G21：+xl= 台账（≤4 槽×22 字符≈96B）再扩 512。
-static mut CTRL_REPLY: [u8; 3072] = [0; 3072];
+// 刀 G31：3072→8192——pr=/px= 膨胀后 sm 行稳超 3072，q=（modem 服务图）
+// 自 ~#27 起一直被截尾没上过屏；+5KB 静态换整条服务图可见。
+static mut CTRL_REPLY: [u8; 8192] = [0; 8192];
 /// 0 闲，1 应答已交、等 IN 完成，2 再等 20ms 后拉 PS_HOLD。
 static mut CTRL_FB: u8 = 0;
 static mut FB_APID: u32 = 0;
@@ -4156,8 +4158,10 @@ struct SmemSnap {
 
 static mut SMEM_ENTS: [u32; 10] = [0; 10];
 static mut SMEM_RX: [u32; 22] = [0; 22];
-/// NEW_SERVER 的服务号、实例，最多 8 对。
-static mut SMEM_SVC: [u32; 16] = [0; 16];
+/// NEW_SERVER 的服务号、实例，最多 8 对。刀 G31：16→80（40 对）——
+/// #36 ch=4:28 实测 modem 单靴广播 40 枚 NEW_SERVER，8 槽只够头两成，
+/// 服务图（尤其 0x45 WLFW 是否晚到）一直被截。q= 全量上屏随之放开。
+static mut SMEM_SVC: [u32; 80] = [0; 80];
 static mut SMEM_NSVC: u32 = 0;
 /// WLFW（svc 0x45）目击闩。扫描每轮只留 8 个 NEW_SERVER，槽 b 的
 /// `0x45` 在 node 0 端口 88，排在这 8 个之后，`q=` 看不住它。
@@ -4744,10 +4748,19 @@ static mut TF_PC_PORT: u32 = 0;
 /// 刀 G30b（纯观察）：QRTR 控制面正账——#34 po=fffffffe.38 定谳那不是
 /// 底噪，是 QRTR_PORT_CTRL(0xfffffffe) 的控制报文（uapi qrtr.h 实锤），
 /// 整条线 56 封信只计数没读过。ch= 各 typ 计数（下标 typ-2，2..=13），
-/// cc= 最近一枚 typ.svc.inst.node.port 五元组；lk= 走 SMEM_LOOK（G3 起
-/// 只写不读的暗闩，本刀上屏）——modem 在 LOOKUP 什么服务从此可见。
+/// cc= 最近一枚 typ.svc.inst.node.port 五元组；ml= 走 SMEM_LOOK（G3 起
+/// 只写不读的暗闩，G30b 上屏时误撞旧 lk= 渲染位，G31 改名 ml=）——
+/// modem 在 LOOKUP 什么服务从此可见。
 static mut TF_CH: [u32; 12] = [0; 12];
 static mut TF_CC: [u32; 5] = [0; 5];
+/// 刀 G31：#36 实测——cc= 抄到 4.0.0.0.0（最后一枚 NEW_SERVER 五元组
+/// 全零）。两解：modem 临终真空通告 / 短包(<56B)守卫置零。ccz= 计全零
+/// 五元组枚数（守卫只记非零组，cc= 永远是最后一枚「有肉」的）；
+/// dc= 记 DEL_CLIENT(typ6) 的 client{node,port}（#36 见 15 连闭——
+/// 是谁在关：node=0 是 modem 本node，别处则是远端）。
+static mut TF_CCZ: u32 = 0;
+static mut TF_DCL: [u32; 2] = [0; 2];
+static mut TF_DCL_N: u32 = 0;
 /// 刀 G21：TX 台账 4 槽——每笔 glink_tx_payload 成功记 (sport, 整包
 /// 字节数, 发后 head)。靴 #20 定谳需要：modem 消费停在 tail=28b8，
 /// 却不知道 frontier 上卡的是哪笔。台账按时间序滚存，渲染进 xl=。
@@ -12113,7 +12126,7 @@ fn pd_take_name(fifo: u64, off: u64, chunk: u64, w1: u32) -> bool {
 fn scan_new_servers(fifo: u64, rh: u64) {
     unsafe {
         SMEM_NSVC = 0;
-        SMEM_SVC = [0; 16];
+        SMEM_SVC = [0; 80];
         SMEM_NLOOK = 0;
         SMEM_LOOK = [0; 16];
         SMEM_QSTOP = 0;
@@ -12401,30 +12414,54 @@ fn scan_new_servers(fifo: u64, rh: u64) {
                     // typ(uapi qrtr_pkt_type) 2..=13 入直方图；五元组抄
                     // typ.svc.inst.node.port（载荷≥56 才有 svc/inst、≥68 才有
                     // node/port；HELLO/PING 短包后四元记 0）。
+                    // 刀 G31：#36 cc=4.0.0.0.0 破案腿——五元组全零时只计
+                    // ccz= 不覆盖 cc=（末枚有肉的永存）；typ6 DEL_CLIENT
+                    // 的 client{node,port} 在 @+52/+56，抄 dc=（15 连闭是谁）。
                     if dst_port == 0xfffffffe && typ >= 2 && typ <= 13 {
                         let ci = (typ - 2) as usize;
                         TF_CH[ci] = TF_CH[ci].saturating_add(1);
-                        TF_CC[0] = typ;
-                        TF_CC[1] = if chunk >= 56 {
+                        let csvc = if chunk >= 56 {
                             rd32((fifo + off + 52) as usize)
                         } else {
                             0
                         };
-                        TF_CC[2] = if chunk >= 56 {
+                        let cinst = if chunk >= 60 {
                             rd32((fifo + off + 56) as usize)
                         } else {
                             0
                         };
-                        TF_CC[3] = if chunk >= 68 {
+                        let cnode = if chunk >= 64 {
                             rd32((fifo + off + 60) as usize)
                         } else {
                             0
                         };
-                        TF_CC[4] = if chunk >= 68 {
+                        let cport = if chunk >= 68 {
                             rd32((fifo + off + 64) as usize)
                         } else {
                             0
                         };
+                        TF_CC[0] = typ;
+                        if csvc | cinst | cnode | cport != 0 {
+                            TF_CC[1] = csvc;
+                            TF_CC[2] = cinst;
+                            TF_CC[3] = cnode;
+                            TF_CC[4] = cport;
+                        } else {
+                            TF_CCZ = TF_CCZ.saturating_add(1);
+                        }
+                        if typ == 6 {
+                            TF_DCL[0] = if chunk >= 56 {
+                                rd32((fifo + off + 52) as usize)
+                            } else {
+                                0
+                            };
+                            TF_DCL[1] = if chunk >= 60 {
+                                rd32((fifo + off + 56) as usize)
+                            } else {
+                                0
+                            };
+                            TF_DCL_N = TF_DCL_N.saturating_add(1);
+                        }
                     }
                 }
                 if typ == 1
@@ -12923,7 +12960,7 @@ fn scan_new_servers(fifo: u64, rh: u64) {
                         if svc == 0x45 {
                             unsafe { SAW_45 = 0x8000_0000 | (inst & 0x7fff_ffff) };
                         }
-                        if n < 8 {
+                        if n < 40 {
                             unsafe {
                                 SMEM_SVC[n as usize * 2] = svc;
                                 SMEM_SVC[n as usize * 2 + 1] = inst;
@@ -13779,8 +13816,11 @@ fn ctrl_service(
                                 }
                                 // 刀 G30b：ch= 控制面 typ 直方图（typ:cnt 只列
                                 // 非零，typ 语义=uapi qrtr_pkt_type）、cc= 最近
-                                // 一枚五元组 typ.svc.inst.node.port、lk= NEW_LOOKUP
+                                // 一枚五元组 typ.svc.inst.node.port、ml= NEW_LOOKUP
                                 // 目击（svc.inst×≤8；SMEM_LOOK 首次上屏）。
+                                // 刀 G31：ccz= 全零五元组枚数、dc= DEL_CLIENT
+                                // client{node.port}+枚数；lk= 改名 ml=（让位
+                                // 主线上 LOOK_N.LOOK_PEND.HOST_ADV 的旧 lk=）。
                                 push_str(reply, &mut rn, " ch=");
                                 let mut chi = 0u32;
                                 let mut chany = false;
@@ -13817,7 +13857,19 @@ fn ctrl_service(
                                 } else {
                                     push_str(reply, &mut rn, "-");
                                 }
-                                push_str(reply, &mut rn, " lk=");
+                                push_str(reply, &mut rn, " ccz=");
+                                push_hex(reply, &mut rn, unsafe { TF_CCZ } as u64);
+                                push_str(reply, &mut rn, " dc=");
+                                if unsafe { TF_DCL_N } != 0 {
+                                    push_hex(reply, &mut rn, unsafe { TF_DCL[0] } as u64);
+                                    push_str(reply, &mut rn, ".");
+                                    push_hex(reply, &mut rn, unsafe { TF_DCL[1] } as u64);
+                                    push_str(reply, &mut rn, ".");
+                                    push_hex(reply, &mut rn, unsafe { TF_DCL_N } as u64);
+                                } else {
+                                    push_str(reply, &mut rn, "-");
+                                }
+                                push_str(reply, &mut rn, " ml=");
                                 let nlk = unsafe { SMEM_NLOOK };
                                 if nlk == 0 {
                                     push_str(reply, &mut rn, "-");
@@ -14387,7 +14439,7 @@ fn ctrl_service(
                                     k_rr -= 1;
                                 }
                                 push_str(reply, &mut rn, " q=");
-                                let nsvc = unsafe { SMEM_NSVC }.min(8);
+                                let nsvc = unsafe { SMEM_NSVC }.min(40);
                                 for i in 0..nsvc {
                                     if i != 0 {
                                         push_str(reply, &mut rn, ",");
