@@ -5870,3 +5870,145 @@ rfs 线程功能正常——**唯独 elf_loader PD 的 dlopen 死**。第二客�
   Hexagon 处理器模块已确认）：找 dlopen 在 phdr 收讫后的失败分支
   （malloc/页分配/进程创建的错误返回路径），锚点=「Hash
   verification failed for segment」与 phdr 断言字符串的 xref。
+
+## 靴 #54：逆向窗全收——xref 破零方法论 + loader 全链反编译 + 0x2ecb770 定谳 + 网络腿死亡现场（2026-10-23，案头期）
+
+靴 #53 立的战场（b22 loader 段逆向找 dlopen 失败分支）本窗全收。
+案头三件产出：方法论（为什么之前 xref 全零）、链条（loader 全链
+反编译到手）、判词（0x2ecb770 不是线上魔数）。另：窗末 s53 网络
+腿死亡，现场取证定谳 + 远程救护失败，等物理重启。
+
+### 一、xref 破零方法论（五课，全入册）
+
+1. **phdr 列错位教训**：之前的表把 p_paddr（字节 12–15）印成
+   「vaddr」、p_memsz 印成「filesz」。全表重解
+   （struct.unpack '<8I'，Elf32：type/offset/vaddr/paddr/filesz/
+   memsz/flags/align）后 bNN=phdrNN 映射律坐实（b01=phdr1
+   8248B、b22=phdr22 0x9d423c、b17/b24/b34=0B 段）。
+2. **双地址世界**：执行世界=paddr（e_entry=0x8c000000，Q6 恒等
+   映射跑物理址）；主镜像 PT_LOAD 一律 **vaddr=paddr+0x34000000**
+   （全表验过，8 个例外是 0x557xxxx/0x1e4xxxxx 外设共享窗）。
+   代码里的字符串引用全是 c2 世界立即数——这就是 FindRefs 在
+   8c 世界装载的程序上全零的根因之一。
+3. **Hexagon 常数扩展器（const extenders）**：32 位立即数被拆散
+   进多指令，**原始字节扫描必然全零**；只有反汇编后取操作数
+   Scalar 才能找到。正法=OperandScan.java（遍历全指令操作数、
+   绕开 ReferenceManager——分析器不建 ref 也无所谓）。
+4. **全仓线性反汇编毒化**：2.5M 站点扫描把 rodata 文本/表格当代
+   码反汇编，立即数直方图全是垃圾（a3e03000 基址兔子洞的病根，
+   验尸=对「引用址」dump 原字节见 ASCII）。**直方图只信函数体内
+   的操作数扫描**。
+5. **ELF 重装配正法**：truncate 到 max(p_offset+p_filesz)=
+   99,471,360B；b00 写 0、每 bNN 写 phdrN.p_offset；patch
+   vaddr:=paddr（Ghidra 映射进 8c 执行世界）+ memsz:=filesz
+   （bss 叠段防重映射）→ Hexagon:LE:32:default 入口分析正常。
+   产物 /tmp/modem-patched.elf + /tmp/modproj 项目（mod，
+   已分析保存）。Ghidra 12.1.4 headless API 三坑：getReferencesTo
+   返回 Reference[]（非迭代器）；FunctionManager 无
+   getFunctionAfter(Address)；拼法 decompileCompleted。
+
+### 二、loader 全链反编译（全在 b14 RX 段 8c595000–8c800000）
+
+- `FUN_8c760c20`（4348B）**首页读**：tftp 读 ehdr(52B)+phdr 表
+  ——s53 看到的两笔 tftp 读就是它。
+- `FUN_8c7e6da0`（2156B）**装载编排**：断言错误码全家——rc -22
+  st_size、rc -25×3（ehdr/phoff/phnum×32）、rc -30×2
+  （p_offset/p_filesz）、rc -17（iHashSegIdx，无 hash 段）、
+  rc -23 GATEWAY_MAP_FAILED、rc -33（path）；**10× 重试环**日志
+  「rfs_gateway retry (auth fail) : %d」。这族断言全是软的
+  （ERRLOG 环记一笔+返回错误码，环=cd0a35a0 索引 16 槽×0x30）。
+- `FUN_8c7e663c`（176B）**SigVerify 线程壳**：qurt attrs→名
+  「SigVerify」→栈 0x2000→create(entry=0xc07e6800)→join→透传
+  退出码；日志「Gateway Authentication success!!」/「Gateway
+  Authentication fail, error code %d」。
+- `0x8c7e6800`（**SigVerify 本体** 276B，无函数符号强建）：从
+  phdr0 扫 **p_flags&0x07000000==0x02000000**（hash 段标记）→
+  找不到=-17；hash 段 filesz==0=-19 → `FUN_8c7e6a94` auth+取
+  hash → 每段 `FUN_8c7e6914(authctx, idx, elf+p_offset,
+  filesz)` 校验，失败日志「Hash verification failed for
+  segment: %d」。
+- `FUN_8c7e6a94`（772B）**gateway_security.c auth**：ELF
+  magic+CLASS32+LSB+**e_phoff==0x34**+**e_phentsize==0x20** 校验；
+  malloc(0x14) 状态；`thunk a411c20c(3,&flag)`=
+  secboot_util_hw_is_auth_enabled（熔丝）；使能则 malloc(0x340)
+  =832B 缓冲+136B 请求 → **`FUN_8c7fe388(buf,…,3,0x12,0,0,
+  &out)`** → 返回≠0x2ecb770 则 **-6**「Signature Authentication
+  failed」→ 编排层重试×10 → rtld 杀 PD。
+- `FUN_8c7e6914`（296B）**每段哈希校验**：算法 ID 从 ctx+0xc
+  （0x14/0x30/0x20 三选），crypto PD thunks a40fdac0/a40fdad0，
+  成功日志「Hash matched for segment %d」。
+- `FUN_8c7e50f0`（684B）**PD 生成编排**：malloc 失败日志「Eloader
+  Failed to get memory- NO PD is spwan」。
+
+### 三、0x2ecb770 定谳（重大修正）
+
+**不是线上魔数——是 secboot/auth 网关模块的通用 SUCCESS 返回
+码。**证据：`FUN_8c7e5448`（之前误标「请求构造器」）实为初始化器
+（清 ctx+0x38..+0x58、建 timer），**成功也返回 0x2ecb770**。四处
+引用对齐：8c5f13e8（第二客户端 cmp）/8c7e5480（初始化 return）/
+8c7e6c58（客户端查）/8c7fe3b0（shim 短路 return）。
+
+shim `FUN_8c7fe388`（44B）：selector==2 → 直返 0x2ecb770（旁路）；
+否则 **thunk a411bd80=父域真身**（a411xxxx 页=PD 创建时父填的
+PLT）。故 RPC(3,0x12) 是 **QuRT 父域内部调用**——auth 真身不在我
+们镜像里，也**未必上我们看得见的 QRTR 线**（线上 0x12 的敲=
+service-locator GET_DOMAIN_LIST，G35 起我们已答 33/0x20/0x22；
+pdh= 抄盘 G34b 起活着，pe=1 十七字节名全等闩在役）。
+
+### 四、第 4 站 8c5f13e8 身份：同门第二客户端（root 侧装载腿）
+
+`FUN_8c5f0f98`（1260B）：同套 ELF 校验链（\x7fELF+CLASS32+LSB+
+e_phoff 0x34+e_phentsize 0x20）+ 同 0x340 应答缓冲 memset +
+同 is_auth_enabled 熔丝检查，但两处分叉：RPC 第 5 参=**2**（非
+0x12，shim selector==2 直通=免认证成功路径）——等一下，重读：
+此处传 (3,2) 而非 (…,…,2)，selector 语义仍在验；**失败走
+ERR_FATAL 硬死**（FUN_8c1ee428 不返回）非软重试；带 **30 槽×40B
+引用计数注册表**（DAT_caca0dc0，上限 0x1e，lock/unlock 引用计
+数）=**root 侧镜像装载腿**（PD 生另一条路径，客户端侧镜像实
+现）。错误码族 0xf9ac99xx+trace 面 0x314（FUN_8c110f8c/
+FUN_8c110eb8）与 loader 侧 0x314 同源。
+
+### 五、与活证据对读（环境假说细化）
+
+- 4 记 0x12 敲=locator 查询（已答）；**auth RPC 不上这线**。
+- **11.17s 静默=auth 失败 10× 静默重试**（重试环无日志直到放弃）；
+  讣告 DEL_SERVER×7=rtld QDI_OS_PROCESS_EXIT（loader 返回错误
+  →调用方杀 PD——loader 不崩，是被杀）。
+- 死因候选（s54 要分岔）：(a) 熔丝使能、父域验证段哈希链不过
+  ——原厂签名镜像理论应过，除非 **hash 段取数腿断了**（SigVerify
+  先取 hash 段再逐段校验；死亡发生在任何进一步 tftp 读之前，
+  即卡在 auth RPC 或 hash 段读之前）；(b) 父域里 (3,0x12) 服务
+  例项无人注册（等谁注册？0x14×1 无腿口是候选）。
+- s54 观察刀需求：0x12 每包 msgid 直方图（分 locator 敲 vs 其
+  他）+ 0x14 定向抄盘（G38④ 的 96B 滚存已备）+ 重试窗（~11s）
+  内新包全录——若 auth 上线，必在此窗。
+
+### 六、网络腿死亡现场（窗末，s53 命 28 稳态后）
+
+- 症状：ping/2323 全死；USB 上 Aginx ECM 仍在（枚举活）。
+- 取证链：libusb 总线 reset（pyusb dev.reset()，等效拔插）→
+  重枚举（id 0x1000577c3→0x100057f0b）→ ECM 仍不绑 → 配置描述
+  符逐字节走读**结构完好**（IAD+CDC control(int 0x81 mps16)+
+  data alt1 双 512B，SuperSpeed；iMACAddress=**字符串 3**，
+  wMaxSegmentSize=1514）→ **字符串 1–4 全 STALL（pipe error）**。
+- 定谳：**fw 半活——静态描述符照答、动态控制请求全拒** →
+  AppleUSBECM 拿不到 MAC 字符串 → 不绑 en → 网络腿死。控制台
+  骑同一条死腿，sm 不可达。远程不可救（reset 无效），**需人手
+  断电重启**（通知已发）。
+- 新病签名入册：**「USB 半活：描述符答/字符串 STALL」**。下次
+  控制台静默先查这个：system_profiler 看 Aginx ECM 在不在 →
+  pyusb 读 string（全 STALL=fw 半活；正常返串=主机侧绑定问题）。
+- 配方留存：PEP 668 装不进系统 python，`python3 -m venv
+  /tmp/usbvenv && pip install pyusb`，idVendor=7531 idProduct=260。
+
+### 下一步
+
+1. 等物理重启 → 首查 s53 死亡时刻的账（若 fw 冷启清零则只能靠
+   本收据现场）；重启后先 pyusb 读 string 验 fw 活性再连 2323。
+2. s54 刀（观察优先）：0x12 msgid 直方图 + 0x14 抄盘 + 重试窗
+   全录。若 auth 上线且形状可解 → s55 行为刀（应答 auth）。
+3. 逆向续（可离线）：FUN_8c5f0f98 的 RPC(3,2) 语义细读（selector
+   旁路 vs 例项）+ a411 父域真身在 SBL 侧的对应（另一战场）。
+
+（收据完；工具产物：/tmp/modem-patched.elf、/tmp/modproj、
+/tmp/b22scripts/*.java、/tmp/mod-{opscan,magic,decomp*}.log）
