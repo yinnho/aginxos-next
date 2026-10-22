@@ -126,6 +126,7 @@ MODE="heartbeat"
 [ "${1:-}" = "--s30" ] && MODE="s30"
 [ "${1:-}" = "--s31" ] && MODE="s31"
 [ "${1:-}" = "--s32" ] && MODE="s32"
+[ "${1:-}" = "--s33" ] && MODE="s33"
 mkdir -p "${OUTDIR}"
 ELF="${OUTDIR}/heartbeat.elf"
 
@@ -996,6 +997,14 @@ elif [ "${MODE}" = "s32" ]; then
   ELF="${OUTDIR}/s32.elf"
   cp "${HERE}/target/aarch64-unknown-none-softfloat/release/redfin-bare" "${ELF}"
   BIN="${OUTDIR}/s32.bin"; IMG="${OUTDIR}/boot-s32.img"
+elif [ "${MODE}" = "s33" ]; then
+  # 刀 G32（一行刀，零行为变更）：#37 现场 LEN=3072 整截——G31 只扩了
+  # CTRL_REPLY 忘了 TCP_TX（G21 配对尺寸律：send_slice 装不下的静默截尾，
+  # partial send 仍 Ok）。TCP_TX 3072→8192 同步；q=/iq= 才真上屏。
+  (cd "${HERE}" && cargo build --release --target aarch64-unknown-none-softfloat) || { echo "cargo build FAILED (${MODE}) -- 不拷陈旧件" >&2; exit 1; }
+  ELF="${OUTDIR}/s33.elf"
+  cp "${HERE}/target/aarch64-unknown-none-softfloat/release/redfin-bare" "${ELF}"
+  BIN="${OUTDIR}/s33.bin"; IMG="${OUTDIR}/boot-s33.img"
 elif [ "${MODE}" = "s21" ]; then
   # 刀 G22：s20 同面，intent 池+归还追踪（cmd5 全量入池、TX 池挑、
   # RX_DONE/W_REUSE 归还、池干 RX_INTENT_REQ、cmd3/11 入 8B 集、ii= 台账）。

@@ -488,7 +488,10 @@ static mut RX_LEN: usize = 0;
 static mut TCP_RX: [u8; 2560] = [0; 2560];
 // 刀 G21：TX 随 CTRL_REPLY 同步 3072——send_slice 一次装整条 sm 行，
 // 不足会静默截尾（partial send 仍 Ok）。
-static mut TCP_TX: [u8; 3072] = [0; 3072];
+// 刀 G32：同步律第二刀——G31 只扩了 CTRL_REPLY 忘了这里，#37 现场
+// LEN=3072 整截（ccz= 在=新码在跑，帽子在 tx 缓冲）。配对尺寸律：
+// 改 CTRL_REPLY 必同改 TCP_TX。入向 2560 不动（命令行只有几字节）。
+static mut TCP_TX: [u8; 8192] = [0; 8192];
 static mut CTRL_SLOTS: [smoltcp::iface::SocketStorage<'static>; 1] =
     [smoltcp::iface::SocketStorage::EMPTY];
 static mut CTRL_IFACE: Option<smoltcp::iface::Interface> = None;
