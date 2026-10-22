@@ -5276,3 +5276,56 @@ G38 码 5f44b39、G39 码 04657ce 先后码尖位上推（9d07c11→5f44b39→
 
 - 本收据本地提交（收据不推）。G40 码件出来后走码尖位舞步。
 - 观察面新增字段本靴全验：rpm=/pdi=/mh=/pk14= 每帧可见。
+
+## 靴 #47（s40/G40，2026-10-22 晚）——四观察键全活，两大假说齐排除
+
+- 19:40:23 用户手动 fastboot 入口，链 #47 刷 boot_a（s40 零填 68,157,440B，
+  md5 738b04ac…）、set_active a、reboot；ping up 19:41:18（+54s）。
+- **命 1 = 603s**（19:41:18→19:51:21 狗杀）——**天花板第二十证**。
+
+### 四键判读（+384s/+430s 两帧一致，纯观察未点火 rp）
+
+- `sd=0.0.0.0`——4 槽 seed 抽块（首+尾块）对账**逐字节全保真**：
+  「seed 搬坏」假说排除。
+- `ro=9.f.1.1,a.f.1.2,11.f.1.3`——三笔 OPEN 全 matched=1。**判读翻案**
+  （读 RFS_PATHS 后）：四主路径 `/boot/modem_fs1|fs2|fsc|fsg` 恰全 15
+  字符、cid 1-based——sport09→cid1=**fs1（主 EFS）**、sport0a→cid2=fs2、
+  sport11→cid3=fsc。modem 开了 fs1；**rfs 末笔=fsc 的 OPEN（≤48s）**，
+  rm=8.0.3.1=3 OPEN+1 ALLOC+4 IOVEC 全应答零丢（#46 判例复确认）。
+- `tl=`（停点全景，**目的口**直方图）：dest 0x10 rfs=48s、dest 0x11 tftp
+  =51s、dest 0x12 svc64=63s、ctrl=63s、0x14/15/16/1000=49-50s——**全部
+  入站 48-63s 归零**，其后 ~9 分钟死寂至狗杀。
+- `rl=/pr=`（tftp 全景，G24/G28 键）：**N=0x11=17 笔 RRQ**、每笔换源口
+  （0x21…0x26）、路径环 4 槽全=`00 01 /readonly/firmware/image/modem_pr
+  /so/549_38_0.mbn\0octet`——17 笔全是 modem 自举链（elf_loader 读自家
+  .mbn；末两笔 fl=3 rsize=52 seek=0/0xa0=Elf32 头分段读）。**modem 从未
+  对 wlan 件发 RRQ**——wlan_pd 卡在取固件之前。
+- 名册 38+ 项与 #46 同构：44.1 在册、0x45 仍缺；pn=kernel/elf_loader.1.30
+  （pn= 只闩 elf_loader 类问句——其余问句名全盲，见 G41）；af= 感官 PD
+  SNS_REG_INIT 老死法、pd0=21.3.avs/audio 不变。
+- ox=3.0（3 OACK 全发成）、tt=d90.d90（TX 环净空）。
+
+### 命 2 = 142s 短命 + 控制台楔死（#46 早死命同款）
+
+- 19:51:21 狗杀后 USB 总线全无 ~7 分钟（RNDIS/fastboot/adb 三空、arp 无
+  条目）——一度判「整机硬楔」，**19:58:13 ICMP 自爬回**：是慢狗/慢复位
+  非硬楔（复活性判读要看足 10 分钟再下）。
+- 命 2 全程：ping 活但 **sm 口 2323 三次 TimeoutError**（网络栈应答、
+  应用主环楔死——22 连接楔死律形状），20:00:35 ICMP 落，**全长 142s**。
+  #46 命形（603/182/260）复现：**命 1 长、命 2-3 短命+控制台楔**。
+- probe3 多命循环采样器已挂（命 3 起自动接续，单命 10+10 分钟等待容忍
+  慢狗复活）。
+
+### 教训
+
+- r8/hist 的 sport 与 po/tl 的键是两套口径（前者=源口、后者=目的口）；
+  先读渲染代码再下结论——#47 首判「fs2/fsc/fsg」就是没查 RFS_PATHS 的
+  想当然。
+- tf= 只渲染已应答路径；请求全景在 rl=/pr=（17 笔 vs tf= 1 路径）。
+
+### G41 方向（据 G40 新事实）
+
+- modem 装完自己（tftp 17 笔）→ 开 fs1/fs2 → ALLOC+IOVEC×4 → 末笔 OPEN
+  fsc → 48-63s 全静。「等什么」下一刀=**抓 GET_DOMAIN_LIST 问句名环**
+  （pd_take_name 已解析出名字、只欠记录；pn= 只闩 elf_loader 类）——
+  modem 在找哪个服务一翻便知。次选：ADSP/CDSP 子系统状态面。
