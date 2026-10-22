@@ -521,6 +521,12 @@ static mut TCP_NOTES: u8 = 0;
 static mut TCP_ST: u8 = 0xff;
 /// 停在 SynReceived 的起点。超过 1 秒就拆掉再 listen，免得唯一的套接字把后来的 SYN 拒掉。
 static mut TCP_SYN_AT: u64 = 0;
+/// s54v4：Established 自愈两计数——RX_AT=末次收到对端字节的时刻
+/// （0=刚建连基线）；KNOCK=Established 期间看到的 SYN 敲门数（对端
+/// 有字节来即清零）。空闲 180s 或敲门≥8 → abort+重listen（07:28
+/// 事故：死对端 Established 是唯一无出口态，ICMP 活而 2323 黑洞）。
+static mut TCP_RX_AT: u64 = 0;
+static mut TCP_KNOCK: u32 = 0;
 static mut TCP_RXF: u8 = 0xff;
 static mut TCP_LS_BAD: bool = false;
 static mut CTX_UFS: *mut Ufs = core::ptr::null_mut();
@@ -4903,6 +4909,10 @@ static mut PD_IND_ARM: u32 = 0;
 /// （UNINIT 不自发 RESTART 是 Linux pdr 语义；要不要人为踢一脚=实验
 /// 变量，观察器/人工都能发）。rpm= 计手动次数。
 static mut SR_RP_MAN: u32 = 0;
+/// s54v3：rm 选靶——1=RESTART_PD 打 modem 根域 msm/modem/root_pd
+/// （modem 自我 SSR→PIL 重载→新 loader 场，不烧手机命）；0=wlan_pd
+/// 旧靶。域名表在 DOMS（6421 一带），根域是 pd-mapper 在册可保护域。
+static mut SR_ROOT: u32 = 0;
 /// 刀 G39：③ MPSS TX 环现场读数——smem_scan 每拍走查到 478 就抄
 /// head/tail（ffff=还没走查到）。#45 悟出：环卡死是 sr_tick 全部后续
 /// （ACK/RP）的总闸，却没有任何一栏能看见它——mh= 每帧可见。
@@ -4933,6 +4943,36 @@ static mut RXQ_Z: [u32; 16] = [0; 16];
 /// 若是 elf_loader PD 的死亡讣告即定谳 dlopen 放弃）。
 static mut RXQ_T: [u32; 16] = [0; 16];
 static mut RXQ_N: u32 = 0;
+/// s54：phdr1 阶梯探针。离线定谳（靴 #54 逆向）：root 侧装载腿
+/// FUN_8c5f0f98 走查 phdr 找到 hash 段（我们的 phdr1：flags=0x02200000、
+/// off=0x1000、filesz=0x1a98、memsz=0x2000）→ alloc(p_memsz) → 才会
+/// seek 0x1000 读段。线上从未见过 0x1000 偏移的读请求 ⇒ 死点=alloc
+/// 一步（软错 0xb→rtld 静默退场，与 +1ms 弃单、+11.1s 讣告全签名吻合）。
+/// 探针=送数时把 phdr1.p_memsz（文件偏移 104）/p_filesz（偏移 100）
+/// 覆写成阶梯值：若 alloc 是堵点、更小尺寸能过，hash 段读（rl= 里
+/// seek=1000 的 RRQ）即上线现形=实锤+池尺寸二分。rung0=0x2000=原值
+/// =对照靴。跨 modem SSR 存活：讣告（chunk=52 且 ctrl cmd=4）+8s
+/// 门推档（7 笔一簇只推一级）；兜底=距上次首服≥25s 的新首服也推档
+/// （防「讣告假说错、档永不动」烧靴）。
+static SO_LADDER: [u32; 8] = [0x2000, 0x1000, 0x800, 0x400, 0x100, 0x20, 8, 4];
+static mut SO_RUNG: u32 = 0;
+static mut SO_RUNG_AT: u64 = 0;
+static mut SO_ADV_N: u32 = 0;
+static mut SO_ADV_SRC: u32 = 0;
+static mut SO_PATCH_N: u32 = 0;
+/// s54v2 修：补丁已送达旗——v1 实测靴 1（06-23 06:18）装载器整靴只
+/// 发 stat 会话（tev k=12 双场）从不读文件头，讣告簇照来（ob=40，
+/// modem SSR 环 ~50s/簇）→ 阶梯在纯 stat 周期空烧到档 2、patchN=0。
+/// 铁律：**推档必须以本档真送过补丁块为门**（补丁送达置 1，任一锚
+/// 推档时消费清 0）。stat-only 周期不再烧档；装载器若在某档走通也
+/// 不推（旗留着，同档续跑）。
+static mut SO_PATCHED: u32 = 0;
+static mut SO_FRESH_AT: u64 = 0;
+/// s54：讣告全保真——52B DEL_SERVER 原文末 2 笔（时间序旧→新）+总笔数。
+/// rqr= 只有五元组摘要；node/service/instance 解码要原文。52B=32B qrtr
+/// 头+20B ctrl 体（cmd.service.instance.node.port）。
+static mut SO_OB_N: u32 = 0;
+static mut SO_OB: [[u8; 52]; 2] = [[0; 52]; 2];
 /// s53：tftp 大 DATA 端到端环回读校验（数据假说终审）。SH1/SH2 只证
 /// 块缓冲对（boot 期文件直读），没证 woff 写环后的字节。四值=源
 /// xor32 全文/源 xor32 首 108B/环回读 xor32 全文/环回读 首 108B。
@@ -8220,6 +8260,30 @@ fn tf_pump_window(ufs: &mut Ufs, at478: u64, at479: u64, sz479: u64, armed: bool
                 want = (limit - off) as usize;
             }
             let n = so_read(ufs, off, want);
+            // s54：phdr1 阶梯补丁——本块盖住文件偏移 100..108（phdr1.p_filesz
+            // @100=0x1a98、p_memsz@104=0x2000，hash 段）即覆写：memsz=档值
+            // 恒写；filesz 只缩不涨（档值<0x1a98 才写）。rung0 档值=原值
+            // 0x2000 ⇒ 字节不变=对照靴。只有块 1（seek=0 会话/全文件会话）
+            // 盖得住 100..108；boot 探针读（64B@0/52B@0xa0）不经此路。
+            if off <= 100 && off + n as u32 >= 108 {
+                let v = unsafe { SO_LADDER[(SO_RUNG as usize).min(7)] };
+                unsafe {
+                    let p100 = 4 + (100 - off) as usize;
+                    if v < 0x1a98 {
+                        TF_BLKBUF[p100] = v as u8;
+                        TF_BLKBUF[p100 + 1] = (v >> 8) as u8;
+                        TF_BLKBUF[p100 + 2] = (v >> 16) as u8;
+                        TF_BLKBUF[p100 + 3] = (v >> 24) as u8;
+                    }
+                    let p104 = 4 + (104 - off) as usize;
+                    TF_BLKBUF[p104] = v as u8;
+                    TF_BLKBUF[p104 + 1] = (v >> 8) as u8;
+                    TF_BLKBUF[p104 + 2] = (v >> 16) as u8;
+                    TF_BLKBUF[p104 + 3] = (v >> 24) as u8;
+                    SO_PATCH_N = SO_PATCH_N.wrapping_add(1);
+                    SO_PATCHED = 1;
+                }
+            }
             // 刀 G46：so_read 返回值（a=n；n<want 即短读=EOF 形收口的直证）。
             tf_ev(9, n as u16);
             if n == 0 {
@@ -8658,6 +8722,29 @@ fn tf_reply(ufs: &mut Ufs, at478: u64, at479: u64, sz479: u64) {
         // +kick；st=2 半程保持游标（DR 只计半程重试），kick 走 resume 续推。
         let fresh = !retry || matches!(st_now, 3 | 7 | 8 | 9);
         if fresh {
+            // s54：兜底推档（锚B）——新首服距上次首服≥25s 且期间无讣告
+            // 推档（防「52B/type4 不是讣告」假说错时阶梯永不动）。推档
+            // 在本次送数之前=本靴即用新档值。
+            {
+                let nowf = time::cntvct();
+                let fqf = time::freq_or(FREQ_FALLBACK as u32) as u64;
+                unsafe {
+                    if SO_PATCHED != 0
+                        && fqf != 0
+                        && SO_FRESH_AT != 0
+                        && SO_RUNG < 7
+                        && nowf.saturating_sub(SO_FRESH_AT) > 25 * fqf
+                        && nowf.saturating_sub(SO_RUNG_AT) > 25 * fqf
+                    {
+                        SO_RUNG += 1;
+                        SO_RUNG_AT = nowf;
+                        SO_ADV_N = SO_ADV_N.wrapping_add(1);
+                        SO_ADV_SRC = 2;
+                        SO_PATCHED = 0;
+                    }
+                    SO_FRESH_AT = nowf;
+                }
+            }
             unsafe {
                 TF_XFER_PORT = sport;
                 TF_ST = 1;
@@ -8852,11 +8939,17 @@ fn sr_tick(at478: u64, at479: u64, sz479: u64) {
     if unsafe { SR_NEED_RP } && unsafe { SR_RP_N } == 0 && !unsafe { SR_RP_PEND } && !unsafe { SR_PEND }
     {
         let txn = unsafe { SR_TXN };
+        // s54v3：rm 选靶——root_pd（modem 自我 SSR）优先于 wlan_pd 旧靶。
+        let dname: &[u8] = if unsafe { SR_ROOT } != 0 {
+            b"msm/modem/root_pd"
+        } else {
+            SR_NAME
+        };
         let mut q = [0u8; 64];
         let mut n = 7usize;
         put_u8(&mut q, &mut n, 1);
-        put_u16(&mut q, &mut n, SR_NAME.len() as u16);
-        for &b in SR_NAME {
+        put_u16(&mut q, &mut n, dname.len() as u16);
+        for &b in dname {
             put_u8(&mut q, &mut n, b);
         }
         qmi_finish_typed(&mut q, n, 0, txn, 0x24);
@@ -8874,6 +8967,7 @@ fn sr_tick(at478: u64, at479: u64, sz479: u64) {
                 SR_RP_N = 1;
                 SR_RP_PEND = true;
                 SR_NEED_RP = false;
+                SR_ROOT = 0;
                 SR_TXN = SR_TXN.wrapping_add(1);
             }
         }
@@ -12792,6 +12886,33 @@ fn scan_new_servers(fifo: u64, rh: u64) {
                         RXQ_T[qi] = 0;
                     }
                     RXQ_N = RXQ_N.wrapping_add(1);
+                    // s54：讣告捕获+阶梯推档（锚A）。chunk=52 且 payload
+                    // 首 word=4 ⇒ DEL_SERVER ctrl 包原形（32B qrtr 头+20B
+                    // 体：cmd.service.instance.node.port）。末 2 笔 52B 全保
+                    // 真；8s 门内一簇 7 笔只推一级档（modem SSR 周期≫8s，
+                    // 每靴讣告簇=推一档=下一靴用更小的 alloc 请求）。
+                    if chunk == 52 && RXQ_T[qi] == 4 {
+                        let src52 = (fifo + off + 16) as u64;
+                        let slot = (SO_OB_N & 1) as usize;
+                        let mut obi = 0usize;
+                        while obi < 52 {
+                            SO_OB[slot][obi] = rd8(src52 + obi as u64);
+                            obi += 1;
+                        }
+                        SO_OB_N = SO_OB_N.wrapping_add(1);
+                        let nowob = time::cntvct();
+                        if SO_RUNG < 7
+                            && SO_PATCHED != 0
+                            && (SO_RUNG_AT == 0
+                                || nowob.saturating_sub(SO_RUNG_AT) > 8 * freqq)
+                        {
+                            SO_RUNG += 1;
+                            SO_RUNG_AT = nowob;
+                            SO_ADV_N = SO_ADV_N.wrapping_add(1);
+                            SO_ADV_SRC = 1;
+                            SO_PATCHED = 0;
+                        }
+                    }
                 }
             }
             // 刀 G23：大包两件照办，其余仍小包专属——
@@ -13896,6 +14017,36 @@ fn ctrl_service(
     }
     match sock.state() {
         State::Established => {
+            // s54v4：Established 自愈——死对端无出口是 07:28 事故根因
+            // （主环活着、ICMP 应答，但 socket 停在 Established，后来
+            // SYN 对不上四元组被 smoltcp 静默丢=黑洞）。两路撤桌：
+            // ①空闲 180s（对端死透无 FIN）；②SYN 敲门累计 8 次（后来
+            // 者反复敲=旧对端大概率已死）。撤桌姿势与半关态一致。
+            let now = time::cntvct();
+            if unsafe { TCP_RX_AT } == 0 {
+                unsafe { TCP_RX_AT = now };
+            }
+            if let Some(f) = tcp_rx_flags() {
+                if f & 0x02 != 0 {
+                    unsafe { TCP_KNOCK += 1 };
+                }
+            }
+            let idle =
+                freq != 0 && now.wrapping_sub(unsafe { TCP_RX_AT }) > freq as u64 * 180;
+            if unsafe { TCP_KNOCK >= 8 } || idle {
+                sock.abort();
+                let _ = sock.listen(CTRL_PORT);
+                unsafe {
+                    CTRL_GREETED = false;
+                    CTRL_LINE_N = 0;
+                    CTRL_OVERFLOW = false;
+                    TCP_SYN_AT = 0;
+                    TCP_RX_AT = 0;
+                    TCP_KNOCK = 0;
+                }
+                tcp_mark(ufs, freq, t, " tcp heal=0x", if idle { 2 } else { 1 });
+                return false;
+            }
             if unsafe { !CTRL_GREETED } && sock.may_send() {
                 if ctrl_reply(sock, b"aginx\n") {
                     unsafe { CTRL_GREETED = true };
@@ -13911,6 +14062,10 @@ fn ctrl_service(
                     Ok(0) | Err(_) => break,
                     Ok(n) => n,
                 };
+                unsafe {
+                    TCP_RX_AT = now;
+                    TCP_KNOCK = 0;
+                }
                 for &b in &tmp[..n] {
                     if b == b'\n' || b == b'\r' {
                         let code = if unsafe { CTRL_OVERFLOW } {
@@ -13953,6 +14108,8 @@ fn ctrl_service(
                             19
                         } else if ctrl_line_is(b"pk") {
                             20
+                        } else if ctrl_line_is(b"rm") {
+                            21
                         } else if unsafe { CTRL_LINE_N } == 0 {
                             3
                         } else {
@@ -14295,6 +14452,9 @@ fn ctrl_service(
                                 push_hex(reply, &mut rn, unsafe { SR_RP_N } as u64);
                                 push_str(reply, &mut rn, ".");
                                 push_hex(reply, &mut rn, unsafe { SR_RP_ERR } as u64);
+                                // s54v3：末位=SR_ROOT（1=上发打的是根域）。
+                                push_str(reply, &mut rn, ".");
+                                push_hex(reply, &mut rn, unsafe { SR_ROOT } as u64);
                                 push_str(reply, &mut rn, " pdi=");
                                 push_hex(reply, &mut rn, unsafe { PD_IND_N } as u64);
                                 push_str(reply, &mut rn, " pm=");
@@ -14511,6 +14671,49 @@ fn ctrl_service(
                                         push_str(reply, &mut rn, ".");
                                         push_hex(reply, &mut rn, unsafe { RXQ_T[qi] } as u64);
                                         qk += 1;
+                                    }
+                                }
+                                // s54：s54=档位.档值.补丁次数.推档次数.末次
+                                // 推档源（1=讣告 2=兜底）——阶梯探针主读数。
+                                // ob=讣告总笔数.末2笔 52B 全保真 hex（旧→新；
+                                // 32B qrtr 头 ver.type.src_node.src_port.pad.
+                                // size.dst_node.dst_port + 20B 体 cmd.service.
+                                // instance.node.port）。放 rqr= 邻位=行中段，
+                                // 避开 TCP_TX 帽挤尾区。
+                                push_str(reply, &mut rn, " s54=");
+                                push_hex(reply, &mut rn, unsafe { SO_RUNG } as u64);
+                                push_str(reply, &mut rn, ".");
+                                push_hex(
+                                    reply,
+                                    &mut rn,
+                                    unsafe { SO_LADDER[(SO_RUNG as usize).min(7)] } as u64,
+                                );
+                                push_str(reply, &mut rn, ".");
+                                push_hex(reply, &mut rn, unsafe { SO_PATCH_N } as u64);
+                                push_str(reply, &mut rn, ".");
+                                push_hex(reply, &mut rn, unsafe { SO_ADV_N } as u64);
+                                push_str(reply, &mut rn, ".");
+                                push_hex(reply, &mut rn, unsafe { SO_ADV_SRC } as u64);
+                                push_str(reply, &mut rn, " ob=");
+                                push_hex(reply, &mut rn, unsafe { SO_OB_N } as u64);
+                                {
+                                    let obs = unsafe { SO_OB_N } as usize;
+                                    let o0 = if obs >= 2 { obs - 2 } else { 0 };
+                                    let mut oslot = o0;
+                                    while oslot < obs {
+                                        let oi = oslot & 1;
+                                        let mut oj = 0usize;
+                                        push_str(reply, &mut rn, ".");
+                                        while oj < 52 {
+                                            let obb = unsafe { SO_OB[oi][oj] };
+                                            push_hex(reply, &mut rn, (obb >> 4) as u64);
+                                            push_hex(reply, &mut rn, (obb & 0xF) as u64);
+                                            oj += 1;
+                                        }
+                                        oslot += 1;
+                                    }
+                                    if obs == 0 {
+                                        push_str(reply, &mut rn, "-");
                                     }
                                 }
                                 push_str(reply, &mut rn, " pd2=");
@@ -16057,6 +16260,22 @@ fn ctrl_service(
                                 push_hex(reply, &mut rn, unsafe { TF_PK14_N } as u64);
                                 push_str(reply, &mut rn, "\n");
                             }
+                            21 => {
+                                // s54v3：rm——RESTART_PD 打 modem 根域
+                                // msm/modem/root_pd（rp 的 wlan_pd 靶在 #46
+                                // 证腿通而域未初始化被拒 error 9；根域是
+                                // pd-mapper 在册可重启域）。modem 自我 SSR
+                                // →PIL 重载→新 loader 场，不烧手机命。
+                                unsafe {
+                                    SR_ROOT = 1;
+                                    SR_RP_MAN = SR_RP_MAN.wrapping_add(1);
+                                    SR_NEED_RP = true;
+                                    SR_RP_N = 0;
+                                }
+                                push_str(reply, &mut rn, "rm fired ");
+                                push_hex(reply, &mut rn, unsafe { SR_RP_MAN } as u64);
+                                push_str(reply, &mut rn, " root\n");
+                            }
                             3 => {}
 
                             _ => push_str(reply, &mut rn, "?\n"),
@@ -16088,6 +16307,8 @@ fn ctrl_service(
                 CTRL_LINE_N = 0;
                 CTRL_OVERFLOW = false;
                 TCP_SYN_AT = 0;
+                TCP_RX_AT = 0;
+                TCP_KNOCK = 0;
             }
             false
         }
@@ -16101,6 +16322,8 @@ fn ctrl_service(
                 CTRL_GREETED = false;
                 CTRL_LINE_N = 0;
                 CTRL_OVERFLOW = false;
+                TCP_RX_AT = 0;
+                TCP_KNOCK = 0;
             }
             false
         }

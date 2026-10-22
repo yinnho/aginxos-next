@@ -146,6 +146,7 @@ MODE="heartbeat"
 [ "${1:-}" = "--s51" ] && MODE="s51"
 [ "${1:-}" = "--s52" ] && MODE="s52"
 [ "${1:-}" = "--s53" ] && MODE="s53"
+[ "${1:-}" = "--s54" ] && MODE="s54"
 mkdir -p "${OUTDIR}"
 ELF="${OUTDIR}/heartbeat.elf"
 
@@ -1252,6 +1253,20 @@ elif [ "${MODE}" = "s53" ]; then
   ELF="${OUTDIR}/s53.elf"
   cp "${HERE}/target/aarch64-unknown-none-softfloat/release/redfin-bare" "${ELF}"
   BIN="${OUTDIR}/s53.bin"; IMG="${OUTDIR}/boot-s53.img"
+elif [ "${MODE}" = "s54" ]; then
+  # 刀 G54（行为刀·p_memsz 阶梯探针）：靴 #54 逆向离线定谳死点=hash
+  # 段 alloc（FUN_8c5f0f98 walk→alloc(p_memsz) 失败→rtld 静默退场，
+  # 0x1000 偏移读从未上线=alloc 从未成功）。行为证法：送数时覆写 SO
+  # phdr1.p_memsz(偏移104)/p_filesz(偏移100) 成阶梯值（rung0=0x2000
+  # 原值=对照靴）——若 alloc 是堵点且更小尺寸能过，hash 段读 RRQ
+  # （seek=1000）即上线现形=实锤+池尺寸二分。跨 modem SSR 存活：
+  # 讣告簇（chunk=52/type=4）+8s 门推档，兜底=距上次首服≥25s 推档；
+  # s54= 档位.档值.补丁数.推档数.源，ob= 讣告末2笔 52B 全保真。
+  # s44-s53 全保留。
+  (cd "${HERE}" && cargo build --release --target aarch64-unknown-none-softfloat) || { echo "cargo build FAILED (${MODE}) -- 不拷陈旧件" >&2; exit 1; }
+  ELF="${OUTDIR}/s54.elf"
+  cp "${HERE}/target/aarch64-unknown-none-softfloat/release/redfin-bare" "${ELF}"
+  BIN="${OUTDIR}/s54.bin"; IMG="${OUTDIR}/boot-s54.img"
 elif [ "${MODE}" = "s21" ]; then
   # 刀 G22：s20 同面，intent 池+归还追踪（cmd5 全量入池、TX 池挑、
   # RX_DONE/W_REUSE 归还、池干 RX_INTENT_REQ、cmd3/11 入 8B 集、ii= 台账）。
