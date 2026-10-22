@@ -4566,3 +4566,31 @@ ka 立活；cyc=112 +527s 硬死（5 粒 ICMP 全死、无软复活）——第�
   OACK 形状与写腿交换序（怀疑我们的 OACK 让 tqftp 客户端解析硬楔——
   契合「零 DATA 零 ERROR 零重试」的全冻死状）；WRQ 选项 dump（wn 只抄
   了文件名，选项段未录）。
+
+## 刀 G28（10-22 晨，码 323e5df 已推）——0x1011 悬案定谳渲染拼接伪影 + 写腿会话口对齐 stock
+
+- **#28 增记破案：线上从来没有 0x1011 的包**。rl 渲染端
+  `push_hex(TF_RL_N)` 后无分隔符直接拼首槽 dst——`rl=1011.1f.2` 实为
+  **N=0x10（16 笔请求）hex"10" + 首槽 dst=0x11"11" 拼接**。全量重解
+  #28 sm0：wl=11.1f.2（TOT=1）与 wx=1.1.11.1f.1.11.1（VIA=0x11
+  SRC=0x1f）与修正后阶梯首槽 11.1f.2 **三账合一**——客户端 WRQ 与读腿
+  同发 0x11，单发无重试；G24「写方言硬编码 0x1000+0x11」整个理论建立
+  在渲染伪影上（#24/#25 的"0x1011"同源；wx BL=1/BLV=11 是同包 FIFO
+  重扫挤占，非重试）。渲染修：N 与首槽补","。
+- **参照定谳（/tmp/tqftpserv-ref，linux-msm/tqftpserv 全读）**：rmtfs
+  是错参照（纯 QMI svc14+共享内存）；tqftpserv 才是我们的对端。stock
+  handle_wrq 语义：**每会话 qrtr_open(0) 新口**发 OACK、后续 ACK 同口，
+  客户端 DATA/ERROR 回会话口；回显集=blksize/timeoutms 恒回（缺省
+  512/1000）、tsize 键在场即回（值 0 也回，`*tsize != -1`）、wsize 恒回
+  （缺省 1，域 1..65535 无钳）、rsize≠0/seek≥0 才回；ERROR 9=END OF
+  TRANSFER 正常收幕非错。
+- **G28 五修**（对照 #24–#28 五靴「OACK 后零 DATA 零 ERROR 零重试」
+  全冻）：①写 OACK/ACK 源口改新会话口（tf_new_port 0x1000+，发成功闩
+  TF_W_XFER）；②客户端回会话口全闸收（on_wx 进 tf_note_ack/
+  tf_note_data/RX-log/武装门四闸）；③tsize 改键在场即回（tf_w_parse
+  加第 5 元 ts_seen）；④wsize 去 min(16) 钳（回显≠请求即协商失配）；
+  ⑤wo= 武装 WRQ 选项段快照（TF_W_OPTS 96B nibble hex+len，五靴零观测
+  的最后盲区——WRQ 带哪些键从此直读）。
+- 风险在册：G12/G13 读腿临时口实验曾「纯 ping 活、首查 sm 即死」——但
+  彼时无 on_xfer/on_wx 收口闸（G20+ 才有），写腿单发 OACK 暴露面一包；
+  若 #29 早死即回查此分岔。
