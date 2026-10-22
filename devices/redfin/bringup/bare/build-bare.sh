@@ -124,6 +124,7 @@ MODE="heartbeat"
 [ "${1:-}" = "--s28" ] && MODE="s28"
 [ "${1:-}" = "--s29" ] && MODE="s29"
 [ "${1:-}" = "--s30" ] && MODE="s30"
+[ "${1:-}" = "--s31" ] && MODE="s31"
 mkdir -p "${OUTDIR}"
 ELF="${OUTDIR}/heartbeat.elf"
 
@@ -974,6 +975,16 @@ elif [ "${MODE}" = "s30" ]; then
   ELF="${OUTDIR}/s30.elf"
   cp "${HERE}/target/aarch64-unknown-none-softfloat/release/redfin-bare" "${ELF}"
   BIN="${OUTDIR}/s30.bin"; IMG="${OUTDIR}/boot-s30.img"
+elif [ "${MODE}" = "s31" ]; then
+  # 刀 G30b（纯观察，零行为变更，叠在 G30 pc= 之上）：#34 po=fffffffe.38
+  # 定谳=QRTR_PORT_CTRL(0xfffffffe) 控制报文非底噪——56 封信整条线只计
+  # 数没读过。三件：ch= 控制包 typ 直方图（HELLO/NEW_SERVER/LOOKUP…）、
+  # cc= 最近一枚五元组 typ.svc.inst.node.port、lk= NEW_LOOKUP 目击闩
+  # SMEM_LOOK 上屏（G3 起只写不读的暗闩——modem 在找什么服务从此可见）。
+  (cd "${HERE}" && cargo build --release --target aarch64-unknown-none-softfloat)
+  ELF="${OUTDIR}/s31.elf"
+  cp "${HERE}/target/aarch64-unknown-none-softfloat/release/redfin-bare" "${ELF}"
+  BIN="${OUTDIR}/s31.bin"; IMG="${OUTDIR}/boot-s31.img"
 elif [ "${MODE}" = "s21" ]; then
   # 刀 G22：s20 同面，intent 池+归还追踪（cmd5 全量入池、TX 池挑、
   # RX_DONE/W_REUSE 归还、池干 RX_INTENT_REQ、cmd3/11 入 8B 集、ii= 台账）。

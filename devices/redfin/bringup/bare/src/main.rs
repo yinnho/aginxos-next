@@ -4741,6 +4741,13 @@ static mut TF_PO_C: [u32; 8] = [0; 8];
 /// 「它递的信长什么样」——答不答、怎么答，看完信再裁。
 static mut TF_PC: [u8; 64] = [0; 64];
 static mut TF_PC_PORT: u32 = 0;
+/// 刀 G30b（纯观察）：QRTR 控制面正账——#34 po=fffffffe.38 定谳那不是
+/// 底噪，是 QRTR_PORT_CTRL(0xfffffffe) 的控制报文（uapi qrtr.h 实锤），
+/// 整条线 56 封信只计数没读过。ch= 各 typ 计数（下标 typ-2，2..=13），
+/// cc= 最近一枚 typ.svc.inst.node.port 五元组；lk= 走 SMEM_LOOK（G3 起
+/// 只写不读的暗闩，本刀上屏）——modem 在 LOOKUP 什么服务从此可见。
+static mut TF_CH: [u32; 12] = [0; 12];
+static mut TF_CC: [u32; 5] = [0; 5];
 /// 刀 G21：TX 台账 4 槽——每笔 glink_tx_payload 成功记 (sport, 整包
 /// 字节数, 发后 head)。靴 #20 定谳需要：modem 消费停在 tail=28b8，
 /// 却不知道 frontier 上卡的是哪笔。台账按时间序滚存，渲染进 xl=。
@@ -12390,6 +12397,35 @@ fn scan_new_servers(fifo: u64, rh: u64) {
                         TF_PC.copy_from_slice(pb);
                         TF_PC_PORT = dst_port;
                     }
+                    // 刀 G30b：控制面包记账——dst 口 0xfffffffe=QRTR_PORT_CTRL，
+                    // typ(uapi qrtr_pkt_type) 2..=13 入直方图；五元组抄
+                    // typ.svc.inst.node.port（载荷≥56 才有 svc/inst、≥68 才有
+                    // node/port；HELLO/PING 短包后四元记 0）。
+                    if dst_port == 0xfffffffe && typ >= 2 && typ <= 13 {
+                        let ci = (typ - 2) as usize;
+                        TF_CH[ci] = TF_CH[ci].saturating_add(1);
+                        TF_CC[0] = typ;
+                        TF_CC[1] = if chunk >= 56 {
+                            rd32((fifo + off + 52) as usize)
+                        } else {
+                            0
+                        };
+                        TF_CC[2] = if chunk >= 56 {
+                            rd32((fifo + off + 56) as usize)
+                        } else {
+                            0
+                        };
+                        TF_CC[3] = if chunk >= 68 {
+                            rd32((fifo + off + 60) as usize)
+                        } else {
+                            0
+                        };
+                        TF_CC[4] = if chunk >= 68 {
+                            rd32((fifo + off + 64) as usize)
+                        } else {
+                            0
+                        };
+                    }
                 }
                 if typ == 1
                     && (dst_port == TF_DATA_PORT || dst_port == TF_SVC_PORT || on_xfer || on_wx)
@@ -13740,6 +13776,70 @@ fn ctrl_service(
                                     push_str(reply, &mut rn, ".64");
                                 } else {
                                     push_str(reply, &mut rn, "-");
+                                }
+                                // 刀 G30b：ch= 控制面 typ 直方图（typ:cnt 只列
+                                // 非零，typ 语义=uapi qrtr_pkt_type）、cc= 最近
+                                // 一枚五元组 typ.svc.inst.node.port、lk= NEW_LOOKUP
+                                // 目击（svc.inst×≤8；SMEM_LOOK 首次上屏）。
+                                push_str(reply, &mut rn, " ch=");
+                                let mut chi = 0u32;
+                                let mut chany = false;
+                                while chi < 12 {
+                                    let ccnt = unsafe { TF_CH[chi as usize] };
+                                    if ccnt != 0 {
+                                        if chany {
+                                            push_str(reply, &mut rn, ",");
+                                        }
+                                        push_hex(reply, &mut rn, (chi + 2) as u64);
+                                        push_str(reply, &mut rn, ":");
+                                        push_hex(reply, &mut rn, ccnt as u64);
+                                        chany = true;
+                                    }
+                                    chi += 1;
+                                }
+                                if !chany {
+                                    push_str(reply, &mut rn, "-");
+                                }
+                                push_str(reply, &mut rn, " cc=");
+                                if unsafe { TF_CC[0] } != 0 {
+                                    let mut cci = 0u32;
+                                    while cci < 5 {
+                                        if cci > 0 {
+                                            push_str(reply, &mut rn, ".");
+                                        }
+                                        push_hex(
+                                            reply,
+                                            &mut rn,
+                                            unsafe { TF_CC[cci as usize] } as u64,
+                                        );
+                                        cci += 1;
+                                    }
+                                } else {
+                                    push_str(reply, &mut rn, "-");
+                                }
+                                push_str(reply, &mut rn, " lk=");
+                                let nlk = unsafe { SMEM_NLOOK };
+                                if nlk == 0 {
+                                    push_str(reply, &mut rn, "-");
+                                } else {
+                                    let mut lki = 0u32;
+                                    while lki < nlk && lki < 8 {
+                                        if lki > 0 {
+                                            push_str(reply, &mut rn, ",");
+                                        }
+                                        push_hex(
+                                            reply,
+                                            &mut rn,
+                                            unsafe { SMEM_LOOK[lki as usize * 2] } as u64,
+                                        );
+                                        push_str(reply, &mut rn, ".");
+                                        push_hex(
+                                            reply,
+                                            &mut rn,
+                                            unsafe { SMEM_LOOK[lki as usize * 2 + 1] } as u64,
+                                        );
+                                        lki += 1;
+                                    }
                                 }
                                 push_str(reply, &mut rn, " i2=");
                                 push_hex(reply, &mut rn, unsafe { I2_N } as u64);
