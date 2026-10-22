@@ -4718,6 +4718,14 @@ static mut TF_W_SPORT: u32 = 0;
 static mut TF_W_ACKS: u32 = 0;
 static mut TF_W_BYTES: u64 = 0;
 static mut TF_W_ERRS: u32 = 0;
+/// 刀 G28：写会话口。stock handle_wrq 每会话 qrtr_open(0) 新口发 OACK，
+/// 客户端 DATA/ERROR 都回该口（tqftpserv.c:658-716）；旧实现从 0x11 服务口
+/// 回——客户端收 OACK 后零 DATA 零 ERROR 零重试全冻（#24–#28 五靴），对齐
+/// 会话口是 stock 形状的最后一处差。TF_W_OPTS[N]=武装 WRQ 选项段快照
+/// （读腿 RRQ 后到会把 TF_OPTBUF 换血，武装时抄盘才稳）。
+static mut TF_W_XFER: u32 = 0;
+static mut TF_W_OPTS: [u8; 96] = [0; 96];
+static mut TF_W_OPTS_N: u8 = 0;
 /// 刀 G21：TX 台账 4 槽——每笔 glink_tx_payload 成功记 (sport, 整包
 /// 字节数, 发后 head)。靴 #20 定谳需要：modem 消费停在 tail=28b8，
 /// 却不知道 frontier 上卡的是哪笔。台账按时间序滚存，渲染进 xl=。
@@ -7386,16 +7394,20 @@ fn tf_save_opts(fifo: u64, off: u64, chunk: u64) {
 /// 刀 G21：WRQ 选项解析（只读 TF_OPTBUF → 元组，不碰任何共享静态——
 /// 读会话的 TF_REQ_*/TF_WSENT 不许被写腿污染；tf_apply_saved 会清
 /// TF_WSENT 破坏 G19 窗不变式，写腿禁用）。缺省 blk=512/wsz=0/tmo=1000。
-fn tf_w_parse() -> (u32, u32, u32, u32, u32, u32) {
+/// 刀 G28：加第 5 元 ts_seen=tsize 键在场（stock handle_wrq：tsize 只要
+/// 客户端带键就回显、值 0 也回，`tsize && *tsize != -1`；旧门「值非 0」
+/// 在 tsize=0 时漏回）。
+fn tf_w_parse() -> (u32, u32, u32, u32, bool, u32, u32) {
     let mut blk = 512u32;
     let mut wsz = 0u32;
     let mut tmo = 1000u32;
     let mut tsz = 0u32;
+    let mut ts_seen = false;
     let mut rs = 0u32;
     let mut sk = 0u32;
     let n = unsafe { TF_OPTLEN } as usize;
     if n < 4 {
-        return (blk, wsz, tmo, tsz, rs, sk);
+        return (blk, wsz, tmo, tsz, ts_seen, rs, sk);
     }
     let mut p = 2usize;
     let mut skipped = 0u32;
@@ -7448,13 +7460,14 @@ fn tf_w_parse() -> (u32, u32, u32, u32, u32, u32) {
             tmo = v;
         } else if klen == 5 && k0 == b't' {
             tsz = v;
+            ts_seen = true;
         } else if klen == 5 && k0 == b'r' {
             rs = v;
         } else if klen == 4 && k0 == b's' {
             sk = v;
         }
     }
-    (blk, wsz, tmo, tsz, rs, sk)
+    (blk, wsz, tmo, tsz, ts_seen, rs, sk)
 }
 
 fn tf_apply_saved() {
@@ -7876,9 +7889,11 @@ fn tf_reply(ufs: &mut Ufs, at478: u64, at479: u64, sz479: u64) {
         q[1] = 4;
         q[2] = (blk >> 8) as u8;
         q[3] = blk as u8;
-        // 刀 G24：写腿回程口镜像来程（#24 WRQ 走知名口 0x1011，旧硬编码
-        // 0x11 → 客户端等不存在的应答口）。
-        let wvia = if unsafe { TF_W_VIA } != 0 {
+        // 刀 G28：写 ACK 回程口=会话口（与 OACK 同口，stock 同一
+        // session socket）；会话口未闩（OACK 没发出去）才退 VIA/0x11。
+        let wvia = if unsafe { TF_W_XFER } != 0 {
+            unsafe { TF_W_XFER }
+        } else if unsafe { TF_W_VIA } != 0 {
             unsafe { TF_W_VIA }
         } else {
             0x11
@@ -7918,12 +7933,14 @@ fn tf_reply(ufs: &mut Ufs, at478: u64, at479: u64, sz479: u64) {
         // 刀 G21：改 tf_w_parse 元组——tf_apply_saved 会清 TF_WSENT 破坏
         // G19 读窗不变式、且此前解析的是陈旧 RRQ 选项（op2 从不存盘），
         // 两毒齐避；TF_OPTBUF 已由 walker 的 op2 分支随 pend 换血。
-        let (wblk, wwsz, wtmo, wtsz, wrs, wsk) = tf_w_parse();
+        let (wblk, wwsz, wtmo, wtsz, wts_seen, wrs, wsk) = tf_w_parse();
         unsafe {
             TF_W_ACTIVE = true;
             TF_W_EXP = 1;
             TF_W_BLK = wblk;
-            TF_W_WSZ = if wwsz == 0 { 1 } else { wwsz.min(16) };
+            // 刀 G28：去 min(16) 上限——stock 无此钳（wsize 域 1..65535），
+            // 回显值≠请求值即协商失配。
+            TF_W_WSZ = if wwsz == 0 { 1 } else { wwsz };
             TF_W_PEND = false;
             TF_W_SHORT = false;
         }
@@ -7947,7 +7964,9 @@ fn tf_reply(ufs: &mut Ufs, at478: u64, at479: u64, sz479: u64) {
             q[n] = 0;
             n += 1;
         }
-        if wtsz != 0 {
+        if wts_seen {
+            // 刀 G28：tsize 键在场即回（stock `tsize && *tsize != -1`——
+            // 客户端带键报 0 字节写也回显 0；旧「值非 0」门在 0 时漏键）。
             tf_put_cstr(&mut q, &mut n, b"tsize");
             tf_put_dec(&mut q, &mut n, wtsz);
             if n < q.len() {
@@ -7956,7 +7975,8 @@ fn tf_reply(ufs: &mut Ufs, at478: u64, at479: u64, sz479: u64) {
             }
         }
         {
-            let wsv = if wwsz > 0 { wwsz.min(16) } else { 1 };
+            // 刀 G28：wsize 回显去 min(16)（同 TF_W_WSZ）。
+            let wsv = if wwsz > 0 { wwsz } else { 1 };
             tf_put_cstr(&mut q, &mut n, b"wsize");
             tf_put_dec(&mut q, &mut n, wsv);
             if n < q.len() {
@@ -7980,23 +8000,25 @@ fn tf_reply(ufs: &mut Ufs, at478: u64, at479: u64, sz479: u64) {
                 n += 1;
             }
         }
-        // 刀 G24：OACK 回程口=WRQ 来程口（TF_W_VIA，武装时记）。
-        let wvia = if unsafe { TF_W_VIA } != 0 {
-            unsafe { TF_W_VIA }
-        } else {
-            0x11
-        };
+        // 刀 G28：OACK 源口=新会话口（stock handle_wrq：qrtr_open(0) 每
+        // 会话新口，OACK 与后续 ACK 同口；旧 wvia=0x11 服务口——RFC 1350
+        // 血统的客户端只认新传输口，#24–#28 客户端收 OACK 后全冻的头号
+        // 嫌疑）。发成功才闩 TF_W_XFER；失败 pend 留住下圈重试（新口）。
+        let wport = tf_new_port();
         if glink_tx_payload(
             at478,
             at479,
             tx_head,
             sz479,
-            wvia,
+            wport,
             unsafe { TF_NODE },
             unsafe { TF_PORT },
             &q[..n],
         ) {
-            unsafe { TF_W_OX = TF_W_OX.wrapping_add(1); }
+            unsafe {
+                TF_W_OX = TF_W_OX.wrapping_add(1);
+                TF_W_XFER = wport;
+            }
             tf_drop_pend();
         }
         return;
@@ -12309,7 +12331,11 @@ fn scan_new_servers(fifo: u64, rh: u64) {
                 let dst_port = rd32((fifo + off + 44) as usize);
                 let xfer_port = unsafe { TF_XFER_PORT };
                 let on_xfer = xfer_port != 0 && dst_port == xfer_port;
-                if typ == 1 && (dst_port == TF_DATA_PORT || dst_port == TF_SVC_PORT || on_xfer) {
+                // 刀 G28：写会话口同权收——客户端 DATA/ACK/ERROR 回会话口。
+                let on_wx = unsafe { TF_W_XFER } != 0 && dst_port == unsafe { TF_W_XFER };
+                if typ == 1
+                    && (dst_port == TF_DATA_PORT || dst_port == TF_SVC_PORT || on_xfer || on_wx)
+                {
                     tf_note_ack(off, fifo);
                 }
                 // 刀 G20：WRQ 客户端��� DATA(op3)——发往我们 OACK 的源口
@@ -12317,14 +12343,15 @@ fn scan_new_servers(fifo: u64, rh: u64) {
                 // tf_note_ack，互不串台）。刀 G24：0x1011 写腿同收。
                 if typ == 1
                     && chunk >= 52
-                    && (dst_port == TF_SVC_PORT || dst_port == TF_ALT_PORT || on_xfer)
+                    && (dst_port == TF_SVC_PORT || dst_port == TF_ALT_PORT || on_xfer || on_wx)
                 {
                     tf_note_data(off, fifo, chunk as u32);
                 }
                 if typ == 1 && chunk >= 52 && unsafe { TF_ST } >= 1 {
                     let op = ((rd8(fifo + off + 48) as u32) << 8) | (rd8(fifo + off + 49) as u32);
                     // 0x12 是自家假 pd-mapper 口，QMI 头 00 04 恒撞 ACK 码，不入册。
-                    if on_xfer || dst_port == TF_SVC_PORT
+                    // 刀 G28：会话口两股（读 xfer/写 wx）同入册。
+                    if on_wx || on_xfer || dst_port == TF_SVC_PORT
                         || (dst_port != 0x12 && (op == 4 || op == 5))
                     {
                         // 刀 G6：第三元=op5 的错误码 / op4 的块号（其余 op 填 ffff）。
@@ -12667,12 +12694,15 @@ fn scan_new_servers(fifo: u64, rh: u64) {
                         }
                     }
                 }
-                // 刀 G24：武装门收知名口 0x1011——#24 阶梯首槽 dst=0x1011
-                // 实锤客户端写方言 WRQ 发 0x1000+0x11，旧门整段吞掉（无
-                // OACK 无 ERROR，写会话全静）。读腿仍以 0x11 为主道。
+                // 刀 G24：武装门收知名口 0x1011（刀 G28 勘误：#24 阶梯首槽
+                // dst=0x1011 实为 rl 渲染 N 与首槽拼接伪影——线上 WRQ 一直
+                // 走 0x11；0x1011 分支留存无害）。刀 G28：加写会话口——
+                // 客户端 DATA(op3)/ERROR(op5) 回会话口要能进 op3/op5 分支。
                 if typ == 1
                     && dst_node == 1
-                    && (dst_port == 0x11 || dst_port == TF_ALT_PORT)
+                    && (dst_port == 0x11
+                        || dst_port == TF_ALT_PORT
+                        || (unsafe { TF_W_XFER } != 0 && dst_port == unsafe { TF_W_XFER }))
                     && chunk >= 34
                 {
                     let op0 = ((rd8(fifo + off + 48) as u32) << 8) | (rd8(fifo + off + 49) as u32);
@@ -12750,6 +12780,20 @@ fn scan_new_servers(fifo: u64, rh: u64) {
                                 // 刀 G21：WRQ 选项抄盘（读腿专用 TF_OPTBUF 在
                                 // pend 时随请求换血，单 pend 槽无竞态）。
                                 tf_save_opts(fifo, off, chunk);
+                                // 刀 G28：武装时快照选项段进 TF_W_OPTS——
+                                // 后到的读腿 RRQ 会把 TF_OPTBUF 换血，wo=
+                                // 要的是 WRQ 原话（五靴零观测的最后盲区）。
+                                TF_W_OPTS = [0; 96];
+                                let mut won = unsafe { TF_OPTLEN } as usize;
+                                if won > 96 {
+                                    won = 96;
+                                }
+                                let mut woi = 0usize;
+                                while woi < won {
+                                    TF_W_OPTS[woi] = TF_OPTBUF[woi];
+                                    woi += 1;
+                                }
+                                TF_W_OPTS_N = won as u8;
                                 // 刀 G24：写腿来程口入账（写 OACK/ACK 回程
                                 // 镜像它；读腿武装不改此账）。
                                 TF_W_VIA = dst_port;
@@ -13562,6 +13606,20 @@ fn ctrl_service(
                                     }
                                     wli += 1;
                                 }
+                                // 刀 G28：wo=武装 WRQ 选项段快照（≤96B nibble
+                                // hex + .len）——五靴零观测的最后盲区：WRQ
+                                // 带哪些键、值多少，从此直读。
+                                push_str(reply, &mut rn, " wo=");
+                                let mut woi2 = 0u32;
+                                let wol = unsafe { TF_W_OPTS_N } as u32;
+                                while woi2 < wol {
+                                    let wb = unsafe { TF_W_OPTS[woi2 as usize] };
+                                    push_hex(reply, &mut rn, (wb >> 4) as u64);
+                                    push_hex(reply, &mut rn, (wb & 0xF) as u64);
+                                    woi2 += 1;
+                                }
+                                push_str(reply, &mut rn, ".");
+                                push_hex(reply, &mut rn, wol as u64);
                                 // 刀 G27：wn= 武装 WRQ 文件名快照（hex 直读）。
                                 push_str(reply, &mut rn, " wn=");
                                 let mut wni = 0u32;
@@ -13693,6 +13751,10 @@ fn ctrl_service(
                                 // 补盲洞：此前请求只认 0x11，换口请求整段不可见。
                                 push_str(reply, &mut rn, " rl=");
                                 push_hex(reply, &mut rn, unsafe { TF_RL_N } as u64);
+                                // 刀 G28：N 与首槽补分隔——旧「N 直接拼首槽
+                                // dst」造出 dst=0x1011 假读数（N=0x10 + dst
+                                // 0x11 → "10"+"11"），G24 写方言悬案的结构根因。
+                                push_str(reply, &mut rn, ",");
                                 {
                                     let total = unsafe { TF_RL_N } as usize;
                                     let shown = total.min(6);

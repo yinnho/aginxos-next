@@ -121,6 +121,7 @@ MODE="heartbeat"
 [ "${1:-}" = "--s25" ] && MODE="s25"
 [ "${1:-}" = "--s26" ] && MODE="s26"
 [ "${1:-}" = "--s27" ] && MODE="s27"
+[ "${1:-}" = "--s28" ] && MODE="s28"
 mkdir -p "${OUTDIR}"
 ELF="${OUTDIR}/heartbeat.elf"
 
@@ -940,6 +941,17 @@ elif [ "${MODE}" = "s27" ]; then
   ELF="${OUTDIR}/s27.elf"
   cp "${HERE}/target/aarch64-unknown-none-softfloat/release/redfin-bare" "${ELF}"
   BIN="${OUTDIR}/s27.bin"; IMG="${OUTDIR}/boot-s27.img"
+elif [ "${MODE}" = "s28" ]; then
+  # 刀 G28：写腿会话口对齐 stock——#28 破案 wn=/readwrite/server_check.txt
+  # + wl=11.1f.2 单发零重试零 DATA；0x1011 悬案定谳 rl 渲染拼接伪影
+  # （N 直接拼首槽 dst）。修：写 OACK/ACK 从新会话口（stock handle_wrq
+  # qrtr_open(0)，tf_new_port 0x1000+）、客户端回会话口全闸收（on_wx）、
+  # tsize 键在场即回、wsize 去 min(16)。观察：wo= WRQ 选项段快照（五靴
+  # 零观测盲区）+ rl N/首槽补分隔。
+  (cd "${HERE}" && cargo build --release --target aarch64-unknown-none-softfloat)
+  ELF="${OUTDIR}/s28.elf"
+  cp "${HERE}/target/aarch64-unknown-none-softfloat/release/redfin-bare" "${ELF}"
+  BIN="${OUTDIR}/s28.bin"; IMG="${OUTDIR}/boot-s28.img"
 elif [ "${MODE}" = "s21" ]; then
   # 刀 G22：s20 同面，intent 池+归还追踪（cmd5 全量入池、TX 池挑、
   # RX_DONE/W_REUSE 归还、池干 RX_INTENT_REQ、cmd3/11 入 8B 集、ii= 台账）。
