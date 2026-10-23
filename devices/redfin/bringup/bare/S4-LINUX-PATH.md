@@ -6146,3 +6146,51 @@ instance.node.port）——放 rqr= 邻位=行中段，避开 TCP_TX 帽挤尾�
 - 产物 126,976B ✓；垫 68,157,440B、md5 2eda6f1f…。链 #56
   （/tmp/s54v4-chain.sh）等物理 fastboot 现场 → 闸门 → 刷 v4 →
   set_active a → reboot；起机后单探活循环点 rm。
+
+### 九、v4 自愈刀首考失败 + USB phy 楔死第二案 + s54v5 五刀（10-23 上午）
+
+- **07:38:20 楔死复现**：杀常驻观察循环（dd-kill 粗暴断开）后 2323
+  再度 SYN 黑洞，v4 两路自愈（180s 空闲/敲门≥8）都没救回——07:44
+  仍黑洞，ICMP 仍活。静态面穷尽：所有状态都有出口、heal 逻辑推演
+  成立，定谳只能靠盘上环（ring_put 每条 FUA 落盘+回读验证，跨重启
+  持存——遗言不怕等）。
+- **取证链三波三折**：①07:47 武装等物理 fastboot，30min 无果判
+  NO FASTBOOT（事后 11:34 发现 fastboot 一直在——等待窗内沙箱侧
+  fastboot 探测疑似失明，教训：长窗等待循环里的 fastboot 探测要
+  能区分「不在总线」与「自己看不见」）；②11:36 手动补跑：闸门过、
+  set_active a、fastboot reboot——**reboot 后整机从 USB 总线消失**
+  （fastboot 空、en10 消失、ICMP 灭），#54/#55 家族 USB phy 楔死
+  **第二案实锤**（暖复位链 ~50% 杀 USB）；③链子对着死总线空转被
+  手动收尸。07:38 楔死案的环遗言原样在盘（11:36 命也只写了启动
+  记录），等下一次活控制台用 lg 深挖。
+- **静态复查抓出 v4 两处真雷**（皆为本刀根因候选）：
+  1. **敲门计数空转**：`tcp_rx_flags` 读全局 `RX_LEN`，但
+     `CtrlPhy::receive` 消费帧时已把它清零——Established 分支里读到
+     的几乎恒 None，计数永不走，自愈只剩 180s 空闲一条腿。
+  2. **Closing/SynSent 无出口**：关门族臂漏了这两个态，落 `_ => false`
+     万年不动（理论难抵达，但楔死形状对不上时它们是仅剩嫌疑）。
+- **s54v5 五刀**（20b5a507 后第三刀，11:5x–12:0x）：
+  1. 敲门改收帧时点：`SYN_SEQ` 在 `s20_on_frame` 落邮箱时对 OUT_BUF
+     直接判增（单核事件路径无竞态，邮箱满被丢的 SYN 也算数）；
+     `TCP_KNOCK_BASE`=进入 st=3 时的基线，差值≥8 撤桌。v4 的
+     tcp_rx_flags/TCP_KNOCK/TCP_RXF 全退役。
+  2. 关门族臂补 `Closing|SynSent`——任何非 Listen 态都有出口。
+  3. `tcp_mark` 帽 16→64（v4 现场帽子烧完，事故窗 st 迁移全哑）。
+  4. **深挖环**：`lg<n>`（尾往回 ≤24 条）+`lm<seq>`（seq 起 16 条
+     窗口，尾向头扫、首个 seq<s0 止）+`LOG_OUT` 384→2048；`log`
+     四条版改为 `ring_back(4)`。
+  5. **USB 无枚举自愈 afb**：开机 120s 仍 `EP0.devst<2`（宿主没走
+     到 SET_CONFIGURATION）即判 USB 死，直接 `CTRL_FB=2`（立即档）
+     暖复位进 fastboot——XBL 全套重初始化 USB，链子见 fastboot 就
+     接着滚。枚举正常的命秒过 devst=2 永不触发；拔线命一趟 fb 后
+     停 fastboot（可接受停机位）。**USB 死命本就零观察价值（s54
+     证据全走控制台），杀之无代价**。
+  - sm 帧新增 `tp=`（TCP st 码.SYN_SEQ 累计.状态年龄秒）——此后
+    TCP 体检随帧自带，不再全靠事后环。
+- 产物 131,072B（v5 代码增长）；垫 68,157,440B、md5
+  536ebfe9c14f567814f6ea2858e6d763。链 /tmp/s54v5-chain.sh：等
+  fastboot（用户 Power+VolDown 直进 或 v4 控制台 fb 代打）→验件→
+  闸门→刷 v5→set_active a→reboot→等控制台（含 auto-fb 接力三掷）
+  →lg24 深挖 07:38 遗言→sm 全帧。骰机 v2=/tmp/s54-loop2.sh（12 圈×
+  [等控制台/auto-fb 接住→180s 观察→fb→闸门→set_active a→reboot]，
+  不刷零磨损）——判读完遗言再点火。
