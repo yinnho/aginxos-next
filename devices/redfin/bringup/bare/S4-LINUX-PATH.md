@@ -6596,3 +6596,82 @@ v3 尾轮 rt 同构（RRQ 口 21-26，口 25 得 34 块/口 26 得 a0 块后停�
 时间线：20:54 武装 → 20:58:03 fastboot（手动 Power+VolDown）→
 20:59:12 console → 21:04:30 扫完 → 21:06:27 run done。
 代码已先落 `6b84893d`（feat s55+s56），本收据随后垫顶。
+
+## 二十一、s57/s58 出件 + rtld 静态路径闭环：毙点翻案=ET_EXEC 断言（2026-10-23 深夜，案头期+fb 楔死窗口）
+
+**fb 骰机再杀 phy（22:14:30）**：s57 出件后走 `fb` 骰 fastboot——
+ping 死、fastboot 20 分钟不出（等待器 22:34:40 正式超时）、ioreg 无
+Google 设备（只剩 hubs/CH340/Billboard）=USB phy 楔死第 N 案，唯
+物理断电可解。22:36 已推通知请手工断电重启进 fastboot（用户此窗
+说过「我来手工」）。fb 骰机≈50% 杀 phy 的旧律再证——**非必要不
+fb，刷机等手动 Power+VolDown**。
+
+### 静态逆向闭环（Ghidra proj-full MFULL，b30=elf_loader PD 全链）
+
+本窗把 dlopen 全链读完（AAnchor2/6/7 三轮，反编译件在
+re-b22/out-full/）：
+
+- **链**：PD 入口 `1e400278` → `dlopen("wlanmdsp.mbn", 4)`（
+  `1e400ca8`；**mode=4 rtld_main 写死**）→ `_rtld_load_library`
+  `1e405e70`（search.c 硬路径/搜索路径二枝）→ open 编排
+  `1e405570`（fopen=DAT_1e41b048、fstat=DAT_1e41b050、close=
+  DAT_1e41b04c）→ **分派器 `1e404730`：`mode&4==0`→动态
+  map_object `1e401a70`；否则→静态 map_object `1e403a60`**。
+  ⇒ **wlan 装载恒走静态路径**。
+- **静态路径**（3280B）：**无 hash 段 mmap、无验签**；硬断言
+  `e_type==2 (ET_EXEC)`；逐 PT_LOAD 定址 mmap(p_vaddr, p_memsz,
+  prot, 1, fd, p_offset)；失败词 "Failed to mmap segment number
+  %d 0x%X Bytes, object too big"。
+- **动态路径**（6488B，wlan 永不达）：phdr 扫 `flags&0x07000000==
+  0x02000000`（=ph1）→hash 段 mmap+verify_start/update/end→段
+  循环。**s54 阶梯补的 ph1 是 PT_NULL——静态路径整段跳过，阶梯
+  从头到尾=对照靴**（推档机制保留当集步进器用）。
+- verify_headers `1e403408`：e_type∈{2,3} 都收（断言在静态
+  map_object 里，不在 verify）；phnum≤15、phentsize=0x20——
+  服务文件 5 phdr 全过。
+- **ops 表** 0x1e41b030(=0x10)/0x1e41b032(=0xfff1)+16 槽
+  0x1e41b034..0x1e41b074：ph31 fsz=0x1378 < 表偏移 0x8030 <
+  msz=0xa000 ⇒ **纯 bss 运行时装填**；b30/b31 文件扫指针表全负
+  （b30 六条 run=别处 QDI 跳表；b31 只 rodata 字符串指针）——
+  Ghidra 写引用盲区=计算地址写。线索：crt 溜槽 `1e400c90` →
+  `_rtld_init 1e400ae0(param_3=spawn args)` 的返回门
+  **`FUN_1e40081c(param_3)`**=ops 安装头号候选（scan7b 在跑）；
+  `1e400488`=空桩（覆写点）、`1e405370`=objlist 追加器、
+  `1e405b60`=搜索路径清单安装器（非 ops）。
+- 线上三 op（open/fstat/read 头页）都活=ops 已装好可用——表来
+  源问题不挡刀。
+
+### 毙点翻案（#54 alloc 判词撤销）
+
+静态路径顺序：malloc(0xd0 obj)→malloc(0x1000 头页)→**read 头页**
+→e_type 断言。线上 160B 头读（恰=5×32 phdr 表本体）**发生了**
+⇒ 两次 malloc 都活、池健康 ⇒ verify_headers 逐项过 ⇒ **毙点=
+ET_EXEC 断言**（服务文件 ET_DYN(3)≠2）。#54「alloc(p_memsz)
+err 0xb」系动态路径误模推演，撤。
+
+生产悖论立案：同 b30 在真机也断言 ET_EXEC ⇒ 真机该搜索路径上的
+wlanmdsp 必是 ET_EXEC 工件——我们的 so/549_38_0.mbn（ET_DYN、
+e_entry=0）要么不是正身、要么生产走他路。不挡本刀（先看段读）。
+
+### s58 出件（22:38）
+
+- 刀：服务泵块 0 盖 0x10 时改 e_type 字节 0x03→0x02（幂等：现值
+  =3 才写；SO_ETYPED 计数；sm `s54=` 链插 `et=` 段）。前提实证：
+  服务文件字节[0x10]=0x03、e_phoff=0x34、phnum=5。
+- 单变量纪律：不动 vaddr（ph2 va=0 若被 mmap shim 拒）、不动
+  e_entry(=0，调 0 崩在段读之后，先看段读）——s59 候补库。
+- **WIN 签名升级**：`rl=` 现段读 seek=3000（ph2 RX 0x11753@off
+  0x3000）/seek=15000（ph3 RW 0xd643c@off 0x15000）=过断言+mmap
+  池真考；seek=1000 旧 hash 门保留观察。仍静默=断言非毙点或 shim
+  拒 va=0（两歧 s59 拆）。
+- 工件：boot-s58.img 131072B md5 `00d22b66b5e1cc2aa573ac6decd91a47`；
+  垫 68,157,440B md5 `dfc09d8eac5f948d38750d3141f40ab8`（122 环
+  毒律零填）。驱动 `/tmp/s58-run.sh`（flash|drive；drive=settle
+  75s→sm→7 集 mz 间隔 25s→每集 sm 快照+WIN grep seek=
+  (1000|3000|15000)+et= 命中观察）。
+- 附：s57（mz 全 PIL 舞步集发生器）同件烤出未上机——两刀合并
+  一靴（mz 每集重装喂档，e_type 刀每集生效）。
+
+时间线：22:14:30 fb 杀 phy → 22:34:40 等待器超时定谳 → 22:36 推
+通知等手工 → 22:38 s58 烤成垫毒 → 22:41 码尖 `9fbe43b8`（s57+s58）
+→ 本收据垫顶。check.sh 全绿先过。
