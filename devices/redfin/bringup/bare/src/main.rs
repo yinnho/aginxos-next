@@ -8961,12 +8961,41 @@ fn tf_reply(ufs: &mut Ufs, at478: u64, at479: u64, sz479: u64) {
     if op == 1 && !armed && fresh && (tf_is_wlan() || (tf_is_so() && unsafe { TZ_ST } == 1)) {
         return;
     }
-    if op != 1
-        || !armed
-        || (!retarget && !fresh && !retry)
-        || !(tf_is_so() || tf_is_wlan())
-        || (!tf_is_wlan() && unsafe { TZ_ST } != 1)
-    {
+    if op != 1 || !armed || (!retarget && !fresh && !retry) {
+        tf_drop_pend();
+        return;
+    }
+    // s61：无服务名不再静默弃——镜像 stock tqftpserv 回 ERROR(1 File not
+    // found)。s60 定谳（收据二十六）：两名字之外全走 arm→下一拍无声丢，
+    // EFS 读每笔拖满 1s×N 超时把编排卡死（传感器 PD SNS_REG_INIT:0xb2
+    // 同根），arm→弃窗再连坐撞窗请求（so 探针三笔 disp=2 全灭）。快失败
+    // =编排照 stock 节奏往前走；探针生存率另由受理门抢占刀保底。
+    if !tf_is_so() && !tf_is_wlan() {
+        let mut q = [0u8; 32];
+        q[1] = 5;
+        q[3] = 1;
+        let msg = b"File not found";
+        let mut m = 4usize;
+        while m < 4 + msg.len() {
+            q[m] = msg[m - 4];
+            m += 1;
+        }
+        q[m] = 0;
+        m += 1;
+        glink_tx_payload(
+            at478,
+            at479,
+            tx_head,
+            sz479,
+            TF_SVC_PORT,
+            unsafe { TF_NODE },
+            unsafe { TF_PORT },
+            &q[..m],
+        );
+        tf_drop_pend();
+        return;
+    }
+    if !tf_is_wlan() && unsafe { TZ_ST } != 1 {
         tf_drop_pend();
         return;
     }
@@ -14018,9 +14047,12 @@ fn scan_new_servers(fifo: u64, rh: u64) {
                     // 楔死 pend，62 库 so 线全 disp=2 排队死）。写腿降副线：
                     // 被挤 WRQ 客户端 1s 超时自会重试，TF_W_* 会话态不随
                     // pend 走，无在途损失。WRQ 不抢读（会话态机有游标）。
-                    let preempt_w = op0 == 1
-                        && unsafe { TF_PEND && TF_OP == 2 }
-                        && tf_req_serveable(fifo, off, chunk);
+                    // s61：抢占前置撤 TF_OP==2——s60 实测占位者是 unserved
+                    // 名的 arm→弃窗（读占读无救援，10s stale 门追不上客户
+                    // 端 1s 重试预算，so 探针三笔 disp=2 全灭）。占位者皆
+                    // 未服务（pend 只活 arm→OACK 一拍），被挤者 1s 自愈。
+                    let preempt_w =
+                        op0 == 1 && unsafe { TF_PEND } && tf_req_serveable(fifo, off, chunk);
                     if op0 == 1 || op0 == 2 {
                         let ti = (unsafe { TF_RT_N } % 8) as usize;
                         let disp = if seen {

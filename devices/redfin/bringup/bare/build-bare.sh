@@ -153,6 +153,7 @@ MODE="heartbeat"
 [ "${1:-}" = "--s58" ] && MODE="s58"
 [ "${1:-}" = "--s59" ] && MODE="s59"
 [ "${1:-}" = "--s60" ] && MODE="s60"
+[ "${1:-}" = "--s61" ] && MODE="s61"
 mkdir -p "${OUTDIR}"
 ELF="${OUTDIR}/heartbeat.elf"
 
@@ -1343,6 +1344,20 @@ elif [ "${MODE}" = "s60" ]; then
   ELF="${OUTDIR}/s60.elf"
   cp "${HERE}/target/aarch64-unknown-none-softfloat/release/redfin-bare" "${ELF}"
   BIN="${OUTDIR}/s60.bin"; IMG="${OUTDIR}/boot-s60.img"
+elif [ "${MODE}" = "s61" ]; then
+  # 刀 G61（服务面全开·快失败+探针免吃）：s60 判决（收据二十六）——干净头
+  # 从未被测：客户端 so 探针三笔全灭于受理门（disp=2 读占读无救援），
+  # 真身=tf_reply 名字门（tf_is_so/tf_is_wlan 之外 arm→下一拍无声弃，
+  # EFS 读 1s×N 超时拖死编排，传感器 PD SNS_REG_INIT:0xb2 同根）。
+  # 两刀：①unserved 名镜像 stock tqftpserv 回 ERROR(1 File not found)
+  # （快失败，编排照 stock 节奏走）；②serveable RRQ（so/wlanmdsp 裸看名）
+  # 抢占【任意】pend（撤 TF_OP==2 前置——占位者皆未服务，被挤 1s 自愈）。
+  # so/wlan 供件线、SO_KNIVES_OFF、写腿全不动。WIN 签名不变=干净头上的
+  # 探针活到 OACK+DATA（tev ev4/ev5/ev9），其后看段读/wf=。
+  (cd "${HERE}" && cargo build --release --target aarch64-unknown-none-softfloat) || { echo "cargo build FAILED (${MODE}) -- 不拷陈旧件" >&2; exit 1; }
+  ELF="${OUTDIR}/s61.elf"
+  cp "${HERE}/target/aarch64-unknown-none-softfloat/release/redfin-bare" "${ELF}"
+  BIN="${OUTDIR}/s61.bin"; IMG="${OUTDIR}/boot-s61.img"
 elif [ "${MODE}" = "s55" ]; then
   # 刀 G55（集发生器+受理环）：三层故障栈第①层（重启环未闭合=阶梯冻结
   # 根因）补齐——真杠杆=SCM PAS（lito.dtsi pil_modem=pil-tz-generic
