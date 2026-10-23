@@ -5284,6 +5284,10 @@ static mut TF_SEEN_N: u32 = 0;
 static mut TF_N: u32 = 0;
 static mut TF_NAME: [u8; 64] = [0; 64];
 static mut TF_NAME_N: u8 = 0;
+/// s62：so 会话逐名 FAT 解析的会话私有文件（0=未解析，回退 TZ_*——
+/// boot 探针两读在会话前，走 TZ_*）。
+static mut TF_SV_CL: u32 = 0;
+static mut TF_SV_SZ: u32 = 0;
 /// 开机一次 FAT 探针结果（不真喂）。0=未跑 1=命中；失败 TZ_ST=4/errcode，TZ_CL=errcode(|depth<<8)。
 /// sm：tz=st.sz.cl
 static mut TZ_ST: u32 = 0;
@@ -7792,7 +7796,29 @@ fn tf_name_has(pat: &[u8]) -> bool {
 }
 
 fn tf_is_so() -> bool {
-    tf_name_has(b"549_38_0.mbn")
+    // s62：so/ 目录任意 .mbn（收据二十七：装载器 c05f0f98 装完一件即返，
+    // 根 PD dlopen 序列的下一件库名只能从线上看——旧单名门会把它们全
+    // 打成 unserved）。名尾巴 .mbn 且含 so/；旧尾巴保留（boot 探针
+    // 候补同款兼容）。
+    if tf_name_has(b"549_38_0.mbn") {
+        return true;
+    }
+    let n = (unsafe { TF_NAME_N } as usize).min(64);
+    if n < 4 {
+        return false;
+    }
+    let nm = unsafe { core::slice::from_raw_parts(TF_NAME.as_ptr(), n) };
+    if &nm[n - 4..n] != b".mbn" {
+        return false;
+    }
+    let mut i = 0usize;
+    while i + 3 <= n {
+        if &nm[i..i + 3] == b"so/" {
+            return true;
+        }
+        i += 1;
+    }
+    false
 }
 
 /// s59：wlan 真身请求——名尾巴 wlanmdsp.mbn（elf_loader PD 四级搜索
@@ -7801,6 +7827,61 @@ fn tf_is_so() -> bool {
 /// 服务，数据源=WLAN_FW 内嵌 blob（不碰 FAT/ext4——设备分区态不担保）。
 fn tf_is_wlan() -> bool {
     tf_name_has(b"wlanmdsp.mbn")
+}
+
+/// s61：TFTP ERROR(1 "File not found")——stock tqftpserv 同款快失败。
+/// s62 起也用于 so 名在 FAT 上不存在的会话（逐名解析失败）。
+fn tf_reply_err1(at478: u64, at479: u64, tx_head: u64, sz479: u64) {
+    let mut q = [0u8; 32];
+    q[1] = 5;
+    q[3] = 1;
+    let msg = b"File not found";
+    let mut m = 4usize;
+    while m < 4 + msg.len() {
+        q[m] = msg[m - 4];
+        m += 1;
+    }
+    q[m] = 0;
+    m += 1;
+    glink_tx_payload(
+        at478,
+        at479,
+        tx_head,
+        sz479,
+        TF_SVC_PORT,
+        unsafe { TF_NODE },
+        unsafe { TF_PORT },
+        &q[..m],
+    );
+}
+
+/// s62：按请求名解析 FAT（so 会话）。剥客户端前缀 /readonly/firmware/
+/// （装载器路径 c07fe498 第二级的原样请求名）后走 fat_path_open；
+/// 命中写会话私有 TF_SV_*，失败 false（调用方回 ERROR(1)）。
+fn tf_resolve_so(ufs: &mut Ufs) -> bool {
+    let n = (unsafe { TF_NAME_N } as usize).min(64);
+    if n == 0 {
+        return false;
+    }
+    let nm = unsafe { core::slice::from_raw_parts(TF_NAME.as_ptr(), n) };
+    const PFX: &[u8] = b"/readonly/firmware/";
+    let rel: &[u8] = if nm.len() > PFX.len() && &nm[..PFX.len()] == PFX {
+        &nm[PFX.len()..]
+    } else if nm[0] == b'/' {
+        &nm[1..]
+    } else {
+        nm
+    };
+    match fat_path_open(ufs, rel) {
+        Ok((cl, sz)) => {
+            unsafe {
+                TF_SV_CL = cl;
+                TF_SV_SZ = sz;
+            }
+            true
+        }
+        Err(_) => false,
+    }
 }
 
 fn tf_is_ruleset() -> bool {
@@ -8317,12 +8398,13 @@ fn tf_note_data(off: u64, fifo: u64, chunk: u32) {
 
 /// 从 SO 的簇链读 `n` 字节到 `TF_BLKBUF[4..]`。簇 16KiB，FAT 已在 `MODEM_FAT`。
 fn so_read(ufs: &mut Ufs, off: u32, n: usize) -> usize {
-    let sz = unsafe { TZ_SZ };
+    // s62：会话期用逐名解析的 TF_SV_*（0=boot 探针期，回退 TZ_*）。
+    let sz = unsafe { if TF_SV_SZ != 0 { TF_SV_SZ } else { TZ_SZ } };
     if n == 0 || off >= sz {
         return 0;
     }
     let n = n.min((sz - off) as usize).min(8192);
-    let mut cl = unsafe { TZ_CL };
+    let mut cl = unsafe { if TF_SV_CL != 0 { TF_SV_CL } else { TZ_CL } };
     let mut skip = off / 16384;
     while skip > 0 {
         let nxt = fat_next(cl) as u32;
@@ -8414,7 +8496,20 @@ fn tf_req_serveable(fifo: u64, off: u64, chunk: u64) -> bool {
     fn ends(nm: &[u8; 80], n: usize, suf: &[u8]) -> bool {
         n >= suf.len() && &nm[n - suf.len()..n] == suf
     }
-    ends(&nm, n, b"549_38_0.mbn") || ends(&nm, n, b"wlanmdsp.mbn")
+    // s62：so/ 目录任意 .mbn 同入「读主线」（受理抢占资格与旧件同权）。
+    let so_dir = n > 4 && &nm[n - 4..n] == b".mbn" && {
+        let mut i = 0usize;
+        let mut hit = false;
+        while i + 3 <= n {
+            if &nm[i..i + 3] == b"so/" {
+                hit = true;
+                break;
+            }
+            i += 1;
+        }
+        hit
+    };
+    ends(&nm, n, b"549_38_0.mbn") || ends(&nm, n, b"wlanmdsp.mbn") || so_dir
 }
 
 /// s59：wlan 真身读——WLAN_FW[off..off+n] 平进 TF_BLKBUF[4..]（与
@@ -8511,7 +8606,8 @@ fn tf_pump_window(ufs: &mut Ufs, at478: u64, at479: u64, sz479: u64, armed: bool
             let sz = if unsafe { TF_SRC } != 0 {
                 WLAN_FW.len() as u32
             } else {
-                unsafe { TZ_SZ }
+                // s62：so 会话跟逐名解析的会话私有尺寸。
+                unsafe { if TF_SV_SZ != 0 { TF_SV_SZ } else { TZ_SZ } }
             };
             let rs = unsafe { TF_RSIZE };
             // rsize 是「从 seek 起要多少」，窗口尾 = seek+rsize，夹在文件尾内。
@@ -8958,7 +9054,8 @@ fn tf_reply(ufs: &mut Ufs, at478: u64, at479: u64, sz479: u64) {
     let retry = st_now == 2 || st_now == 3 || (st_now >= 7 && st_now <= 9);
     // 游标不回头纪律保持：fresh（st 0/4）之外照旧丢。armed 已是 II_ST=2（刀 G4）。
     // s59：wlan 真身同入读服务腿（无 TZ_ST 前置——blob 不依赖 FAT 探针）。
-    if op == 1 && !armed && fresh && (tf_is_wlan() || (tf_is_so() && unsafe { TZ_ST } == 1)) {
+    // s62：so 前置同撤 TZ_ST（旧件已由逐名解析门接手存在性判定）。
+    if op == 1 && !armed && fresh && (tf_is_wlan() || tf_is_so()) {
         return;
     }
     if op != 1 || !armed || (!retarget && !fresh && !retry) {
@@ -8970,32 +9067,17 @@ fn tf_reply(ufs: &mut Ufs, at478: u64, at479: u64, sz479: u64) {
     // EFS 读每笔拖满 1s×N 超时把编排卡死（传感器 PD SNS_REG_INIT:0xb2
     // 同根），arm→弃窗再连坐撞窗请求（so 探针三笔 disp=2 全灭）。快失败
     // =编排照 stock 节奏往前走；探针生存率另由受理门抢占刀保底。
+    // s62：盘上无此件（so 名 FAT 解析失败）同走此门。
     if !tf_is_so() && !tf_is_wlan() {
-        let mut q = [0u8; 32];
-        q[1] = 5;
-        q[3] = 1;
-        let msg = b"File not found";
-        let mut m = 4usize;
-        while m < 4 + msg.len() {
-            q[m] = msg[m - 4];
-            m += 1;
-        }
-        q[m] = 0;
-        m += 1;
-        glink_tx_payload(
-            at478,
-            at479,
-            tx_head,
-            sz479,
-            TF_SVC_PORT,
-            unsafe { TF_NODE },
-            unsafe { TF_PORT },
-            &q[..m],
-        );
+        tf_reply_err1(at478, at479, tx_head, sz479);
         tf_drop_pend();
         return;
     }
-    if !tf_is_wlan() && unsafe { TZ_ST } != 1 {
+    // s62：so 会话按请求名逐名解析 FAT（so/ 目录任意 .mbn）。旧前置
+    // TZ_ST==1 只保 boot 探针那一件；现按名实解析，命中就会话私有
+    // TF_SV_*（so_read/泵 limit/tsize 跟用），解析失败=ERROR(1)。
+    if !tf_is_wlan() && !tf_resolve_so(ufs) {
+        tf_reply_err1(at478, at479, tx_head, sz479);
         tf_drop_pend();
         return;
     }
@@ -9020,11 +9102,11 @@ fn tf_reply(ufs: &mut Ufs, at478: u64, at479: u64, sz479: u64) {
     }
     if unsafe { TF_HAS_TS } != 0 {
         tf_put_cstr(&mut q, &mut n, b"tsize");
-        // s59：wlan 会话的 tsize=blob 长（TZ_SZ 是 so 件的）。
+        // s59：wlan 会话的 tsize=blob 长（s62：so 会话=逐名解析尺寸）。
         let tsz = if tf_is_wlan() {
             WLAN_FW.len() as u32
         } else {
-            unsafe { TZ_SZ }
+            unsafe { if TF_SV_SZ != 0 { TF_SV_SZ } else { TZ_SZ } }
         };
         tf_put_dec(&mut q, &mut n, tsz);
         if n < q.len() {
@@ -15176,6 +15258,11 @@ fn ctrl_service(
                                 push_hex(reply, &mut rn, unsafe { TZ_SZ } as u64);
                                 push_str(reply, &mut rn, ".");
                                 push_hex(reply, &mut rn, unsafe { TZ_CL } as u64);
+                                // s62：会话私有 so 文件（cl.sz；0.0=未解析）。
+                                push_str(reply, &mut rn, " sv=");
+                                push_hex(reply, &mut rn, unsafe { TF_SV_CL } as u64);
+                                push_str(reply, &mut rn, ".");
+                                push_hex(reply, &mut rn, unsafe { TF_SV_SZ } as u64);
                                 // 刀 G45：so= 单命令连读.逐扇区退路。
                                 push_str(reply, &mut rn, " so=");
                                 push_hex(reply, &mut rn, unsafe { TF_SO2 } as u64);

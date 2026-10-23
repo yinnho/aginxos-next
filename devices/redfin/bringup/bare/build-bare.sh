@@ -154,6 +154,7 @@ MODE="heartbeat"
 [ "${1:-}" = "--s59" ] && MODE="s59"
 [ "${1:-}" = "--s60" ] && MODE="s60"
 [ "${1:-}" = "--s61" ] && MODE="s61"
+[ "${1:-}" = "--s62" ] && MODE="s62"
 mkdir -p "${OUTDIR}"
 ELF="${OUTDIR}/heartbeat.elf"
 
@@ -1358,6 +1359,21 @@ elif [ "${MODE}" = "s61" ]; then
   ELF="${OUTDIR}/s61.elf"
   cp "${HERE}/target/aarch64-unknown-none-softfloat/release/redfin-bare" "${ELF}"
   BIN="${OUTDIR}/s61.bin"; IMG="${OUTDIR}/boot-s61.img"
+elif [ "${MODE}" = "s62" ]; then
+  # 刀 G62（so/ 目录任意件供件）：案头（收据二十七）——so 装载器
+  # c05f0f98 装完一件即返，根 PD dlopen 序列的下一件库名只能从线上看；
+  # 旧单名门（549_38_0.mbn 尾巴）会把后续库名全打成 unserved 回
+  # ERROR(1)。本刀：①tf_is_so/受理抢占扩「尾巴 .mbn 且含 so/」；
+  # ②OACK 前按请求名逐名 FAT 解析（剥 /readonly/firmware/ 前缀走
+  # fat_path_open）→ 会话私有 TF_SV_CL/SZ（so_read/泵 limit/tsize
+  # 跟用；解析失败=ERROR(1) 快失败，名字仍进 rt 账本=情报）；
+  # ③TZ_ST 前置撤（存在性由解析门接手）。s61 双刀与 SO_KNIVES_OFF
+  # 原样。WIN 阶梯（案头重写）：seek=0x1000/rsize=0x2000(2 块) 首响，
+  # 其后任意 so 名会话（sv= 看解析）；wl/wlan 线不动。
+  (cd "${HERE}" && cargo build --release --target aarch64-unknown-none-softfloat) || { echo "cargo build FAILED (${MODE}) -- 不拷陈旧件" >&2; exit 1; }
+  ELF="${OUTDIR}/s62.elf"
+  cp "${HERE}/target/aarch64-unknown-none-softfloat/release/redfin-bare" "${ELF}"
+  BIN="${OUTDIR}/s62.bin"; IMG="${OUTDIR}/boot-s62.img"
 elif [ "${MODE}" = "s55" ]; then
   # 刀 G55（集发生器+受理环）：三层故障栈第①层（重启环未闭合=阶梯冻结
   # 根因）补齐——真杠杆=SCM PAS（lito.dtsi pil_modem=pil-tz-generic
