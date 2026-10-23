@@ -4715,7 +4715,7 @@ static mut PM_N: u32 = 0;
 const SR_SVC: u32 = 0x42;
 const SR_INST: u32 = 0xb401;
 const SR_QRTR_PORT: u32 = 0x14;
-const SR_NAME: &[u8] = b"msm/modem/wlan_pd";
+const SR_NAME: &[u8] = b"msm/modem/root_pd";
 /// MPSS SMP2P：pub 返回码、出向 valid_entries、入向名位（bit0=ipa bit1=wlan）。
 static mut MPSS_PUB: u32 = 0xffff_ffff;
 static mut MPSS_VOUT: u32 = 0;
@@ -6434,6 +6434,43 @@ fn host_svc_port(svc: u32, inst: u32) -> Option<(u32, u32)> {
     }
 }
 
+/// s55：SCM PAS 调用（arm64 SCM v2 约定，对齐 redbull qcom_scm-64.c：
+/// SMC64+STD+OWNER_SIP，x0=0x42000000|(svc<<8)|cmd，x1=arginfo，x2=args[0]；
+/// 返回 a0=0 成/1 INTERRUPTED 同参重发/负错）。INTERRUPTED 有界重发 8 次。
+/// 指令表：0x205 AUTH_AND_RESET、0x206 SHUTDOWN、0x207 IS_SUPPORTED
+/// （均 svc=2=PIL，x2=pas_id，modem=4——lito.dtsi pil_modem 节真源）。
+fn scm_pas(fnid: u32, arg2: u64) -> (u64, u64) {
+    scm_raw(0x4200_0000u64 | fnid as u64, arg2)
+}
+
+/// s56：裸 SMC（x0 全值自持——SMC64 走 0x42xxxxxx、SMC32 走 0x02xxxxxx
+/// 由调用方给全值；x1=1 单 by-value 参）。INTERRUPTED(a0=1) 有界重发 8 次。
+/// mx 探针的底座。
+fn scm_raw(x0: u64, arg2: u64) -> (u64, u64) {
+    let mut tries = 0u32;
+    let (mut a0, mut a1) = (0xffff_ffffu64, 0u64);
+    while tries < 8 {
+        let (r0, r1);
+        unsafe {
+            core::arch::asm!(
+                "smc #0",
+                inout("x0") x0 => r0,
+                inout("x1") 1u64 => r1,
+                inout("x2") arg2 => _,
+                out("x3") _, out("x4") _, out("x5") _, out("x6") _, out("x7") _,
+                options(nostack),
+            );
+        }
+        a0 = r0;
+        a1 = r1;
+        if a0 != 1 {
+            break;
+        }
+        tries += 1;
+    }
+    (a0, a1)
+}
+
 fn glink_tx_qrtr(
     at478: u64,
     at479: u64,
@@ -7690,6 +7727,7 @@ fn tf_drop_pend() {
             TF_SEEN_N += 1;
         }
         TF_PEND = false;
+        TF_PEND_AT = 0;
         TF_N += 1;
     }
 }
@@ -7860,6 +7898,38 @@ static mut TF_RL_K: [u32; 6] = [0; 6];
 static mut TF_RL_F: [u32; 6] = [0; 6];
 static mut TF_RL_N: u32 = 0;
 static mut TF_RL_VIS: u64 = 0;
+
+/// s55：RRQ 受理追踪环（8 槽，槽=源口.来程口.到达时TF_PEND.seen命中.
+/// 到达时TF_ST.disp）。0x25 案（phdr 表 RRQ 进了 rl= 账却从未成服）的
+/// 专刀：受理门四岔（armed/seen 重复/pend 占位/口外）从此有现场，不再
+/// 只能事后推。disp：0=armed（本次占 pend）、1=seen 重复弃、
+/// 2=pend 占位弃。
+static mut TF_RT_SP: [u32; 8] = [0; 8];
+static mut TF_RT_DP: [u32; 8] = [0; 8];
+static mut TF_RT_PEND: [u32; 8] = [0; 8];
+static mut TF_RT_SEEN: [u32; 8] = [0; 8];
+static mut TF_RT_ST: [u32; 8] = [0; 8];
+static mut TF_RT_DISP: [u32; 8] = [0; 8];
+static mut TF_RT_N: u32 = 0;
+/// s56：rt 环补名指纹+op 类型（RRQ=1/WRQ=2 都入环；nm=文件名前 4 字节
+/// 小端拼 u32——「哪笔丢的是什么」从此可归因）。
+static mut TF_RT_NM: [u32; 8] = [0; 8];
+static mut TF_RT_OP: [u32; 8] = [0; 8];
+/// s56：pend 起租时刻（cntvct 原始值；0=无租）。受理门 newest-wins 与
+/// tick 看门狗共用——BUG-A 大件停滞把 pend 楔死、后续 RRQ 全死在门上
+/// （disp=2 无限连）即 24h 静默真身。
+static mut TF_PEND_AT: u64 = 0;
+// s56b：mx 参数暂存——行缓冲在分派链尾清零，体内无法重读；
+// 臂求值时解析结果落此，体 32 消费。
+static mut MX_F: u64 = 0;
+static mut MX_A: u64 = 0;
+static mut MX_HAVE: u32 = 0;
+/// s55：SCM PAS 三连发结果账（mp/ms/mr 命令写）：cmd.a0.a1——
+/// AUTH_AND_RESET 命中即集发生器补齐（新集全链=0x25 吞点下轮可测）。
+static mut SCM_CMD: u32 = 0;
+static mut SCM_R0: u64 = 0;
+static mut SCM_R1: u64 = 0;
+static mut SCM_N: u32 = 0;
 
 /// 刀 G24：写腿三账 + 观察三件。TF_W_VIA=本写会话 WRQ 进来的口（写腿
 /// 回程镜像它；0=未定走 0x11）；TF_W_N/TF_W_OX=WRQ 武装数/写 OACK 发出
@@ -8561,6 +8631,16 @@ fn tf_reply(ufs: &mut Ufs, at478: u64, at479: u64, sz479: u64) {
         return;
     }
     if unsafe { !TF_PEND } {
+        return;
+    }
+    // s56：pend 看门狗——租期>60s 判停滞（健康小件服秒级、963KB 大件
+    // 即便 100KB/s 也 10s 级），退租清账等下一笔。楔死 pend 把后续一切
+    // RRQ 挡在受理门（disp=2 无限连）的 24h 静默结构，从此有自愈腿。
+    if unsafe { TF_PEND_AT != 0 }
+        && time::cntvct().wrapping_sub(unsafe { TF_PEND_AT })
+            > time::freq_or(FREQ_FALLBACK as u32) as u64 * 60
+    {
+        tf_drop_pend();
         return;
     }
     let op = unsafe { TF_OP };
@@ -13771,7 +13851,54 @@ fn scan_new_servers(fifo: u64, rh: u64) {
                             i += 1;
                         }
                     }
-                    if op0 != 3 && op0 != 4 && op0 != 5 && !seen && unsafe { !TF_PEND } {
+                    // s55/s56：每笔请求（RRQ/WRQ）受理现场入环——0x25 吞点
+                    // 专刀。记在 seen 算完之后、生产门之前：四岔（armed/
+                    // seen/pend 占位）与到达时的 TF_ST 同帧可读；s56 补
+                    // op 类型与文件名前 4 字节指纹（丢的是哪笔从此可归因）。
+                    if op0 == 1 || op0 == 2 {
+                        let ti = (unsafe { TF_RT_N } % 8) as usize;
+                        let disp = if seen {
+                            1
+                        } else if unsafe { TF_PEND } {
+                            2
+                        } else {
+                            0
+                        };
+                        // 名指纹：RRQ/WRQ 包文名域起 fifo+off+50（与生产门
+                        // 同源），取前 4 字节小端。越界（chunk 太小）记 0。
+                        let mut nm: u32 = 0;
+                        if chunk >= 54 {
+                            nm = rd8(fifo + off + 50) as u32
+                                | (rd8(fifo + off + 51) as u32) << 8
+                                | (rd8(fifo + off + 52) as u32) << 16
+                                | (rd8(fifo + off + 53) as u32) << 24;
+                        }
+                        unsafe {
+                            TF_RT_SP[ti] = rd32((fifo + off + 28) as usize);
+                            TF_RT_DP[ti] = dst_port;
+                            TF_RT_PEND[ti] = if TF_PEND { 1 } else { 0 };
+                            TF_RT_SEEN[ti] = if seen { 1 } else { 0 };
+                            TF_RT_ST[ti] = TF_ST as u32;
+                            TF_RT_DISP[ti] = disp;
+                            TF_RT_OP[ti] = op0;
+                            TF_RT_NM[ti] = nm;
+                            TF_RT_N = TF_RT_N.wrapping_add(1);
+                        }
+                    }
+                    // s56：受理门 newest-wins——pend 被陈旧 op（租期>10s，
+                    // BUG-A 大件停滞形）占住时，新 RRQ 不再整笔弃（disp=2
+                    // 无限连=24h 静默真身），而是让陈旧者退租入 seen 环
+                    // （防同偏移重放）后接棒。WRQ 不抢（写腿有在途状态机）。
+                    let pend_stale = unsafe {
+                        TF_PEND
+                            && TF_PEND_AT != 0
+                            && time::cntvct().wrapping_sub(TF_PEND_AT)
+                                > time::freq_or(FREQ_FALLBACK as u32) as u64 * 10
+                    };
+                    if op0 != 3 && op0 != 4 && op0 != 5 && !seen && unsafe { !TF_PEND || (op0 == 1 && pend_stale) } {
+                        if unsafe { TF_PEND } {
+                            tf_drop_pend();
+                        }
                         let op = op0;
                         let mut name = [0u8; 64];
                         let mut nn = 0usize;
@@ -13790,6 +13917,7 @@ fn scan_new_servers(fifo: u64, rh: u64) {
                             TF_NAME = name;
                             TF_NAME_N = nn as u8;
                             TF_PEND = true;
+                            TF_PEND_AT = time::cntvct();
                             // 刀 G46：请求到达时刻（op1 RRQ/op2 WRQ，a=op）。
                             tf_ev(1, op as u16);
                             if op == 1 {
@@ -14094,6 +14222,61 @@ fn ctrl_line_is(want: &[u8]) -> bool {
 
 /// s54v5：行首=<head> 且余下 1..=8 位全 ASCII 数字（lg12 / lm54321）。
 /// 精确命令不冲突（log 是 3 字整匹配，lg 走不到它）。
+/// s56：`mx <fnid-hex> <arg2-hex>` 双 hex 参解析（空格分隔，各 ≤8 位）。
+fn ctrl_line_hex2(head: &[u8]) -> Option<(u64, u64)> {
+    let n = unsafe { CTRL_LINE_N };
+    if n <= head.len() + 1 || n > 44 {
+        return None;
+    }
+    if unsafe { &CTRL_LINE[..head.len()] } != head {
+        return None;
+    }
+    let hd = |b: u8| -> Option<u64> {
+        match b {
+            b'0'..=b'9' => Some((b - b'0') as u64),
+            b'a'..=b'f' => Some((b - b'a' + 10) as u64),
+            b'A'..=b'F' => Some((b - b'A' + 10) as u64),
+            _ => None,
+        }
+    };
+    let mut i = head.len();
+    let (mut a, mut an) = (0u64, 0u32);
+    while i < n && unsafe { CTRL_LINE[i] } == b' ' {
+        i += 1;
+    }
+    while i < n {
+        match hd(unsafe { CTRL_LINE[i] }) {
+            Some(d) => {
+                a = a.wrapping_mul(16).wrapping_add(d);
+                an += 1;
+                i += 1;
+            }
+            None => break,
+        }
+    }
+    if an == 0 || an > 8 {
+        return None;
+    }
+    let (mut b2, mut bn) = (0u64, 0u32);
+    while i < n && unsafe { CTRL_LINE[i] } == b' ' {
+        i += 1;
+    }
+    while i < n {
+        match hd(unsafe { CTRL_LINE[i] }) {
+            Some(d) => {
+                b2 = b2.wrapping_mul(16).wrapping_add(d);
+                bn += 1;
+                i += 1;
+            }
+            None => break,
+        }
+    }
+    if bn == 0 || bn > 8 {
+        return None;
+    }
+    Some((a, b2))
+}
+
 fn ctrl_line_num(head: &[u8]) -> Option<u32> {
     let n = unsafe { CTRL_LINE_N };
     if n <= head.len() || n > head.len() + 8 {
@@ -14248,6 +14431,32 @@ fn ctrl_service(
                             20
                         } else if ctrl_line_is(b"rm") {
                             21
+                        } else if ctrl_line_is(b"mp") {
+                            29
+                        } else if ctrl_line_is(b"ms") {
+                            30
+                        } else if ctrl_line_is(b"mr") {
+                            31
+                        } else if {
+                            // s56b：mx 参数在臂内捕获——行缓冲在链尾即清零
+                            // （CTRL_LINE_N=0），体内重读必 None。臂求值时行
+                            // 还在，解析结果暂存 statics 供体 32 取用。
+                            match ctrl_line_hex2(b"mx") {
+                                Some((f, a)) => {
+                                    unsafe {
+                                        MX_F = f;
+                                        MX_A = a;
+                                        MX_HAVE = 1;
+                                    }
+                                    true
+                                }
+                                None => {
+                                    unsafe { MX_HAVE = 0; }
+                                    false
+                                }
+                            }
+                        } {
+                            32
                         } else if ctrl_line_num(b"lg").is_some() {
                             22
                         } else if ctrl_line_num(b"lm").is_some() {
@@ -15665,6 +15874,68 @@ fn ctrl_service(
                                         push_str(reply, &mut rn, "-");
                                     }
                                 }
+                                // s55：rt=RRQ 受理环（8 槽，旧→新。槽=
+                                // 源口.来程口.到达时PEND.seen.到达时ST.disp；
+                                // disp 0=armed 1=seen 弃 2=pend 占位弃）——
+                                // 0x25 案的受理现场。
+                                // s56b：p=pend 活体（PEND.租龄秒.TF_ST.TF_N）
+                                // ——受理门/看门狗判决的直读窗。
+                                push_str(reply, &mut rn, " p=");
+                                push_hex(reply, &mut rn, if unsafe { TF_PEND } { 1 } else { 0 });
+                                push_str(reply, &mut rn, ".");
+                                if unsafe { TF_PEND && TF_PEND_AT != 0 } {
+                                    let age = time::cntvct().wrapping_sub(unsafe { TF_PEND_AT })
+                                        / time::freq_or(FREQ_FALLBACK as u32) as u64;
+                                    push_hex(reply, &mut rn, age);
+                                } else {
+                                    push_str(reply, &mut rn, "0");
+                                }
+                                push_str(reply, &mut rn, ".");
+                                push_hex(reply, &mut rn, unsafe { TF_ST } as u64);
+                                push_str(reply, &mut rn, ".");
+                                push_hex(reply, &mut rn, unsafe { TF_N } as u64);
+                                push_str(reply, &mut rn, " rt=");
+                                push_hex(reply, &mut rn, unsafe { TF_RT_N } as u64);
+                                push_str(reply, &mut rn, ",");
+                                {
+                                    let total = unsafe { TF_RT_N } as usize;
+                                    let shown = total.min(8);
+                                    let start = total.saturating_sub(8);
+                                    let mut k = 0usize;
+                                    while k < shown {
+                                        let idx = (start + k) % 8;
+                                        if k != 0 {
+                                            push_str(reply, &mut rn, ",");
+                                        }
+                                        push_hex(reply, &mut rn, unsafe { TF_RT_SP[idx] } as u64);
+                                        push_str(reply, &mut rn, ".");
+                                        push_hex(reply, &mut rn, unsafe { TF_RT_DP[idx] } as u64);
+                                        push_str(reply, &mut rn, ".");
+                                        push_hex(reply, &mut rn, unsafe { TF_RT_PEND[idx] } as u64);
+                                        push_str(reply, &mut rn, ".");
+                                        push_hex(reply, &mut rn, unsafe { TF_RT_SEEN[idx] } as u64);
+                                        push_str(reply, &mut rn, ".");
+                                        push_hex(reply, &mut rn, unsafe { TF_RT_ST[idx] } as u64);
+                                        push_str(reply, &mut rn, ".");
+                                        push_hex(reply, &mut rn, unsafe { TF_RT_DISP[idx] } as u64);
+                                        push_str(reply, &mut rn, ".");
+                                        push_hex(reply, &mut rn, unsafe { TF_RT_OP[idx] } as u64);
+                                        push_str(reply, &mut rn, ".");
+                                        push_hex(reply, &mut rn, unsafe { TF_RT_NM[idx] } as u64);
+                                        k += 1;
+                                    }
+                                    if shown == 0 {
+                                        push_str(reply, &mut rn, "-");
+                                    }
+                                }
+                                push_str(reply, &mut rn, " sc=");
+                                push_hex(reply, &mut rn, unsafe { SCM_N } as u64);
+                                push_str(reply, &mut rn, ".");
+                                push_hex(reply, &mut rn, unsafe { SCM_CMD } as u64);
+                                push_str(reply, &mut rn, ".");
+                                push_hex(reply, &mut rn, unsafe { SCM_R0 } as u64);
+                                push_str(reply, &mut rn, ".");
+                                push_hex(reply, &mut rn, unsafe { SCM_R1 } as u64);
                                 // me=pub.vout.inflags — MPSS SMP2P ipa 刀
                                 push_str(reply, &mut rn, " me=");
                                 push_hex(reply, &mut rn, unsafe { MPSS_PUB } as u64);
@@ -16479,6 +16750,85 @@ fn ctrl_service(
                                 push_str(reply, &mut rn, "rm fired ");
                                 push_hex(reply, &mut rn, unsafe { SR_RP_MAN } as u64);
                                 push_str(reply, &mut rn, " root\n");
+                            }
+                            29 => {
+                                // s55：mp——PAS IS_SUPPORTED(pas=4) 无害探针
+                                // （SMC 0x42000207）。a0=0 且 a1!=0 = TZ PAS
+                                // 对 modem 可用，mr/ms 才有戏。
+                                let (a0, a1) = scm_pas(0x207, 4);
+                                unsafe {
+                                    SCM_CMD = 0x207;
+                                    SCM_R0 = a0;
+                                    SCM_R1 = a1;
+                                    SCM_N = SCM_N.wrapping_add(1);
+                                }
+                                push_str(reply, &mut rn, "pas isup a0=");
+                                push_hex(reply, &mut rn, a0);
+                                push_str(reply, &mut rn, " a1=");
+                                push_hex(reply, &mut rn, a1);
+                                push_str(reply, &mut rn, "\n");
+                            }
+                            30 => {
+                                // s55：ms——PAS SHUTDOWN(pas=4) 温停
+                                // （SMC 0x42000206）。modem 已死态下预期返回
+                                // 非 0（already down）；返回 0 = 干净停稳，
+                                // 随后 mr 放行。
+                                let (a0, a1) = scm_pas(0x206, 4);
+                                unsafe {
+                                    SCM_CMD = 0x206;
+                                    SCM_R0 = a0;
+                                    SCM_R1 = a1;
+                                    SCM_N = SCM_N.wrapping_add(1);
+                                }
+                                push_str(reply, &mut rn, "pas sd a0=");
+                                push_hex(reply, &mut rn, a0);
+                                push_str(reply, &mut rn, " a1=");
+                                push_hex(reply, &mut rn, a1);
+                                push_str(reply, &mut rn, "\n");
+                            }
+                            31 => {
+                                // s55：mr——PAS AUTH_AND_RESET(pas=4) 放行
+                                // （SMC 0x42000205）。本机 modem 的真重启
+                                // 杠杆（pil-tz-generic 正路；servreg 直射
+                                // 两域同拒 error 9 已证非本机正路）。命中
+                                // =MSS 复位释放→PBL 全链重拉→新集。
+                                let (a0, a1) = scm_pas(0x205, 4);
+                                unsafe {
+                                    SCM_CMD = 0x205;
+                                    SCM_R0 = a0;
+                                    SCM_R1 = a1;
+                                    SCM_N = SCM_N.wrapping_add(1);
+                                }
+                                push_str(reply, &mut rn, "pas ar a0=");
+                                push_hex(reply, &mut rn, a0);
+                                push_str(reply, &mut rn, " a1=");
+                                push_hex(reply, &mut rn, a1);
+                                push_str(reply, &mut rn, "\n");
+                            }
+                            32 => {
+                                // s56b：参数已在分派臂捕获（行缓冲此时已
+                                // 清零，ctrl_line_hex2 必 None——v2b 现场
+                                // 翻车实证）。体只消费 MX_* 暂存。
+                                if unsafe { MX_HAVE != 0 } {
+                                    let (fx, a2) =
+                                        unsafe { (MX_F, MX_A) };
+                                    let (a0, a1) = scm_raw(fx, a2);
+                                    unsafe {
+                                        SCM_CMD = fx as u32;
+                                        SCM_R0 = a0;
+                                        SCM_R1 = a1;
+                                        SCM_N = SCM_N.wrapping_add(1);
+                                    }
+                                    push_str(reply, &mut rn, "smc ");
+                                    push_hex(reply, &mut rn, fx);
+                                    push_str(reply, &mut rn, " a0=");
+                                    push_hex(reply, &mut rn, a0);
+                                    push_str(reply, &mut rn, " a1=");
+                                    push_hex(reply, &mut rn, a1);
+                                    push_str(reply, &mut rn, "\n");
+                                } else {
+                                    push_str(reply, &mut rn, "mx <fnid-hex> <arg2-hex>\n");
+                                }
                             }
                             3 => {}
 

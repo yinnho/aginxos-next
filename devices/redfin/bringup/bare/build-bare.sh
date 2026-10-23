@@ -147,6 +147,8 @@ MODE="heartbeat"
 [ "${1:-}" = "--s52" ] && MODE="s52"
 [ "${1:-}" = "--s53" ] && MODE="s53"
 [ "${1:-}" = "--s54" ] && MODE="s54"
+[ "${1:-}" = "--s55" ] && MODE="s55"
+[ "${1:-}" = "--s56" ] && MODE="s56"
 mkdir -p "${OUTDIR}"
 ELF="${OUTDIR}/heartbeat.elf"
 
@@ -1267,6 +1269,32 @@ elif [ "${MODE}" = "s54" ]; then
   ELF="${OUTDIR}/s54.elf"
   cp "${HERE}/target/aarch64-unknown-none-softfloat/release/redfin-bare" "${ELF}"
   BIN="${OUTDIR}/s54.bin"; IMG="${OUTDIR}/boot-s54.img"
+elif [ "${MODE}" = "s56" ]; then
+  # 刀 G56（受理门活体修+通用 SMC 探针）：s55 上机三判决——mp a0=0 a1=0
+  # （SMC 通、PAS4 支持位 0）、mr a0=ffcfffe9（AUTH_AND_RESET 被 TZ 拒，
+  # 私有码内核表 -1..-12 外）、rt= 当场活捉 0x25 吞点真身=pend 占位整笔
+  # 弃（disp=2）。本刀：①rt 环补 op 类型+文件名 4 字节指纹（RRQ/WRQ 都
+  # 入环，丢的是哪笔从此可归因）②受理门 newest-wins（pend 租期>10s 的
+  # 陈旧 op 让位新 RRQ，不再 disp=2 无限连=24h 静默结构）③tick pend
+  # 看门狗（租期>60s 退租自愈）④mx <fnid-hex> <arg2-hex> 通用 SMC 探针
+  # （scm_raw 底座，SMC32/64 自选、任意 pas_id、错码标定免重编译）。
+  # s44-s55 全保留。
+  (cd "${HERE}" && cargo build --release --target aarch64-unknown-none-softfloat) || { echo "cargo build FAILED (${MODE}) -- 不拷陈旧件" >&2; exit 1; }
+  ELF="${OUTDIR}/s56.elf"
+  cp "${HERE}/target/aarch64-unknown-none-softfloat/release/redfin-bare" "${ELF}"
+  BIN="${OUTDIR}/s56.bin"; IMG="${OUTDIR}/boot-s56.img"
+elif [ "${MODE}" = "s55" ]; then
+  # 刀 G55（集发生器+受理环）：三层故障栈第①层（重启环未闭合=阶梯冻结
+  # 根因）补齐——真杠杆=SCM PAS（lito.dtsi pil_modem=pil-tz-generic
+  # pas-id=4；0x205 AUTH_AND_RESET/0x206 SHUTDOWN/0x207 IS_SUPPORTED，
+  # SMC64 x0=0x42000000|(svc<<8)|cmd）。控制台 mp/ms/mr 三发+sc= 结果账；
+  # servreg 直射两域同拒 error 9（十七）已证非本机正路。②s55 rt= 受理环
+  # （8 槽：源口.来程口.到达时PEND.seen.到达时ST.disp）专抓 0x25 吞点。
+  # ③SR_NAME→root_pd（listener 与 rm 同名对齐）。s44-s54 全保留。
+  (cd "${HERE}" && cargo build --release --target aarch64-unknown-none-softfloat) || { echo "cargo build FAILED (${MODE}) -- 不拷陈旧件" >&2; exit 1; }
+  ELF="${OUTDIR}/s55.elf"
+  cp "${HERE}/target/aarch64-unknown-none-softfloat/release/redfin-bare" "${ELF}"
+  BIN="${OUTDIR}/s55.bin"; IMG="${OUTDIR}/boot-s55.img"
 elif [ "${MODE}" = "s21" ]; then
   # 刀 G22：s20 同面，intent 池+归还追踪（cmd5 全量入池、TX 池挑、
   # RX_DONE/W_REUSE 归还、池干 RX_INTENT_REQ、cmd3/11 入 8B 集、ii= 台账）。
