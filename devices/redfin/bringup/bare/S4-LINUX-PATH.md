@@ -6340,3 +6340,21 @@ instance.node.port）——放 rqr= 邻位=行中段，避开 TCP_TX 帽挤尾�
 `s54=` 继承档位直测 0x800；死 ⇒ `0.0.xx.0`（0x8E 被 ABL 清/写）。
 WIN=任何一命 `rl=` 出现 seek=1000（hash 段读上线）；LOSS=rung7（值4）
 整命无 hash 读 → 转 QDI（8,4,0x3c）池背书离线翻案线。
+
+### 十四、phy 楔死第三案（13:07–13:19，v5.3→v5.4 换装靴）——等物理断电
+
+- 13:07:17 骰机第 5 圈 `fastboot reboot` 后**整机离 USB 总线**：13:10
+  起裸跑（禁沙箱）`fastboot devices` 恒空、ping 169.254.1.1 100% 丢、
+  ioreg USB 树三 XHCI 控制器下零设备。v5.3（在 boot_a 未换）120s
+  无枚举 auto-fb 理论 ~13:10:30 前后应送其进 fastboot——13:18:55
+  8 分钟观察窗判词 `STILL_OFFBUS`（离线 11m38s）。定谳同靴#55 九：
+  **暖复位杀 USB phy 终态，连 XBL fastboot 的 USB 都不活**，远程
+  不可自愈，唯物理断电（Power+VolDown 直进 fastboot 最优）。
+- v5.3 骰机遗迹存 `/tmp/s54-loop2-v53-final.log`（4 整圈+圈 5 起点；
+  末帧圈4 f9 又一批独立衰减垃圾 `ef086751/2e2df9f0/7bc85d4c/
+  4c2e461e/6159ce9`——每命新随机位，imem 证伪加一层）。
+- 链 `/tmp/s54v54-chain.sh` 13:07:44 武装（md5 门过），窗口 13:27:44
+  止；接力守卫自动重开至 14:20 前后——用户任意时刻断电重启均接得
+  住（直进 fastboot=即刻刷；普通启动=console-fb 代打进 fastboot）。
+- 刷后判据不变：圈 2 首帧 `s5i=1.<a4>.<8f|1>.1`=PON 持久化活、
+  `s54=` 继承档位直测；WIN=seek=1000 上线；LOSS=rung7 无 hash 读。
