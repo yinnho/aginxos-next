@@ -6733,3 +6733,193 @@ P0 假 → 落 `jump 0x1e403a60` 静态 map_object。**
   （775 行）+ parse-bits python 直读（本收据配方）。
 - 码尖无新（纯案头）；本收据垫顶。fb 楔死未解（22:14:30 案#6），
   等待器超时 22:59:32，重挂晨窗——s58 一到 fastboot 即刷。
+
+## 二十三、s58 靴判决：刀未参战（会话被 efs 抢占）+ FAT 全walk 悖论加深 + mode 字面量出处未决（2026-10-23 深夜四）
+
+23:10:25 刷入 boot-s58-pad.img（md5 dfc09d8e，122 环 68,157,440B），
+23:13 自然靴 + 7 集 mz。**判决：s58 对刀而言=无效靴，非「断言不是
+毙点」**——预宣告的「仍静默=两歧」不适用，静默有上游解释。
+
+### 刀未参战三证（全量 sm 5285B，/tmp/s58-full-sm.txt）
+
+- `s54=0.2000.0.0.0.0`：SO_RUNG=0、SO_PATCH_N=0、**SO_ETYPED=0**
+  ——块服务环全程零跑。
+- `so=2.0`：TF_SO2=2 恰=tf_boot_probe 自检两读（64B@0+52B@0xa0，
+  main.rs:7683/7694）——so_read 无第三笔调用=elf_loader 的读从未到。
+- `tf=/readwrite/modem_efs.2.5` + `ww=1.1.0.0.0`：泵单会话状态机被
+  efs WRQ 抢停（写会话武装、等块 1、0 字节到）。`tb=4.0.11.0`。
+
+### 对照 s54 靴（/tmp/s54-full.log）：服务相活着
+
+s54 靴 `tf=/readonly/.../549_38_0.mbn.1.7`、`tb=3.1.11.1`（**TF_ST=3
+送完、块 1 已发**）、`so=4.0`（≥2 笔服务读）。s58 靴服务相死因
+=会话未成熟即被抢：pr 顺序 ota(2)→**so(1)**→efs(1,2)，so RRQ 仅
+1 笔（重试全被 seen 环吃=收据二十 0x25 已知案）→ loader 弃线。
+s56 newest-wins/看门狗与 G20-G26 写会话腿在 so 新鲜期内的抢占
+=首要嫌疑，未插桩不定谳。
+
+### 渲染坑记档：sh=「头差异」是假象
+
+sh= 与 FAT 拷贝逐字节一致——`push_hex` 是极简十六进制（吃前导零，
+0x00→"0"），非定宽。`th=464c457f.a40003` 直读：et=3（DYN）、
+em=0xa4（QDSP6）——设备 UFS so 文件=FAT 拷贝，e_type=3 上机再证。
+
+### FAT 全walk（walk-deep.py，递归+ELF 嗅探）
+
+62 个 ELF：**ET_EXEC 仅 2 个——modem.mdt（9420B 本体）+ modem.b00
+（1172B 存根）**；so/ 60 文件全 ET_DYN。⇒ 生产悖论加深：若生产
+dlopen(wlanmdsp) 带 mode bit2 走静态断言，产线全灭。生产 mode 必
+不带 bit2——**bench「mode=4」出处（调用点字面量）成为待钉环**。
+AAnchor11 发现 dlopen 调用点=1e4002c0/c8，位于 Ghidra 入口
+1e4002e0 之前的**从未反汇编字节区**（引用来自 undefined 数据）——
+`disassemble()` 强解后 dump 窗口（跑批中）。
+
+### 1e40081c 定谳：ops 表安装器
+
+0x54B 表装到 0x1e41b034：默认桩（log/open/read/malloc/free 等十余
+槽）+param_1 覆盖（版本≥0x14）；**验签三件套 param_1[2..4]
+（"If one verify fn ptr specified, all must be"）+ uimg 五件套
+[0xf..0x14]**——b30 装载器带验签钩子位，静态 map_object 未调用
+（无 hash 无验签的判词不变），钩子消费者在他路径。
+
+### s59 前提（插桩先于行为刀）
+
+先修会话抢战再谈刀效：(a) OACK/ACK/抢占全记账（sport+时刻+抢占者）；
+(b) so 会话新鲜期（OACK 后 N 秒）内 WRQ 只回 ERROR 不抢占；或读会话
+st∈{1,2} 优先。刀字节 0x10 3→2 挂点（块服务环 8494）本身没错——
+错在会话到不了那里。
+
+### 工件
+
+- /tmp/s58-231022.log（run 全程）、/tmp/s58-full-sm.txt（全量 sm）。
+- run 脚本三假信号记档：con() dd count=512 截断 sm（s54=/et=/rl 槽
+  全丢）+ WIN/ET/MZ grep 跑残文——教训：**sm 回复 >512B，探针读
+  帽按 4KB 起**；MZ_NOADVANCE 判据（sm 里找 mz ep=）永假。
+- re-b22 walk-deep.py（/tmp/modem-radio/）、AAnchor11.java 三修
+  （DecompInterface 正配、getReferencesTo、disassemble 强解）。
+
+## 二十四、wlanmdsp 真身链闭合：dlopen 调用点=「wlanmdsp.mbn,4」+ vendor 真身 ET_EXEC 提取成功，生产悖论解+两线分离定谳（2026-10-23 深夜五，案头）
+
+二十三收尾时的两个悬环（mode 字面量出处、FAT 全 walk 悖论）本窗全闭。
+核心转折：**dlopen 调用点根本不是在装 so/ 里那个文件——它在装 wlanmdsp.mbn，而那
+个文件不在 radio FAT，在 vendor 分区。** 观测的 so/549_38_0.mbn RRQ 是另一条线。
+
+### ① dlopen 调用点窗口（AAnchor11 最终产出 disasm11.log）
+
+Ghidra 入口 1e4002e0 之前的从未反汇编字节区（elf_loader PD crt 段）强解成功
+（clearListing(center±0x100)+流式 disassemble 逐条走；**打印必须纯正向**——
+背走（getInstructionBefore）越出反汇编前沿返回 null 会把打印循环整个杀掉，
+前两轮「空窗口」即此故，不是没有指令）。
+
+真正的 PD main=1e400278，结构完整落盘：
+
+```
+1e400278  allocframe #0x58
+1e40027c  call 0x1e4002e0            ← crt init（Ghidra 误当的「入口」实为子程）
+1e400280  memw (SP+#0x54),#0x0 ; assign R1,#0x0 ; add R2,SP,#0x0
+1e400288  call 0x1e40a540            ← memset
+1e40028c  add R0,R2,#0x4 ; assign R2,#0x50 ; assign R0,#0x0
+1e400298  add R1,SP+#0x54 ; add R2,SP,#0x0
+1e4002a0  memw (SP),#0x28            ← 结构 size=0x28(40B)
+1e4002a8  memw (SP+#0x28),##0x1e4002fc   ← 回调①（fd 域检查 0x801..0x1800）
+1e4002b0  memw (SP+#0x2c),##0x1e4003b0   ← 回调②
+1e4002b4  call 0x1e400c90            ← ops 装载链（wraps 1e40081c 安装器）
+1e4002b8  call 0x1e40750c            （影子 assign R0,#1 → 1e40750c(1)）
+1e4002bc  assign R0,#0x1
+1e4002c0  call 0x1e400ca8            ← dlopen
+1e4002c4  immext #0x1e411000
+1e4002c8  combine R1R0,#0x4,##0x1e411000  ← 影子：R0=0x1e411000 R1=4
+1e4002cc  call 0x1e40720c            （影子 combine R1R0,#4,#0 + R3R2,#0,#0x27
+                                        → 1e40720c(0,4,0x27,0)）
+1e4002d8  call 0x1e408e30
+1e4002dc  assign R0,#0x0 ; dealloc_return
+```
+
+影子包位级核对（收据二十二方法，parse bits[15:14]）：
+- 2b8=0x5a00792a(01 续) + 2bc=0x7800c020(11 端) → 包{call 1e40750c; assign R0,#1}
+- 2c0=0x5a0044f4(01) + 2c4=0x1e44440(01) + 2c8=0x7c80c080(11 端) →
+  **包{call dlopen; combine R1R0,#4,0x1e411000} = dlopen(R0=0x1e411000, R1=4)** ✓
+- 2cc=0x5a0077a0(01) + 2d0=0x7c004080(01) + 2d4=0x7c13e002(11 端) →
+  包{call 1e40720c; R1=4,R0=0; R3=0,R2=0x27}
+- 2d8=0x5a01c5ac(11 端单包) call 1e408e30；2dc duplex 收尾 return 0
+
+### ② 路径串=「wlanmdsp.mbn」——不是 so 文件名
+
+0x1e411000 直读（blob off=0x5ec6000+0x11000）：`wlanmdsp.mbn`。它坐在 rtld 串表
+头部（紧邻 rtld.c / map_object.c / 全套断言串）。**mode=4 的生产字面量出处闭环：
+ elf_loader PD 自己的 main 第一个 dlopen 就是装 WLAN 镜像。**
+
+### ③ PD 派生表（modem-full.elf 0x1649xxx rodata）——四级搜索路径
+
+```
+msm/modem/wlan_pd  wlan_process  wlanmdsp.mbn
+  /readonly/firmware/image/wlanmdsp.mbn
+  /readonly/vendor/firmware_mnt/image/wlanmdsp.mbn
+  /readonly/vendor/firmware/wlanmdsp.mbn
+  /readonly/vendor/firmware/wlanmdsp.otaupdate
+msm/modem/test_pd  test_process  testpd.mbn（同构四级）
+```
+旁证铁串：`RFS_ENOENT - cannot find Wlan image, CANNOT spawn a PD`、
+`RFS SERVER isn't ready or RFS Read ERROR, CANNOT spawn a PD`、
+`ELF_LOADER CAN SPWAN User PD:%s`。elf_loader=用户 PD 派生器，wlan_pd 是其
+硬编码首单（与 main 里 dlopen 字面量互证）。
+
+### ④ 两线分离定谳：so/549_38_0.mbn RRQ 属 dlfs so 线（0x16b0xxx）
+
+```
+dlfs_std_io.c  _FOPEN: file %s found on EFS/RFS  /so/%s
+/readonly/firmware/image/modem_pr/so/%s          ← 观测 RRQ 的拼路径出处
+```
+62 个 so/*.mbn 全 ET_DYN=根 PD 动态库线，mode 无 bit2，e_type=3 本来就对。
+**收据 21「毙=ET_EXEC 断言」判词撤销**：so 线 160B 头读后静默=服务不成熟
+（收据 23 会话抢占判决维持，且升为唯一死点解释）；**s58 e_type 刀
+（549_38_0 3→2）前提作废且反方向**——动态消费者拿到 ET_EXEC 反会被引进
+定址段走法。刀面重定向：若要验静态路断言，patch 对象应是 wlan 线供给文件，
+不是 so 线文件。
+
+### ⑤ qdb 判死：Qshrink 符号库，非镜像容器
+
+image/saipan/qdsp6m.qdb（6654191B）：magic `\x7fQDB`，0x40 处起 zlib 流
+（\x78\xda），解压 30374857B = `# Qshrink 4.0 Hash Database File`——ramdump
+符号化库。2499 条 wlan 符号/源文件名（wlan_endp.c/wlan_data.cpp…），
+`\x7fELF` 计数=0，wlanmdsp 串=0。不是镜像来源，此路封闭。
+（modemr.jsn=纯 servreg 元数据，version.cfg=构建串 g7250-00264-230619-B，
+同样无别名表。）
+
+### ⑥ wlanmdsp.mbn 真身提取成功（vendor.img debugfs）
+
+radio FAT 全树零 wlan 命名文件 → 真身只可能在 vendor。brew e2fsprogs（keg-only，
+/opt/homebrew/opt/e2fsprogs/sbin/debugfs）直取一代仓回滚真源
+`.factory/vendor.img`（up1a.231105.001.b2）：
+
+```
+/firmware/wlanmdsp.mbn  3811096B  md5 619167e6289bdd1bd5e391979da39231
+ELF32 LSB  Hexagon(0xa4)  e_type=2 ET_EXEC ✓
+（同目录记账：bdwlan-redfin.bin/bdwlan-u-redfin.bin 各 26328B=板数据，
+ /firmware/wlan/qca_cld=CLD 驱动树，后续 WLAN bring 用）
+```
+**生产悖论彻底闭合**：生产 dlopen("wlanmdsp.mbn",4) → 四级搜索第 3 级
+/readonly/vendor/firmware/wlanmdsp.mbn 命中（AP 侧 RFS 供的正是 vendor 分区
+此文件）→ ET_EXEC → mode bit2 静态定址段装入 → 无断言、自洽。
+
+### ⑦ bench 无 WLAN 的结构性根因 + 上机两腿
+
+根因：wlanmdsp.mbn 不在 radio FAT → elf_loader 四级搜索全空 → RFS_ENOENT
+→ wlan_pd 永不派生（静默跳过，非死机——与收据 23 的 so 线服务不成熟互不纠缠）。
+
+s59 计划（先修泵再供文件）：
+1. **tftp 会话抢占修复**（收据 23 先决：OACK/ACK/抢占记账 + 读会话 st∈{1,2}
+   优先或 so 会话新鲜期内 WRQ 只回 ERROR 不抢占）→ 根 PD so 线 62 库跑通。
+2. **wlan 供文件腿**：pump 对 `/readonly/firmware/image/wlanmdsp.mbn`
+   （搜索第 1 级，我们完全掌控的 serve 面）RRQ 直接答真身
+   /tmp/modem-radio/wlan-fw/wlanmdsp.mbn（先入仓外资产位待定，考虑
+   .local/device/redfin/ 集中）→ elf_loader mode=4 静态装入 ET_EXEC →
+   wlan_pd 派生 → WLAN 子系统上 modem DSP。下一前沿=glink/wlanctl 面板数据。
+
+### 教训
+
+- Ghidra 背走出前沿=null 杀循环——**dump 一律纯正向**；AAnchor11 最终形态
+  （DecompInterface+getReferencesTo+clearListing 流式解+正向打印）可复用。
+- 「FAT 全 walk 悖论」的解法不是继续在 FAT 里找，而是问**调用点要什么名**——
+  名字对不上就是别的线（dlfs so 线），别把两条线焊在同一个消费者上。
+- rea 拒 Hexagon ELF 不代表案头死路：串表直读（blob va→off 换算）零成本定名。
