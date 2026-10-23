@@ -6923,3 +6923,66 @@ s59 计划（先修泵再供文件）：
 - 「FAT 全 walk 悖论」的解法不是继续在 FAT 里找，而是问**调用点要什么名**——
   名字对不上就是别的线（dlfs so 线），别把两条线焊在同一个消费者上。
 - rea 拒 Hexagon ELF 不代表案头死路：串表直读（blob va→off 换算）零成本定名。
+
+## 二十五、s59 首刷判决：修泵腿活证成立 + 小窗分段读真相 + 两刀撤防（2026-10-24 00:30–01:00，红鳍在役）
+
+刷机：boot-s59-pad.img（68,157,440B 垫零，md5 a7ec9f27314cbd248f1d271d4cb3a9cb）
+→ flash boot_a + set_active a + reboot（用户手按 Power+VolDown 进 fastboot，
+串号门 REDFIN_FASTBOOT_SERIAL 环内比对；哨兵首版变量名写成 REDFIN_FASTBOOT
+被自家门拦——**门拦自家哨也是门在工作**，对账后放行）。
+
+### ① 修泵腿（TF_SN/TF_SP 会话私有地址槽）：活证成立
+
+| 字段 | s58（刷前，25h 命） | s59 首刷 ~90s | 解读 |
+|---|---|---|---|
+| tf= | /readwrite/modem_efs.2.5（efs WRQ 占名） | so/549_38_0.mbn.1.7 | 会话真源回读线 |
+| tb= | 4.x（ST=4 op5 打死） | **3.x（ST=3 送完）** | 会话首次走完 |
+| rt= | 8 条含 efs WRQ 穿插 | 7 条纯 RRQ 干净收尾 | 本次无抢占（wp=0- 合理，机制未被需要≠机制无效） |
+| so= | 2.0 | 4.0 | 服务 +2、错 0 |
+
+���占伤害结构（收据 23）在 s59 结构性闭合：DATA 只认首服 OACK 同拍闩的
+TF_SN/TF_SP；wp=/wf= 新账渲染在案。**注意**：u=12390/ob=28 跨刷同值=PON
+快照继承（s54v5.4 机制），不是「没重启」——rt/wf/wp 才是本命 RAM 账。
+
+### ② tev 毫秒线揭真身：客户端是小窗分段读，不是整文件下载
+
+tev 解码（ev9=so_read 返回 n；ev5=DATA 发出 blk；ev7=ST 迁；ev2=ACK；
+ev3=对端 ERROR）：
+
+```
+bee9: ev3(code9=End-of-Transfer) → ev9(52) → ev5(blk1) → ev7(ST=3) → ev2(ACK 0)
+beee: ev2(ACK 1) → ev9(160) → ev5(blk1) → ev7(ST=3) → （再无 ev2 ——永静默）
+```
+
+- 客户端节奏=52B 探针 + **160B 头表**（ELF 头+phdr 表）→ 拿头即决。
+- tf=N 计数=7=DATA 发出数；tb=st.blk.xfer.wsent 中 blk=base+wsent=1 ⇒
+  **base=0**（ACK 从未推进窗口）；ST=3 来自 limit=seek+rsize 短块收口——
+  rsize 分段读，962KB 全文件从未被要过。
+- 160B 头表读=收据 21「头读已发生」的同一现象，但收据 24 已拆两线：
+  这是 **dlfs so 线**的装载器，不是 wlanmdsp 的 rtld 断言路径。
+
+### ③ 拿头后永静默：头 108B 恰为两把已撤前提毒刀的落点
+
+- s54 阶梯：phdr1.p_filesz@100（0x1a98→0x1000）+ p_memsz@104（0x2000→0x1000）
+  ——rung 从 0x2000 推到 0x1000（PON 跨命继承，s58 末命讣告推档）。
+- s58 e_type 刀：@0x10 ET_DYN(3)→ET_EXEC(2)。
+- 两刀前提均被收据 24 撤销（so=dlfs 另线；ET_EXEC 断言属 wlanmdsp 路径；
+  #54 alloc 判词撤）——**s59 是 so 头段史上首次活送，却顶着两把毒刀送**。
+- 静默形状：无段读（s58 注释预言的 WIN 签名 ph2@0x3000/ph3@0x15000 未现）、
+  无讣告簇（rung 不再推进）、rt 冻结 10min+。
+
+### ④ 判决执行：s60 = SO_KNIVES_OFF（ef84ae46 已推）
+
+单变量重考：so 线一字不动（FAT 原字节），wlan 供件腿原样。
+WIN 签名=头表后有**任何**后续（段读/seek RRQ/讣告簇）；仍静默=堵点在
+头表之外（版本错配/等外部事件/别的前置缺件）。
+boot-s60-pad.img 68,157,440B md5 586ba228322fc3df717c62f3518944d7 待刷。
+
+### 教训
+
+- 「送完」两个字曾是盲读：tf=N 是**发出数**不是 ACK 数，tb.blk=base+wsent
+  才是活窗真相——**每字段先查渲染器再下判词**（本轮差点把「整文件下载完
+  被弃」写成结论，tev 线拉回来）。
+- 过期实验刀=活性毒物：前提被撤的刀必须同 commit 撤防，否则它会在第一
+  次真正的活测里污染唯一样本。
+- probe-sm.sh（perl alarm 版）替代 dd 阻塞版：自终止单连接，不再留挂账连接。
