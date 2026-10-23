@@ -569,6 +569,19 @@ const BULK_LEN: u32 = 1536;
 /// `fr` 只读 SMEM 421，不分配、不踢 IPCC。
 const PON_PPID: u32 = 0x008;
 const IMEM_RESTART: usize = 0x146A_B65C;
+/// s54v5.3：阶梯跨命持久化——暖复位 IMEM 存活（重启原因协议本证）。
+/// 字选 lito+kona 双 dtsi 实证 0x190..0x65c 零消费者空档（lito.dtsi
+/// imem@146ab000 子节点：10/1c/c8..190/65c/6b0/6d0/94c..a14，kona 同
+/// 构）。life=命计数器（读快照→写回+1，次命快照=持久化存活证据）；
+/// rung=SO_RUNG 存档（0x7166 magic 校验，冷启 IMEM 清零自动归位）；
+/// 三探针 200/400/500=空档死区取证（写 0x7166_0001 一次，次命快照
+/// 仍此值=全链无人碰；异值/归零=他有消费者，挪位）。
+const IMEM_S54_MAGIC: u32 = 0x7166_0000;
+const IMEM_S54_LIFE: usize = 0x146A_B600;
+const IMEM_S54_RUNG: usize = 0x146A_B604;
+const IMEM_S54_P200: usize = 0x146A_B200;
+const IMEM_S54_P400: usize = 0x146A_B400;
+const IMEM_S54_P500: usize = 0x146A_B500;
 const MSM_PS_HOLD: usize = 0x0C26_4000;
 const CTRL_PORT: u16 = 2323;
 static mut CTRL_LINE: [u8; 64] = [0; 64];
@@ -5033,6 +5046,16 @@ static mut SO_PATCH_N: u32 = 0;
 /// 不推（旗留着，同档续跑）。
 static mut SO_PATCHED: u32 = 0;
 static mut SO_FRESH_AT: u64 = 0;
+/// s54v5.3：imem 快照/恢复面——IM_LIFE=本命序号；IM_SNAP_* 各字上命
+/// 残值（boot 时先读快照再写回，sm 渲染的即「活了过来」的那份）；
+/// IM_RUNG_SRC=0 冷启/1=imem 恢复（分辨「继承」与「重开」）。
+static mut IM_LIFE: u32 = 0;
+static mut IM_RUNG_SRC: u32 = 0;
+static mut IM_SNAP_LIFE: u32 = 0;
+static mut IM_SNAP_RUNG: u32 = 0;
+static mut IM_SNAP_200: u32 = 0;
+static mut IM_SNAP_400: u32 = 0;
+static mut IM_SNAP_500: u32 = 0;
 /// s54：讣告全保真——52B DEL_SERVER 原文末 2 笔（时间序旧→新）+总笔数。
 /// rqr= 只有五元组摘要；node/service/instance 解码要原文。52B=32B qrtr
 /// 头+20B ctrl 体（cmd.service.instance.node.port）。
@@ -8806,6 +8829,8 @@ fn tf_reply(ufs: &mut Ufs, at478: u64, at479: u64, sz479: u64) {
                         SO_ADV_N = SO_ADV_N.wrapping_add(1);
                         SO_ADV_SRC = 2;
                         SO_PATCHED = 0;
+                        // s54v5.3：推档即落 imem（跨命阶梯）。
+                        wr32(IMEM_S54_RUNG, 0x7166_0000 | SO_RUNG);
                     }
                     SO_FRESH_AT = nowf;
                 }
@@ -12976,6 +13001,8 @@ fn scan_new_servers(fifo: u64, rh: u64) {
                             SO_ADV_N = SO_ADV_N.wrapping_add(1);
                             SO_ADV_SRC = 1;
                             SO_PATCHED = 0;
+                            // s54v5.3：推档即落 imem（跨命阶梯）。
+                            wr32(IMEM_S54_RUNG, 0x7166_0000 | SO_RUNG);
                         }
                     }
                 }
@@ -14835,6 +14862,24 @@ fn ctrl_service(
                                 push_hex(reply, &mut rn, unsafe { SO_ADV_N } as u64);
                                 push_str(reply, &mut rn, ".");
                                 push_hex(reply, &mut rn, unsafe { SO_ADV_SRC } as u64);
+                                // s54v5.3：imem 持久化体检——本命号.恢复源
+                                // （0=冷/1=imem）.life 上命残值.rung 上命残值.
+                                // 三探针上命残值。残值=0x7166xxxx 即暖链全程
+                                // 无人碰=持久化活证；异值/归零=有消费者。
+                                push_str(reply, &mut rn, " s5i=");
+                                push_hex(reply, &mut rn, unsafe { IM_LIFE } as u64);
+                                push_str(reply, &mut rn, ".");
+                                push_hex(reply, &mut rn, unsafe { IM_RUNG_SRC } as u64);
+                                push_str(reply, &mut rn, ".");
+                                push_hex(reply, &mut rn, unsafe { IM_SNAP_LIFE } as u64);
+                                push_str(reply, &mut rn, ".");
+                                push_hex(reply, &mut rn, unsafe { IM_SNAP_RUNG } as u64);
+                                push_str(reply, &mut rn, ".");
+                                push_hex(reply, &mut rn, unsafe { IM_SNAP_200 } as u64);
+                                push_str(reply, &mut rn, ".");
+                                push_hex(reply, &mut rn, unsafe { IM_SNAP_400 } as u64);
+                                push_str(reply, &mut rn, ".");
+                                push_hex(reply, &mut rn, unsafe { IM_SNAP_500 } as u64);
                                 push_str(reply, &mut rn, " ob=");
                                 push_hex(reply, &mut rn, unsafe { SO_OB_N } as u64);
                                 {
@@ -16692,6 +16737,39 @@ fn fill_tables() {
 extern "C" fn rust_main() -> ! {
     // s54v5.2：命内起点第一手捕获（见 BOOT_TICK 注）。
     unsafe { BOOT_TICK = time::cntvct() };
+    // s54v5.3：imem 持久化恢复（字选/证据链见 IMEM_S54_* 注）。
+    // 先快照后写回：渲染的快照=上命残值=存活证据本体。rung 只认
+    // magic+≤7，其余一律归 0 重开（冷启自愈）。探针只在非 magic 时
+    // 写一次，原值永不被自己覆盖。
+    unsafe {
+        IM_SNAP_LIFE = rd32(IMEM_S54_LIFE);
+        IM_SNAP_RUNG = rd32(IMEM_S54_RUNG);
+        IM_SNAP_200 = rd32(IMEM_S54_P200);
+        IM_SNAP_400 = rd32(IMEM_S54_P400);
+        IM_SNAP_500 = rd32(IMEM_S54_P500);
+        IM_LIFE = if (IM_SNAP_LIFE >> 16) == 0x7166 {
+            (IM_SNAP_LIFE & 0xffff).saturating_add(1)
+        } else {
+            1
+        };
+        wr32(IMEM_S54_LIFE, 0x7166_0000 | IM_LIFE);
+        if (IM_SNAP_RUNG >> 16) == 0x7166 && (IM_SNAP_RUNG & 0xffff) <= 7 {
+            SO_RUNG = IM_SNAP_RUNG & 0xffff;
+            IM_RUNG_SRC = 1;
+        } else {
+            SO_RUNG = 0;
+        }
+        wr32(IMEM_S54_RUNG, 0x7166_0000 | SO_RUNG);
+        if (IM_SNAP_200 >> 16) != 0x7166 {
+            wr32(IMEM_S54_P200, 0x7166_0001);
+        }
+        if (IM_SNAP_400 >> 16) != 0x7166 {
+            wr32(IMEM_S54_P400, 0x7166_0001);
+        }
+        if (IM_SNAP_500 >> 16) != 0x7166 {
+            wr32(IMEM_S54_P500, 0x7166_0001);
+        }
+    }
     let freq = time::freq_or(FREQ_FALLBACK as u32);
     let mut ufs = Ufs::new(HCI, UTRD, UCD, freq);
     ufs.init();
