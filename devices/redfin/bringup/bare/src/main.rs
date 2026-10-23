@@ -535,6 +535,17 @@ static mut SYN_SEQ: u32 = 0;
 static mut TCP_KNOCK_BASE: u32 = 0;
 /// s54v5：当前 TCP 状态的起点（状态年龄，sm tp= 第三段上报）。
 static mut TCP_ST_AT: u64 = 0;
+/// s54v5.2：命内起点——暖复位 cntvct 按架构活过 warm 域（PS_HOLD），
+/// 「开机多久」一律减本基线；auto-fb 若读绝对值，宿主枚举慢的暖命
+/// 会被误判>120s 弹回 fastboot（骰机无限蹦床）。
+static mut BOOT_TICK: u64 = 0;
+/// s54v5.2：栈重生——07:38/12:05 两案同形：**TCP 先死而 ICMP 后活**
+/// （ICMP 回显=地址镜像借来路，TCP SYN-ACK=地址构造靠 iface 自身），
+/// 病灶在 iface 层或更深，状态机锤子够不着（12:05 案敲门 ≥25 仍黑
+/// 洞=敲门自愈健在而无效的实锤）。RX 静默 300s（基线=末次 RX/上次
+/// 重生/命起取最大）即整栈推倒重建（ctrl_boot 全套重跑）。观察循环
+/// 20s 一拍，活用时永不触发；楔死后 5 分钟内控制台必回。
+static mut STACK_REBIRTH_AT: u64 = 0;
 static mut TCP_LS_BAD: bool = false;
 static mut CTX_UFS: *mut Ufs = core::ptr::null_mut();
 static mut CTX_FREQ: u32 = 0;
@@ -14253,7 +14264,8 @@ fn ctrl_service(
                                 let secs = if freq == 0 {
                                     0
                                 } else {
-                                    time::cntvct() / freq as u64
+                                    // s54v5.2：命内秒数（暖复位 cntvct 继承）
+                                    time::cntvct().wrapping_sub(unsafe { BOOT_TICK }) / freq as u64
                                 };
                                 push_u64(reply, &mut rn, secs);
                                 push_str(reply, &mut rn, " seq ");
@@ -16470,6 +16482,27 @@ fn ctrl_poll(ufs: &mut Ufs, freq: u32, t: &mut [u8; 96], arb: &spmi::Arb, n_apid
     if freq == 0 {
         return;
     }
+    // s54v5.2：栈重生判定（详见 STACK_REBIRTH_AT 注）——先判后建，
+    // 同一拍完成推倒+重建。socket 槽显式清空（SocketSet 复用旧槽
+    // 会 add 撞满）。
+    unsafe {
+        let now = time::cntvct();
+        let base = TCP_RX_AT.max(STACK_REBIRTH_AT).max(BOOT_TICK);
+        if CTRL_UP && now.wrapping_sub(base) > freq as u64 * 300 {
+            STACK_REBIRTH_AT = now;
+            CTRL_IFACE = None;
+            CTRL_UP = false;
+            CTRL_HANDLE = None;
+            CTRL_SLOTS[0] = smoltcp::iface::SocketStorage::EMPTY;
+            CTRL_GREETED = false;
+            CTRL_LINE_N = 0;
+            CTRL_OVERFLOW = false;
+            TCP_ST = 0xff;
+            TCP_SYN_AT = 0;
+            TCP_RX_AT = 0;
+            tcp_mark(ufs, freq, t, " tcp reb=0x", 1);
+        }
+    }
     if unsafe { !CTRL_UP } {
         let rc = ctrl_boot(freq);
         tcp_mark(ufs, freq, t, " tcp ls=0x", rc as u64);
@@ -16657,6 +16690,8 @@ fn fill_tables() {
 
 #[no_mangle]
 extern "C" fn rust_main() -> ! {
+    // s54v5.2：命内起点第一手捕获（见 BOOT_TICK 注）。
+    unsafe { BOOT_TICK = time::cntvct() };
     let freq = time::freq_or(FREQ_FALLBACK as u32);
     let mut ufs = Ufs::new(HCI, UTRD, UCD, freq);
     ufs.init();
@@ -17672,7 +17707,7 @@ extern "C" fn rust_main() -> ! {
             if freq != 0
                 && unsafe { EP0.devst < 2 }
                 && unsafe { CTRL_FB == 0 }
-                && time::cntvct() / freq as u64 > 120
+                && time::cntvct().wrapping_sub(unsafe { BOOT_TICK }) / freq as u64 > 120
             {
                 s20_keep(&mut ufs, freq, &mut t, " s20 afb=0x", 1);
                 unsafe { CTRL_FB = 2 };
