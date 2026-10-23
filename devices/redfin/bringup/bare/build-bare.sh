@@ -151,6 +151,7 @@ MODE="heartbeat"
 [ "${1:-}" = "--s56" ] && MODE="s56"
 [ "${1:-}" = "--s57" ] && MODE="s57"
 [ "${1:-}" = "--s58" ] && MODE="s58"
+[ "${1:-}" = "--s59" ] && MODE="s59"
 mkdir -p "${OUTDIR}"
 ELF="${OUTDIR}/heartbeat.elf"
 
@@ -1313,6 +1314,22 @@ elif [ "${MODE}" = "s58" ]; then
   ELF="${OUTDIR}/s58.elf"
   cp "${HERE}/target/aarch64-unknown-none-softfloat/release/redfin-bare" "${ELF}"
   BIN="${OUTDIR}/s58.bin"; IMG="${OUTDIR}/boot-s58.img"
+elif [ "${MODE}" = "s59" ]; then
+  # 刀 G59（修泵+供文件）：收据二十三/二十四两腿。
+  # ①读会话私有地址槽 TF_SN/TF_SP（首服 OACK 同拍闩）——DATA 不再走
+  # walker 每请求刷新的 TF_NODE/TF_PORT（efs WRQ 中途改投收件人=so 线
+  # tb=4.0.11.0 全死的真身）；读主线 RRQ（so/wlan 裸看名）可抢占新鲜
+  # WRQ pend（disp=3/wp= 账），WRQ 仍不抢读。
+  # ②wlan 真身供件：wlanmdsp.mbn（vendor.img 提取 ET_EXEC 3,811,096B）
+  # build.rs 四验后烤进 rodata（rust.ld 数据域抬 0x82000，让打包垫的
+  # 0x80000 双入口字节落在零填洞）；名尾巴 wlanmdsp.mbn 的 RRQ 按读会话
+  # 服务（源=wlan_read memcpy，tsize=blob 长；s54 阶梯/s58 刀对 wlan
+  # 会话双双禁用——真身一字不动）。WIN=wlan_pd 派生（ELF_LOADER CAN
+  # SPWAN User PD / 四级搜索首答）；wf= 账直读。s44–s58 全保留。
+  (cd "${HERE}" && cargo build --release --target aarch64-unknown-none-softfloat) || { echo "cargo build FAILED (${MODE}) -- 不拷陈旧件" >&2; exit 1; }
+  ELF="${OUTDIR}/s59.elf"
+  cp "${HERE}/target/aarch64-unknown-none-softfloat/release/redfin-bare" "${ELF}"
+  BIN="${OUTDIR}/s59.bin"; IMG="${OUTDIR}/boot-s59.img"
 elif [ "${MODE}" = "s55" ]; then
   # 刀 G55（集发生器+受理环）：三层故障栈第①层（重启环未闭合=阶梯冻结
   # 根因）补齐——真杠杆=SCM PAS（lito.dtsi pil_modem=pil-tz-generic

@@ -11,6 +11,11 @@ SECTIONS {
   /* S0-3 异常向量表：16 槽×128B，VBAR 须 2KB 对齐 */
   . = ALIGN(0x800);
   .vectors : { KEEP(*(.vectors)) }
+  /* s59：数据域抬 0x82000——wlanmdsp 真身 ~3.8MB 使平铺超 0x80000，
+   * 而打包垫在 flat+0x80000 写双入口字节（两种 ABL 入口约定），必须
+   * 让它落在 0x80000..0x82000 的 objcopy 零填洞里（text+vectors
+   * ~0x34000 ≪ 0x80000，洞恒在；blob/rodata 一个字节不被碰）。 */
+  . = 0xA7F02000;
   .rodata ALIGN(8) : { *(.rodata .rodata.*) }
   .data ALIGN(8) : { *(.data .data.*) }
   . = ALIGN(16);

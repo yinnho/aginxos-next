@@ -5117,6 +5117,37 @@ const TF_SVC_PORT: u32 = 0x11;
 const TF_ALT_PORT: u32 = 0x1011;
 /// 这次 SO 传输的源端口。0 表示还没发 OACK。
 static mut TF_XFER_PORT: u32 = 0;
+/// s59：读会话私有地址槽（node/port）——首服 OACK 发出时快照（与
+/// TF_XFER_PORT 同拍）。受理链 walker 对每个后到请求（op≠3/4/5）都
+/// 覆写 TF_NODE/TF_PORT（main 走查区「地址刷新先于一切闸」）——收据
+/// 23 抢占案的伤害结构：efs WRQ 一到，在途 so 会话的 DATA 全改投 efs
+/// 客户端 → elf_loader 1s 超时 op5 → ST=4（s58 现场 tb=4.0.11.0 即此
+/// 形）。泵的 DATA 从此只认会话槽；TF_NODE/TF_PORT 只供「下一笔 pend
+/// 的首答」寻址（OACK/ERROR 与 G3 刷新纪律不变）。
+static mut TF_SN: u32 = 0;
+static mut TF_SP: u32 = 0;
+/// s59：读会话数据源。0=so/FAT（TZ_CL 簇链）；1=wlan 真身（WLAN_FW
+/// 内嵌 blob）。s54 阶梯与 s58 e_type 刀都只属于 so 线——对 wlan 会话
+/// 双双禁用（真身字节一字不动，静态装载验签/hash 才有原味可考）。
+static mut TF_SRC: u32 = 0;
+/// s59：wlan 供件账。RQ=名尾巴 wlanmdsp.mbn 的 RRQ 武装数；OX=OACK
+/// 发成数；DV=DATA 块发成数（wlan 会话独计）。
+static mut TF_WF_RQ: u32 = 0;
+static mut TF_WF_OX: u32 = 0;
+static mut TF_WF_DV: u32 = 0;
+/// s59：读 RRQ 抢占 WRQ pend 账。PRE=次数；环 4 槽（新覆旧）=低 16 位
+/// 被挤 WRQ 的源口 | 高 16 位抢者源口——收据 23 先决「抢占记账」落地，
+/// 现场可归因（谁挤了谁）。
+static mut TF_PRE: u32 = 0;
+static mut TF_PRE_SP: [u32; 4] = [0; 4];
+/// s59：wlanmdsp.mbn 真身（build.rs 从 .local/device/redfin/modem/
+/// 拷入 OUT_DIR；vendor.img /firmware 提取，ELF32 LE Hexagon ET_EXEC
+/// 3,811,096B，md5 619167e6…，配方=收据二十四）。elf_loader PD
+/// dlopen("wlanmdsp.mbn",4) 四级搜索第 1 级 /readonly/firmware/image/
+/// 的应答体——静态 map_object 硬断言 ET_EXEC，本件原生即 2（s58 对
+/// so 件的 3→2 刀不适用于此，永不触 wlan 会话）。rust.ld 数据域已抬
+/// 0x82000，blob 全在 0x80000 双入口字节之上。
+static WLAN_FW: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/wlanmdsp.mbn"));
 /// OACK 发出时刻（CNTVCT）。宽限刀用：OACK 后 2s 无 ACK-0 就合成 ack=0 直发 DATA 块 1
 /// （非规客户端 OACK 后不 ACK 只等数据的假设 E）。0 = 未发。
 static mut TF_OACK_AT: u64 = 0;
@@ -7757,6 +7788,14 @@ fn tf_is_so() -> bool {
     tf_name_has(b"549_38_0.mbn")
 }
 
+/// s59：wlan 真身请求——名尾巴 wlanmdsp.mbn（elf_loader PD 四级搜索
+/// 第 1 级 /readonly/firmware/image/wlanmdsp.mbn，收据二十四：bench
+/// 无 WLAN 结构根因=四级全 404 → wlan_pd 永不派生）。命中即按读会话
+/// 服务，数据源=WLAN_FW 内嵌 blob（不碰 FAT/ext4——设备分区态不担保）。
+fn tf_is_wlan() -> bool {
+    tf_name_has(b"wlanmdsp.mbn")
+}
+
 fn tf_is_ruleset() -> bool {
     tf_name_has(b"ota_firewall/ruleset")
 }
@@ -7986,8 +8025,10 @@ static mut BG_SP: u32 = 0;
 static mut BG_W: [u32; 3] = [0; 3];
 
 /// 只把 SO 的 RRQ 载荷抄进 BSS。选项等到第一次 sm 之后再解析。
+/// s59：wlan 真身 RRQ 同道（tf_apply_saved/OACK 回显吃 TF_OPTBUF——
+/// 不放宽则解析上一笔 so 的陈旧选项，blksize 回显错值）。
 fn tf_save_so(fifo: u64, off: u64, chunk: u64) {
-    if !tf_is_so() {
+    if !(tf_is_so() || tf_is_wlan()) {
         return;
     }
     let size = rd32((fifo + off + 36) as usize) as usize;
@@ -8348,6 +8389,46 @@ fn so_read(ufs: &mut Ufs, off: u32, n: usize) -> usize {
     got
 }
 
+/// s59：受理门前裸看名（不依赖 TF_NAME——武装与否无关）。「读主线」的
+/// RRQ（so 件或 wlan 真身）才有抢占新鲜 WRQ pend 的资格；其余照旧排队。
+/// 名域 fifo+off+50 起 NUL 结尾（与生产门同源），抄 ≤80B 对尾巴。
+fn tf_req_serveable(fifo: u64, off: u64, chunk: u64) -> bool {
+    let max = if chunk > 50 { chunk - 50 } else { 0 };
+    let mut nm = [0u8; 80];
+    let mut n = 0usize;
+    while n < 80 && (n as u64) < max {
+        let b = rd8(fifo + off + 50 + n as u64);
+        if b == 0 {
+            break;
+        }
+        nm[n] = b;
+        n += 1;
+    }
+    fn ends(nm: &[u8; 80], n: usize, suf: &[u8]) -> bool {
+        n >= suf.len() && &nm[n - suf.len()..n] == suf
+    }
+    ends(&nm, n, b"549_38_0.mbn") || ends(&nm, n, b"wlanmdsp.mbn")
+}
+
+/// s59：wlan 真身读——WLAN_FW[off..off+n] 平进 TF_BLKBUF[4..]（与
+/// so_read 同一出口形状，泵零感知）。blob 在抬高的 rodata 域，纯
+/// memcpy 不碰 UFS/FAT。
+fn wlan_read(off: u32, n: usize) -> usize {
+    let len = WLAN_FW.len();
+    if n == 0 || off as usize >= len {
+        return 0;
+    }
+    let n = n.min(len - off as usize).min(8192);
+    unsafe {
+        core::ptr::copy_nonoverlapping(
+            WLAN_FW.as_ptr().add(off as usize),
+            TF_BLKBUF.as_mut_ptr().add(4),
+            n,
+        );
+    }
+    n
+}
+
 /// tftp。WRQ 仍在监听口回 ACK block 0。
 /// SO 的 RRQ 在 II_ST=2（IPA INIT 完成）后立即发 OACK（刀 G4：不再等第一次 sm）。
 /// rsize 键存在且值为 0 时不发 DATA，等 code 9。
@@ -8419,7 +8500,12 @@ fn tf_pump_window(ufs: &mut Ufs, at478: u64, at479: u64, sz479: u64, armed: bool
         // 刀 G5：DATA 从 seek 起算（stock tftp_send_data 同款：文件偏移 =
         // seek + cur*blksize，块号在窗口内从 1 数）。
         let limit = {
-            let sz = unsafe { TZ_SZ };
+            // s59：会话源二分——so=FAT 真身，wlan=内嵌 blob。
+            let sz = if unsafe { TF_SRC } != 0 {
+                WLAN_FW.len() as u32
+            } else {
+                unsafe { TZ_SZ }
+            };
             let rs = unsafe { TF_RSIZE };
             // rsize 是「从 seek 起要多少」，窗口尾 = seek+rsize，夹在文件尾内。
             if rs > 0 {
@@ -8458,13 +8544,19 @@ fn tf_pump_window(ufs: &mut Ufs, at478: u64, at479: u64, sz479: u64, armed: bool
             if off + blk_sz as u32 > limit {
                 want = (limit - off) as usize;
             }
-            let n = so_read(ufs, off, want);
+            // s59：读源随会话——wlan 会话不碰 UFS（blob memcpy）。
+            let n = if unsafe { TF_SRC } != 0 {
+                wlan_read(off, want)
+            } else {
+                so_read(ufs, off, want)
+            };
             // s54：phdr1 阶梯补丁——本块盖住文件偏移 100..108（phdr1.p_filesz
             // @100=0x1a98、p_memsz@104=0x2000，hash 段）即覆写：memsz=档值
             // 恒写；filesz 只缩不涨（档值<0x1a98 才写）。rung0 档值=原值
             // 0x2000 ⇒ 字节不变=对照靴。只有块 1（seek=0 会话/全文件会话）
             // 盖得住 100..108；boot 探针读（64B@0/52B@0xa0）不经此路。
-            if off <= 100 && off + n as u32 >= 108 {
+            // s59：wlan 会话禁（so 线专属刀——真身一字不动）。
+            if unsafe { TF_SRC } == 0 && off <= 100 && off + n as u32 >= 108 {
                 let v = unsafe { SO_LADDER[(SO_RUNG as usize).min(7)] };
                 unsafe {
                     let p100 = 4 + (100 - off) as usize;
@@ -8491,7 +8583,9 @@ fn tf_pump_window(ufs: &mut Ufs, at478: u64, at479: u64, sz479: u64, armed: bool
             // 3→2 放行静态装载；WIN 签名升级=段读上线（ph2 RX 0x11753@
             // off0x3000、ph3 RW 0xd643c@off0x15000）= mmap 池真考。单变量
             // 纪律：不动 vaddr/entry（va=0 若被 mmap shim 拒，s59 再补）。
-            if off <= 0x10 && off + n as u32 >= 0x11 {
+            // s59：wlan 会话禁（同 s54——真身原生 ET_EXEC=2，本刀对它本就
+            // 无事可做，禁是结构保证而非依赖巧合）。
+            if unsafe { TF_SRC } == 0 && off <= 0x10 && off + n as u32 >= 0x11 {
                 let p = 4 + (0x10 - off) as usize;
                 unsafe {
                     if TF_BLKBUF[p] == 0x03 {
@@ -8518,14 +8612,17 @@ fn tf_pump_window(ufs: &mut Ufs, at478: u64, at479: u64, sz479: u64, armed: bool
                 TF_BLKBUF[3] = blk as u8;
             }
             let pkt = unsafe { &TF_BLKBUF[..4 + n] };
+            // s59：DATA 只认会话私有槽（TF_SN/TF_SP，首服 OACK 同拍快照）
+            // ——TF_NODE/TF_PORT 是 walker 每请求刷新的全局，中途任何
+            // op1/op2 到达（收据 23 的 efs WRQ）都会改投 DATA 收件人。
             if !glink_tx_payload(
                 at478,
                 at479,
                 tx_head,
                 sz479,
                 unsafe { TF_XFER_PORT },
-                unsafe { TF_NODE },
-                unsafe { TF_PORT },
+                unsafe { TF_SN },
+                unsafe { TF_SP },
                 pkt,
             ) {
                 // 环满/回卷闸拒绝：DX++ 让路。TF_WSENT/TF_BLKNO 保留在
@@ -8544,6 +8641,10 @@ fn tf_pump_window(ufs: &mut Ufs, at478: u64, at479: u64, sz479: u64, armed: bool
                     2
                 };
                 TF_N += 1;
+                // s59：wlan 会话 DATA 独计（wf= 第三元）。
+                if TF_SRC != 0 {
+                    TF_WF_DV = TF_WF_DV.wrapping_add(1);
+                }
                 // 刀 G49③：TX 世代+1——服务内环活性判据（见走查循环）。
                 TF_TXGEN = TF_TXGEN.wrapping_add(1);
             }
@@ -8792,8 +8893,8 @@ fn tf_reply(ufs: &mut Ufs, at478: u64, at479: u64, sz479: u64) {
     // RRQ 撞 7916 门 !tf_is_so() 静默 drop，6+ 笔换源口重试全吞 → 客户端
     // 弃线全静。stock open 失败即 ERROR file not found；真机产线本就无
     // tqftpserv，客户端对「服务在、文件无」本就该走人（ruleset ERROR 后
-    // 换 WRQ 重来的先例在案）。
-    if op == 1 && !tf_is_so() {
+    // 换 WRQ 重来的先例在案）。s59：wlan 真身除外（读主线，走下方服务腿）。
+    if op == 1 && !tf_is_so() && !tf_is_wlan() {
         if unsafe { II_ST } != 2 {
             return;
         }
@@ -8849,14 +8950,15 @@ fn tf_reply(ufs: &mut Ufs, at478: u64, at479: u64, sz479: u64) {
     // 内拿到新 OACK。节流纪律不变（一 pend 一答、不动游标）。
     let retry = st_now == 2 || st_now == 3 || (st_now >= 7 && st_now <= 9);
     // 游标不回头纪律保持：fresh（st 0/4）之外照旧丢。armed 已是 II_ST=2（刀 G4）。
-    if op == 1 && !armed && tf_is_so() && unsafe { TZ_ST } == 1 && fresh {
+    // s59：wlan 真身同入读服务腿（无 TZ_ST 前置——blob 不依赖 FAT 探针）。
+    if op == 1 && !armed && fresh && (tf_is_wlan() || (tf_is_so() && unsafe { TZ_ST } == 1)) {
         return;
     }
     if op != 1
         || !armed
         || (!retarget && !fresh && !retry)
-        || !tf_is_so()
-        || unsafe { TZ_ST } != 1
+        || !(tf_is_so() || tf_is_wlan())
+        || (!tf_is_wlan() && unsafe { TZ_ST } != 1)
     {
         tf_drop_pend();
         return;
@@ -8882,7 +8984,13 @@ fn tf_reply(ufs: &mut Ufs, at478: u64, at479: u64, sz479: u64) {
     }
     if unsafe { TF_HAS_TS } != 0 {
         tf_put_cstr(&mut q, &mut n, b"tsize");
-        tf_put_dec(&mut q, &mut n, unsafe { TZ_SZ });
+        // s59：wlan 会话的 tsize=blob 长（TZ_SZ 是 so 件的）。
+        let tsz = if tf_is_wlan() {
+            WLAN_FW.len() as u32
+        } else {
+            unsafe { TZ_SZ }
+        };
+        tf_put_dec(&mut q, &mut n, tsz);
         if n < q.len() {
             q[n] = 0;
             n += 1;
@@ -8937,6 +9045,10 @@ fn tf_reply(ufs: &mut Ufs, at478: u64, at479: u64, sz479: u64) {
         &q[..n],
     ) {
         unsafe { TF_PQ_TXOK = TF_PQ_TXOK.wrapping_add(1) };
+        // s59：wlan OACK 独计（wf= 第二元）。
+        if tf_is_wlan() {
+            unsafe { TF_WF_OX = TF_WF_OX.wrapping_add(1) };
+        }
         // 刀 G46：OACK 发成（a=retry 腿 0/1）。
         tf_ev(4, retry as u16);
         // 刀 G9c：retry 服务只投 OACK，不碰游标/synth——原会话状态原样保留，
@@ -8980,6 +9092,11 @@ fn tf_reply(ufs: &mut Ufs, at478: u64, at479: u64, sz479: u64) {
                 TF_ACK_PEND = false;
                 TF_ACK_OFF = 0xffff_ffff;
                 TF_OACK_AT = time::cntvct();
+                // s59：会话源+私有地址槽同拍闩——DATA 从此只认这一对
+                // （收件人=OACK 刚送达的客户端；walker 后续刷新不伤会话）。
+                TF_SRC = if tf_is_wlan() { 1 } else { 0 };
+                TF_SN = TF_NODE;
+                TF_SP = TF_PORT;
                 // 刀 G7：OACK 落环即合成 ACK-0（2s 宽限退役为兜底）。G6 窗2 实测：
                 // 客户端 1s 超时窗（tm=3e8）内既不 ACK-0 也不 EOT——18 笔重试全在
                 // ping 前打完，2s 后才发的 DATA 块 1 永远扑空（tb=2.1.11 冻结、
@@ -13889,12 +14006,25 @@ fn scan_new_servers(fifo: u64, rh: u64) {
                     // 专刀。记在 seen 算完之后、生产门之前：四岔（armed/
                     // seen/pend 占位）与到达时的 TF_ST 同帧可读；s56 补
                     // op 类型与文件名前 4 字节指纹（丢的是哪笔从此可归因）。
+                    // s59：读主线抢占——pend 被新鲜 WRQ 占住时，so/wlan 的
+                    // RRQ（受理门前裸看名）接棒而非整笔弃（收据 23：efs WRQ
+                    // 楔死 pend，62 库 so 线全 disp=2 排队死）。写腿降副线：
+                    // 被挤 WRQ 客户端 1s 超时自会重试，TF_W_* 会话态不随
+                    // pend 走，无在途损失。WRQ 不抢读（会话态机有游标）。
+                    let preempt_w = op0 == 1
+                        && unsafe { TF_PEND && TF_OP == 2 }
+                        && tf_req_serveable(fifo, off, chunk);
                     if op0 == 1 || op0 == 2 {
                         let ti = (unsafe { TF_RT_N } % 8) as usize;
                         let disp = if seen {
                             1
                         } else if unsafe { TF_PEND } {
-                            2
+                            // s59：3=本笔 RRQ 抢占了占位 WRQ pend。
+                            if preempt_w {
+                                3
+                            } else {
+                                2
+                            }
                         } else {
                             0
                         };
@@ -13929,8 +14059,24 @@ fn scan_new_servers(fifo: u64, rh: u64) {
                             && time::cntvct().wrapping_sub(TF_PEND_AT)
                                 > time::freq_or(FREQ_FALLBACK as u32) as u64 * 10
                     };
-                    if op0 != 3 && op0 != 4 && op0 != 5 && !seen && unsafe { !TF_PEND || (op0 == 1 && pend_stale) } {
+                    if op0 != 3 && op0 != 4 && op0 != 5
+                        && !seen
+                        && unsafe { !TF_PEND
+                            || (op0 == 1 && pend_stale)
+                            || preempt_w }
+                    {
                         if unsafe { TF_PEND } {
+                            // s59：抢占记账先于退租（被挤者的源口此刻还
+                            // 在 TF_W_SRC）——ev13 入环、wp= 环收直读。
+                            if preempt_w {
+                                unsafe {
+                                    TF_PRE = TF_PRE.wrapping_add(1);
+                                    TF_PRE_SP[(TF_PRE.wrapping_sub(1) % 4) as usize] =
+                                        (TF_W_SRC & 0xffff)
+                                            | (rd32((fifo + off + 28) as usize) & 0xffff) << 16;
+                                }
+                                tf_ev(13, 2);
+                            }
                             tf_drop_pend();
                         }
                         let op = op0;
@@ -13962,6 +14108,10 @@ fn scan_new_servers(fifo: u64, rh: u64) {
                                 TF_HAS_SK = if saw_sk { 1 } else { 0 };
                                 TF_SEEK = skv;
                                 tf_save_so(fifo, off, chunk);
+                                // s59：wlan 真身 RRQ 武装独计（wf= 首元）。
+                                if tf_is_wlan() {
+                                    TF_WF_RQ = TF_WF_RQ.wrapping_add(1);
+                                }
                             }
                             if op == 2 {
                                 // 刀 G21：WRQ 选项抄盘（读腿专用 TF_OPTBUF 在
@@ -15913,9 +16063,10 @@ fn ctrl_service(
                                     }
                                 }
                                 // s55：rt=RRQ 受理环（8 槽，旧→新。槽=
-                                // 源口.来程口.到达时PEND.seen.到达时ST.disp；
-                                // disp 0=armed 1=seen 弃 2=pend 占位弃）——
-                                // 0x25 案的受理现场。
+                                // 源口.来程口.到达时PEND.seen.到达时ST.disp.
+                                // op.名指纹）——0x25 案的受理现场。
+                                // disp 0=armed 1=seen 弃 2=pend 占位弃
+                                // 3=抢占占位 WRQ pend 后 armed（s59）。
                                 // s56b：p=pend 活体（PEND.租龄秒.TF_ST.TF_N）
                                 // ——受理门/看门狗判决的直读窗。
                                 push_str(reply, &mut rn, " p=");
@@ -15966,6 +16117,32 @@ fn ctrl_service(
                                         push_str(reply, &mut rn, "-");
                                     }
                                 }
+                                // s59：wp=读抢占 WRQ 账（次数.4 槽新→旧=
+                                // 高16抢者源口|低16被挤 WRQ 源口）；
+                                // wf=wlan 供件账（RRQ.OACK.DATA.SRC）。
+                                push_str(reply, &mut rn, " wp=");
+                                push_hex(reply, &mut rn, unsafe { TF_PRE } as u64);
+                                {
+                                    let mut k = unsafe { TF_PRE } as usize;
+                                    let mut shown = 0usize;
+                                    while k > 0 && shown < 4 {
+                                        push_str(reply, &mut rn, ",");
+                                        push_hex(reply, &mut rn, unsafe { TF_PRE_SP[(k - 1) % 4] } as u64);
+                                        k -= 1;
+                                        shown += 1;
+                                    }
+                                    if shown == 0 {
+                                        push_str(reply, &mut rn, "-");
+                                    }
+                                }
+                                push_str(reply, &mut rn, " wf=");
+                                push_hex(reply, &mut rn, unsafe { TF_WF_RQ } as u64);
+                                push_str(reply, &mut rn, ".");
+                                push_hex(reply, &mut rn, unsafe { TF_WF_OX } as u64);
+                                push_str(reply, &mut rn, ".");
+                                push_hex(reply, &mut rn, unsafe { TF_WF_DV } as u64);
+                                push_str(reply, &mut rn, ".");
+                                push_hex(reply, &mut rn, unsafe { TF_SRC } as u64);
                                 push_str(reply, &mut rn, " sc=");
                                 push_hex(reply, &mut rn, unsafe { SCM_N } as u64);
                                 push_str(reply, &mut rn, ".");
