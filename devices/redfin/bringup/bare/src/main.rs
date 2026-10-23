@@ -5063,6 +5063,11 @@ static mut SO_RUNG_AT: u64 = 0;
 static mut SO_ADV_N: u32 = 0;
 static mut SO_ADV_SRC: u32 = 0;
 static mut SO_PATCH_N: u32 = 0;
+/// s58：e_type 单字节刀命中计数。rtld 静态路径（dlopen mode4 →
+/// FUN_1e403a60）硬断言 ET_EXEC(2)==e_type；服务文件是 ET_DYN(3)
+/// ⇒ 读完头页即毙于断言。本刀在块 0 覆盖 0x10 时改 0x03→0x02
+/// （幂等：只在现值=3 时写+计数）。
+static mut SO_ETYPED: u32 = 0;
 /// s54v2 修：补丁已送达旗——v1 实测靴 1（06-23 06:18）装载器整靴只
 /// 发 stat 会话（tev k=12 双场）从不读文件头，讣告簇照来（ob=40，
 /// modem SSR 环 ~50s/簇）→ 阶梯在纯 stat 周期空烧到档 2、patchN=0。
@@ -7930,6 +7935,18 @@ static mut SCM_CMD: u32 = 0;
 static mut SCM_R0: u64 = 0;
 static mut SCM_R1: u64 = 0;
 static mut SCM_N: u32 = 0;
+/// s57：mz——全 PIL 重装账（集发生器）。rm/rp 直射 QMI daemon 双拒
+/// （err9/0x90001）、fb 骰机 50% 杀 phy；收据二十定谳 ar(4)=ffcfffe9
+/// =前置缺 INIT_IMAGE ⇒ SCM 层重装（SHUTDOWN→INIT_IMAGE→MEM_SETUP→
+/// 段重载→AUTH）是新集唯一安全杠杆。MZ_N=集数；MZ_SD/I0/M0/LD/A0=
+/// 五步果（ffffffff=未跑；LD=0xE000|err=段重载败）。集间 SO_RUNG
+/// 不动（fw RAM 跨集存活）——阶梯每集喂一档。sm 渲染 mz=。
+static mut MZ_N: u32 = 0;
+static mut MZ_SD: u32 = 0xffff_ffff;
+static mut MZ_I0: u32 = 0xffff_ffff;
+static mut MZ_M0: u32 = 0xffff_ffff;
+static mut MZ_LD: u32 = 0xffff_ffff;
+static mut MZ_A0: u32 = 0xffff_ffff;
 
 /// 刀 G24：写腿三账 + 观察三件。TF_W_VIA=本写会话 WRQ 进来的口（写腿
 /// 回程镜像它；0=未定走 0x11）；TF_W_N/TF_W_OX=WRQ 武装数/写 OACK 发出
@@ -8464,6 +8481,23 @@ fn tf_pump_window(ufs: &mut Ufs, at478: u64, at479: u64, sz479: u64, armed: bool
                     TF_BLKBUF[p104 + 3] = (v >> 24) as u8;
                     SO_PATCH_N = SO_PATCH_N.wrapping_add(1);
                     SO_PATCHED = 1;
+                }
+            }
+            // s58：e_type 单字节刀——静态逆向定谳（消去法）：静态路径顺序=
+            // malloc(0xd0)→malloc(0x1000 头页)→read 头页→e_type==2 断言；
+            // 线上 160B 头读（恰=5×32 phdr 表）已发生 ⇒ 两次 malloc 活、
+            // verify_headers 逐项过 ⇒ 毙点=ET_EXEC 断言（服务文件 ET_DYN）。
+            // #54「alloc err 0xb」判词系动态路径误模，撤。本刀字节 0x10
+            // 3→2 放行静态装载；WIN 签名升级=段读上线（ph2 RX 0x11753@
+            // off0x3000、ph3 RW 0xd643c@off0x15000）= mmap 池真考。单变量
+            // 纪律：不动 vaddr/entry（va=0 若被 mmap shim 拒，s59 再补）。
+            if off <= 0x10 && off + n as u32 >= 0x11 {
+                let p = 4 + (0x10 - off) as usize;
+                unsafe {
+                    if TF_BLKBUF[p] == 0x03 {
+                        TF_BLKBUF[p] = 0x02;
+                        SO_ETYPED = SO_ETYPED.wrapping_add(1);
+                    }
                 }
             }
             // 刀 G46：so_read 返回值（a=n；n<want 即短读=EOF 形收口的直证）。
@@ -14437,6 +14471,8 @@ fn ctrl_service(
                             30
                         } else if ctrl_line_is(b"mr") {
                             31
+                        } else if ctrl_line_is(b"mz") {
+                            33
                         } else if {
                             // s56b：mx 参数在臂内捕获——行缓冲在链尾即清零
                             // （CTRL_LINE_N=0），体内重读必 None。臂求值时行
@@ -15091,6 +15127,8 @@ fn ctrl_service(
                                 );
                                 push_str(reply, &mut rn, ".");
                                 push_hex(reply, &mut rn, unsafe { SO_PATCH_N } as u64);
+                                push_str(reply, &mut rn, ".");
+                                push_hex(reply, &mut rn, unsafe { SO_ETYPED } as u64);
                                 push_str(reply, &mut rn, ".");
                                 push_hex(reply, &mut rn, unsafe { SO_ADV_N } as u64);
                                 push_str(reply, &mut rn, ".");
@@ -15936,6 +15974,19 @@ fn ctrl_service(
                                 push_hex(reply, &mut rn, unsafe { SCM_R0 } as u64);
                                 push_str(reply, &mut rn, ".");
                                 push_hex(reply, &mut rn, unsafe { SCM_R1 } as u64);
+                                // s57：mz=N.sd.i0.m0.ld.a0（全 PIL 重装账）
+                                push_str(reply, &mut rn, " mz=");
+                                push_hex(reply, &mut rn, unsafe { MZ_N } as u64);
+                                push_str(reply, &mut rn, ".");
+                                push_hex(reply, &mut rn, unsafe { MZ_SD } as u64);
+                                push_str(reply, &mut rn, ".");
+                                push_hex(reply, &mut rn, unsafe { MZ_I0 } as u64);
+                                push_str(reply, &mut rn, ".");
+                                push_hex(reply, &mut rn, unsafe { MZ_M0 } as u64);
+                                push_str(reply, &mut rn, ".");
+                                push_hex(reply, &mut rn, unsafe { MZ_LD } as u64);
+                                push_str(reply, &mut rn, ".");
+                                push_hex(reply, &mut rn, unsafe { MZ_A0 } as u64);
                                 // me=pub.vout.inflags — MPSS SMP2P ipa 刀
                                 push_str(reply, &mut rn, " me=");
                                 push_hex(reply, &mut rn, unsafe { MPSS_PUB } as u64);
@@ -16829,6 +16880,69 @@ fn ctrl_service(
                                 } else {
                                     push_str(reply, &mut rn, "mx <fnid-hex> <arg2-hex>\n");
                                 }
+                            }
+                            33 => {
+                                // s57：mz——集发生器（全 PIL 舞步重装）。
+                                // 逐拍复刻 boot 期 pas_init_image 序：
+                                // SHUTDOWN(4)→INIT_IMAGE(PAS_META 重灌
+                                // mdt)→MEM_SETUP(4,0x8c000000,0x11800000)
+                                // →load_modem_segs(UFS 重读)→dcache→
+                                // AUTH(4)。不走 s20_log（暖命环写死，
+                                // rw=362×n 阻塞控制台）；果全入 MZ_* 账。
+                                let (s0, _) = scm_pas(0x206, 4);
+                                let n = MODEM_MDT.len();
+                                unsafe {
+                                    PAS_META.raw[..n].copy_from_slice(MODEM_MDT);
+                                }
+                                let pa = core::ptr::addr_of!(PAS_META) as u64;
+                                dcache_civac(pa, n as u64);
+                                let fnid = 0x0200_0201u64 | 0x4000_0000;
+                                let mut i0 = 0i64;
+                                for _ in 0..8 {
+                                    let (a, _) = psci::smc_ret2(fnid, 0x82, 4, pa, 0, 0);
+                                    i0 = a;
+                                    if i0 != -12 {
+                                        break;
+                                    }
+                                }
+                                let fnid = 0x0200_0202u64 | 0x4000_0000;
+                                let (m0, m1) =
+                                    psci::smc_ret2(fnid, 3, 4, 0x8c00_0000, 0x1180_0000, 0);
+                                let mut ld = 0xffff_ffffu32;
+                                if m0 == 0 && m1 == 0 {
+                                    match load_modem_segs(ufs) {
+                                        Ok(c) => {
+                                            dcache_civac(0x8c00_0000, 0x1180_0000);
+                                            ld = c;
+                                        }
+                                        Err(i) => ld = 0xE000 | i as u32,
+                                    }
+                                }
+                                let (a0, _) = scm_pas(0x205, 4);
+                                unsafe {
+                                    MZ_N = MZ_N.wrapping_add(1);
+                                    MZ_SD = s0 as u32;
+                                    MZ_I0 = i0 as u32;
+                                    MZ_M0 = m0 as u32;
+                                    MZ_LD = ld;
+                                    MZ_A0 = a0 as u32;
+                                    SCM_CMD = 0x205;
+                                    SCM_R0 = a0;
+                                    SCM_N = SCM_N.wrapping_add(1);
+                                }
+                                push_str(reply, &mut rn, "mz ep=");
+                                push_hex(reply, &mut rn, unsafe { MZ_N } as u64);
+                                push_str(reply, &mut rn, " sd=");
+                                push_hex(reply, &mut rn, s0);
+                                push_str(reply, &mut rn, " i0=");
+                                push_hex(reply, &mut rn, i0 as u64);
+                                push_str(reply, &mut rn, " m0=");
+                                push_hex(reply, &mut rn, m0 as u64);
+                                push_str(reply, &mut rn, " ld=");
+                                push_hex(reply, &mut rn, ld as u64);
+                                push_str(reply, &mut rn, " a0=");
+                                push_hex(reply, &mut rn, a0);
+                                push_str(reply, &mut rn, "\n");
                             }
                             3 => {}
 

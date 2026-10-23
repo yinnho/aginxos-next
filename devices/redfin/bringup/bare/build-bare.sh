@@ -149,6 +149,8 @@ MODE="heartbeat"
 [ "${1:-}" = "--s54" ] && MODE="s54"
 [ "${1:-}" = "--s55" ] && MODE="s55"
 [ "${1:-}" = "--s56" ] && MODE="s56"
+[ "${1:-}" = "--s57" ] && MODE="s57"
+[ "${1:-}" = "--s58" ] && MODE="s58"
 mkdir -p "${OUTDIR}"
 ELF="${OUTDIR}/heartbeat.elf"
 
@@ -1283,6 +1285,34 @@ elif [ "${MODE}" = "s56" ]; then
   ELF="${OUTDIR}/s56.elf"
   cp "${HERE}/target/aarch64-unknown-none-softfloat/release/redfin-bare" "${ELF}"
   BIN="${OUTDIR}/s56.bin"; IMG="${OUTDIR}/boot-s56.img"
+elif [ "${MODE}" = "s57" ]; then
+  # 刀 G57（集发生器·全 PIL 舞步重装）：收据二十定谳 ar(4)=ffcfffe9
+  # =前置缺 INIT_IMAGE——单发 AUTH 不够，正路=SHUTDOWN→INIT_IMAGE
+  # (PAS_META 重灌 mdt)→MEM_SETUP(4,0x8c000000,0x11800000)→段重载
+  # (UFS 重读)→dcache→AUTH 全链。控制台 mz 一发全集（不走 s20_log，
+  # 暖命环写死）；账 MZ_N/SD/I0/M0/LD/A0，sm 渲染 mz=。集间 SO_RUNG
+  # 不动（fw RAM 跨集存活）——p_memsz 阶梯每集喂一档；WIN=rl= 现
+  # seek=1000（hash 段读=alloc 过），LOSS=rung7 整集无 hash 读。
+  # rm/rp QMI 直射双拒、fb 骰机 50% 杀 phy，SCM 重装是唯一安全杠杆。
+  # s44-s56 全保留。
+  (cd "${HERE}" && cargo build --release --target aarch64-unknown-none-softfloat) || { echo "cargo build FAILED (${MODE}) -- 不拷陈旧件" >&2; exit 1; }
+  ELF="${OUTDIR}/s57.elf"
+  cp "${HERE}/target/aarch64-unknown-none-softfloat/release/redfin-bare" "${ELF}"
+  BIN="${OUTDIR}/s57.bin"; IMG="${OUTDIR}/boot-s57.img"
+elif [ "${MODE}" = "s58" ]; then
+  # 刀 G58（e_type 单字节刀）：全像 Ghidra 逆向闭环——dlopen(名,4) 的
+  # mode&4 走**静态** map_object（FUN_1e403a60，无 hash/无验签），其硬
+  # 断言 ET_EXEC(2)==e_type；服务文件 so/549_38_0.mbn=ET_DYN(3) ⇒ 读完
+  # 头页即毙（#54 alloc 判词系动态路径误模，撤）。s54 阶梯补丁 ph1 是
+  # PT_NULL——静态路径整段跳过，阶梯实为对照靴。本刀：服务泵块 0 覆盖
+  # 0x10 时改 e_type 0x03→0x02（SO_ETYPED 计数，sm s54= 链尾插 et= 段）。
+  # WIN 签名升级=段读上线（ph2 RX 0x11753@off0x3000、ph3 RW 0xd643c@
+  # off0x15000）=mmap 池真考；仍静默=断言非毙点或 mmap shim 拒 va=0
+  # （s59 候补 vaddr/entry）。s57 mz 集发生器+全 PIL 舞步全保留。
+  (cd "${HERE}" && cargo build --release --target aarch64-unknown-none-softfloat) || { echo "cargo build FAILED (${MODE}) -- 不拷陈旧件" >&2; exit 1; }
+  ELF="${OUTDIR}/s58.elf"
+  cp "${HERE}/target/aarch64-unknown-none-softfloat/release/redfin-bare" "${ELF}"
+  BIN="${OUTDIR}/s58.bin"; IMG="${OUTDIR}/boot-s58.img"
 elif [ "${MODE}" = "s55" ]; then
   # 刀 G55（集发生器+受理环）：三层故障栈第①层（重启环未闭合=阶梯冻结
   # 根因）补齐——真杠杆=SCM PAS（lito.dtsi pil_modem=pil-tz-generic
