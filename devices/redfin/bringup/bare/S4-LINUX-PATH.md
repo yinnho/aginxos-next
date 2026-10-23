@@ -6675,3 +6675,61 @@ e_entry=0）要么不是正身、要么生产走他路。不挡本刀（先看�
 时间线：22:14:30 fb 杀 phy → 22:34:40 等待器超时定谳 → 22:36 推
 通知等手工 → 22:38 s58 烤成垫毒 → 22:41 码尖 `9fbe43b8`（s57+s58）
 → 本收据垫顶。check.sh 全绿先过。
+
+## 二十二、mode=4→R3 指令级闭环：影子包装破「flat listing 假象」，静态路径铁案（2026-10-23 深夜二，案头）
+
+### 悬案（本收据要杀的）
+
+收据二十一留了一道未闭合的口：分派器 `1e404730 !tstbit P0,R3,#2`
+测的 R3 在调用点 1e40579c 的 flat listing 窗内无人置位——若 R3 非
+4，全部翻回动态路径，s58 刀前提塌。scan9 窗口还见 R3 疑是 fstat
+64 位字段高半字/字串残留，两读打架。
+
+### 方法论突破：Hexagon 影子包装（shadow packet）
+
+- **parse bits=指令字 [15:14]**：01=续包、11=包尾、00=duplex
+  （双半指令，**同时收包**）。raw word 直读 modem-full.elf
+  （b30 blob off 0x5ec6000+va−0x1e400000）。
+- **call 与其后的参数装填可在同一包**：`call` 占槽，包内其后指令
+  在控制转移前提交，被调者入口读到的是**包尾提交后的寄存器**。
+  ⇒ **Ghidra flat listing 的地址顺序≠参数装填顺序——call 后面的
+  指令可能正是它的装参**。scan9 的「R3 无人置位」纯属假象。
+- 铁证三包（parse bits 实测）：
+  - `{1e406138 call 5570; 1e40613c combine R1R0,R17,R16}END`
+    ⇒ 5570(buf, mode)（与反编译 `FUN_1e405570(iVar1,param_5)`
+    互证）；
+  - `{1e40579c call 1e404730; 1e4057a0 combine R1R0,R16,R19;
+    1e4057a4 add R2,SP,#8; assign R3,R18}DUPLEX-END`
+    ⇒ **分派器四参=(R0=name, R1=fd, R2=&sb, R3=R18=mode)**；
+  - 空链跳入/走链穷尽两条子路**汇入同一包**——此前担心的「R3=
+    fstat 残留」根本不构成第三态，影子统一装参。
+
+### mode 全链（寄存器级，逐跳实测）
+
+dlopen(1e400ca8) `assign R2,R16(mode)` → _rtld_load_library
+(1e405e70) 入口 `combine R17R16,R2,R0`（R17=mode）→ 两处
+`assign R4,R17` 喂 1e406090 param_5 → 入口 `assign R17,R4` →
+call 5570 影子 `R1=R17=mode` → 5570 入口 `combine R19R18,R0,R1`
+（R18=mode）→ call 分派器影子 `R3=R18`。**R3=4，tstbit(4,2)=1，
+P0 假 → 落 `jump 0x1e403a60` 静态 map_object。**
+
+### 判词
+
+- **静态路径铁案**（无 hash、无验签、ET_EXEC 断言、逐 PT_LOAD
+  定址 mmap）——收据二十一的翻案结论从「消去法推演」升格为
+  「指令级闭环」。s58（e_type 0x10 字节 3→2）前提成立，待上机。
+- 字串考古：0x1e411ea2="search.c"、0x1e411f0c="try %s"（log 的
+  第 4/5 参走同一影子包——两 call 一包的疑云由此解：log 包止于
+  duplex，5570 自立一包）。
+- 生产悖论不变：真机同 b30 也断言 ET_EXEC ⇒ 真机搜索路径上的
+  wlanmdsp 必为 ET_EXEC 工件，与 so/549_38_0.mbn(ET_DYN) 相斥
+  ——待 FAT so/ 全列单（挂账）。
+- 撤销 scan9 的「R3=字串 0x1e411f0c 残留→静态」中间读法（对）
+  与「R3=hi32(stat)→动态」担忧（错）——都是 flat 假象。
+
+### 工件
+
+- `re-b22/AAnchor10.java`（四函数全量反汇编）+ `out-full/disasm10.log`
+  （775 行）+ parse-bits python 直读（本收据配方）。
+- 码尖无新（纯案头）；本收据垫顶。fb 楔死未解（22:14:30 案#6），
+  等待器超时 22:59:32，重挂晨窗——s58 一到 fastboot 即刷。
