@@ -6358,3 +6358,41 @@ WIN=任何一命 `rl=` 出现 seek=1000（hash 段读上线）；LOSS=rung7（�
   住（直进 fastboot=即刻刷；普通启动=console-fb 代打进 fastboot）。
 - 刷后判据不变：圈 2 首帧 `s5i=1.<a4>.<8f|1>.1`=PON 持久化活、
   `s54=` 继承档位直测；WIN=seek=1000 上线；LOSS=rung7 无 hash 读。
+
+### 十五、phy 楔死第四案+骰机 fb 腿无超时挂死（13:39–15:15，v5.4 首圈）——暖复位骰子连坐两案
+
+- **v5.4 圈 1 干净跑完**（13:36:15 开局，证据存 `/tmp/s54-v54-cycle1.log`）：
+  9×20s sm 帧全 `s5i=0.0.10.0`（冷启面：恢复源 0=imem 已退役、0x8E=0x00
+  干净、0x8F=0x10 上命 gen2 理由残值、命 0）、`s54=1.1000.1.1.1`（rung1=
+  0x1000 在服，memsz+filesz 双改，advsr=1=锚 A 本命已推档）、tp=Established。
+  **锚 A 已把 `0xA0|(1<<2)|0 = 0xA4` 写进 0x8E、0x8F|=0x01**——字节落
+  PON 就等跨命回读定生死。
+- 13:39:30 `c1 fb fired`（fb_go 暖复位）后**整机再离总线**（第四案）：
+  13:40:40 起裸跑 `fastboot devices` 恒空、ping 100% 丢、14:09 ioreg USB
+  树零设备。**判词 STILL_OFFBUS 第二回**：暖复位杀 phy 终态复发——
+  13:07（XBL 侧 `fastboot reboot`）与 13:39（fw 侧 fb_go）两起不同发起
+  端同一死形，~50% 暖复位骰子坐实，唯物理断电可解。
+- **骰机 fb 腿挂死 29 分钟**（13:39:30→14:08 仍无标记）：`NO FASTBOOT/
+  GATE_FAIL/rolled` 三标记皆未出=循环死在轮询圈外。结构性根因=fb 腿
+  `fastboot set_active a`/`fastboot reboot` **裸调无超时**——fastboot CLI
+  在无设备时无限等待，闸门后设备掉总线即永久挂（子进程现场未拍，
+  教训：诊挂死先拍 ps 树再杀）。杀循环（pkill -f 's54-loop2[.]sh'
+  防自杀匹配）保圈 1 证据。
+- **硬化**（当日落地）：骰机所有 fastboot 调用包
+  `FBTO(){ perl -e 'alarm shift; exec @ARGV' "$@"; }`（macOS 无
+  timeout/gtimeout；devices 15s/set_active 60s/reboot 45s），CONSOLE 的
+  kill 升 -9。此后楔死最多 10 分钟出 `NO FASTBOOT` 有界停机，不再挂死。
+- **复活链 v2** `/tmp/s54-recover2.sh`：等 fastboot（PON reboot-bootloader
+  理由 XVDD_RB 跨断电存活，13:34 案已证冷启可直落 fastboot）**或**直出
+  控制台（冷启进 v5.4）两路都接；到 fastboot 则闸门→`set_active a`
+  （**不刷**，v5.4 已在 boot_a）→reboot→等控制台→sm 首帧；判决字段落
+  `/tmp/s54-verdict.log` 后重开硬化骰机 8 圈。监管器接力重开复活链至
+  ~17:15。若直出控制台路命中，判决帧升级为**冷断电持久化考**——比
+  骰机暖复位圈更强的判据。
+- 诊断教训记档：13:40:40 探测输出里的 `aginx` 行是 `tail -5` 吐的日志
+  内容（console fb 回应嵌在标记行里），非 `fastboot devices` 命中——
+  复合输出先分段确认归属再下结论。
+- 判据不变：复活首帧 `s5i=1.a4.11.1`=PON 跨命存活（0x8F 的 11=回声位
+  活=ABL 不清它）；`0.0.xx.0`=死（0x8E 被清/写）。WIN=`rl=` seek=1000
+  （hash 段读）；LOSS=rung7（值4）整命无 hash 读→QDI（8,4,0x3c）池
+  背书离线翻案。
