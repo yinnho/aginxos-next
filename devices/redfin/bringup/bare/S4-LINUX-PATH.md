@@ -7048,3 +7048,53 @@ boot-s61-pad.img 68,157,440B md5 b6e7ae45d46c727498ade7eaf59c7f57。
   （泵+弃 pend）让「tf=5」伪装成「发了 5 笔」。
 - 事后可免的坑：blob 偏移凭记忆引用（0x8539f）而非内容定位——这次
   内容搜出真偏移 0x8535f，两刀 bin 均一字不差。**偏移永远内容定位**。
+
+## 二十七、案头：so 装载器（FUN_c05f0f98）指令级全解——读阶梯重写 WIN 预期（2026-10-24，等刷窗）
+
+### 读阶梯（Ghidra scan12/13：S12_sopath_c07fe498.c + S13_up_c05f0f98.c）
+
+so 线消费侧=根 PD 库装载器 `FUN_c05f0f98`（入口垫 `c07fe460` 剥
+「./」前缀；`c07fe498`=路径解析——先试 `/so/%s`，失败再试
+`/readonly/firmware/image/modem_pr/so/%s`）。装载序列：
+
+1. **read(52)** ELF 头；校验：magic 7f454c46、class=1(32)、
+   version=1、**e_ehsize==0x34、e_phentsize==0x20**（错码 5）。
+2. malloc(e_phnum<<5) → **lseek(e_phoff=52)** → **read(160)** phdr
+   表（错码 6/7/8）。e_phoff=0x34 恰=52 → 该 lseek 是 no-op 位置，
+   但 dlfs 层照发 seek 会话（s59 已见 52B+160B 两会话）。
+3. 扫 phdr 表找 **flags&0x07000000==0x02000000 的段**（真身 ph1，
+   flags=0x2200000）＝QCOM 哈希段；p_memsz==0 → 错 10。
+4. memalloc(p_memsz) → **lseek(p_offset=0x1000)** → **read(p_memsz
+   =0x2000=8192)**（错码 0xc/0xd）。**读的是 memsz 非 filesz**
+   （filesz=0x1a98=6808；多要的 1392B 越进 ph2 首部，FAT 供件
+   任意 off 无妨）。
+5. 哈希段内容校验（FUN_c07fe388 返 magic **0x2ecb770**，条件门
+   local_3c[0]≠0 才走）+ 服务注册（DAT_caca0dc0 表、refcount）。
+
+### WIN 预期重写
+
+- **装载器根本不读 ph2/ph3 PT_LOAD**——段装是后续缺页/执行的事。
+  s58 笔记「WIN=seek=3000/15000」**作废**。
+- **WIN 第一响=新 so 会话 seek=0x1000(4096) rsize=0x2000(8192)，
+  2 块 @7680**（rt 新会话、tev ev4/ev5×2、ST=3）。
+- **s59「拿头后静默」重解释**：0x1000 探针正是被吃的那笔（s59 rt
+  被吃 2 笔 0x22/0x23 里的一笔）——s61 两刀（ERROR 快失败+serveable
+  抢占）正对它。s61 若 0x1000 会话出现且 ST=3，链路即通到哈希段。
+- 0x1000 读后若静默：嫌疑=哈希段校验（0x2ecb770 条件门）或注册后
+  等外部事件；若客户端改问**别的 so 名**（根 PD dlopen 序列下一件），
+  现门只认 549_38_0.mbn 尾巴 → 会回 ERROR(1)——**名字本身就是情报**
+  （s62 候选：fat_path_open 服务 so/ 目录任意名）。
+
+### 装载器错码表（FUN_c05f0f44(7,N) 进度 + 错 N）
+
+3=尾部 malloc0x347 链；4/5=终态；5=头校验；6=phdr malloc；
+7=lseek(e_phoff)；8=短读 phdr；10=哈希段 memsz=0；0xb=memalloc 失败；
+0xc=lseek(p_offset)；0xd=哈希段短读；0xe=哈希段读成。
+
+### 附产
+
+- bdwlan-redfin.bin 重提取落 `.local/device/redfin/modem/wlan-fw/`
+  （26,328B md5 4a8bc69e…；vendor.img 同目录还有 bdwlan-u-redfin.bin
+  同尺寸件待分辨）。
+- Ghidra headless 参数律：项目名=MFULL 非 proj-full（目录名≠工程名）；
+  `.` 项目路径非法——一律绝对路径。
