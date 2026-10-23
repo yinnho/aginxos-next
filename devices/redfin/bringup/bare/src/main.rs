@@ -576,12 +576,17 @@ const IMEM_RESTART: usize = 0x146A_B65C;
 /// rung=SO_RUNG 存档（0x7166 magic 校验，冷启 IMEM 清零自动归位）；
 /// 三探针 200/400/500=空档死区取证（写 0x7166_0001 一次，次命快照
 /// 仍此值=全链无人碰；异值/归零=他有消费者，挪位）。
-const IMEM_S54_MAGIC: u32 = 0x7166_0000;
-const IMEM_S54_LIFE: usize = 0x146A_B600;
-const IMEM_S54_RUNG: usize = 0x146A_B604;
-const IMEM_S54_P200: usize = 0x146A_B200;
-const IMEM_S54_P400: usize = 0x146A_B400;
-const IMEM_S54_P500: usize = 0x146A_B500;
+/// s54v5.4：PON 跨命存储（imem 空档已证伪——暖复位后逐字随机衰减
+/// 1–6 位，非消费者写；0x190..0x65c 不在 XBL/ABL 保持域）。pm8150
+/// SID0 PON@0x800（redfin dtsi：qpnp-power-on，store-hard-reset-reason）：
+/// 0x8E=XVDD_RB_SPARE（驱动/内核全树无人写=无主字节）；0x8F=
+/// SOFT_RB_SPARE（gen2 reason<<1 占位 7..1，bit0 无人动——当 ABL
+/// 清洗探针的回声位）。编码 0b101_rr_ll：bit7..5=魔标、bit4..2=rung
+/// （0..7）、bit1..0=命计数 mod4（档位顶格时仍有「恢复真发生」的
+/// 翻转证据）。PON 在 BBRTC 域，暖复位按设计保持（fb_go 的 0x8F
+/// 靴链每圈实证）。
+const PON_S54_SPARE: u8 = 0x8E;
+const PON_S54_ECHO: u8 = 0x8F;
 const MSM_PS_HOLD: usize = 0x0C26_4000;
 const CTRL_PORT: u16 = 2323;
 static mut CTRL_LINE: [u8; 64] = [0; 64];
@@ -2920,6 +2925,26 @@ fn pon_rmw(arb: &spmi::Arb, apid: u32, addr: u8, mask: u8, val: u8) -> bool {
     arb.write(apid, addr, &b).is_ok()
 }
 
+/// s54v5.4：推档即落 PON 0x8E（跨命阶梯）。锚点（serve/讣告路径）没有
+/// arb 形参——Arb 是 MMIO 常量拼装的纯值类型，就地重建（单核裸件主
+/// 流程，无并发事务）；FB_APID 由 boot 期 fb_check 预落。写失败不追
+/// 究：s5i 快照自会暴露（下命残值非魔标=存储腿断）。
+fn pon_s54_store() {
+    let ap = unsafe { FB_APID };
+    if ap == 0 {
+        return;
+    }
+    let arb = spmi::Arb {
+        core: CORE,
+        chnls: CHNLS,
+        obsrvr: OBSRVR,
+        cnfg: CNFG,
+    };
+    let v = 0xA0u8 | (((unsafe { SO_RUNG }) as u8 & 7) << 2)
+        | ((unsafe { IM_LIFE }) as u8 & 3);
+    let _ = arb.write(ap, PON_S54_SPARE, &[v]);
+}
+
 /// 只读检查。pm8150 SID0 PON@0x800 是 system-reset，且开了
 /// store-hard-reset-reason。gen2 的原因字左移 1 位写 0x8F。
 fn fb_check(arb: &spmi::Arb, n_apid: u32) -> Result<(), u64> {
@@ -5046,16 +5071,15 @@ static mut SO_PATCH_N: u32 = 0;
 /// 不推（旗留着，同档续跑）。
 static mut SO_PATCHED: u32 = 0;
 static mut SO_FRESH_AT: u64 = 0;
-/// s54v5.3：imem 快照/恢复面——IM_LIFE=本命序号；IM_SNAP_* 各字上命
-/// 残值（boot 时先读快照再写回，sm 渲染的即「活了过来」的那份）；
-/// IM_RUNG_SRC=0 冷启/1=imem 恢复（分辨「继承」与「重开」）。
+/// s54v5.4：PON 快照/恢复面——IM_SNAP_8E/8F=上命留下的字节（boot 先
+/// 读快照再写回，sm 渲染的即「活了过来」的那份）；IM_RUNG_SRC=0 冷启
+/// /1=PON 恢复（分辨「继承」与「重开」）；IM_LIFE=命计数 mod4（0x8E
+/// 位 1..0 跨命自增）。IM_SNAP_8F 位 0=回声探针：本命写过 1，下命读回
+/// 1 ⇒ ABL 不清 0x8F、0 ⇒ 清洗实锤（0x8E 存储面之外的免费实据）。
 static mut IM_LIFE: u32 = 0;
 static mut IM_RUNG_SRC: u32 = 0;
-static mut IM_SNAP_LIFE: u32 = 0;
-static mut IM_SNAP_RUNG: u32 = 0;
-static mut IM_SNAP_200: u32 = 0;
-static mut IM_SNAP_400: u32 = 0;
-static mut IM_SNAP_500: u32 = 0;
+static mut IM_SNAP_8E: u32 = 0;
+static mut IM_SNAP_8F: u32 = 0;
 /// s54：讣告全保真——52B DEL_SERVER 原文末 2 笔（时间序旧→新）+总笔数。
 /// rqr= 只有五元组摘要；node/service/instance 解码要原文。52B=32B qrtr
 /// 头+20B ctrl 体（cmd.service.instance.node.port）。
@@ -8829,8 +8853,8 @@ fn tf_reply(ufs: &mut Ufs, at478: u64, at479: u64, sz479: u64) {
                         SO_ADV_N = SO_ADV_N.wrapping_add(1);
                         SO_ADV_SRC = 2;
                         SO_PATCHED = 0;
-                        // s54v5.3：推档即落 imem（跨命阶梯）。
-                        wr32(IMEM_S54_RUNG, 0x7166_0000 | SO_RUNG);
+                        // s54v5.4：推档即落 PON（跨命阶梯）。
+                        pon_s54_store();
                     }
                     SO_FRESH_AT = nowf;
                 }
@@ -13001,8 +13025,8 @@ fn scan_new_servers(fifo: u64, rh: u64) {
                             SO_ADV_N = SO_ADV_N.wrapping_add(1);
                             SO_ADV_SRC = 1;
                             SO_PATCHED = 0;
-                            // s54v5.3：推档即落 imem（跨命阶梯）。
-                            wr32(IMEM_S54_RUNG, 0x7166_0000 | SO_RUNG);
+                            // s54v5.4：推档即落 PON（跨命阶梯）。
+                            pon_s54_store();
                         }
                     }
                 }
@@ -14862,24 +14886,18 @@ fn ctrl_service(
                                 push_hex(reply, &mut rn, unsafe { SO_ADV_N } as u64);
                                 push_str(reply, &mut rn, ".");
                                 push_hex(reply, &mut rn, unsafe { SO_ADV_SRC } as u64);
-                                // s54v5.3：imem 持久化体检——本命号.恢复源
-                                // （0=冷/1=imem）.life 上命残值.rung 上命残值.
-                                // 三探针上命残值。残值=0x7166xxxx 即暖链全程
-                                // 无人碰=持久化活证；异值/归零=有消费者。
+                                // s54v5.4：PON 持久化体检——恢复源（0=冷
+                                // /1=PON）.0x8E 上命残值.0x8F 上命残值.命
+                                // 计数 mod4。8E 残值顶三位=101 即魔标在
+                                // （0xA0|rung<<2|life 低两位）；8F 位 0=回声。
                                 push_str(reply, &mut rn, " s5i=");
-                                push_hex(reply, &mut rn, unsafe { IM_LIFE } as u64);
-                                push_str(reply, &mut rn, ".");
                                 push_hex(reply, &mut rn, unsafe { IM_RUNG_SRC } as u64);
                                 push_str(reply, &mut rn, ".");
-                                push_hex(reply, &mut rn, unsafe { IM_SNAP_LIFE } as u64);
+                                push_hex(reply, &mut rn, unsafe { IM_SNAP_8E } as u64);
                                 push_str(reply, &mut rn, ".");
-                                push_hex(reply, &mut rn, unsafe { IM_SNAP_RUNG } as u64);
+                                push_hex(reply, &mut rn, unsafe { IM_SNAP_8F } as u64);
                                 push_str(reply, &mut rn, ".");
-                                push_hex(reply, &mut rn, unsafe { IM_SNAP_200 } as u64);
-                                push_str(reply, &mut rn, ".");
-                                push_hex(reply, &mut rn, unsafe { IM_SNAP_400 } as u64);
-                                push_str(reply, &mut rn, ".");
-                                push_hex(reply, &mut rn, unsafe { IM_SNAP_500 } as u64);
+                                push_hex(reply, &mut rn, unsafe { IM_LIFE } as u64);
                                 push_str(reply, &mut rn, " ob=");
                                 push_hex(reply, &mut rn, unsafe { SO_OB_N } as u64);
                                 {
@@ -16737,39 +16755,8 @@ fn fill_tables() {
 extern "C" fn rust_main() -> ! {
     // s54v5.2：命内起点第一手捕获（见 BOOT_TICK 注）。
     unsafe { BOOT_TICK = time::cntvct() };
-    // s54v5.3：imem 持久化恢复（字选/证据链见 IMEM_S54_* 注）。
-    // 先快照后写回：渲染的快照=上命残值=存活证据本体。rung 只认
-    // magic+≤7，其余一律归 0 重开（冷启自愈）。探针只在非 magic 时
-    // 写一次，原值永不被自己覆盖。
-    unsafe {
-        IM_SNAP_LIFE = rd32(IMEM_S54_LIFE);
-        IM_SNAP_RUNG = rd32(IMEM_S54_RUNG);
-        IM_SNAP_200 = rd32(IMEM_S54_P200);
-        IM_SNAP_400 = rd32(IMEM_S54_P400);
-        IM_SNAP_500 = rd32(IMEM_S54_P500);
-        IM_LIFE = if (IM_SNAP_LIFE >> 16) == 0x7166 {
-            (IM_SNAP_LIFE & 0xffff).saturating_add(1)
-        } else {
-            1
-        };
-        wr32(IMEM_S54_LIFE, 0x7166_0000 | IM_LIFE);
-        if (IM_SNAP_RUNG >> 16) == 0x7166 && (IM_SNAP_RUNG & 0xffff) <= 7 {
-            SO_RUNG = IM_SNAP_RUNG & 0xffff;
-            IM_RUNG_SRC = 1;
-        } else {
-            SO_RUNG = 0;
-        }
-        wr32(IMEM_S54_RUNG, 0x7166_0000 | SO_RUNG);
-        if (IM_SNAP_200 >> 16) != 0x7166 {
-            wr32(IMEM_S54_P200, 0x7166_0001);
-        }
-        if (IM_SNAP_400 >> 16) != 0x7166 {
-            wr32(IMEM_S54_P400, 0x7166_0001);
-        }
-        if (IM_SNAP_500 >> 16) != 0x7166 {
-            wr32(IMEM_S54_P500, 0x7166_0001);
-        }
-    }
+    // s54v5.4：跨命恢复移至 Arb/fb_check 之后（PON 读写要 SPMI 事务，
+    // 见下方 n_apid 落点处的 PON_S54_* 块；imem 方案已证伪退役）。
     let freq = time::freq_or(FREQ_FALLBACK as u32);
     let mut ufs = Ufs::new(HCI, UTRD, UCD, freq);
     ufs.init();
@@ -16931,6 +16918,39 @@ extern "C" fn rust_main() -> ! {
         instrument::report_reset(PS_HOLD, 632, freq);
     }
     let n_apid = spmi::apid_count(feat);
+    // s54v5.4：PON 跨命恢复（0x8E/0x8F，见 PON_S54_* 注）。fb_check 先
+    // 行落 FB_APID/FB_GEN2（此后 0x8E 存储腿随时可用）；恢复点在任何
+    // tftp 首服之前（serve 在主循环尾段）。快照=上命残值=存活证据本体；
+    // 只认魔标，其余归 0 重开（PMIC 冷启 0x8E=0 自愈）。0x8F 只拉 bit0
+    // 回声（gen2 reason 占位 7..1，bit0 无人动；下命读回=1 ⇒ ABL 不清
+    // 0x8F、=0 ⇒ 清洗实锤）。
+    let _ = fb_check(&arb, n_apid);
+    {
+        let ap = unsafe { FB_APID };
+        let mut b8e = [0u8; 1];
+        let mut b8f = [0u8; 1];
+        if ap != 0 {
+            let _ = arb.read(ap, PON_S54_SPARE, &mut b8e);
+            let _ = arb.read(ap, PON_S54_ECHO, &mut b8f);
+        }
+        unsafe {
+            IM_SNAP_8E = b8e[0] as u32;
+            IM_SNAP_8F = b8f[0] as u32;
+            if b8e[0] >> 5 == 0b101 {
+                SO_RUNG = ((b8e[0] >> 2) & 7) as u32;
+                IM_LIFE = (((b8e[0] & 3).wrapping_add(1)) & 3) as u32;
+                IM_RUNG_SRC = 1;
+            } else {
+                IM_RUNG_SRC = 0;
+            }
+            if ap != 0 {
+                let v =
+                    0xA0 | (((SO_RUNG as u8) & 7) << 2) | ((IM_LIFE as u8) & 3);
+                let _ = arb.write(ap, PON_S54_SPARE, &[v]);
+                let _ = arb.write(ap, PON_S54_ECHO, &[b8f[0] | 0x01]);
+            }
+        }
+    }
     // VADC 主角（fatal）：o231=ppid<<16|apid<<8|owner。
     let vad = match arb.find_apid_owner(PPID_VADC as u32, 0, n_apid) {
         Some(a) => a,

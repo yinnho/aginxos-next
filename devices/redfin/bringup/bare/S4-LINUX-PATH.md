@@ -6280,3 +6280,63 @@ instance.node.port）——放 rqr= 邻位=行中段，避开 TCP_TX 帽挤尾�
   12:48:47 点火；**判决帧=第 2 圈首帧**：持久化活 ⇒ `s5i=
   2.1.71660001.71660001…` 且 `s54=2.800.1.1.x`（继承档位，直测
   0x800 档）；死 ⇒ 回 `1.0.垃圾`（被消费者清/改）。
+
+### 十三、imem 空档证伪（SRAM 衰减）+ PON 正路换装 s54v5.4（12:5x–13:1x）
+
+**imem 假存储定谳（v5.3 骰机第 2 圈判决帧）**：
+
+- 12:57:14 第 2 圈首帧 `s5i=1.0.cf206751.2e2df9f0.6bc85d4c.4c26461e.6159de8`
+  ——**恢复源=0**。对照第 1 圈五字快照 `ef20e709/2e25f9f0/3fc81d4c/
+  4c2d465e/7159df9`：逐字 XOR popcount=1–6 位。这是**随机位翻转**的
+  签名，不是「有消费者在写」——消费者写要么整字覆盖要么归零，不会
+  每字恰好翻几个位。定谳：**imem 0x190..0x65c 空档不在暖复位保持域**
+  ——Linux dtsi 的 consumer 地图 ≠ XBL/ABL 的 SRAM 保持地图；暖复位
+  后该窗整体掉电衰减，唯 0x65c reboot-reason（协议特例，ABL 消费）
+  幸存。v5.3 的 imem 方案退役（magic 门两命全拒=门本身稳健，存储面
+  死）。
+- v5.3 骰机 5 圈（12:48–13:07）全为 rung≤1 对照命——设计雷（十一）
+  的直接后果，历史价值=衰减证据链。
+
+**PON 正路（内核源码精确取证，LineageOS redbull lineage-24.0）**：
+
+- redfin PMIC=lito 套片 pm8150(SID0)+pm7250b+pm8150l
+  （lito-pmic-overlay.dtsi）；PON@**0x800**（pm8150.dtsi
+  qcom,power-on@800，qpnp-power-on 驱动，开 store-hard-reset-reason）。
+- `drivers/input/misc/qpnp-power-on.c` PON 寄存器表：**0x8E=
+  XVDD_RB_SPARE**（全树无任何写者=无主字节）、**0x8F=SOFT_RB_SPARE**
+  （gen2 reason<<1 占位 7..1；`qpnp_pon_set_restart_reason` 写它、
+  fb_go 同式）；WARM_RESET_REASON1/2=0xC2/0xB 为 PON 硬件自更新
+  （不可用作存储）。主线上游 qcom-pon.c（pm8916）同族佐证。
+- **PON 在 BBRTC 域、暖复位按设计保持**——fb_go 的 0x8F 腿每圈把机器
+  送进 fastboot 就是活证（fw 写 → PS_HOLD 暖复位 → XBL/ABL 读到）。
+- 研究工具坑：本机 shell 快照的 `grep` 函数坏了（无声 137）——
+  Monitor/管道里必须用 `/usr/bin/grep` 绝对路径（本节两次翻车实据）。
+
+**s54v5.4 七刀**（main.rs，13:0x）：
+
+1. imem 五常量退场，换 `PON_S54_SPARE=0x8E / PON_S54_ECHO=0x8F`。
+2. 编码 1 字节：`0b101_rr_ll`——魔标 101 / rung(0..7) / 命计数 mod4
+   （档位顶格时仍有「恢复真发生」的翻转证据）。随机垃圾命中 1/32，
+   PMIC 无衰减无消费者，风险可收。
+3. rust_main 头部 imem 恢复块退役；**恢复点移到 Arb/fb_check 之后**
+   （PON 读写要 SPMI 事务；boot 期自动跑 fb_check 落 FB_APID——原为
+   控制台 cmd5 专属）。恢复在任何 tftp 首服之前。
+4. 推档即落 PON：锚 A（讣告）/锚 B（新首服≥25s）改调 `pon_s54_store()`
+   ——serve 路径无 arb 形参，Arb 是 MMIO 常量拼装纯值类型就地重建
+   （单核裸件主流程无并发事务；wait_done ≤1M 轮有界）。
+5. **0x8F bit0=回声探针**：每命读快照后写回 `|0x01`（bit0 在 gen2
+   reason 掩码 GENMASK(7,1) 之外、无人动；fb_go 的 rmw mask=0xFE 也不
+   碰它）。下命读回 1 ⇒ ABL 不清 0x8F（整字节将来可当第二存储面）；
+   读回 0 ⇒ ABL 清洗实锤。0x8E 是主存储，不受此疑。
+6. sm 渲染 `s5i=` 换四段：`恢复源(0冷/1PON).0x8E上命残值.0x8F上命残值.
+   命mod4`。
+7. 构建件：`--s54` 131,072B md5 7732d6bd…（13:06）；垫 68,157,440B
+   `boot-s54v54-pad.img` md5 **176362a05898df1a86aeb152f78b2f32**；
+   链 `/tmp/s54v54-chain.sh`（md5 门+串号门+console-fb 代打+auto-fb
+   兜底+刷后 sm 首帧+骰机 16 圈）；v5.3 骰机遗迹存
+   `/tmp/s54-loop2-v53-final.log`。
+
+**v5.4 判据**（骰机第 2 圈首帧）：活 ⇒ `s5i=1.<a4>.<8f|1>.1` 且
+`s54=` 继承档位直测 0x800；死 ⇒ `0.0.xx.0`（0x8E 被 ABL 清/写）。
+WIN=任何一命 `rl=` 出现 seek=1000（hash 段读上线）；LOSS=rung7（值4）
+整命无 hash 读 → 转 QDI（8,4,0x3c）池背书离线翻案线。
