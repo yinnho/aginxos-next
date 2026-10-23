@@ -7098,3 +7098,31 @@ so 线消费侧=根 PD 库装载器 `FUN_c05f0f98`（入口垫 `c07fe460` 剥
   同尺寸件待分辨）。
 - Ghidra headless 参数律：项目名=MFULL 非 proj-full（目录名≠工程名）；
   `.` 项目路径非法——一律绝对路径。
+
+## 收据二十七·附（案头）：FAT 全树勘定——so/ 59 件全列，收据 23 挂账闭
+
+宿主侧 python 直读 radio FAT16（reader 脚本内联；**seek 单位雷**：data
+区基址已是字节，再乘 bps=seek 到无人区全零——首跑 so/ 列空+listdir(2)
+「空目录」假象皆此故；修正后全树立现）。8.3 混名与 LFN 并存，清单按
+LFN 真名：
+
+- 根 `image/`（cl=2）三摊：
+  - **modem 主 ELF 拆片**：`modem.mdt`(9420B 头) + `.B00`–`.B34`
+    段文件（1172B–38.7MB，共 36 件）——tqftpserv 传统上先被要的就是
+    这套（B00/B01…短块连续读形状）。
+  - `modem_pr/so/`：**59 件 .mbn**（549_38_0.mbn 963,644B 在列，
+    cl=6759；同门兄弟 578_0/549_e_0/549_0_4…833_0/587_0_0 等，尺寸
+    25,992B–2,056,128B）。
+  - `verinfo/`：QDB 6,654,191B 单件。
+- **无 bdwlan/bdf 于 radio FAT**——bdwlan 只在 vendor（前提取不变）。
+- s62 门（名含 `so/` 且尾 `.mbn`）对 so/ 目录**全覆盖**；B 段/
+  modem.mdt/QDB 不在门内——客户端若问这些名，现刀回 ERROR(1)，
+  名字落 rt ledger=新情报。
+
+### 磁盘瞬时满盘案（本窗插曲）
+
+凌晨会话中 Data 卷瞬时打满（ENOSPC 连任务输出文件都建不了，df 显
+425G 用/11G 余）；无失控进程实证（ps 无 ghidra/java/dd 活体），疑
+APFS purgeable 计量口径。响应：清 16 件旧 pad（s52–s60 共 ~1G，
+可由 build-bare.sh 复出件），随后 169G 空闲。教训：**pad 是消耗品，
+留现役两件（s61/s62）即可**。
