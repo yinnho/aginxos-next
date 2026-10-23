@@ -6425,3 +6425,174 @@ WIN=任何一命 `rl=` 出现 seek=1000（hash 段读上线）；LOSS=rung7（�
 - 工具账：recover3 的 `break 2` 写错层（FASTBOOT_UP 直接跳出主循环
   没走 reboot 腿，17:23:06 手动 set_active+reboot 接回）；TaskStop 杀
   进程组连坐 nohup 子树教训已记 memory；macOS pgrep 无 -c。
+
+### 十七、重启环判死→真杠杆=SCM PAS（18:38–19:0x，源码定谳窗）
+
+- **24h 长命静默=三层判决实证**：守卫随会话亡（18:38 poll#1 后无痕），
+  10-23 18:42 复探：ICMP 活（1.4ms）、fw 控制台活（sm 5254B 应答）、
+  `s54=1.1000.1.1.1` 冻结整夜、rqr/tt 零新事件——**无重启环=无新集=
+  阶梯冻结**不再只是推论。三层故障栈（①重启环未闭合 ②0x25 phdr RRQ
+  吞件 ③整文件相死于 BUG-A）中 ① 是集发生器，优先。
+- **zsh /dev/tcp 假死案**：zsh 无 /dev/tcp（`no such file or directory`
+  被 2>/dev/null 吞成空应答，误诊控制台楔死一回合）——控制台探针必须
+  `bash -c` 包裹。破案后基线照常。
+- **rm/rp 实弹两发（RESTART_PD 直射）**：
+  - `rm fired 1 root` → `rpm=1.1.90001.0`：SR_RP_MAN=1、SR_RP_N=1
+    （真上链）、**SR_RP_ERR=0x90001**；tx 环动（tt e08→eb0）、新 RX
+    （rqr 56→59，48B 应答 sport **0x65**→dst 0x10=SR_QRTR_PORT）。
+    **rpm= 四槽=SR_RP_MAN.SR_RP_N.SR_RP_ERR.SR_ROOT**（14622 写点）。
+  - `rp fired 2`（SR_ROOT=0→打 SR_NAME=wlan_pd）→ `rpm=2.1.90001.0`
+    ——**两路径同错**。0x90001 拆=响应 TLV0x02 的 qmi_response_type
+    {result=1 FAILURE, error=9}；err9 不在内核短表（qmi_soc.h 只有
+    0/1/2/3/5/41/58/69/90/94），旧表读法=INCOMPATIBLE_STATE（libqmi
+    交叉验证挂账）。daemon 拒绝，modem root PD 未重启（RL 零新集）。
+  - 附带实锤：REGISTER_LISTENER(0x20) 早有应（sr=1.7fffffff.0 =
+    SR_HIT.SR_STATE.SR_RES，state=UNINIT 0x7fffffff、res=0 成功），
+    但 **si=0 零 IND**——listener 挂上了没消息。且 fw 常量
+    `SR_NAME="msm/modem/wlan_pd"`（main.rs:4718）与 rm 靶
+    root_pd 不同域——注册/重启不同名，协议走样（内核侧无此要求但
+    同名才是 listener 语义）。
+- **内核协议真源（socks:8800 经 googlesource 抓取）**：
+  `drivers/soc/qcom/pdr_internal.h`：0x20 REGISTER_LISTENER(enable
+  u8+path 串)/0x21 GET_DOMAIN_LIST/0x22 STATE_UPDATED IND/0x23
+  SET_ACK/**0x24 RESTART_PD(service_path 串,MAX_LEN 67)**——**请求体
+  形状我们没错**（串体合法）。`pdr_restart_pd()`：目标地址=locator
+  （get_domain_list）应答学的 addr 且 `service_connected` 必须真——
+  正主是 host 侧 pd-mapper 数据库闭环，我们绕过它直射 daemon。响应
+  判读 FAILURE+DISABLED→EOPNOTSUPP、其它 FAILURE→EREMOTEIO。
+- **翻案：servreg 直射非本机正路——真杠杆=SCM PAS**。本地发现
+  **`.local/device/redfin/kernel-src/redbull/` = redfin 下游 4.19 全量
+  内核源码树**（一直躺在 .local，从未用过）。`lito.dtsi:2753`
+  `pil_modem: qcom,mss@4080000`：`compatible="qcom,pil-tz-generic"`、
+  **`pas-id=<4>`**、`signal-aop`、`mboxes=<&qmp_aop 0>`、
+  `ssctl-instance-id=<0x12>`——modem 的加电/复位/放行全在 **TZ PAS**，
+  AP 侧正路=SCM 调用。subsys-pil-tz.c + qcom_scm-64.c 全序列：
+  - SMC64、STD(yielding)、OWNER_SIP(2)；`FNID=(svc<<8)|cmd`；SVC_PIL
+    =0x2。**AUTH_AND_RESET=0x5→指令 0x42000205**，x1=arginfo=1，
+    x2=pas_id=4；SHUTDOWN=0x6→0x42000206；IS_SUPPORTED=0x7→
+    0x42000207（无害探针）；PAS_MSS_RESET=0xa（导出但本树无人调用，
+    备用）。返回 x0=0 成/1 INTERRUPTED(同参重发)/负 EBUSY(sleep 重试)。
+  - 内核在 AUTH_AND_RESET 前还投 Rails（vdd_cx/vdd_mss TURBO，RPMH
+    腿）——本机冷启投过的票可能仍在；若 TZ 拒，按返回码补 SHUTDOWN→
+    AUTH 或补 INIT_IMAGE（metadata=mdt 首段）分步走。
+  - 探针序：`mp`(0x207 探 PAS 可用)→`ms`(0x206 温和停)→`mr`(0x205
+    放行)。命中=新集全链（ELF 头起重拉）=集发生器补齐+0x25 吞件
+    下一轮可测。
+- **v5.5 刀设计（bundled，一次 fastboot boot 全带）**：①mr/ms/mp
+  三 SCM 控制台命令；②s55 RRQ 受理环（末 8 笔 RRQ：sport/seen 命中/
+  到达时 TF_PEND/TF_ST/OACK 发送成败——专抓 0x25 吞点）；③SR_NAME
+  改 root_pd（listener 同名对齐）。每 boot 一命律照旧。
+
+### 十八、s55 上机日第一击：phy 楔死第五案（19:07–，等断电）
+
+- **s55 构建**：`--s55` 131,072B md5 2340034217710c330fb83987eb638608；
+  垫 68,157,440B 垫件 md5 208d802ce6776bddfa18b56355d95f51。
+- **链**：/tmp/s55-deploy.sh（fb→闸门→flash boot_a→set_active a→reboot
+  →ICMP/控制台→mp→条件 ms+mr→6 轮观察）。
+- **19:07:22 fb 发射后 USB 全盲**：fastboot 零枚举、ICMP 死、
+  system_profiler 零 USB 设备——7 分钟无恢复，**phy 楔死第五案**（同
+  第四案 fb_go 暖复位签名；fb_go=PON 0x8F gen2 reason 0x04+PS_HOLD=0
+  暖复位路径，正是楔死高发腿）。断电前一切自动恢复路径无效（第
+  四案 3.7h 实证）。已请用户物理断电（Power+VolDown 进 fastboot）。
+- 续跑腿 /tmp/s55-resume.sh 上膛（等 fastboot ≤20min→串号闸门→flash
+  →set_active→reboot→mp/ms/mr 自动实验，判决落同日志）。
+- 帧预算核：rt=+sc= 约 +270B，帧 5254→~5520B < CTRL_REPLY 8192B ✓
+  中段插入（pr= 后）不挤尾字段。
+
+## 十九、s55 真机三发判决 + 0x25 吞点真身活捉 + 接线暗伤（10-23 晚）
+
+**断电复活**：用户 19:20 Power+VolDown，resume 链自动接管（fastboot
+19:20:12→flash→reboot 19:20:15→icmp 19:21:27→console 19:21:32）。
+phy 楔死案 #5 全程 13min，物理断电唯一解再证。
+
+**接线暗伤（首刷 s55 三命令全不可达）**：mp 回 `?`——分派链是
+`ctrl_line_is(b"名")` 名字臂 → id → match 体；上窗口只写了 22/23/24
+三个体，名字臂没接；且 22/23 早被 s54v5 的 `lg<n>/lm<seq>` 日志环读
+取器在 match 前 `continue` 消化——三个体是永远够不着的死臂。教训：
+**控制台新命令=名字臂+体两处同刀，grep `ctrl_line_is` 与 `N =>` 对账**。
+修：体挪 29/30/31（mp/ms/mr），名字臂补齐；`mx` 后续占 32。
+
+**二刷（19:36）三发判决（boot-s55 v2 md5 338eed…，垫 adb…见 log）**：
+
+1. `mp`（IS_SUPPORTED 0x207/pas4）→ **a0=0 a1=0**——SMC 通了！
+   我们 EL1 裸发 SMC64 STD SIP（x0=0x42000207,x1=1,x2=4）TZ 应答，
+   约定逐位对上内核 qcom_scm-64.c（arglen=低4位/x0x1x2 三寄存器/
+   `__qcom_scm_pas_supported` 返回 res.a1）。a1=0 按内核惯例=PAS4
+   支持位 0（与 lito.dtsi pil-tz pas-id=4 矛盾——下游 pil-tz 探测
+   未必查 IS_SUPPORTED，待 mx 扫描标定）。
+2. `mr`（AUTH_AND_RESET 0x205/pas4）→ **a0=ffcfffe9**（=-0x03000017
+   私有码）——内核 remap 表只认 -1..-12（ERROR/EINVAL_ARG/EINVAL_ADDR/
+   EOPNOTSUPP/ENOMEM/V2_EBUSY），此码内核自己也只会盲译 -EINVAL。
+   结构 (3<<24)|0x17 疑 TZ PIL 状态机「本 boot 无 INIT_IMAGE」类拒绝
+   （下步：mx 扫描标定+全 PIL 舞步 INIT_IMAGE(.mdt 元数据)→MEM_SETUP
+   →AUTH；metadata 本地有真货 549_38_0.mbn）。
+3. `rl=4000`/`rt=6` 三 poll 冻结——mr 拒绝生效，modem 没被重启。
+
+**0x25 吞点真身活捉（rt= 首役）**：boot 期 6 笔 RRQ（口 22,21,23,24,
+25,26 顺序），4 笔受理（disp=0），**2 笔 pend 占位整笔弃（disp=2，
+口 21/23）**——上一笔 op 未消费时到达的请求直接丢，rl= 账记名永不成
+服。**TF_PEND 全传输期保持 true → BUG-A 大件停滞把 pend 楔死 → 后续
+一切 RRQ 死在受理门（disp=2 无限连）= 24h 静默的结构真身**。口序
+递增+丢 21/23 不挡 24/25/26 到达 → modem 侧 tftp 单发不重试（无
+seen-dup、无新到达）。
+
+**s56 刀（四件，boot-s56 md5 e3e71877…/垫 adb92319…）**：①rt 环补
+op 类型+文件名前 4 字节指纹（RRQ/WRQ 都入环）②受理门 newest-wins
+（pend 租期>10s 陈旧 op 让位新 RRQ：tf_drop_pend 退租入 seen 环防
+重放后接棒；WRQ 不抢——写腿在途状态机）③tick pend 看门狗（>60s
+退租自愈，健康 963KB 传输 10s 量级）④`mx <fnid-hex> <arg2-hex>`
+通用 SMC 探针（scm_raw 底座：x0 全值自持，SMC32=0x02…/SMC64=0x42…
+自选；x1=1 单 by-value 参）。mx 矩阵：42000207/4 复验、02000207/4
+SMC32 变体、42000207/1 与 /ff pas 扫描标定、42000206/4 SHUTDOWN
+可见化。跑腿 /tmp/s56-run.sh（pid 88495）。
+
+### 收据二十（10-23 晚）s56 活机三连+isup 全表普查——pas 表与 dtsi 镜像吻合、ar 拒因改判「前置缺失」
+
+**v2b（mx 前缀臂修+p= 字段，md5 8ab75b09…/垫 e3eaf831…）20:42 刷入**：
+boot rt 环 8 槽全景（WRQ×2 口 1f/24 + RRQ 口 21-26，全员名指纹
+6165722f=`/rea`）——modem 会**同口重试**（口 21/23 重入环 disp=1=
+seen 环吃重试=第二路吞包实锤）。mx 矩阵全回 usage 行——**体 32 重
+解析撞零化行缓冲必 None（分派链尾 CTRL_LINE_N=0 早于体执行）**，
+控制台第三课：带参命令参数必须在分派臂求值时捕获（MX_F/MX_A/
+MX_HAVE statics 暂存法）。
+
+**mspmr 零重刷三连（20:48，v2b 上手动 ms→mp→mr 各读 sc=）**：
+- SHUTDOWN(4) → **a0=0**（成功）
+- IS_SUPPORTED(4) → a0=0 **a1=0**
+- AUTH_AND_RESET(4) → **ffcfffe9 第三次稳定复现**
+
+对账 lito.dtsi：`pil-tz-generic`+`pil-modem` 节点白纸黑字 pas-id=4
+（lpass=1/cdsp=18/venus=9/ipa_fws=15/npu=23）——stock 内核当年就用 4
+起 modem，活机 isup(4) 却报 a1=0（kernel 解码 `!!res.a1`=不支持）
+→ 真矛盾，立项全表普查。
+
+**v3（mx statics 修，md5 3e850c6925e22fb7caa7794ab164a702/垫
+9acc1389cdb57c9457b1ead4d4577512）20:58 刷入，mx-check 一发验通**
+（回 `smc 42000207 a0=0 a1=0`）。isup 全表扫描 0–31（SMC64，只读）
+20:59:38–21:04:30：
+
+- **表员（a0=0）={1,4,9,13,15,18,19,20,21,23}**；表外（22 个）全
+  ffcfffc0。**dtsi 六员 {1,4,9,15,18,23} 全数在表，零错位**；表多
+  出 13/19/20/21（dtsi 无对应 PIL 节点，疑 ssc 等）。
+- **a1 表员全 0**——stock 用同表员起过 modem，故此 TZ 的 isup a1
+  ≠kernel 语义的 supported（裸机无 PIL 子系统在跑，最像「当前在
+  跑」或未实现）。vendor subsys-pil-tz 本就不调 pas_supported，不
+  冲突。
+- SMC32 抽样（02000207 id 1/4/9）同形 a0=0——**两种调用宽度 TZ
+  都受理**。
+- 错码小字典（行为学定）：**ffcfffc0=id 不在 pas 表**；**ffcfffe9=
+  前置/状态拒**（非「不支持」）。
+- **ar(4) 拒因改��：pas 4 表员有效，ffcfffe9=缺 INIT_IMAGE 前置**
+  → s57 = 全 PIL 舞步（subsys-pil-tz 次序：INIT_IMAGE(4, mdt_phys)
+  arginfo=0x42 RW 回写 → MEM_SETUP(4, 0x8c000000, 0xf800000) →
+  AUTH_AND_RESET(4)），metadata 从 UFS 读 549_38_0.mbn 头+hash 段
+  拷入 RAM 静态区给 phys。若走通=TZ 自装 modem，绕开 tqftp 侍服与
+  BUG-A。
+
+v3 尾轮 rt 同构（RRQ 口 21-26，口 25 得 34 块/口 26 得 a0 块后停，
+重试落 seen 环 disp=1）——newest-wins/看门狗未误触发，BUG-A 停滞
+形状不变。sc=24.2000207.0.0（0x24=36 发探针全入账，字段全 hex）。
+
+时间线：20:54 武装 → 20:58:03 fastboot（手动 Power+VolDown）→
+20:59:12 console → 21:04:30 扫完 → 21:06:27 run done。
+代码已先落 `6b84893d`（feat s55+s56），本收据随后垫顶。
