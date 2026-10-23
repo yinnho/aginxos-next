@@ -5058,6 +5058,13 @@ static mut RXQ_N: u32 = 0;
 /// 门推档（7 笔一簇只推一级）；兜底=距上次首服≥25s 的新首服也推档
 /// （防「讣告假说错、档永不动」烧靴）。
 static SO_LADDER: [u32; 8] = [0x2000, 0x1000, 0x800, 0x400, 0x100, 0x20, 8, 4];
+/// s60：两刀全撤（收据二十五现场判决）。s59 首次活送 so 头段（52B
+/// 探针 + 160B 头表，tev ev9 直证）后装载器永静默：无段读、无讣告、
+/// rt 冻结——而头 108B 恰是两刀落点（e_type@0x10、phdr1@100..108）。
+/// 收据二十四已撤两刀前提（so=dlfs 另线、ET_EXEC 断言属 wlanmdsp
+/// 路径、#54 alloc 判词撤）；本常量执行该判决：so 线一字不动，
+/// 阶梯/单字节刀只留骨架记账。
+const SO_KNIVES_OFF: bool = true;
 static mut SO_RUNG: u32 = 0;
 static mut SO_RUNG_AT: u64 = 0;
 static mut SO_ADV_N: u32 = 0;
@@ -8556,7 +8563,7 @@ fn tf_pump_window(ufs: &mut Ufs, at478: u64, at479: u64, sz479: u64, armed: bool
             // 0x2000 ⇒ 字节不变=对照靴。只有块 1（seek=0 会话/全文件会话）
             // 盖得住 100..108；boot 探针读（64B@0/52B@0xa0）不经此路。
             // s59：wlan 会话禁（so 线专属刀——真身一字不动）。
-            if unsafe { TF_SRC } == 0 && off <= 100 && off + n as u32 >= 108 {
+            if !SO_KNIVES_OFF && unsafe { TF_SRC } == 0 && off <= 100 && off + n as u32 >= 108 {
                 let v = unsafe { SO_LADDER[(SO_RUNG as usize).min(7)] };
                 unsafe {
                     let p100 = 4 + (100 - off) as usize;
@@ -8585,7 +8592,7 @@ fn tf_pump_window(ufs: &mut Ufs, at478: u64, at479: u64, sz479: u64, armed: bool
             // 纪律：不动 vaddr/entry（va=0 若被 mmap shim 拒，s59 再补）。
             // s59：wlan 会话禁（同 s54——真身原生 ET_EXEC=2，本刀对它本就
             // 无事可做，禁是结构保证而非依赖巧合）。
-            if unsafe { TF_SRC } == 0 && off <= 0x10 && off + n as u32 >= 0x11 {
+            if !SO_KNIVES_OFF && unsafe { TF_SRC } == 0 && off <= 0x10 && off + n as u32 >= 0x11 {
                 let p = 4 + (0x10 - off) as usize;
                 unsafe {
                     if TF_BLKBUF[p] == 0x03 {

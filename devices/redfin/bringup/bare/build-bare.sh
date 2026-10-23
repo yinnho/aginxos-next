@@ -152,6 +152,7 @@ MODE="heartbeat"
 [ "${1:-}" = "--s57" ] && MODE="s57"
 [ "${1:-}" = "--s58" ] && MODE="s58"
 [ "${1:-}" = "--s59" ] && MODE="s59"
+[ "${1:-}" = "--s60" ] && MODE="s60"
 mkdir -p "${OUTDIR}"
 ELF="${OUTDIR}/heartbeat.elf"
 
@@ -1330,6 +1331,18 @@ elif [ "${MODE}" = "s59" ]; then
   ELF="${OUTDIR}/s59.elf"
   cp "${HERE}/target/aarch64-unknown-none-softfloat/release/redfin-bare" "${ELF}"
   BIN="${OUTDIR}/s59.bin"; IMG="${OUTDIR}/boot-s59.img"
+elif [ "${MODE}" = "s60" ]; then
+  # 刀 G60（撤两刀·单变量重考）：s59 首刷活测（收据二十五现场）——修泵腿
+  # 成立（抢占消失、so 会话干净走完），但 tev 毫秒线揭真身：客户端是
+  # 52B 探针+160B 头表的小窗分段读，拿头后永静默（无段读/无讣告）；
+  # 头 108B 恰为 s54 阶梯（phdr1@100..108）与 s58 e_type 刀（@0x10）
+  # 的落点，而收据二十四已撤两刀前提。SO_KNIVES_OFF=true 执行判决：
+  # so 线一字不动。wlan 供件腿 s59 原样。WIN 签名不变=装载器头表后
+  # 有任何后续（段读/seek RRQ/讣告）；仍静默=堵点在头表之外。
+  (cd "${HERE}" && cargo build --release --target aarch64-unknown-none-softfloat) || { echo "cargo build FAILED (${MODE}) -- 不拷陈旧件" >&2; exit 1; }
+  ELF="${OUTDIR}/s60.elf"
+  cp "${HERE}/target/aarch64-unknown-none-softfloat/release/redfin-bare" "${ELF}"
+  BIN="${OUTDIR}/s60.bin"; IMG="${OUTDIR}/boot-s60.img"
 elif [ "${MODE}" = "s55" ]; then
   # 刀 G55（集发生器+受理环）：三层故障栈第①层（重启环未闭合=阶梯冻结
   # 根因）补齐——真杠杆=SCM PAS（lito.dtsi pil_modem=pil-tz-generic
