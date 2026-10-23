@@ -516,18 +516,25 @@ static mut CTRL_IFACE: Option<smoltcp::iface::Interface> = None;
 static mut CTRL_HANDLE: Option<smoltcp::iface::SocketHandle> = None;
 static mut CTRL_UP: bool = false;
 static mut CTRL_GREETED: bool = false;
-/// 监听记录不走 s20_keep 的 24 条配额。最多 16 条。
+/// 监听记录不走 s20_keep 的 24 条配额。s54v5：16→64——v4 现场帽子
+/// 一口气烧完，事故窗的 st 迁移全哑（遗言停笔早于楔死）。
 static mut TCP_NOTES: u8 = 0;
 static mut TCP_ST: u8 = 0xff;
 /// 停在 SynReceived 的起点。超过 1 秒就拆掉再 listen，免得唯一的套接字把后来的 SYN 拒掉。
 static mut TCP_SYN_AT: u64 = 0;
-/// s54v4：Established 自愈两计数——RX_AT=末次收到对端字节的时刻
-/// （0=刚建连基线）；KNOCK=Established 期间看到的 SYN 敲门数（对端
-/// 有字节来即清零）。空闲 180s 或敲门≥8 → abort+重listen（07:28
-/// 事故：死对端 Established 是唯一无出口态，ICMP 活而 2323 黑洞）。
+/// s54v4：Established 自愈——RX_AT=末次收到对端字节的时刻（0=刚建
+/// 连基线）。空闲 180s → abort+重listen（07:28 事故：死对端
+/// Established 是唯一无出口态，ICMP 活而 2323 黑洞）。
 static mut TCP_RX_AT: u64 = 0;
-static mut TCP_KNOCK: u32 = 0;
-static mut TCP_RXF: u8 = 0xff;
+/// s54v5：敲门计数改收帧时点。v4 的 tcp_rx_flags 在 Established 分支
+/// 里读 RX_LEN——那已被 CtrlPhy::receive 消费时清零，计数基本永不走，
+/// 自愈只剩空闲一条腿。SYN_SEQ 在 s20_on_frame 落邮箱时对 OUT_BUF
+/// 直接判增（单核事件路径无竞态）；KNOCK_BASE=本次进入 Established
+/// （st=3）时的基线，SYN_SEQ-BASE ≥8 = 后来者反复敲门 → 撤桌。
+static mut SYN_SEQ: u32 = 0;
+static mut TCP_KNOCK_BASE: u32 = 0;
+/// s54v5：当前 TCP 状态的起点（状态年龄，sm tp= 第三段上报）。
+static mut TCP_ST_AT: u64 = 0;
 static mut TCP_LS_BAD: bool = false;
 static mut CTX_UFS: *mut Ufs = core::ptr::null_mut();
 static mut CTX_FREQ: u32 = 0;
@@ -546,6 +553,7 @@ const OUR_IP: [u8; 4] = [169, 254, 1, 1];
 const BULK_LEN: u32 = 1536;
 /// 控制口。连上先看到 `aginx`。`id` 回 `redfin`，`ping` 回 `pong`，
 /// `up` 回开机秒数。`fb` 进 fastboot。`log` 回最近四条环记录。
+/// s54v5：`lg<n>` 尾往回 n（≤24）条；`lm<seq>` seq 起 16 条窗口。
 /// `bat` 回 soak 的 f 字：V<<48|I<<32|MSOC<<24|CHGR06<<16|CHGR42<<8|0x17。
 /// `fr` 只读 SMEM 421，不分配、不踢 IPCC。
 const PON_PPID: u32 = 0x008;
@@ -568,7 +576,8 @@ static mut CTRL_FB: u8 = 0;
 static mut FB_APID: u32 = 0;
 static mut FB_GEN2: bool = false;
 static mut FB_AT: u64 = 0;
-static mut LOG_OUT: [u8; 384] = [0; 384];
+/// s54v5：384→2048——lg/lm 深挖（24 条×80B 顶满），log 四条版共用。
+static mut LOG_OUT: [u8; 2048] = [0; 2048];
 static mut SOAK_QG: u32 = 0;
 static mut SOAK_CHG: u32 = 0;
 
@@ -1262,6 +1271,11 @@ fn s20_tx_arp(ufs: &mut Ufs, freq: u32, t: &mut [u8; 96], req: bool) {
 fn s20_on_frame(n: usize) {
     if n < 14 || n > BULK_LEN as usize {
         return;
+    }
+    // s54v5：敲门在落邮箱时点计（邮箱满被丢的 SYN 也算到过——
+    // 敲门语义=有后来者，不要求 smoltcp 消费到它）。
+    if syn_to_2323(unsafe { &OUT_BUF[..n] }) {
+        unsafe { SYN_SEQ = SYN_SEQ.wrapping_add(1) };
     }
     unsafe {
         if RX_LEN != 0 {
@@ -2787,7 +2801,7 @@ impl smoltcp::phy::Device for CtrlPhy {
 }
 
 fn tcp_mark(ufs: &mut Ufs, freq: u32, t: &mut [u8; 96], label: &str, v: u64) {
-    if unsafe { TCP_NOTES } >= 16 {
+    if unsafe { TCP_NOTES } >= 64 {
         return;
     }
     unsafe { TCP_NOTES += 1 };
@@ -2821,27 +2835,22 @@ fn tcp_state_code(state: smoltcp::socket::tcp::State) -> u8 {
     }
 }
 
-/// 待交给 smoltcp 的帧如果是发往 2323 的 IPv4 TCP，返回标志字节。
-fn tcp_rx_flags() -> Option<u8> {
-    unsafe {
-        let n = RX_LEN;
-        if n < 40 || n > RX_COPY.len() {
-            return None;
-        }
-        let f = &RX_COPY[..n];
-        if f[12] != 0x08 || f[13] != 0x00 || f[14] >> 4 != 4 {
-            return None;
-        }
-        let ihl = ((f[14] & 0x0f) as usize) * 4;
-        if ihl < 20 || 14 + ihl + 14 > n || f[23] != 6 {
-            return None;
-        }
-        let dport = ((f[14 + ihl + 2] as u16) << 8) | (f[14 + ihl + 3] as u16);
-        if dport != CTRL_PORT {
-            return None;
-        }
-        Some(f[14 + ihl + 13])
+/// 发往 2323 的 IPv4 TCP SYN 判定（s54v5：参数化——v4 版读全局
+/// RX_LEN，被 CtrlPhy::receive 消费清零后基本读不到，敲门计数空转）。
+fn syn_to_2323(f: &[u8]) -> bool {
+    let n = f.len();
+    if n < 40 || n > 1536 {
+        return false;
     }
+    if f[12] != 0x08 || f[13] != 0x00 || f[14] >> 4 != 4 {
+        return false;
+    }
+    let ihl = ((f[14] & 0x0f) as usize) * 4;
+    if ihl < 20 || 14 + ihl + 14 > n || f[23] != 6 {
+        return false;
+    }
+    let dport = ((f[14 + ihl + 2] as u16) << 8) | (f[14 + ihl + 3] as u16);
+    dport == CTRL_PORT && f[14 + ihl + 13] & 0x02 != 0
 }
 
 fn ctrl_boot(freq: u32) -> u8 {
@@ -2972,18 +2981,63 @@ fn fb_tick(arb: &spmi::Arb, freq: u32, ufs: &mut Ufs, t: &mut [u8; 96]) {
 
 /// 最近四条环记录，旧的在前。读失败不复位。
 fn ring_tail(ufs: &mut Ufs, dst: &mut [u8]) -> usize {
+    ring_back(ufs, 4, dst)
+}
+
+/// s54v5：lg<n>——从尾往回 count（帽 24）条，旧的在前（与 log 同序）。
+/// 记录文本自带 #seq 前缀，depth 定位靠它。读失败跳过不复位。
+fn ring_back(ufs: &mut Ufs, count: u32, dst: &mut [u8]) -> usize {
     let (base, slot) = unsafe { (RING.base, RING.slot) };
     if base == 0 {
         return 0;
     }
     let mut n = 0usize;
-    for back in (0..4u32).rev() {
+    for back in (0..count.min(24)).rev() {
         let idx = (slot + RING_BLOCKS - 1 - back) % RING_BLOCKS;
         if ufs.read10(base + idx, 1, DATA).is_err() {
             continue;
         }
         let blk = unsafe { core::slice::from_raw_parts(DATA as *const u8, 4096) };
         if logring::parse(blk).is_none() {
+            continue;
+        }
+        let mut i = 32usize;
+        while i < 112 && blk[i] != 0 && n + 1 < dst.len() {
+            dst[n] = blk[i];
+            n += 1;
+            i += 1;
+        }
+        if n < dst.len() {
+            dst[n] = b'\n';
+            n += 1;
+        }
+    }
+    n
+}
+
+/// s54v5：lm<seq>——seq∈[s0, s0+16) 的记录，新在旧前（尾向头扫的
+/// 天然序；每行自带 #seq，顺序不影响判读）。首个 seq<s0 即止（环序
+/// 单调，写败留槽也不破坏单调性——seq 不回退）。
+fn ring_from(ufs: &mut Ufs, s0: u64, dst: &mut [u8]) -> usize {
+    let (base, slot) = unsafe { (RING.base, RING.slot) };
+    if base == 0 || s0 > u64::MAX - 16 {
+        return 0;
+    }
+    let mut n = 0usize;
+    for back in 0..RING_BLOCKS {
+        let idx = (slot + RING_BLOCKS - 1 - back) % RING_BLOCKS;
+        if ufs.read10(base + idx, 1, DATA).is_err() {
+            continue;
+        }
+        let blk = unsafe { core::slice::from_raw_parts(DATA as *const u8, 4096) };
+        let s = match logring::parse(blk) {
+            Some((s, _, _)) => s,
+            None => continue,
+        };
+        if s < s0 {
+            break;
+        }
+        if s >= s0 + 16 {
             continue;
         }
         let mut i = 32usize;
@@ -13976,6 +14030,27 @@ fn ctrl_line_is(want: &[u8]) -> bool {
     n == want.len() && unsafe { &CTRL_LINE[..n] } == want
 }
 
+/// s54v5：行首=<head> 且余下 1..=8 位全 ASCII 数字（lg12 / lm54321）。
+/// 精确命令不冲突（log 是 3 字整匹配，lg 走不到它）。
+fn ctrl_line_num(head: &[u8]) -> Option<u32> {
+    let n = unsafe { CTRL_LINE_N };
+    if n <= head.len() || n > head.len() + 8 {
+        return None;
+    }
+    if unsafe { &CTRL_LINE[..head.len()] } != head {
+        return None;
+    }
+    let mut v: u32 = 0;
+    for i in head.len()..n {
+        let b = unsafe { CTRL_LINE[i] };
+        if !b.is_ascii_digit() {
+            return None;
+        }
+        v = v.saturating_mul(10).saturating_add((b - b'0') as u32);
+    }
+    Some(v)
+}
+
 fn ctrl_reply(sock: &mut smoltcp::socket::tcp::Socket, body: &[u8]) -> bool {
     sock.send_slice(body).is_ok()
 }
@@ -13997,7 +14072,13 @@ fn ctrl_service(
     let sock = sockets.get_mut::<Socket>(handle);
     let st = tcp_state_code(sock.state());
     if st != unsafe { TCP_ST } {
-        unsafe { TCP_ST = st };
+        unsafe {
+            TCP_ST = st;
+            TCP_ST_AT = time::cntvct();
+            if st == 3 {
+                TCP_KNOCK_BASE = SYN_SEQ;
+            }
+        }
         tcp_mark(ufs, freq, t, " tcp st=0x", st as u64);
     }
     // 只有一个套接字。半开握手不完成时，后来的 SYN 对不上四元组，smoltcp 直接 RST。
@@ -14026,14 +14107,11 @@ fn ctrl_service(
             if unsafe { TCP_RX_AT } == 0 {
                 unsafe { TCP_RX_AT = now };
             }
-            if let Some(f) = tcp_rx_flags() {
-                if f & 0x02 != 0 {
-                    unsafe { TCP_KNOCK += 1 };
-                }
-            }
+            // s54v5：敲门=SYN_SEQ 差值（收帧时点已计，见 s20_on_frame）。
+            let knocks = unsafe { SYN_SEQ.wrapping_sub(TCP_KNOCK_BASE) };
             let idle =
                 freq != 0 && now.wrapping_sub(unsafe { TCP_RX_AT }) > freq as u64 * 180;
-            if unsafe { TCP_KNOCK >= 8 } || idle {
+            if knocks >= 8 || idle {
                 sock.abort();
                 let _ = sock.listen(CTRL_PORT);
                 unsafe {
@@ -14042,7 +14120,6 @@ fn ctrl_service(
                     CTRL_OVERFLOW = false;
                     TCP_SYN_AT = 0;
                     TCP_RX_AT = 0;
-                    TCP_KNOCK = 0;
                 }
                 tcp_mark(ufs, freq, t, " tcp heal=0x", if idle { 2 } else { 1 });
                 return false;
@@ -14064,7 +14141,6 @@ fn ctrl_service(
                 };
                 unsafe {
                     TCP_RX_AT = now;
-                    TCP_KNOCK = 0;
                 }
                 for &b in &tmp[..n] {
                     if b == b'\n' || b == b'\r' {
@@ -14110,6 +14186,10 @@ fn ctrl_service(
                             20
                         } else if ctrl_line_is(b"rm") {
                             21
+                        } else if ctrl_line_num(b"lg").is_some() {
+                            22
+                        } else if ctrl_line_num(b"lm").is_some() {
+                            23
                         } else if unsafe { CTRL_LINE_N } == 0 {
                             3
                         } else {
@@ -14128,6 +14208,36 @@ fn ctrl_service(
                             };
                             if sent {
                                 s20_keep(ufs, freq, t, " s20 cmd=0x", 6);
+                                queued = true;
+                            }
+                            continue;
+                        }
+                        // s54v5：lg<n>=尾往回 n 条（1..=24）；lm<seq>=
+                        // seq 窗口 16 条。大回包走 LOG_OUT（2048）。
+                        if code == 22 {
+                            let k = ctrl_line_num(b"lg").unwrap_or(4).max(1);
+                            let n = ring_back(ufs, k, unsafe { &mut LOG_OUT });
+                            let sent = if n > 0 {
+                                ctrl_reply(sock, unsafe { &LOG_OUT[..n] })
+                            } else {
+                                ctrl_reply(sock, b"lg\n")
+                            };
+                            if sent {
+                                s20_keep(ufs, freq, t, " s20 cmd=0x", 22);
+                                queued = true;
+                            }
+                            continue;
+                        }
+                        if code == 23 {
+                            let s0 = ctrl_line_num(b"lm").unwrap_or(0) as u64;
+                            let n = ring_from(ufs, s0, unsafe { &mut LOG_OUT });
+                            let sent = if n > 0 {
+                                ctrl_reply(sock, unsafe { &LOG_OUT[..n] })
+                            } else {
+                                ctrl_reply(sock, b"lm\n")
+                            };
+                            if sent {
+                                s20_keep(ufs, freq, t, " s20 cmd=0x", 23);
                                 queued = true;
                             }
                             continue;
@@ -14463,6 +14573,25 @@ fn ctrl_service(
                                 push_hex(reply, &mut rn, unsafe { PM_N } as u64);
                                 push_str(reply, &mut rn, ".");
                                 push_hex(reply, &mut rn, unsafe { PM_MSG } as u64);
+                                // s54v5：tp=TCP现场——st 码（tcp_state_code
+                                // 表）.SYN_SEQ 累计敲门.状态年龄秒
+                                // （freq 未知则 -）。07:38 楔死案全靠事后
+                                // 环定谳，此后现场帧自带 TCP 体检。
+                                push_str(reply, &mut rn, " tp=");
+                                push_hex(reply, &mut rn, unsafe { TCP_ST } as u64);
+                                push_str(reply, &mut rn, ".");
+                                push_hex(reply, &mut rn, unsafe { SYN_SEQ } as u64);
+                                push_str(reply, &mut rn, ".");
+                                if freq == 0 {
+                                    push_str(reply, &mut rn, "-");
+                                } else {
+                                    push_u64(
+                                        reply,
+                                        &mut rn,
+                                        time::cntvct().wrapping_sub(unsafe { TCP_ST_AT })
+                                            / freq as u64,
+                                    );
+                                }
                                 push_str(reply, &mut rn, " sr=");
                                 push_hex(reply, &mut rn, unsafe { SR_HIT } as u64);
                                 push_str(reply, &mut rn, ".");
@@ -16299,7 +16428,15 @@ fn ctrl_service(
         }
         // 只有一个套接字。停在 LastAck 上时，下一笔 SYN 会被 smoltcp RST，
         // 第二次 2323 之后 ping 也没了。直接 abort 再听。
-        State::CloseWait | State::LastAck | State::FinWait1 | State::FinWait2 | State::TimeWait => {
+        // s54v5：补 Closing|SynSent——此前落 `_` 无出口（07:38 楔死案
+        // 的未决嫌疑态，现在无论停哪都有出口）。
+        State::CloseWait
+        | State::LastAck
+        | State::FinWait1
+        | State::FinWait2
+        | State::TimeWait
+        | State::Closing
+        | State::SynSent => {
             sock.abort();
             let _ = sock.listen(CTRL_PORT);
             unsafe {
@@ -16308,7 +16445,6 @@ fn ctrl_service(
                 CTRL_OVERFLOW = false;
                 TCP_SYN_AT = 0;
                 TCP_RX_AT = 0;
-                TCP_KNOCK = 0;
             }
             false
         }
@@ -16323,7 +16459,6 @@ fn ctrl_service(
                 CTRL_LINE_N = 0;
                 CTRL_OVERFLOW = false;
                 TCP_RX_AT = 0;
-                TCP_KNOCK = 0;
             }
             false
         }
@@ -16339,12 +16474,8 @@ fn ctrl_poll(ufs: &mut Ufs, freq: u32, t: &mut [u8; 96], arb: &spmi::Arb, n_apid
         let rc = ctrl_boot(freq);
         tcp_mark(ufs, freq, t, " tcp ls=0x", rc as u64);
     }
-    if let Some(flags) = tcp_rx_flags() {
-        if flags != unsafe { TCP_RXF } {
-            unsafe { TCP_RXF = flags };
-            tcp_mark(ufs, freq, t, " tcp rx=0x", flags as u64);
-        }
-    }
+    // s54v5：原 tcp rx= 标记块退役——读消费后清零的 RX_LEN 基本空转，
+    // 其 SYN 观测职责已由 s20_on_frame 时点的 SYN_SEQ 取代。
     unsafe {
         CTX_UFS = ufs;
         CTX_FREQ = freq;
@@ -17530,6 +17661,21 @@ extern "C" fn rust_main() -> ! {
             }
             if unsafe { LISTEN_TICK } == 0 {
                 smem_scan(&mut ufs, true);
+            }
+            // s54v5：USB 无枚举自愈——暖复位后 dwc3/phy 有概率整死
+            // （#54/#55/#56 三案：整机不在总线上，控制台/ICMP 全灭，
+            // 仅物理断电可救）。宿主 120s 内没走到 SET_CONFIGURATION
+            // （devst<2）即判死：直接武装 fb（CTRL_FB=2 立即档，跳过
+            // 回执等待）进 fastboot——XBL 从头全套重初始化 USB，链子
+            // 那边见 fastboot 就能接着滚。枚举正常的命 devst 秒到 2，
+            // 永不触发；拔线命会一趟 fb 后停在 fastboot（可接受的停机位）。
+            if freq != 0
+                && unsafe { EP0.devst < 2 }
+                && unsafe { CTRL_FB == 0 }
+                && time::cntvct() / freq as u64 > 120
+            {
+                s20_keep(&mut ufs, freq, &mut t, " s20 afb=0x", 1);
+                unsafe { CTRL_FB = 2 };
             }
             fb_tick(&arb, freq, &mut ufs, &mut t);
             let slice = time::cntvct() + freq as u64 / 1000;
