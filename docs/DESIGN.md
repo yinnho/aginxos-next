@@ -74,7 +74,7 @@ AginxOS 是**黑匣子 ARM 服务器**（#422）：无屏、无本地语音、�
 
 | 积木 | 方向 | 是什么 | 形态 |
 |---|---|---|---|
-| **api** | 出（手） | 调外部服务的接口包装。腿=api 接口的声明包装——不是基建，是调用知识（URL 形状/参数/错误码）的外化。腿能装多少，系统的手就长多少 | TOML 声明（`[[tool]]`：url/params/extract/error_check/resolve/cron），`auth_env` 接凭据；duphub 分发，运行时注册即用（`api_tool_register`——agent 自己也能写） |
+| **api** | 出（手） | 调外部服务的接口包装。腿=api 接口的声明包装——不是基建，是调用知识（URL 形状/参数/错误码）的外化。腿能装多少，系统的手就长多少 | TOML 声明（`[[tool]]`：url/params/extract/error_check/resolve/cron），凭据经 `auth_env`/账户选择器接入——多账户下 auth 是**选择器**（`account_kind` → 运行时解析到频道实例账户，见 §四）；duphub 分发，运行时注册即用（`api_tool_register`——agent 自己也能写） |
 | **cli** | 内（本地执行） | 本地执行能力：工具（web-fetch/web-search）、复杂编排件、**引擎 provider（codex/grok 也是 CLI，D12 引擎不再例外）**。TOML 表达不了的多步编排降级为 CLI 件 | D13 `aginx-` 姓命令 / provider 裸名路由真身；pkg 分发（改机器的件） |
 | **分身flow** | 知（剧本） | 怎么把事做成的组合知识：人格+规程+流程+知识库。编排 api 与 cli 成事的是它 | `/home/workflows/<名>/`（AGENTS.md+flows+knowledge）；duphub 分发（改变人的件） |
 | **channel** | 入（门） | 在场：外部世界主动来找系统。收消息→路由能力面→回话。协议腿（门）本身也是可下载工件——iLink 是第一个，将来的门都从市场来 | `aginx-channels` 骨架（daemon+注册表+契约）+ 频道腿工件；`channels/<名>/` 实例目录由系统落 |
@@ -102,8 +102,8 @@ pkgs.aginx.net(pkg)  改变【机器】的件：机身二进制、服务单元�
 
 **系统自动添加**（「用户只丢凭据和一句话，剩下全是系统的」）：
 装分身=读依赖声明→从 duphub 拉腿→落频道实例目录（文件夹即注册表）→
-凭据入密（env/频道实例 session，不进 TOML 不进 repo）→token 验活→
-回执。每个环节都是系统的纯数据行为，零装配零代劳。
+凭据入密（secretd 持本体、频道实例目录持引用，见 §四；不进 TOML 不进
+repo）→token 验活→回执。每个环节都是系统的纯数据行为，零装配零代劳。
 
 **能力自动生成**（铸造链，10-24 同日立法）：四类积木全是数据件
 （TOML/markdown 文本），铸造积木=文本工作=agent 本职。用户丢一个
@@ -135,9 +135,20 @@ API 文档（或 URL），系统即可：读文档（cli）→ 铸腿（提取�
 
 ```
 /home/channels/<名>/
-├── channel.toml      # 类型 + 默认绑定 + 策略（DM/群组/限流/格式）
-└── senders/<uid>/    # 会话状态；绑哪个能力面是记录里的字段
+├── channel.toml          # 类型 + 默认绑定 + 策略（DM/群组/限流/格式）
+└── accounts/<稳定键>/     # 多账户=同频道多实例（2026-10-24 定形）
+    ├── account.toml      # 非敏感元数据（昵称/号类型/默认绑定）；secret 引用→secretd
+    └── senders/<uid>/    # 该账户的会话状态；绑哪个能力面是记录里的字段
 ```
+
+- **多账户=同频道多实例**（2026-10-24 定形，公众号第一走通）���`accounts/<稳定键>/`
+  一户一目录，**键不可自选**（公众号=appid、iLink 将来=wxid），人起的名只是
+  account.toml 里的昵称——改名不搬家、重名不冲突。**凭据本体住 secretd**
+  （键=`频道:稳定键`——backup 排除 secret store 的纪律自然覆盖；每户独立
+  验活，失效回执「请重投」不静默），实例目录只放引用+元数据，删目录=删
+  引用、孤儿键走检测清。env 单键=单账户假设，撞墙即迁。多机各存各账
+  （跨机搬运零回显），IP 白名单=接手回执必带检查项。iLink 现役不动，
+  走通再推广。
 
 - **一频道 = 一目录 + 一包**：协议腿住 opt-in 包（`aginx-channels`
   唯一机身，#69 改形），目录只有数据和绑定。装频道=落目录+opt-in，
