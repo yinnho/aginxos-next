@@ -303,7 +303,15 @@ feedback_to_hub: false
 1. 读取 `staging/<clone-name>/` 全部文件
 2. 格式校验（缺 description、skills/ 根目录等硬闸门）
 3. 建 workspace、写文件、启动分身 agent
-4. 把标记替换成安装回执（成功 ✅ / 失败 ⚠️）
+4. **注册三件（缺一=孤儿分身：system 名册看不见、gateway 拉不起）**：
+   `workflows.md` 名册加行（名+一句话职责）、gateway 盘面
+   `agents/<名>/aginx.toml` 落条目、验 `agents/list` 含新名
+   （gateway 未认=重载单元后再验）
+5. 把标记替换成安装回执（成功 ✅ / 失败 ⚠️）
+
+**D17 直落形态同律**：不经 staging 直落 `workflows/<名>/` 树的铸造
+（契约投喂、保值重铸），落完同样必做注册三件——铸完不注册=没装完，
+回执里必须带 `agents/list` 含新名的验证行。
 
 **失败自修复**：回执会列出全部校验错误。staging 原样保留——按错误修复对应文件（file_write 覆盖即可），然后在回复里重发 `[CLONE_INSTALL:<clone-name>]`。绝不动 staging 里没问题的文件。
 
