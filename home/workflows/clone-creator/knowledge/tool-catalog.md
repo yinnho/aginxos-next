@@ -1,7 +1,7 @@
 ---
 name: tool-catalog
-description: 所有可用工具和 MCP 服务器的完整目录，用于生成分身时选择工具
-tags: [tools, mcp, architecture]
+description: 所有可用工具与 D17 依赖（api 腿/cli/频道）的完整目录，用于生成分身时选择依赖与工具
+tags: [tools, api-legs, architecture]
 ---
 
 # 工具目录
@@ -12,10 +12,10 @@ tags: [tools, mcp, architecture]
 
 **只配两个地方，系统自动推导其余：**
 
-1. **template.json** — 声明 MCP 服务器和插件（基础设施依赖）
-2. **flow 的 tools** — 列出该 flow 需要的所有工具（内置 + MCP），不列 core 工具
+1. **template.json** — 声明依赖（D17 四元组 `dependencies`：api_legs/clis/channels；旧 mcp_servers/plugins 已退役）
+2. **flow 的 tools** — 列出该 flow 需要的所有工具（内置 + 腿工具），不列 core 工具
 
-agent.toml 的 `mcp_servers`、`capabilities.tools` 等**不需要手动配**，系统从 template.json 和 flows 自动推导。
+外部 REST 服务一律走 **api 腿**（声明式工件，见下），不再接 MCP 服务器。
 
 ---
 
@@ -141,142 +141,11 @@ agent.toml 的 `mcp_servers`、`capabilities.tools` 等**不需要手动配**，
 
 ---
 
-## MCP 服务器
+## MCP 服务器（已退役，D17 换代 2026-10-24）
 
-MCP 工具在 flow 的 `tools:` 中用 `mcp_{server}_{tool}` 格式声明。对应 MCP 服务器需在 `template.json` 的 `mcp_servers` 中声明。
+MCP 面整体退役——外部服务一律走**声明式 api 腿**（`[[tool]]` TOML 工件，duphub 可上架可复用）。旧 MCP 服务器清单（wechat-oa / wecom / feishu / browser / twitter / bilibili / zhihu / xiaohongshu / reddit）归档备查：对应的 `mcp_{server}_{tool}` 工具不再生成、不再声明。
 
-### wechat-oa — 微信公众号
-
-`mcp_servers: ["wechat-oa"]`
-
-| MCP 工具 | 说明 |
-|----------|------|
-| `mcp_wechat_oa_get_access_token` | 获取 access token |
-| `mcp_wechat_oa_upload_media` | 上传图片/素材 |
-| `mcp_wechat_oa_upload_media_from_url` | 从 URL 下载并上传 |
-| `mcp_wechat_oa_create_draft` | 创建草稿文章 |
-| `mcp_wechat_oa_get_draft` | 获取草稿内容 |
-| `mcp_wechat_oa_list_drafts` | 列出草稿箱 |
-| `mcp_wechat_oa_delete_draft` | 删除草稿 |
-| `mcp_wechat_oa_publish_draft` | 发布草稿 |
-| `mcp_wechat_oa_get_publish_status` | 查询发布状态 |
-| `mcp_wechat_oa_list_materials` | 列出永久素材 |
-| `mcp_wechat_oa_delete_material` | 删除素材 |
-| `mcp_wechat_oa_get_article_read` | 文章阅读数据 |
-| `mcp_wechat_oa_get_article_share` | 文章分享数据 |
-| `mcp_wechat_oa_get_biz_summary` | 业务概览数据 |
-
-### wecom — 企业微信
-
-`mcp_servers: ["wecom"]`
-
-| MCP 工具 | 说明 |
-|----------|------|
-| `mcp_wecom_send_message` | 发送消息 |
-| `mcp_wecom_get_msg_chat_list` | 获取会话列表 |
-| `mcp_wecom_get_message` | 获取消息记录 |
-| `mcp_wecom_bot_generate` | 生成机器人创建链接 |
-| `mcp_wecom_get_userlist` | 获取通讯录 |
-| `mcp_wecom_get_doc_content` | 获取文档内容 |
-| `mcp_wecom_create_doc` | 创建文档 |
-| `mcp_wecom_edit_doc_content` | 编辑文档 |
-| `mcp_wecom_get_todo_list` | 待办列表 |
-| `mcp_wecom_create_todo` | 创建待办 |
-| `mcp_wecom_create_meeting` | 创建会议 |
-| `mcp_wecom_get_schedule_list_by_range` | 查询日程 |
-| `mcp_wecom_create_schedule` | 创建日程 |
-| ... 以及更多表格/待办/会议/日程工具 | |
-
-### feishu — 飞书
-
-`mcp_servers: ["feishu"]`
-
-66 个工具，覆盖：消息、文档、表格、多维表格、日历、云盘、通讯录、任务、邮件、音视频、知识库、审批、OKR、幻灯片、妙记、白板、考勤。
-
-常用工具：
-| MCP 工具 | 说明 |
-|----------|------|
-| `mcp_feishu_send_message` | 发送消息 |
-| `mcp_feishu_create_doc` | 创建文档 |
-| `mcp_feishu_get_doc` | 获取文档 |
-| `mcp_feishu_read_sheet` | 读取表格 |
-| `mcp_feishu_create_event` | 创建日历事件 |
-| `mcp_feishu_send_mail` | 发送邮件 |
-| `mcp_feishu_create_task` | 创建任务 |
-
-### browser — 浏览器自动化
-
-`mcp_servers: ["browser"]`
-
-| MCP 工具 | 说明 |
-|----------|------|
-| `mcp_browser_navigate` | 导航到 URL |
-| `mcp_browser_click` | 点击 |
-| `mcp_browser_type` | 输入文字 |
-| `mcp_browser_screenshot` | 截图 |
-| `mcp_browser_read_page` | 读取页面内容 |
-| `mcp_browser_scroll` | 滚动 |
-| `mcp_browser_run_js` | 执行 JS |
-| `mcp_browser_back` | 后退 |
-
-### twitter — Twitter/X
-
-`mcp_servers: ["twitter"]`
-
-| MCP 工具 | 说明 |
-|----------|------|
-| `mcp_twitter_search` | 搜索推文 |
-| `mcp_twitter_timeline` | 时间线 |
-| `mcp_twitter_post` | 发推文 |
-| `mcp_twitter_profile` | 用户资料 |
-| `mcp_twitter_like` | 点赞 |
-| `mcp_twitter_follow` | 关注 |
-
-### bilibili — B站
-
-`mcp_servers: ["bilibili"]`
-
-| MCP 工具 | 说明 |
-|----------|------|
-| `mcp_bilibili_search` | 搜索视频 |
-| `mcp_bilibili_hot` | 热门视频 |
-| `mcp_bilibili_video` | 视频信息 |
-| `mcp_bilibili_comments` | 视频评论 |
-| `mcp_bilibili_subtitle` | 视频字幕 |
-
-### zhihu — 知乎
-
-`mcp_servers: ["zhihu"]`
-
-| MCP 工具 | 说明 |
-|----------|------|
-| `mcp_zhihu_hot` | 热榜 |
-| `mcp_zhihu_question` | 问题和回答 |
-| `mcp_zhihu_search` | 搜索内容 |
-
-### xiaohongshu — 小红书
-
-`mcp_servers: ["xiaohongshu"]`
-
-| MCP 工具 | 说明 |
-|----------|------|
-| `mcp_xhs_creator_notes` | 笔记列表 |
-| `mcp_xhs_creator_note_detail` | 笔记详情 |
-| `mcp_xhs_creator_profile` | 账号信息 |
-| `mcp_xhs_creator_stats` | 数据概览 |
-
-### reddit — Reddit
-
-`mcp_servers: ["reddit"]`
-
-| MCP 工具 | 说明 |
-|----------|------|
-| `mcp_reddit_search` | 搜索 |
-| `mcp_reddit_subreddit` | 子版块 |
-| `mcp_reddit_read` | 读取帖子 |
-| `mcp_reddit_comment` | 评论 |
-
----
+**现役腿先例**：`weixin-oa-api`（公众号发布链：token 链/draft_add/freepublish-submit，duphub kind=api-leg 匿名可拉；素材上传 multipart 走随腿包 cli 件）。铸腿方法见「声明式 API 工具」段与 DESIGN.md §三之二铸造链（读 API 文档 → [[tool]] TOML → 真调验活 → 防幻觉闸）。
 
 ## 声明式 API 工具（api_tools.toml）
 
@@ -325,9 +194,9 @@ expect = "1"
 | 参数预解析 | `resolve` | 链式调用：如 driving 先自动 geocode 地名再查路线 |
 | 定时拉取 | `cron` | 定时执行不经过 LLM，结果存 SQLite（零 token） |
 
-### 生成分身时使用
+### 生成分身时使用（D17：腿是独立工件）
 
-分身需要调用外部 API（天气/地图/股票/爬虫等）时，在 files 中包含 `api_tools.toml`，安装时自动注册。
+分身需要调用外部 API（天气/地图/股票/公众号等）时，**优先复用 duphub 现成 api 腿**（template.json `dependencies.api_legs` 声明，拉取即闭包）；无现成腿才铸新腿（本段格式=铸腿格式参考），铸完真调验活，可上架 duphub 复用。不再把 `api_tools.toml` 内嵌进分身包——腿与分身是两个工件。
 
 ---
 
@@ -337,15 +206,16 @@ expect = "1"
 |----------|----------|
 | 名人/作家 | `web_fetch`, `web_search` |
 | 内容创作 | `web_fetch`, `web_search`, `image_generate` |
-| 微信公众号运营 | `web_search`, `mcp_wechat_oa_*` |
-| 企业协作 | `mcp_wecom_*` 或 `mcp_feishu_*` |
+| 微信公众号运营 | `web_search` + api 腿 `weixin-oa-api`（dependencies.api_legs） |
+| 企业协作 | 待铸腿（wecom/feishu 腿未铸；需求出现时走铸造链） |
 | 数据分析 | `sqlite_query`, `sqlite_schema`, `web_fetch` |
 | 社交媒体管理 | `mcp_twitter_*`, `mcp_bilibili_*`, `mcp_xhs_*` |
 | 自动化 | `shell_exec`, `process_*`, `web_fetch` |
 | 浏览器操作 | `mcp_browser_*` |
-| 数据爬取/量化研究 | `api_tools.toml` + `[tool.cron]` 定时拉取, `sqlite_query` 存储, `web_search` |
-| 情报监控 | `api_tools.toml` cron 定时拉取, `cron_create` 定时触发 agent 分析 |
+| 数据爬取/量化研究 | api 腿（`[tool.cron]` 定时拉取）, `sqlite_query` 存储, `web_search` |
+| 情报监控 | api 腿 cron 定时拉取, `cron_create` 定时触发 agent 分析 |
 
 ---
 
 - 2026-05-21: 创建 — 基于 tools/TOOLS.md 和各 MCP README 汇总
+- 2026-10-24: D17 换代 — MCP 面退役、api 腿四元组依赖立法（dependencies），weixin-oa-api 首腿在役

@@ -12,6 +12,8 @@ version: 2
 
 ### 1. 需求收集
 
+**契约输入优先（D17 铸造链）**：如果拿到的是三件套契约件（能力面定义 + 依赖声明 + flows + knowledge 保值 + 纪律），契约即需求——按契约直接进文件生成，对话只补契约没写的缺口，不重走全表。
+
 通过对话了解以下信息（不必一次问完，可以分步）：
 
 - **分身名称**：英文短横线格式（如 customer-support）
@@ -21,9 +23,11 @@ version: 2
 - **人格特征**：什么性格、什么沟通风格
 - **知识领域**：需要了解什么领域的知识
 - **流程列表**：需要哪些能力（每个流程有触发条件）
-- **插件依赖**：是否需要连接外部平台（如 wecom、feishu）
-- **MCP 依赖**：是否需要 MCP 服务器（如 wechat-oa）
-- **API 工具依赖**：是否需要调用外部 REST API（如地图、天气、股票数据）。如果有，生成 api_tools.toml 配置文件
+- **依赖声明（D17 四元组）**：分身依赖什么，按四元组声明（写进 template.json 的 `dependencies` 与 AGENTS.md 规程段）：
+  - **api 腿**：外部 REST 服务（如 weixin-oa-api 发布链）。**优先复用 duphub 现成 api-leg 工件**（拉取闭包，频道腿落 `channels/<名>/leg/`）；无现成腿走铸造链：读 API 文档 → 铸 `[[tool]]` TOML → 真调验活（防幻觉闸，验不过不上架）；连文档都没有，先派 research 探索出 api 文档汇编再铸。**MCP 已被声明式 api 腿替代（D17），不再生成 `mcp_servers`**
+  - **cli**：命令行工具（如聚合搜索 :8089、web-fetch）
+  - **channel**：对外频道面（如绑定 `channels/weixin-oa/` 的公众号实例）——凭据住 secretd/频道实例目录，分身只声明绑定，绝不持有凭据
+  - **引擎**：默认 codex（经 gateway 名册条目），一般不用问
 - **进化策略**：保守/积极/关闭（默认保守，公众型分身默认积极，人格型分身强制保守）
 
 ### 2. 文件生成（staging 逐文件写入）
@@ -319,12 +323,15 @@ template.json 关键字段（生成时参考，文件在 staging 里）：
   "exported_at": "...",
   "knowledge_version": 3,
   "default_flow": "<首个flow名>",
-  "mcp_servers": ["wechat-oa"],
-  "plugins": ["wecom"]
+  "dependencies": {
+    "api_legs": ["weixin-oa-api"],
+    "clis": ["search", "web-fetch"],
+    "channels": ["weixin-oa"]
+  }
 }
 ```
 
-`mcp_servers`/`plugins` 只在需要时加。
+`dependencies` 只在需要时加（四元组语义=api 腿/cli/频道/引擎，D17）。旧 `mcp_servers`/`plugins` 字段已退役不再生成（读取兼容仍在，新分身一律走 `dependencies`）。
 
 ### 4. 安装后验证（下一轮）
 
@@ -332,22 +339,13 @@ template.json 关键字段（生成时参考，文件在 staging 里）：
 
 使用 `clone_evaluate` 工具评估分身质量得分。
 
-### 5. 发布到 Hub（安装成功后）
+### 5. 发布到 Hub（安装成功后，经用户同意）
 
-安装成功后，使用 `clone_publish` 发布到 Hub（此时分身已真���落盘，publish 读得到）：
+安装成功后（分身已真实落盘），用 `shell_exec` 走 `dup push` 上架 duphub（kind=assistant，D17 工件三分）：
 
-```json
-{
-  "name": "<clone-name>"
-}
-```
-
-系统会自动：
-1. 打包分身定义层文件（文件级，非归档）
-2. 使用配置的 Hub API Key 上传到 Hub
-3. 返回 Hub 上的模板 ID
-
-前提：需要在 config.toml 配置 `[hub]` 的 `url` 和 `api_key_env`，并设置对应的环境变量。
+1. 上架前问用户：这个分身要不要公开（duphub 匿名可拉）？不公开就不推。
+2. `dup push <name>`——工件=目录（template.json+AGENTS.md+flows+knowledge），与分身同管道。
+3. 首次发布钉死 kind；上架后可用匿名 manifest 面回验（哈希对账）。
 
 ## 导出已有分身
 
@@ -373,10 +371,7 @@ template.json 关键字段（生成时参考，文件在 staging 里）：
 - 推荐生成 EVOLUTION.md，至少指定 evolution_mode 和进化规则
 - template.json 必须包含 `version: "2"`、`display_name`（中文名）、`category`（中文分类）、`knowledge_version: 3`，有流程时加 `default_flow`
 - **每个 flow 的 frontmatter `description` 必须非空**（写用途不写触发条件，50字以内）——空 description 的 flow 不注入，等于白做
-- 如分身需要 MCP 服务器，template.json 中添加 `mcp_servers` 字段
-- **如分身需要调用外部 API，生成 `api_tools.toml` 文件**（声明式 API 工具，无需写代码）
-  - 支持自动鉴权、响应提取、定时拉取（cron 存 SQLite）、参数预解析（resolve 链式调用）
-  - 格式参考 tool-catalog.md 的声明式 API 工具部分
+- **分身需要外部 API 时优先复用 duphub 现成 api 腿**（`dependencies.api_legs` 声明，dup 拉取即闭包）；无现成腿走铸造链（API 文档→`[[tool]]` TOML→真调验活，参考 tool-catalog.md 的 D17 api 腿部分）。**不生成 `mcp_servers`，也不直接手写 api_tools.toml**——腿是独立工件，可上架可复用
 - 如分身需要并行处理或多角色协作，生成 agents/ 目录
 - Skills = "做什么"（操作手册），Agents = "谁来做"（执行实体），两者不要混淆
 
