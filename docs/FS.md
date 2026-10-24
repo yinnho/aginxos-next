@@ -158,9 +158,16 @@ git、aginxbrowser 客户端这类。**首选走 pkg 进 `/var/bin`**（与 prov
 数据和绑定，协议腿住 opt-in 包（`aginx-channels` 唯一机身，weixin=
 第一腿）；裸 L0 零频道，装频道 = 落目录 + opt-in。文件夹即注册表。
 
-- **绑定以频道为轴**：会话住 `channels/<名>/senders/<uid>/`，绑哪个能力面
+- **多账户=同频道多实例**（2026-10-24 定形，DESIGN.md §四）：
+  `channels/<名>/accounts/<稳定键>/` 一户一目录——键不可自选（公众号=
+  appid、iLink 将来=wxid），人起的名只是 account.toml 里的昵称；凭据
+  本体住 secretd（键=`频道:稳定键`），实例目录只放引用+元数据。
+- **绑定以频道为轴**：会话住 `channels/<名>/accounts/<键>/senders/<uid>/`
+  （多账户定形前=频道根下 `senders/`），绑哪个能力面
   是记录里的字段（`bind_agent`）——换绑=改字段，不搬家（推翻旧
   `workflows/<分身>/senders/` 以分身为轴的搬家律）。
+- **频道腿知识住实例域**：该频道的 api 腿工件（duphub `api-leg` 类）
+  落 `channels/<名>/leg/`——腿=调用知识的外化，与频道同域共享各账户。
 - **频道不感知引擎**：桥只认「把文本交给某 agent、拿回文本」窄接口，按
   channel.toml 的 `default_agent` + 会话绑定路由到 gateway 名册（本地
   ACP 口 `127.0.0.1:8686`，`aginx-gateway-local` 包），引擎随名册条目换。
