@@ -200,6 +200,13 @@ static mut RING: Ring = Ring { base: 0, seq: 0, slot: 0 };
 // 刀 G43：环败台账（取代 report_reset 自杀遥测）——计数+末 4 码。
 /// s65：true=只起 modem（跳过 ADSP/IPA/CDSP）；false=旧链（ADSP→IPA→CDSP→modem）。
 const MODEM_ONLY: bool = true;
+
+/// s66：TFTP 服务端「武装」门。历史耦合：armed 原为 `II_ST==2`（IPA INIT_MODEM_DRIVER
+/// 应答已收），MODEM_ONLY 跳过 IPA 链则永不武装，OACK 一个都发不出（s65 实测
+/// pq=284e5.284e5：NOARM 每拍、ox=0）。MODEM_ONLY 时恒武装；旧链语义不变。
+fn tf_armed() -> bool {
+    MODEM_ONLY || unsafe { II_ST } == 2
+}
 static mut RW_FAIL: u32 = 0;
 static mut RW_CODE: [u32; 4] = [0; 4];
 static mut RW_CI: u32 = 0xffff_ffff;
@@ -8810,7 +8817,7 @@ fn tf_reply(ufs: &mut Ufs, at478: u64, at479: u64, sz479: u64) {
     // 刀 G4：武装改 II_ST=2——G3 实测 rd=19f3(6.6s) 对 tm=3e8(1s)：SM_ARMED 等
     // 第一次主机 sm 纯属观察纪律，客户端早超时闭口。本靴 +0.7s 首样已 ii=2、
     // rf=3：rmtfs 回复早已在 glink TX 上流动，无主机也活。
-    let armed = unsafe { II_ST } == 2;
+    let armed = tf_armed();
     let st = unsafe { TF_ST };
     // 宽限刀（假设 E）：OACK 已发、ACK-0 未到、块 0 未动，满 2s 合成 ack=0，
     // 落进下面的正常分支直发 DATA 块 1。若期间真 ACK-0 已到则此门不进。
@@ -9013,7 +9020,7 @@ fn tf_reply(ufs: &mut Ufs, at478: u64, at479: u64, sz479: u64) {
     // tqftpserv，客户端对「服务在、文件无」本就该走人（ruleset ERROR 后
     // 换 WRQ 重来的先例在案）。s59：wlan 真身除外（读主线，走下方服务腿）。
     if op == 1 && !tf_is_so() && !tf_is_wlan() {
-        if unsafe { II_ST } != 2 {
+        if !tf_armed() {
             return;
         }
         let sport = tf_new_port();

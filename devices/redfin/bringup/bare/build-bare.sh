@@ -158,6 +158,7 @@ MODE="heartbeat"
 [ "${1:-}" = "--s63" ] && MODE="s63"
 [ "${1:-}" = "--s64" ] && MODE="s64"
 [ "${1:-}" = "--s65" ] && MODE="s65"
+[ "${1:-}" = "--s66" ] && MODE="s66"
 mkdir -p "${OUTDIR}"
 ELF="${OUTDIR}/heartbeat.elf"
 
@@ -1415,6 +1416,16 @@ elif [ "${MODE}" = "s65" ]; then
   ELF="${OUTDIR}/s65.elf"
   cp "${HERE}/target/aarch64-unknown-none-softfloat/release/redfin-bare" "${ELF}"
   BIN="${OUTDIR}/s65.bin"; IMG="${OUTDIR}/boot-s65.img"
+elif [ "${MODE}" = "s66" ]; then
+  # 刀 G66（MODEM_ONLY 解耦 TFTP 武装门）：s65 判决（收据三十七）——只起 modem 后
+  # so 线退到第一个 tsize 查询就哑：pq=284e5.284e5 NOARM 每拍、ox=0.0.0、wp 里 WRQ
+  # 被重试 5 次。真身=tf_reply 的 armed 原为 II_ST==2（IPA INIT 应答已收）的历史耦合，
+  # 跳过 IPA 链则 TFTP 永不武装。本刀 tf_armed()=MODEM_ONLY||II_ST==2（两处门：armed
+  # 与「非 so 名回 ERROR」腿），其余同 s65。判读同 s65：墙是否越过 so 阶梯第 3 步。
+  (cd "${HERE}" && cargo build --release --target aarch64-unknown-none-softfloat) || { echo "cargo build FAILED (${MODE}) -- 不拷陈旧件" >&2; exit 1; }
+  ELF="${OUTDIR}/s66.elf"
+  cp "${HERE}/target/aarch64-unknown-none-softfloat/release/redfin-bare" "${ELF}"
+  BIN="${OUTDIR}/s66.bin"; IMG="${OUTDIR}/boot-s66.img"
 elif [ "${MODE}" = "s55" ]; then
   # 刀 G55（集发生器+受理环）：三层故障栈第①层（重启环未闭合=阶梯冻结
   # 根因）补齐——真杠杆=SCM PAS（lito.dtsi pil_modem=pil-tz-generic
