@@ -60,9 +60,10 @@
 # 直接收走。`--push <serial>` = adb push + `aginx-pkg install`（显式路径
 # = dev 免签通道）。镜像发布保持手工 scp（sync.sh 留服务器端）。
 #
-# MEMBER_MAX 闸：安装器 stream_member 单成员上限 256MiB（268435456B，
-# crates/pkg 的 MEMBER_MAX）。asr 的 model.int8.onnx 239,233,841B 贴顶——
-# 单成员 >240,000,000B 报警（预案：提 MEMBER_MAX 或拆包）；≥256MiB 拒打。
+# MEMBER_MAX 闸：安装器 stream_member 单成员上限 512MiB（536870912B，
+# crates/pkg 的 MEMBER_MAX）。2026-10-24 提档 256→512MiB：Claude Code
+# 引擎件 270M Bun 单文件（自带 runtime，上游合法形态）。单成员
+# >480,000,000B 报警；≥512MiB 拒打。
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
@@ -425,6 +426,56 @@ case "${PKG}" in
     done
     MEMBERS="pkg.toml SKILL.md files"
     ;;
+  claude)
+    # 引擎树包（2026-10-24，Claude Code 上机）：官方 npm 平台子包
+    # @anthropic-ai/claude-code-linux-arm64-musl（Bun 编译原生单文件，
+    # musl arm64，自带 runtime 不需要 Node——npm 主包只是 wrapper，本
+    # 体在平台子包）。tgz sha256 钉死 TOFU；npm integrity sha512 交叉
+    # 源=W0h8eJdDUmnCAtMSthCBC8AeB0nmnBhueVD9XPyPOxC8Sf+4zLy6k0hbAC+S
+    # tonX80M0f7YVzHaQ9VXtNSxlWQ==（base64，registry 元数据）。
+    # musl r13 与 git/jq 同钉同缓存（loader 自链先到先得）。
+    # 大件：本体 270M，出件 tar ~130M——镜像上架/设备 df 前置检查。
+    APK_DIR="${ROOT}/out/apk-cache"
+    NPM_DIR="${ROOT}/out/npm-cache"
+    CLAUDE_TGZ_SHA=2fa33a03490fcb23faefdb136b4a7f12692371441e6c5a70546d275c679813b9
+    CLAUDE_BIN_SHA=adfd1f0ef12a3bcafa66e33491fc3e4204e41aeb4a7305ffc311c16c26793825
+    CLAUDE_URL="https://registry.npmjs.org/@anthropic-ai/claude-code-linux-arm64-musl/-/claude-code-linux-arm64-musl-2.1.310.tgz"
+    MUSL_APK_SHA=d616c430bcbe0bf452b7f6ea2669f2cad14e85644a7599f4f495115d021742ef
+    mkdir -p "${NPM_DIR}" "${APK_DIR}" "${STAGE}/files"
+    f="${NPM_DIR}/claude-2.1.310-musl-arm64.tgz"
+    if [ ! -s "${f}" ] || [ "$(shasum -a 256 "${f}" | cut -d' ' -f1)" != "${CLAUDE_TGZ_SHA}" ]; then
+      echo "  fetch claude tgz (130M)"
+      curl -fsSL -o "${f}" "${CLAUDE_URL}" \
+        || { echo "FATAL: fetch claude tgz 失败" >&2; exit 1; }
+    fi
+    [ "$(shasum -a 256 "${f}" | cut -d' ' -f1)" = "${CLAUDE_TGZ_SHA}" ] \
+      || { echo "FATAL: claude tgz sha 不符" >&2; exit 1; }
+    mkdir -p "${STAGE}/npm"
+    tar -xzf "${f}" -C "${STAGE}/npm"
+    [ "$(shasum -a 256 "${STAGE}/npm/package/claude" | cut -d' ' -f1)" = "${CLAUDE_BIN_SHA}" ] \
+      || { echo "FATAL: claude 本体 sha 不符" >&2; exit 1; }
+    file "${STAGE}/npm/package/claude" | grep -q 'ld-musl-aarch64' \
+      || { echo "FATAL: claude 本体非 musl（interpreter 不对）" >&2; exit 1; }
+    mkdir -p "${STAGE}/files/usr/bin"
+    install -m 755 "${STAGE}/npm/package/claude" "${STAGE}/files/usr/bin/claude"
+    a="${APK_DIR}/musl-1.2.5-r13.apk"
+    if [ ! -s "${a}" ]; then
+      echo "  fetch musl apk"
+      curl -fsSL -o "${a}" "https://mirrors.tuna.tsinghua.edu.cn/alpine/v3.22/main/aarch64/musl-1.2.5-r13.apk" \
+        || { echo "FATAL: fetch musl 失败" >&2; exit 1; }
+    fi
+    [ "$(shasum -a 256 "${a}" | cut -d' ' -f1)" = "${MUSL_APK_SHA}" ] \
+      || { echo "FATAL: musl apk sha 不符" >&2; exit 1; }
+    tar -xzf "${a}" -C "${STAGE}/files" lib
+    # wrapper 面（细节见 pkgs/claude/bin/claude 头注）
+    mkdir -p "${STAGE}/files/bin"
+    install -m 755 "${RECIPE}/bin/claude" "${STAGE}/files/bin/claude"
+    # 闭包钉死门：本体 + musl loader + libc
+    test -x "${STAGE}/files/usr/bin/claude" || { echo "FATAL: 树里无 usr/bin/claude" >&2; exit 1; }
+    test -f "${STAGE}/files/lib/ld-musl-aarch64.so.1" || { echo "FATAL: 树里无 musl loader" >&2; exit 1; }
+    test -f "${STAGE}/files/lib/libc.musl-aarch64.so.1" || { echo "FATAL: 树里无 musl libc" >&2; exit 1; }
+    MEMBERS="pkg.toml SKILL.md files"
+    ;;
   aginx-proxy)
     # 共享代理隧道树包（2026-09-26）：Alpine v3.22 community stunnel
     # 闭包 4 apk（musl+libssl3+libcrypto3 与 git 包同钉同缓存），
@@ -571,8 +622,8 @@ if [ -d "${STAGE}/files/models" ]; then
 fi
 
 # MEMBER_MAX 闸（见头注）
-WARN_BYTES=240000000
-FATAL_BYTES=268435456
+WARN_BYTES=480000000
+FATAL_BYTES=536870912
 while IFS= read -r f; do
   sz="$(wc -c < "${f}" | tr -d '[:space:]')"
   if [ "${sz}" -ge "${FATAL_BYTES}" ]; then

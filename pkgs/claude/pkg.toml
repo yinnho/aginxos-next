@@ -1,0 +1,17 @@
+# claude — Claude Code 引擎 CLI（上游裸原生件树包，git/jq 同族工艺）。
+# 官方 @anthropic-ai/claude-code-linux-arm64-musl 平台子包：Bun 编译
+# 单文件原生二进制（自带 JS runtime，不需要 Node），musl arm64 动态链
+# ——interpreter /lib/ld-musl-aarch64.so.1，与设备世界同 loader（wrapper
+# 自链先到先得，与 git/jq/python3 同 musl 1.2.5 互不回抢）。
+# 引擎定位（D12 引擎口味，codex/grok 同族）：agents 档案消费
+# （[command.env] HOME 腿），不注册 aginx 命令面。
+# brain 腿=ANTHROPIC_BASE_URL https://brain.aginx.net/anthropic（brain
+# 网关的 Anthropic 格式面；key 走 env，不进包）。
+# face /var/bin/claude。
+name = "claude"
+version = "2.1.310"
+summary = "Claude Code 2.1.310 引擎 CLI（官方 musl arm64 原生单文件 270M；face /var/bin/claude；brain 腿=brain.aginx.net/anthropic）"
+group = "dev"
+url = "https://pkgs.aginx.net/claude/v2.1.310/claude-v2.1.310-4pc.tar"
+
+exec = "bin/claude"

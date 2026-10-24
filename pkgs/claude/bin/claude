@@ -1,0 +1,11 @@
+#!/bin/sh
+# claude face — 原生 musl 件 wrapper（pkgs/claude，jq 同工艺）。
+# Bun 编译单文件自带 runtime，唯一动态依赖是 musl loader/libc——
+# 自链（先到先得，与 git/jq/python3 同 musl 1.2.5）。
+# brain 腿环境由 agents 档案 [command.env] 注入（ANTHROPIC_BASE_URL
+# =https://brain.aginx.net/anthropic + key），wrapper 只管运行时链路。
+P=/var/lib/aginx/pkgfiles/claude
+L=/lib/ld-musl-aarch64.so.1
+[ -e "$L" ] || ln -sf "$P/lib/ld-musl-aarch64.so.1" "$L" 2>/dev/null
+export LD_LIBRARY_PATH="$P/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+exec "$P/lib/ld-musl-aarch64.so.1" "$P/usr/bin/claude" "$@"

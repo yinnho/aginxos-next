@@ -256,9 +256,11 @@ pub enum Kind {
 }
 
 /// Max bytes we will buffer for one bundle member (or the whole bare
-/// binary when it rides a tar). Phone packages are single-digit MiB;
-/// anything near this is a mistake, not a package.
-const MEMBER_MAX: u64 = 256 << 20;
+/// binary when it rides a tar). Most packages are single-digit MiB;
+/// 512 MiB admits the engine tier — Claude Code ships one 270 MiB
+/// Bun-compiled native binary (self-contained runtime, upstream shape,
+/// not a packaging mistake; 2026-10-24).
+const MEMBER_MAX: u64 = 512 << 20;
 
 /// Sniff the artifact: ustar magic ("ustar" at offset 257) = bundle.
 fn is_tar(path: &Path) -> std::io::Result<bool> {
