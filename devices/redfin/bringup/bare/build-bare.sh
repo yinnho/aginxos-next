@@ -156,6 +156,7 @@ MODE="heartbeat"
 [ "${1:-}" = "--s61" ] && MODE="s61"
 [ "${1:-}" = "--s62" ] && MODE="s62"
 [ "${1:-}" = "--s63" ] && MODE="s63"
+[ "${1:-}" = "--s64" ] && MODE="s64"
 mkdir -p "${OUTDIR}"
 ELF="${OUTDIR}/heartbeat.elf"
 
@@ -1389,6 +1390,18 @@ elif [ "${MODE}" = "s63" ]; then
   ELF="${OUTDIR}/s63.elf"
   cp "${HERE}/target/aarch64-unknown-none-softfloat/release/redfin-bare" "${ELF}"
   BIN="${OUTDIR}/s63.bin"; IMG="${OUTDIR}/boot-s63.img"
+elif [ "${MODE}" = "s64" ]; then
+  # 刀 G64（AP 侧服务表对齐 Linux）：收据三十二——slot-b qrtr-lookup 的 AP
+  # 节点(1) 发布 0x1000(TFTP) 实例 1..0xc 共 12 个，我们只公告实例 1。
+  # 本刀补公告实例 2..12（同指服务口 0x11），LOOKUP 任意实例 1..12 同回。
+  # 先验弱：TFTP 头与后续读用同一句柄；但这是 AP 侧与 Linux 唯一的服务表
+  # 差，零新读风险，对齐即排除。mq 命令保留（停机后读=全零，勿用）。
+  # 判读：墙(85 包 ~64s 沉默)是否移动：rqr 总数>0x55、pn 越过
+  # kernel/elf_loader、或 px 出现 seek=4096。
+  (cd "${HERE}" && cargo build --release --target aarch64-unknown-none-softfloat) || { echo "cargo build FAILED (${MODE}) -- 不拷陈旧件" >&2; exit 1; }
+  ELF="${OUTDIR}/s64.elf"
+  cp "${HERE}/target/aarch64-unknown-none-softfloat/release/redfin-bare" "${ELF}"
+  BIN="${OUTDIR}/s64.bin"; IMG="${OUTDIR}/boot-s64.img"
 elif [ "${MODE}" = "s55" ]; then
   # 刀 G55（集发生器+受理环）：三层故障栈第①层（重启环未闭合=阶梯冻结
   # 根因）补齐——真杠杆=SCM PAS（lito.dtsi pil_modem=pil-tz-generic

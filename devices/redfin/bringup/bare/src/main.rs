@@ -6375,7 +6375,7 @@ fn glink_hello(at478: u64, at479: u64, sz479: u64, at480: u64, sz480: u64) -> u3
             }
             unsafe { LOOK_PEND = 0; }
         }
-        if unsafe { HOST_ADV } < 5 {
+        if unsafe { HOST_ADV } < 16 {
             // qrtr.c：对方 HELLO 之后推本机服务。一次一包（一 intent）；0x35 打头。
             // 第五个是 0x31，实例字 0x101。TCP 已能连第二次。
             if unsafe { HELLO_RX } > 0 {
@@ -6442,10 +6442,15 @@ fn glink_hello(at478: u64, at479: u64, sz479: u64, at480: u64, sz480: u64) -> u3
 /// 再 rmtfs 14、tftp 4096、pd-mapper 64。一次一包。节点 1。
 fn glink_announce(at478: u64, at479: u64, head: u64, sz479: u64, iid: u32) {
     let n = unsafe { HOST_ADV };
-    if n >= 5 || head + 72 > sz479 {
+    if n >= 16 || head + 72 > sz479 {
         return;
     }
-    let (svc, inst, port) = if n == 0 {
+    let (svc, inst, port) = if n >= 5 {
+        // s64：Linux 槽 b 的 AP 侧 0x1000(TFTP) 发布实例 1..0xc 共 12 个
+        // （厂商 tftp_server 每远端一实例）；n=0..4 已发实例 1，这里补
+        // 实例 2..12，全部指向同一个服务端口 0x11。
+        (4096, n - 3, 0x11)
+    } else if n == 0 {
         // Linux：svc=0x35 inst=0x1001 at 1:16407（非旧探针 1/0x13）。
         (PM_SVC, PM_INST, PM_QRTR_PORT)
     } else if n == 1 {
@@ -6470,8 +6475,9 @@ fn host_svc_port(svc: u32, inst: u32) -> Option<(u32, u32)> {
         Some((PM_INST, PM_QRTR_PORT))
     } else if svc == 14 && (inst == 0 || inst == 1) {
         Some((1, 0x10))
-    } else if svc == 4096 && (inst == 0 || inst == 1) {
-        Some((1, 0x11))
+    } else if svc == 4096 && inst <= 12 {
+        // s64：LOOKUP 任意实例 1..12（0=通配）都回同一服务口 0x11。
+        Some((if inst == 0 { 1 } else { inst }, 0x11))
     } else if svc == 64 && (inst == 0 || inst == 257) {
         Some((257, 0x12))
     } else if svc == 0x31 && (inst == 0 || inst == 1 || inst == IPA_A5_INST) {
