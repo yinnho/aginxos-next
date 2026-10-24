@@ -225,6 +225,33 @@ native-runtime 132 文件专做「agent 说做完了→验收证据分级」，�
 真相层是任务+评论（Jira for agents），我们会话日志真源——偷目标
 追溯不偷任务模型；Node 重栈不进卡。
 
+## Google Research 双仓——aginxresearch 进化回路的同赛道对表（2026-10-24 用户点名盯紧）
+
+[google-research/harness2](https://github.com/google-research/harness2)（18.6k★，
+Apache-2.0，arXiv 2610.14224，Python/uv 栈）+
+[google-research/google-research](https://github.com/google-research/google-research)
+（39k★ 论文代码 monorepo，顶栏盯梢口）。
+
+**记它**：harness² = 「recursive agent harnessing」框架，**与
+aginxresearch v0.2.0 评价地基 + v0.3.0 evolve 回路正面同构**——任务级
+递归 Propose–Probe–Compose（提编辑案→同任务 probe→行为对比合成，无
+ground-truth 反馈）+ harnessing 级递归 improvement harness（adopted
+harnesses + evidence lessons 跨任务沉淀）≈ 我们的 提案→金标题
+probe→机械门槛→采纳/经验库。Google 用同构架构 + 三 benchmark +
+paper 把「无人 harness 自进化」赛道验证了（单步 +4.5~11.5 分）。
+
+**可学**（对表差集）：①**对比式 probe**——同一任务多候选跑出行为
+对比（contrastive），非我们「同卷均值对比」；②harness 编辑分
+invariant/domain 两类（我们的五文件白名单是按文件分，可对照）；
+③improvement harness 是显式的「进化器自身也会被进化」层（我们 meta
+腿 prompt 还是硬编码租户层）；④release 支持 OpenCode/Codex 双执行器
+——channel 三角色选型的外部参照。
+
+**再评估触发**：aginxresearch v0.3.1 出包后的下一刀（进化回路迭代/
+金标准升级）必对表此仓；google-research 仓按「研究方法类新 paper」
+口径不定期扫。届时注意：Python 栈不进卡，偷协议结构与判定框架不偷
+代码；其 benchmark 跑分叙事不搬——我们的金标题是存量自题。
+
 ## 附：已完成研究（不在 watchlist，已转行动）
 
 - Termux → [TERMUX-STUDY.md](TERMUX-STUDY.md)（recipes 仓/fallback
