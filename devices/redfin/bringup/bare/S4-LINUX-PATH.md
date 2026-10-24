@@ -7126,3 +7126,29 @@ LFN 真名：
 APFS purgeable 计量口径。响应：清 16 件旧 pad（s52–s60 共 ~1G，
 可由 build-bare.sh 复出件），随后 169G 空闲。教训：**pad 是消耗品，
 留现役两件（s61/s62）即可**。
+
+## 收据二十八：s61 首刷+复跑判决——ERROR(1) 刀大胜，so 链路停在「头表读完之后」，非 WIN
+
+**两次开机（首刷 31 探针 / 复跑 60 探针 15min）**：
+- 首刷 p01→p02（+17s）编排一举解堵：服务名册 14→40，PIL 推进到
+  `kernel/elf_loader`，下一域 `avs/audio` 排队。收据 26 的「unserved 名吃
+  EFS 读连坐」假说被正面证实。首刷 +8min 整机死（USB 全消），复跑 15min
+  不死——**偶发，非确定**。
+- so 会话：tev 显示开机约 49s 先后服务 52B ELF 头（bf06 ev9=0x34）与 160B
+  头表（bf0b ev9=0xa0），间隔约 5ms，均成功；此后 **px 停在 seek=52
+  rsize=160，seek=4096/rsize=8192 的哈希段读取从未出现**。s59 的「被受理
+  门吃掉」解释被排除（s61 已修门，现象不变）。
+- **入站环 rqr 总计数两次开机都是 0x55（85 包）**；槽内尾部全是 52B 控制
+  包（NEW_SERVER），末笔约 62–64s；此后至采样结束（首刷 3.5min/复跑 14min）
+  零入站。modem 在 ~64s 后对我们彻底沉默——确定性墙。
+- 装载器 lseek（FUN_c07fe744，AAnchor15）：tftp 型句柄走外部
+  EXT_FUN_d80a885c，**返回值须恰等于请求偏移才算成功**，失败则不再发读。
+  d80a885c 在本工程外（NOFUNC），无法反编译。上游 tqftpserv OACK 回显
+  blksize/timeoutms/wsize/rsize/seek，我方回显逻辑一致（seek=52 能成功为证）。
+- 新名 `/readwrite/server_check.txt`（WRQ，octet/blksize 7680/wsize 10）出现；
+  sensors PD 断言计数 0xb2→0xb3。
+
+**未定谳**：modem 在等什么（不是我们丢包）；lseek 到底失败还是装载器根本
+没跑到那一步（elf_loader 另有前置等待）。s62（so/ 全目录伺服）此刻刷无意义。
+**下一步**：先插桩后动刀——查 85 包全表（NEW_SERVER 服务名册）里缺哪个
+modem 等待的服务；查 d80a885c 所在镜像是否可取。
