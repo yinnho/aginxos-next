@@ -1,0 +1,14 @@
+# jq — 上游裸 CLI 的树包形态（D12 agent-CLI 口味，git/sqlite3 同族：
+# PATH 面 CLI，不注册 aginx 命令面）。Alpine v3.22 main/aarch64
+# jq+oniguruma 闭包 apk 整树（sha256 逐件钉死 TOFU，钉表在
+# scripts/build-pkg.sh jq) 分支）；musl loader 与 git 包同款自持自链
+# （两边同 musl 1.2.5，先到先得）。face /var/bin/jq。
+# 主用例：JSON 信封解码（relay 会话 JSONL/ACP 响应、duphub manifest），
+# 无 python 机上的结构化读取一刀。
+name = "jq"
+version = "1.8.2"
+summary = "jq 1.8.2 JSON 处理器（Alpine v3.22 整树：jq+oniguruma+musl loader；face /var/bin/jq）"
+group = "dev"
+url = "https://pkgs.aginx.net/jq/v1.8.2/jq-v1.8.2-4pc.tar"
+
+exec = "bin/jq"

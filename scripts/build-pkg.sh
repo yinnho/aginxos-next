@@ -31,6 +31,11 @@
 #                       — Alpine v3.22 aarch64 apk 闭包 15 件（sha256 逐件
 #                         钉死）+ wrapper 面 bin/git（L0 刀C：https 传输
 #                         整树自持，apk 缓存 out/apk-cache 复用）
+#   上游树包  jq
+#                       — Alpine v3.22 jq+oniguruma+musl 闭包 3 apk（2026
+#                         -10-24，sha256 钉死，源走 tuna 镜像）+ wrapper
+#                         面 bin/jq：JSON 信封解码刀（relay JSONL/duphub
+#                         manifest），缓存同 out/apk-cache
 #   上游静态包  sqlite3
 #                       — sqlite.org amalgamation（zip 尺寸+sha256 钉死，
 #                         TOFU 于下载日）zig cc musl 全静态单件，face
@@ -370,6 +375,51 @@ case "${PKG}" in
               libz.so.1 libzstd.so.1 libbrotlicommon.so.1 libbrotlidec.so.1 \
               libcares.so.2 libcrypto.so.3 libssl.so.3 libidn2.so.0 \
               libnghttp2.so.14 libpsl.so.5 libunistring.so.5; do
+      find "${STAGE}/files/lib" "${STAGE}/files/usr/lib" -maxdepth 1 -name "${so}" | grep -q . \
+        || { echo "FATAL: 闭包缺 soname ${so}" >&2; exit 1; }
+    done
+    MEMBERS="pkg.toml SKILL.md files"
+    ;;
+  jq)
+    # 上游树包（2026-10-24，dev CLI 补齐四件之二）：Alpine v3.22
+    # main/aarch64 闭包 3 apk（jq+oniguruma+musl），sha256 逐件钉死
+    # （TOFU 于下载日，同 git 钉表）。musl r13 与 git 包钉的 r12 同为
+    # 1.2.5（stable 分支滚动 rev），loader 自链先到先得互不回抢。
+    # 源走 tuna 镜像：镜像文件与 dl-cdn 同源同 sha，dl-cdn 当夜连
+    # 不通（curl 28），缓存命中时不碰网。闭包最小：jq 树=usr/bin/jq
+    # +usr/lib/libjq.so.1*，oniguruma=usr/lib/libonig.so.5*，musl=
+    # loader+libc——无 man/doc/locale 可裁，只剥 apk 家务件。
+    APK_DIR="${ROOT}/out/apk-cache"
+    JQ_BASE="https://mirrors.tuna.tsinghua.edu.cn/alpine/v3.22/main/aarch64"
+    JQ_APKS="
+      jq-1.8.2-r0:20e3b54393eecb2ee3c41a2f54e2401fadadf493b4de58a69fa09fa654c37ab5
+      oniguruma-6.9.10-r0:486a30ba898571f8f391958494ef3982494dffbc56d368d477293c5159c5c192
+      musl-1.2.5-r13:d616c430bcbe0bf452b7f6ea2669f2cad14e85644a7599f4f495115d021742ef
+    "
+    mkdir -p "${APK_DIR}" "${STAGE}/files"
+    for pair in ${JQ_APKS}; do
+      apk="${pair%%:*}"; want="${pair##*:}"
+      f="${APK_DIR}/${apk}.apk"
+      if [ ! -s "${f}" ] || [ "$(shasum -a 256 "${f}" | cut -d' ' -f1)" != "${want}" ]; then
+        echo "  fetch ${apk}"
+        curl -fsSL -o "${f}" "${JQ_BASE}/${apk}.apk" \
+          || { echo "FATAL: fetch ${apk} 失败" >&2; exit 1; }
+      fi
+      got="$(shasum -a 256 "${f}" | cut -d' ' -f1)"
+      [ "${got}" = "${want}" ] \
+        || { echo "FATAL: ${apk} sha256 不符（钉 ${want} 得 ${got}）" >&2; exit 1; }
+      tar -xzf "${f}" -C "${STAGE}/files"
+    done
+    rm -f "${STAGE}/files/.PKGINFO" "${STAGE}/files"/.SIGN.* \
+          "${STAGE}/files"/.pre-* "${STAGE}/files"/.post-* "${STAGE}/files"/.trigger*
+    find "${STAGE}/files" -type d -exec chmod 755 {} +
+    # wrapper 面（细节见 pkgs/jq/bin/jq 头注）
+    mkdir -p "${STAGE}/files/bin"
+    install -m 755 "${RECIPE}/bin/jq" "${STAGE}/files/bin/jq"
+    # 闭包钉死门：本体 + loader + DT_NEEDED soname
+    test -x "${STAGE}/files/usr/bin/jq" || { echo "FATAL: 树里无 usr/bin/jq" >&2; exit 1; }
+    test -f "${STAGE}/files/lib/ld-musl-aarch64.so.1" || { echo "FATAL: 树里无 musl loader" >&2; exit 1; }
+    for so in libjq.so.1 libonig.so.5; do
       find "${STAGE}/files/lib" "${STAGE}/files/usr/lib" -maxdepth 1 -name "${so}" | grep -q . \
         || { echo "FATAL: 闭包缺 soname ${so}" >&2; exit 1; }
     done

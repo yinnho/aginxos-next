@@ -1,0 +1,9 @@
+#!/bin/sh
+# jq face — Alpine 树包 wrapper（pkgs/jq，git 同工艺简化版）。
+# apk 树 jq 动态链 musl——loader 自链（先到先得，与 git 同 musl 1.2.5）
+# + LD_LIBRARY_PATH 指 pkgfiles 树内 usr/lib（oniguruma 所在）。
+P=/var/lib/aginx/pkgfiles/jq
+L=/lib/ld-musl-aarch64.so.1
+[ -e "$L" ] || ln -sf "$P/lib/ld-musl-aarch64.so.1" "$L" 2>/dev/null
+export LD_LIBRARY_PATH="$P/usr/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+exec "$P/lib/ld-musl-aarch64.so.1" "$P/usr/bin/jq" "$@"
