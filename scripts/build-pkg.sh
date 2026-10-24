@@ -426,6 +426,59 @@ case "${PKG}" in
     done
     MEMBERS="pkg.toml SKILL.md files"
     ;;
+  bash)
+    # 上游树包（2026-10-24，dev CLI 第五件）：Alpine v3.22 main/aarch64
+    # 闭包 4 apk（bash+readline+ncurses-libs+ncurses-terminfo-base），
+    # sha256 逐件钉死（TOFU 于下载日，同 jq 钉表工艺）。musl r13 与
+    # git/jq/claude 同钉同缓存（loader 自链先到先得）。存在理由：claude
+    # 引擎（Claude Code）的 Bash 工具腿在 Linux 上硬找 bash（busybox
+    # 无 bash applet），claude manifest 行 deps=bash 随闭包装入。
+    # 闭包 4 apk（bash+readline+libncursesw+musl；terminfo 库走
+    # ncurses-terminfo-base）。ncurses-libs 是空壳 meta 包（四子库
+    # 拆包），readline 只需 libncursesw.so.6。
+    APK_DIR="${ROOT}/out/apk-cache"
+    BASH_BASE="https://mirrors.tuna.tsinghua.edu.cn/alpine/v3.22/main/aarch64"
+    BASH_APKS="
+      bash-5.2.37-r0:411e1fec2dccd603bc9f23586f7b8df2211613ece49b20c71c17412ab2667c44
+      readline-8.2.13-r1:334af29dbf6b5a71a87af4d6a58e2967a8f711a51d00093de0e1498daf83ceb2
+      libncursesw-6.5_p20250503-r0:419b375e8a4345e7172b1f0f3a3c57db61374f5408cdb875d9e860bd4c243aca
+      ncurses-terminfo-base-6.5_p20250503-r0:3d37403e0b5ab9eb0c1ce269444e4a385faec9fe6af452c1c6956806b13d2bd6
+      musl-1.2.5-r13:d616c430bcbe0bf452b7f6ea2669f2cad14e85644a7599f4f495115d021742ef
+    "
+    mkdir -p "${APK_DIR}" "${STAGE}/files"
+    for pair in ${BASH_APKS}; do
+      apk="${pair%%:*}"; want="${pair##*:}"
+      f="${APK_DIR}/${apk}.apk"
+      if [ ! -s "${f}" ] || [ "$(shasum -a 256 "${f}" | cut -d' ' -f1)" != "${want}" ]; then
+        echo "  fetch ${apk}"
+        curl -fsSL -o "${f}" "${BASH_BASE}/${apk}.apk" \
+          || { echo "FATAL: fetch ${apk} 失败" >&2; exit 1; }
+      fi
+      got="$(shasum -a 256 "${f}" | cut -d' ' -f1)"
+      [ "${got}" = "${want}" ] \
+        || { echo "FATAL: ${apk} sha256 不符（钉 ${want} 得 ${got}）" >&2; exit 1; }
+      tar -xzf "${f}" -C "${STAGE}/files"
+    done
+    rm -f "${STAGE}/files/.PKGINFO" "${STAGE}/files"/.SIGN.* \
+          "${STAGE}/files"/.pre-* "${STAGE}/files"/.post-* "${STAGE}/files"/.trigger*
+    find "${STAGE}/files" -type d -exec chmod 755 {} +
+    # apk 把真身放 bin/bash（v3.22 bash 未 usr-merge）——先挪 usr/bin
+    #（家规：真身 usr/bin、wrapper 面 bin/，claude 同布局），再铺 wrapper。
+    mkdir -p "${STAGE}/files/usr/bin"
+    [ -f "${STAGE}/files/bin/bash" ] && mv "${STAGE}/files/bin/bash" "${STAGE}/files/usr/bin/bash"
+    # wrapper 面（细节见 pkgs/bash/bin/bash 头注）
+    mkdir -p "${STAGE}/files/bin"
+    install -m 755 "${RECIPE}/bin/bash" "${STAGE}/files/bin/bash"
+    # 闭包钉死门：本体 + loader + DT_NEEDED soname
+    test -x "${STAGE}/files/usr/bin/bash" || { echo "FATAL: 树里无 usr/bin/bash" >&2; exit 1; }
+    test -f "${STAGE}/files/lib/ld-musl-aarch64.so.1" || { echo "FATAL: 树里无 musl loader" >&2; exit 1; }
+    for so in libreadline.so.8 libncursesw.so.6; do
+      find "${STAGE}/files/lib" "${STAGE}/files/usr/lib" -maxdepth 1 -name "${so}" | grep -q . \
+        || { echo "FATAL: 闭包缺 soname ${so}" >&2; exit 1; }
+    done
+    test -d "${STAGE}/files/etc/terminfo" || { echo "FATAL: 树里无 terminfo" >&2; exit 1; }
+    MEMBERS="pkg.toml SKILL.md files"
+    ;;
   claude)
     # 引擎树包（2026-10-24，Claude Code 上机）：官方 npm 平台子包
     # @anthropic-ai/claude-code-linux-arm64-musl（Bun 编译原生单文件，

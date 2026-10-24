@@ -1,0 +1,14 @@
+# bash — 上游裸 CLI 的树包形态（D12 agent-CLI 口味，git/jq/sqlite3
+# 同族：PATH 面 CLI，不注册 aginx 命令面）。Alpine v3.22 main/aarch64
+# bash+readline+ncurses 闭包 4 apk（sha256 逐件钉死 TOFU，钉表在
+# scripts/build-pkg.sh bash) 分支）；musl loader 自持自链（同 musl
+# 1.2.5 先到先得）。face /var/bin/bash。
+# 主用例：claude 引擎（Claude Code）的 Bash 工具腿——裸树只有 busybox
+# ash，claude 硬找 bash；本包即其依赖（claude manifest 行 deps=bash）。
+name = "bash"
+version = "5.2.37"
+summary = "bash 5.2.37（Alpine v3.22 整树：bash+readline+ncurses+terminfo；claude 引擎 Bash 工具腿+dev CLI 第五件；face /var/bin/bash）"
+group = "dev"
+url = "https://pkgs.aginx.net/bash/v5.2.37/bash-v5.2.37-4pc.tar"
+
+exec = "bin/bash"

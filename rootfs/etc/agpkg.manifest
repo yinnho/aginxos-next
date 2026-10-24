@@ -120,4 +120,6 @@ jq             https://pkgs.aginx.net/jq/v1.8.2/jq-v1.8.2-4pc.tar a80611d3f52c8b
 # 不需要 Node）；MEMBER_MAX 提档 512MiB 随本件（安装器需换代）。引擎
 # 口味（codex/grok 同族）：agents 档案 env 腿，不注册 aginx 命令面。
 # brain 腿=ANTHROPIC_BASE_URL https://brain.aginx.net/anthropic。
-claude         https://pkgs.aginx.net/claude/v2.1.310/claude-v2.1.310-4pc.tar a33643c2b08a8b1bb2513cf88b99213b08b13505ac5df812285aae38ae489bdd opt
+# deps=bash：Bash 工具腿硬找 bash（busybox 无 applet），随闭包带入。
+bash           https://pkgs.aginx.net/bash/v5.2.37/bash-v5.2.37-4pc.tar c7cf6faa6f88895a6b36c50bc82aaf1992a18576d2cf27cff3940a50b3c1d75b opt 5.2.37
+claude         https://pkgs.aginx.net/claude/v2.1.310/claude-v2.1.310-4pc.tar a33643c2b08a8b1bb2513cf88b99213b08b13505ac5df812285aae38ae489bdd opt 2.1.310 bash

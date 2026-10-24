@@ -1,0 +1,14 @@
+#!/bin/sh
+# bash face — Alpine 树包 wrapper（pkgs/bash，jq 同工艺简化版）。
+# 存在的唯一理由：claude 引擎（Claude Code）的 Bash 工具腿在 Linux 上
+# 硬找 bash（busybox 无 bash applet，红鳍裸树只有 ash）——本包补真
+# bash 5.2，同时是 dev CLI 第五件。apk 树动态链 musl，loader 自链
+#（先到先得，与 git/jq/claude 同 musl 1.2.5）+ LD_LIBRARY_PATH 指树内
+# usr/lib（readline/ncursesw 所在）。TERMINFO_DIRS 指树内 terminfo
+#（Alpine 布局=etc/terminfo，非编译期默认路径）。
+P=/var/lib/aginx/pkgfiles/bash
+L=/lib/ld-musl-aarch64.so.1
+[ -e "$L" ] || ln -sf "$P/lib/ld-musl-aarch64.so.1" "$L" 2>/dev/null
+export LD_LIBRARY_PATH="$P/usr/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+export TERMINFO_DIRS="$P/etc/terminfo${TERMINFO_DIRS:+:$TERMINFO_DIRS}"
+exec "$P/lib/ld-musl-aarch64.so.1" "$P/usr/bin/bash" "$@"
