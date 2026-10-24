@@ -115,3 +115,9 @@ aginx-fg       https://pkgs.aginx.net/aginx-fg/v0.1.2/aginx-fg-v0.1.2-4pc.tar 5d
 # 解码（relay 会话 JSONL/ACP 响应、duphub manifest）。PATH 面 CLI
 # （D12 agent-CLI 口味），不注册 aginx 命令面。
 jq             https://pkgs.aginx.net/jq/v1.8.2/jq-v1.8.2-4pc.tar a80611d3f52c8b4b473aa98060fba3bd6367c0cadfcd4b587123077c32ce83dc opt
+# claude (2026-10-24, 引擎商品第三件) — 官方 npm 平台子包
+# claude-code-linux-arm64-musl：Bun 编译原生单文件 270M（自带 runtime
+# 不需要 Node）；MEMBER_MAX 提档 512MiB 随本件（安装器需换代）。引擎
+# 口味（codex/grok 同族）：agents 档案 env 腿，不注册 aginx 命令面。
+# brain 腿=ANTHROPIC_BASE_URL https://brain.aginx.net/anthropic。
+claude         https://pkgs.aginx.net/claude/v2.1.310/claude-v2.1.310-4pc.tar a33643c2b08a8b1bb2513cf88b99213b08b13505ac5df812285aae38ae489bdd opt
