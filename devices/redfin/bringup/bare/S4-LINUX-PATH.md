@@ -7225,3 +7225,17 @@ modem 正常启动；qrtr-lookup 终态+dmesg-raw+ps）。
   INIT_MODEM_DRIVER_CMPLT_REQ(0x35)=0（ic=0.0）；Linux 里 RESP 前 IPA uC 事件
   回调已活。**候选主线**：①查 0x29 是谁/为何缺；②CMPLT(0x35) 不来是否因 IPA uC
   /GSI 侧半栈未起。均待证，禁凭此改刀。
+
+### 收据三十二·附：差集 5 项身份（libqmi qmi-enums.h 对表 + 固件扫描）
+
+- **0x29 = QMI_SERVICE_RFRPE（RF 辐射性能增强）**——modem RF 栈初始化后才注册；
+  与 WLAN/IPA 无直接关系。Linux 里它在 port 48 早期出现，我们 s61 墙上无=
+  **modem 的 RF 初始化链没走完**（原因未证：候选=RF 所需 NV/EFS 内容、RF 驱动
+  等待某 AP 侧应答）。**不得凭此断言是 wlan_pd 不起的因**，只是同一堵墙的
+  又一个症状。
+- 0x45=WLFW（wlan_pd 后）。0x39/0x3a/0x1003 不在 libqmi 表内（非公开/厂商服务），
+  固件里按 service_id 字段扫出的命中后面是字符串表/数值表=误报，无法定位对象。
+- 方法记录：QMI IDL 服务对象布局 `{lib_ver, idl_ver, service_id, max_msg_len,…}`，
+  在 modem.full.elf 数据段按此四字模式可扫出（0x45 命中唯一一处 0xc26754ac 验证；
+  0x29 命中 c274a258 等 7 处）。但对象的指针引用与代码立即数引用 Ghidra 未建
+  交叉引用（未跑完整分析），静态上溯到注册点需先全量分析 Hexagon 立即数。
