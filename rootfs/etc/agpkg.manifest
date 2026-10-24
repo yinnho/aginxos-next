@@ -61,8 +61,14 @@
 # 仍是热修覆盖层（盘上同名赢内置，scp 秒生效）。本地 arm64 zigbuild
 # 出件（宿主/目标 V8 档分取，gh-proxy 过墙），rust-objcopy --strip-all，
 # sha 即本行；v0.5.8 镜像目录保留可回钉。
+#
+# v0.6.2 (2026-10-24): 官方 release 资产直接吃（#473 正典）——v0.6.0 起
+# deno_core 退役、diting_runtime 自有 JS 运行时全栈；/fetch 带 media
+# 字段 + /download 可选 dir（研究引擎 REQ 两件均落地）。sha256 与 gh api
+# digest 逐字符核过；镜像 /v0.6.2/ 服务器侧复验同值；v0.5.9 目录保留
+# 可回钉。
 
-aginxbrowser   https://pkgs.aginx.net/aginxbrowser/v0.5.9/aginxbrowser-0.5.9-aarch64-unknown-linux-musl-screenshot 85954d3ce41d0d7d6cc86de627237bc985fc74178a2f35ec66629eef4fac0c72 opt
+aginxbrowser   https://pkgs.aginx.net/aginxbrowser/v0.6.2/aginxbrowser-0.6.2-aarch64-unknown-linux-musl-screenshot ef6a18bb7749a25f1e9fdb6a5b19e223242baa3ae35fbe446a3c175e5c1c6e23 opt
 # python3 (M28) — first TREE bundle: musl CPython 3.12.14 (python-build-
 # standalone 20260901 install_only_stripped) + Alpine musl 1.2.5 ld.so;
 # pkg.toml exec faces /var/bin/python3 as a symlink into
