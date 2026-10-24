@@ -10,11 +10,15 @@
 # kind:"ruling" 落 type: ruling 件（场景+钦定双段，confidence=DECIDED），
 # 日循环 Leg B prompt 同步教契约；digest 汇总/晨报自查段计裁决数；
 # 新面 `k rulings` 枚举裁决账（将来进化回路回放考卷的出口）。
+# v0.2.2（2026-10-24，汇报策略第一进化面）：wrapper +高优直推腿——
+# digest degraded（safety 类）即时推微信绑定会话；行为真源=
+# /home/policies/reporting.md（三级：立即推白名单/攒晨报/静默），
+# wrapper 只机械执行分级，未绑=SKIP 不炸。
 name = "aginx-mem"
-version = "0.2.1"
-summary = "记忆面工具：kv/tree/knowledge/flows + 日循环腿（day/digest 材料化落账，23:47 自整理）+ 裁决采集（ruling 一等件+考卷面）"
+version = "0.2.2"
+summary = "记忆面工具：kv/tree/knowledge/flows + 日循环腿（day/digest 材料化落账，23:47 自整理）+ 裁决采集（ruling 一等件+考卷面）+ 高优直推（safety 类即时推微信）"
 group = "mem"
-url = "https://pkgs.aginx.net/aginx-mem/v0.2.1/aginx-mem-v0.2.1-4pc.tar"
+url = "https://pkgs.aginx.net/aginx-mem/v0.2.2/aginx-mem-v0.2.2-4pc.tar"
 
 exec = "bin/aginx-mem"
 

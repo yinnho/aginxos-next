@@ -74,6 +74,9 @@ OTA 不覆盖 `/home`。
 │       ├── channel.toml    # 类型 + 默认绑定 + 策略
 │       └── senders/<uid>/  # 会话状态（session.json 绑定=字段；gw.json 桥会话）
 │
+├── policies/               # 系统行为策略——evolve 回路唯一可改的行为面（只动数据不动引擎；10-24 汇报策略=第一进化面）
+│   └── reporting.md        # 什么事值得打断这个人：立即推（白名单）/攒晨报/静默 三级
+│
 ├── workflows/              # 能力面。一个目录 = 一个角色侧面（系统的工作位）
 │   └── <name>/
 │       ├── AGENTS.md       # 人格+规程（codex 工位原生名，刀1 起在役；对外叫「助理」）

@@ -6,6 +6,8 @@
 #                                材料清单+已知索引+lifecycle 契约原核）
 #   Leg C  aginx-mem digest     落账 knowledge/+版本+索引+缺口件
 #                                （坏 JSON 拒收标 degraded，也要出件）
+# v0.2.2：+高优直推腿——digest degraded（safety 类）即时推微信，
+# 策略真源=/home/policies/reporting.md（wrapper 只机械执行分级）。
 # 纪律：day 材料/分析/缺口件绝不出设备；本脚本只在本机转。
 export HOME=/home
 export PATH=/sbin:/bin:/usr/sbin:/usr/bin:/var/bin
@@ -45,5 +47,22 @@ if [ "$rc" = "0" ]; then
   echo "--- digest ok ($(date '+%F %T'))" >> "$LOG"
 else
   echo "--- digest degraded rc=$rc（引擎坏，等人看） ($(date '+%F %T'))" >> "$LOG"
+fi
+
+# 高优直推（v0.2.2，汇报策略地板）：只 safety 类——digest degraded
+# 就是这一类的现役形状；其余一切攒晨报（08:00 微信直达）。策略行
+# `  - safety` 被摘除即静默停用（策略文件是行为真源）。会话没绑=
+# SKIP 照常收工；best-effort，不碰落账真源（morning-report 同 idiom）。
+if [ "$rc" != "0" ] && grep -q '^  - safety' /home/policies/reporting.md 2>/dev/null; then
+  WUID=$(aginx-channels status weixin 2>/dev/null \
+    | sed -n 's/.*"user_id": "\([^"]*\)".*/\1/p' | head -1)
+  if [ -z "$WUID" ]; then
+    echo "--- weixin push SKIPPED (no bound session)" >> "$LOG"
+  elif aginx-channels send weixin "$WUID" \
+    "[日循环告警·safety] $(date '+%F %T') digest degraded rc=$rc——引擎坏等人看，详 /var/log/day-review.log（其余一切照常攒晨报）" >> "$LOG" 2>&1; then
+    echo "--- weixin push ok (safety alert)" >> "$LOG"
+  else
+    echo "--- weixin push FAILED (safety alert)" >> "$LOG"
+  fi
 fi
 exit "$rc"
