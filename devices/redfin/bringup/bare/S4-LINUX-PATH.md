@@ -7306,3 +7306,43 @@ DEBUG_FS/KPROBES（IPC 日志环与 kprobe 均不可用），tracefs 需手挂�
   mcfg.tmp/mbn_hw.dig/mbn_sw.dig。
 - 小偏差（非卡点）：OACK `seek=0` 我们不回显，上游 tqftpserv `seek>=0` 回显。
 - 现场：手机在 Linux(槽 b)；需手动硬复位进 fastboot 后 `set_active a`。
+
+## 收据三十六：Linux 消融实验——wlan_pd 所需 AP 侧最小集=我们早已有的；ADSP/IPA/CDSP/pm/WLAN 栈全不必需
+
+方法：Linux 槽 b（AginxOS 全镜像，`/etc/init.d/radio-bringup` 自动编排）。给脚本加
+`ABL_*` 开关（读 `/etc/radio-ablate`，原件备份 `/etc/init.d/radio-bringup.orig`
+md5 7cbefc77…，实验后已还原核对），`aginx-reboot reboot` 软重启（**`adb reboot` 在
+本机无效**，AGENTS.md 早写；首轮即栽于此），开机 ~105s 采 `/tmp/tftp_server.log`
+（厂商守护进程自写逐请求日志）+dmesg+qrtr-lookup。读数=so 阶梯是否走满、wlanmdsp
+是否被要、wlan_pd 是否上线、node0 服务数/0x29/0x45。脚本 `.local/device/redfin/
+linux-qrtr-cap/abl-run.sh`+`radio-bringup.abl`。
+
+| 实验 | 去掉 | so 阶梯(7步含4096/8192) | wlanmdsp | wlan_pd | 0x29/0x45 | node0 服务 |
+|---|---|---|---|---|---|---|
+| e_ipa | IPA 固件触发(无 INIT_MODEM_DRIVER) | 满 | 读 | 上线 50.6s | 有/有 | 45 |
+| e_cdsp | CDSP 不起 | 满 | 读 | 上线 | 有/有 | 48 |
+| e_pm | pm-service/pm-proxy | 满 | 读 | 上线 | 有/有 | 48 |
+| e_pdmap | pd-mapper | **满** | **从未被要** | 无 | 有/**无** | 42 |
+| e_icnss | msm_icnss+wlan.ko+cnss-daemon | 满 | 读 | 上线 | 有/有 | 44 |
+| e_adsp | ADSP 不起(OFFLINING) | 满 | 读 | 上线 49.6s | 有/有 | 48 |
+| **e_min** | **IPA+pm+CDSP+ADSP+WLAN 栈全去** | **满** | **读** | **上线(0x45 出)** | **有/有** | 44 |
+
+- **结论**：Linux 让 wlan_pd 起来所需 AP 侧=qrtr-ns+tftp_server+rmt_storage+pd-mapper
+  （pd-mapper 只管 wlanmdsp 那一步，so 阶梯不依赖它）。此前几十轮追的「缺 ADSP/
+  CDSP/IPA 半栈/pm」**都不是 wlan_pd 起不来的原因**，脚本头「ADSP 必须先于 modem」
+  在本镜像上也不成立（e_adsp）。
+- **我方起的 ADSP 反而自己崩了**：sm `af=` 读的是 `ADSP_SFR`（ADSP 失败原因），其
+  内容 `sensor_process … SNS_REG_INIT … SNS_RC_SUCCESS == rc`=ADSP 里传感器进程
+  registry 初始化断言→ADSP error fatal（无人给它传感器配置/FastRPC 文件）。这是
+  此前误读为 modem 侧信息的字段。
+- **差别不在**：固件内容（设备 modem_a FAT 的 36 个文件 md5 与本地提取件全同；FwSeg
+  与 modem.mdt 28 个可装载段地址/大小逐项全对）、so 文件内容、TFTP 选项/块数、
+  AP 侧服务公告（s64）、rmtfs 序列。
+- **未排除**：modem 启动参数/PIL 内存与 XPU/SMEM 状态、EFS 内容、qrtr-ns/pd-mapper 应答
+  保真度、时序，以及「崩溃的 ADSP 是否拖住 modem」。
+- **s65（MODEM_ONLY，2d350373 已推）**：不起 ADSP（IPA/CDSP 门依赖 ADSP 绿，自动跳过），
+  其余不动。编译坑：ADSP 块不执行→`ADSP_ST` 再无写入→LLVM 折叠为常量 0→IPA/CDSP
+  门与 3.8MB 内嵌 wlanmdsp 路径被整块优化掉（ELF 仅 364KB）；`core::hint::
+  black_box` 修复，体积回 4,362,336B。pad md5 0c3ddbe87bcce2b66be1a1cddcf0009f。
+- 附：Linux 现场已还原；`/var/radio.log` 跨启动累积需只取最后一段；zsh `A="adb -s x"`
+  不拆词需用函数。
