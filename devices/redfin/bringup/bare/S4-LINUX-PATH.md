@@ -7200,3 +7200,28 @@ modem 等待的服务；查 d80a885c 所在镜像是否可取。
   装载库回调表确认，但「谁在什么时机调 dlopen、失败后为何不重试」需要
   整条 PD 派生链。候选：①取 Linux 参考流量对照 85 包之后 Linux 多收发
   什么（证据最近）；②继续逆向 dlopen 上游（PD 派生器）。
+
+## 收据三十二（案头）：与 Linux 参考时间线对账——modem 节点服务集差 5 项（无需刷机）
+
+数据源 `.local/device/redfin/slot-b-timeline-20261019-110320/`（Linux L0 实机，
+modem 正常启动；qrtr-lookup 终态+dmesg-raw+ps）。
+
+- **服务集差（node 0）**：Linux 45 个服务 id；我们 s61 墙上 39 个。**我们有的
+  Linux 全有（无多余）**；Linux 多出 5 个：`0x29/0x101`(port 48)、`0x45/0x1`
+  (WLFW, port 88)、`0x1003/0x0`(port 92、95)、`0x39/0x1`(97)、`0x3a/0x1`(98)。
+  端口号=注册先后：**0x29 在 port 48（夹在我们已有的 0x22@47 与 0xe7@49 之间）
+  =root PD 早期注册，我们没有**；0x45/0x1003/0x39/0x3a 是 wlan_pd 之后。0x29/
+  0x39/0x3a/0x1003 的身份未考（此前收据无人提过）。
+- **Linux modem 出复位后 1.2s 内序列**（49.01→50.21）：49.08 Power/Clock ready →
+  49.09 service-notifier↔180 + sysmon↔modem SSCTL → 49.09 rmt_storage OPEN
+  /boot/modem_fs1+fs2、读 offset512×512、**读 2,620,416B** → 49.26 /boot/modem_fsc
+  读 65536 → 49.30 AP 发 `QMI_IPA_INIT_MODEM_DRIVER_REQ` / 49.395 RESP（其间
+  49.388 IPA uC 事件日志回调已触发=IPA uC 活）→ **50.206 wlan_pd ONLINE**
+  (state 0x1fffffff, trans-id 1) → 50.208 icnss QMI Connected。
+- **用户态**（ps.txt）：qrtr-ns、rmt_storage、**tftp_server(uid 2903)**、pm-service、
+  pd-mapper、cnss-daemon 均在；故 TIMELINE「dmesg 零 tftp」不是 tftp 没跑，
+  只是用户态不进 dmesg。Linux 下 so 是否被 TFTP 取，dmesg 无法证。
+- 与现状的接点：我们 IPA INIT_MODEM_DRIVER 已通（ii=2.1.0），modem 回的
+  INIT_MODEM_DRIVER_CMPLT_REQ(0x35)=0（ic=0.0）；Linux 里 RESP 前 IPA uC 事件
+  回调已活。**候选主线**：①查 0x29 是谁/为何缺；②CMPLT(0x35) 不来是否因 IPA uC
+  /GSI 侧半栈未起。均待证，禁凭此改刀。
