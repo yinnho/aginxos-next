@@ -5204,9 +5204,9 @@ static mut TF_OKICK: u32 = 0;
 // 刀 G46：毫秒事件时间线（纯插桩，零行为改动）。24 槽滚动环。
 // kind: 1=RRQ/WRQ到 2=ACK到 3=EOT到 4=OACK发 5=DATA发 6=DATA发拒
 //       7=ST迁 8=泵进 9=so_read返回 10=环闸挡 11=读零 12=stat门退
-static mut TF_EV_MS: [u32; 24] = [0; 24];
-static mut TF_EV_K: [u8; 24] = [0; 24];
-static mut TF_EV_A: [u16; 24] = [0; 24];
+static mut TF_EV_MS: [u32; 64] = [0; 64];
+static mut TF_EV_K: [u8; 64] = [0; 64];
+static mut TF_EV_A: [u16; 64] = [0; 64];
 static mut TF_EV_I: usize = 0;
 
 /// 刀 G46：TFTP 事件毫秒时间线记账（#50 计数器粒度到头后的量先于刀）。
@@ -5222,7 +5222,7 @@ fn tf_ev(kind: u8, a: u16) {
         TF_EV_MS[i] = ms;
         TF_EV_K[i] = kind;
         TF_EV_A[i] = a;
-        TF_EV_I = (i + 1) % 24;
+        TF_EV_I = (i + 1) % 64;
     }
 }
 // 刀 G47：TX 拒绝现场快照（纯插桩，零行为改动，#50 悬案
@@ -7794,6 +7794,39 @@ fn tf_drop_pend() {
     }
 }
 
+/// s67：包内文件名分类（不依赖 TF_NAME——被丢弃的到达也要能记）。
+/// 1=so/549_38_0.mbn 2=wlanmdsp.mbn 3=ruleset 4=modem_efs 5=server_check.txt
+/// 7=其它 .mbn 6=其它。纯记账。
+fn tf_pkt_class(fifo: u64, off: u64, chunk: u64) -> u16 {
+    let mut nm = [0u8; 64];
+    let mut n = 0usize;
+    let max = if chunk > 32 { chunk - 32 } else { 0 };
+    while n < 64 && (n as u64) + 2 < max {
+        let b = rd8(fifo + off + 50 + n as u64);
+        if b == 0 {
+            break;
+        }
+        nm[n] = b;
+        n += 1;
+    }
+    let ends = |p: &[u8]| n >= p.len() && &nm[n - p.len()..n] == p;
+    if ends(b"549_38_0.mbn") {
+        1
+    } else if ends(b"wlanmdsp.mbn") {
+        2
+    } else if ends(b"ruleset") {
+        3
+    } else if ends(b"modem_efs") {
+        4
+    } else if ends(b"server_check.txt") {
+        5
+    } else if ends(b".mbn") {
+        7
+    } else {
+        6
+    }
+}
+
 fn tf_name_has(pat: &[u8]) -> bool {
     let n = unsafe { TF_NAME_N } as usize;
     if n < pat.len() {
@@ -7847,6 +7880,8 @@ fn tf_is_wlan() -> bool {
 /// s61：TFTP ERROR(1 "File not found")——stock tqftpserv 同款快失败。
 /// s62 起也用于 so 名在 FAT 上不存在的会话（逐名解析失败）。
 fn tf_reply_err1(at478: u64, at479: u64, tx_head: u64, sz479: u64) {
+    // s67：ev16=本机回 ERROR(1)；a=当前 pend 的类（1=so 2=wlan 其它按名尾）。
+    tf_ev(16, if tf_is_so() { 1 } else if tf_is_wlan() { 2 } else if tf_name_has(b"ruleset") { 3 } else if tf_name_has(b"modem_efs") { 4 } else { 6 });
     let mut q = [0u8; 32];
     q[1] = 5;
     q[3] = 1;
@@ -14191,6 +14226,8 @@ fn scan_new_servers(fifo: u64, rh: u64) {
                             TF_RT_NM[ti] = nm;
                             TF_RT_N = TF_RT_N.wrapping_add(1);
                         }
+                        // s67：ev15=到达（含被丢）。a=op|类<<4|disp<<8，类见 tf_pkt_class。
+                        tf_ev(15, (op0 as u16) | (tf_pkt_class(fifo, off, chunk) << 4) | ((disp as u16) << 8));
                     }
                     // s56：受理门 newest-wins——pend 被陈旧 op（租期>10s，
                     // BUG-A 大件停滞形）占住时，新 RRQ 不再整笔弃（disp=2
@@ -16015,8 +16052,8 @@ fn ctrl_service(
                                 push_str(reply, &mut rn, " tev=");
                                 {
                                     let mut j = unsafe { TF_EV_I };
-                                    for _ in 0..24 {
-                                        let idx = j % 24;
+                                    for _ in 0..64 {
+                                        let idx = j % 64;
                                         let k = unsafe { TF_EV_K[idx] };
                                         if k != 0 {
                                             push_str(reply, &mut rn, ".");
@@ -16026,7 +16063,7 @@ fn ctrl_service(
                                             push_str(reply, &mut rn, ".");
                                             push_hex(reply, &mut rn, unsafe { TF_EV_A[idx] } as u64);
                                         }
-                                        j = (j + 1) % 24;
+                                        j = (j + 1) % 64;
                                     }
                                 }
                                 // 刀 G47：gx=TX 拒绝现场 4 槽（时间序旧→新，

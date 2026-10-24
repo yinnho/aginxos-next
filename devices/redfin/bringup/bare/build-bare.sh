@@ -159,6 +159,7 @@ MODE="heartbeat"
 [ "${1:-}" = "--s64" ] && MODE="s64"
 [ "${1:-}" = "--s65" ] && MODE="s65"
 [ "${1:-}" = "--s66" ] && MODE="s66"
+[ "${1:-}" = "--s67" ] && MODE="s67"
 mkdir -p "${OUTDIR}"
 ELF="${OUTDIR}/heartbeat.elf"
 
@@ -1426,6 +1427,16 @@ elif [ "${MODE}" = "s66" ]; then
   ELF="${OUTDIR}/s66.elf"
   cp "${HERE}/target/aarch64-unknown-none-softfloat/release/redfin-bare" "${ELF}"
   BIN="${OUTDIR}/s66.bin"; IMG="${OUTDIR}/boot-s66.img"
+elif [ "${MODE}" = "s67" ]; then
+  # 刀 G67（TFTP 到达记账·零行为改动）：s66 判决（收据三十八）——armed 解耦后 OACK 能发
+  # （ox=2.0.2），但 modem 每 ~1s 重复「RRQ→OACK→ERROR9→WRQ」循环、不进 52B 读；tev
+  # 24 项小环且不带文件名，分不清重复的是 so 还是别的。本刀：tev 环 24→64；新 ev15=
+  # 每笔 RRQ/WRQ 到达（含被丢）a=op|文件类<<4|disp<<8（类：1=so 2=wlan 3=ruleset
+  # 4=efs 5=server_check 6=其它 7=其它mbn）；ev16=本机回 ERROR(1)（a=类）。行为同 s66。
+  (cd "${HERE}" && cargo build --release --target aarch64-unknown-none-softfloat) || { echo "cargo build FAILED (${MODE}) -- 不拷陈旧件" >&2; exit 1; }
+  ELF="${OUTDIR}/s67.elf"
+  cp "${HERE}/target/aarch64-unknown-none-softfloat/release/redfin-bare" "${ELF}"
+  BIN="${OUTDIR}/s67.bin"; IMG="${OUTDIR}/boot-s67.img"
 elif [ "${MODE}" = "s55" ]; then
   # 刀 G55（集发生器+受理环）：三层故障栈第①层（重启环未闭合=阶梯冻结
   # 根因）补齐——真杠杆=SCM PAS（lito.dtsi pil_modem=pil-tz-generic
