@@ -198,6 +198,8 @@ struct Ring {
 }
 static mut RING: Ring = Ring { base: 0, seq: 0, slot: 0 };
 // 刀 G43：环败台账（取代 report_reset 自杀遥测）——计数+末 4 码。
+/// s65：true=只起 modem（跳过 ADSP/IPA/CDSP）；false=旧链（ADSP→IPA→CDSP→modem）。
+const MODEM_ONLY: bool = true;
 static mut RW_FAIL: u32 = 0;
 static mut RW_CODE: [u32; 4] = [0; 4];
 static mut RW_CI: u32 = 0xffff_ffff;
@@ -18282,115 +18284,123 @@ extern "C" fn rust_main() -> ! {
     );
     ring_put(&mut ufs, freq, logring::LVL_INFO, txt);
     // ADSP 先于 modem。固件在 vendor_a 的 ext4 里。失败只落环，modem 照旧。
-    match load_adsp(&mut ufs, freq, &mut t) {
-        Err(code) => {
-            unsafe { ADSP_ST = code };
-            let txt = hex_text(&mut t, unsafe { RING.seq }, " adsp e=0x", code as u64);
-            ring_put(&mut ufs, freq, logring::LVL_INFO, txt);
-        }
-        Ok(n) => {
-            unsafe { ADSP_ST = 0x8000_0000 | n as u32 };
-            let txt = hex_text(&mut t, unsafe { RING.seq }, " adsp n=0x", n as u64);
-            ring_put(&mut ufs, freq, logring::LVL_INFO, txt);
-            let ar = aop_image(freq, b"{class: image, res: load_state, name: adsp, val: on}");
-            let txt = hex_text(&mut t, unsafe { RING.seq }, " adsp aop=0x", ar as u64);
-            ring_put(&mut ufs, freq, logring::LVL_INFO, txt);
-            if ar == 0 {
-                let wiped = sfr_wipe(freq, 423);
-                unsafe {
-                    ADSP_Z = wiped.st;
-                    ADSP_ZB = wiped.w[0] & 0xff;
-                }
-                let (p0, p1, p2) = pas_go(1, 0x8920_0000, 0x0280_0000);
-                unsafe {
-                    ADSP_P[0] = p0 as u32;
-                    ADSP_P[1] = p1 as u32;
-                    ADSP_P[2] = p2 as u32;
-                }
-                let txt = hex_text(&mut t, unsafe { RING.seq }, " adsp p0=0x", p0 as u64);
+    // s65：MODEM_ONLY——不起 ADSP（IPA/CDSP 门依赖 ADSP 绿，随之自动跳过）。
+    // 依据：收据三十六 Linux 消融（去 IPA/pm/CDSP/ADSP/WLAN 栈 wlan_pd 照起）；
+    // 且 af= 证明我方起的 ADSP 自己 sensor_process 断言崩溃，留着只添乱。
+    // black_box：否则 ADSP_ST 再无写入，LLVM 折叠成 0，连带 IPA/CDSP 门与
+    // 3.8MB 内嵌 wlanmdsp 供件路径整块被优化掉（s65 首版 ELF 仅 364KB 即此故）。
+    if !core::hint::black_box(MODEM_ONLY) {
+        match load_adsp(&mut ufs, freq, &mut t) {
+            Err(code) => {
+                unsafe { ADSP_ST = code };
+                let txt = hex_text(&mut t, unsafe { RING.seq }, " adsp e=0x", code as u64);
                 ring_put(&mut ufs, freq, logring::LVL_INFO, txt);
-                let txt = hex_text(&mut t, unsafe { RING.seq }, " adsp p1=0x", p1 as u64);
+            }
+            Ok(n) => {
+                unsafe { ADSP_ST = 0x8000_0000 | n as u32 };
+                let txt = hex_text(&mut t, unsafe { RING.seq }, " adsp n=0x", n as u64);
                 ring_put(&mut ufs, freq, logring::LVL_INFO, txt);
-                let txt = hex_text(&mut t, unsafe { RING.seq }, " adsp p2=0x", p2 as u64);
+                let ar = aop_image(freq, b"{class: image, res: load_state, name: adsp, val: on}");
+                let txt = hex_text(&mut t, unsafe { RING.seq }, " adsp aop=0x", ar as u64);
                 ring_put(&mut ufs, freq, logring::LVL_INFO, txt);
-                // subsys_start 等 err-ready，最多 proxy-timeout 10 秒。等到再开 modem。
-                let t0 = time::cntvct();
-                let dead = t0 + freq as u64 * 10;
-                let step = if freq == 0 { 1 } else { freq as u64 / 20 };
-                loop {
-                    let (_c, v, _p) = lpass_edge(false);
-                    if v & 0x8000_0000 == 0 {
-                        unsafe { ADSP_SLV = v };
+                if ar == 0 {
+                    let wiped = sfr_wipe(freq, 423);
+                    unsafe {
+                        ADSP_Z = wiped.st;
+                        ADSP_ZB = wiped.w[0] & 0xff;
                     }
-                    if v & 1 != 0 && unsafe { ADSP_FT } == 0xffff_ffff {
-                        let ms = if freq == 0 {
-                            0
-                        } else {
-                            (time::cntvct().wrapping_sub(t0) * 1000) / freq as u64
-                        };
-                        unsafe { ADSP_FT = ms as u32 };
+                    let (p0, p1, p2) = pas_go(1, 0x8920_0000, 0x0280_0000);
+                    unsafe {
+                        ADSP_P[0] = p0 as u32;
+                        ADSP_P[1] = p1 as u32;
+                        ADSP_P[2] = p2 as u32;
                     }
-                    // bit0 还在时先别收。内核先处理 fatal，干净的 ONLINE 只有 bit1。
-                    if (adsp_online(v) && v & 1 == 0) || time::cntvct() >= dead {
-                        break;
+                    let txt = hex_text(&mut t, unsafe { RING.seq }, " adsp p0=0x", p0 as u64);
+                    ring_put(&mut ufs, freq, logring::LVL_INFO, txt);
+                    let txt = hex_text(&mut t, unsafe { RING.seq }, " adsp p1=0x", p1 as u64);
+                    ring_put(&mut ufs, freq, logring::LVL_INFO, txt);
+                    let txt = hex_text(&mut t, unsafe { RING.seq }, " adsp p2=0x", p2 as u64);
+                    ring_put(&mut ufs, freq, logring::LVL_INFO, txt);
+                    // subsys_start 等 err-ready，最多 proxy-timeout 10 秒。等到再开 modem。
+                    let t0 = time::cntvct();
+                    let dead = t0 + freq as u64 * 10;
+                    let step = if freq == 0 { 1 } else { freq as u64 / 20 };
+                    loop {
+                        let (_c, v, _p) = lpass_edge(false);
+                        if v & 0x8000_0000 == 0 {
+                            unsafe { ADSP_SLV = v };
+                        }
+                        if v & 1 != 0 && unsafe { ADSP_FT } == 0xffff_ffff {
+                            let ms = if freq == 0 {
+                                0
+                            } else {
+                                (time::cntvct().wrapping_sub(t0) * 1000) / freq as u64
+                            };
+                            unsafe { ADSP_FT = ms as u32 };
+                        }
+                        // bit0 还在时先别收。内核先处理 fatal，干净的 ONLINE 只有 bit1。
+                        if (adsp_online(v) && v & 1 == 0) || time::cntvct() >= dead {
+                            break;
+                        }
+                        let nap = time::cntvct() + step;
+                        while time::cntvct() < nap {
+                            s20_poll(&mut ufs, freq, &mut t);
+                            ctrl_poll(&mut ufs, freq, &mut t, &arb, n_apid);
+                        }
                     }
-                    let nap = time::cntvct() + step;
-                    while time::cntvct() < nap {
-                        s20_poll(&mut ufs, freq, &mut t);
-                        ctrl_poll(&mut ufs, freq, &mut t, &arb, n_apid);
-                    }
-                }
-                let ms = if freq == 0 {
-                    0
-                } else {
-                    (time::cntvct().wrapping_sub(t0) * 1000) / freq as u64
-                };
-                unsafe { ADSP_WT = ms as u32 };
-                unsafe { ADSP_SFR = sfr_load(freq, 423) };
-                let gc = lpass_glink();
-                let txt = hex_text(&mut t, unsafe { RING.seq }, " adsp gl=0x", gc as u64);
-                ring_put(&mut ufs, freq, logring::LVL_INFO, txt);
-                let txt = hex_text(
-                    &mut t,
-                    unsafe { RING.seq },
-                    " adsp rdy=0x",
-                    ((ms & 0xffff_ffff) << 32) | unsafe { ADSP_SLV } as u64,
-                );
-                ring_put(&mut ufs, freq, logring::LVL_INFO, txt);
-                // 库存是 ADSP ONLINE 之后大约 3 秒才 PIL modem。
-                // bit2 到了就撤代理票，这段时间一直喂 USB。
-                // bit0 这时还没来。fastrpc 的 OPEN 从这里开始才允许，并且只在接收 FIFO 空了之后发。
-                unsafe { LG_ARM = 1 };
-                let settle = time::cntvct() + freq as u64 * 3;
-                loop {
-                    let (_c, v, _p) = lpass_edge(false);
-                    if v & 0x8000_0000 == 0 {
-                        unsafe { ADSP_SLV = v };
-                    }
-                    if v & 1 != 0 && unsafe { ADSP_FT } == 0xffff_ffff {
-                        let ms = if freq == 0 {
-                            0
-                        } else {
-                            (time::cntvct().wrapping_sub(t0) * 1000) / freq as u64
-                        };
-                        unsafe { ADSP_FT = ms as u32 };
-                    }
-                    if v & 4 != 0 {
-                        adsp_proxy_unvote(freq);
-                    }
-                    let _ = lpass_glink();
-                    if time::cntvct() >= settle {
-                        break;
-                    }
-                    let nap = time::cntvct() + step;
-                    while time::cntvct() < nap {
-                        s20_poll(&mut ufs, freq, &mut t);
-                        ctrl_poll(&mut ufs, freq, &mut t, &arb, n_apid);
+                    let ms = if freq == 0 {
+                        0
+                    } else {
+                        (time::cntvct().wrapping_sub(t0) * 1000) / freq as u64
+                    };
+                    unsafe { ADSP_WT = ms as u32 };
+                    unsafe { ADSP_SFR = sfr_load(freq, 423) };
+                    let gc = lpass_glink();
+                    let txt = hex_text(&mut t, unsafe { RING.seq }, " adsp gl=0x", gc as u64);
+                    ring_put(&mut ufs, freq, logring::LVL_INFO, txt);
+                    let txt = hex_text(
+                        &mut t,
+                        unsafe { RING.seq },
+                        " adsp rdy=0x",
+                        ((ms & 0xffff_ffff) << 32) | unsafe { ADSP_SLV } as u64,
+                    );
+                    ring_put(&mut ufs, freq, logring::LVL_INFO, txt);
+                    // 库存是 ADSP ONLINE 之后大约 3 秒才 PIL modem。
+                    // bit2 到了就撤代理票，这段时间一直喂 USB。
+                    // bit0 这时还没来。fastrpc 的 OPEN 从这里开始才允许，并且只在接收 FIFO 空了之后发。
+                    unsafe { LG_ARM = 1 };
+                    let settle = time::cntvct() + freq as u64 * 3;
+                    loop {
+                        let (_c, v, _p) = lpass_edge(false);
+                        if v & 0x8000_0000 == 0 {
+                            unsafe { ADSP_SLV = v };
+                        }
+                        if v & 1 != 0 && unsafe { ADSP_FT } == 0xffff_ffff {
+                            let ms = if freq == 0 {
+                                0
+                            } else {
+                                (time::cntvct().wrapping_sub(t0) * 1000) / freq as u64
+                            };
+                            unsafe { ADSP_FT = ms as u32 };
+                        }
+                        if v & 4 != 0 {
+                            adsp_proxy_unvote(freq);
+                        }
+                        let _ = lpass_glink();
+                        if time::cntvct() >= settle {
+                            break;
+                        }
+                        let nap = time::cntvct() + step;
+                        while time::cntvct() < nap {
+                            s20_poll(&mut ufs, freq, &mut t);
+                            ctrl_poll(&mut ufs, freq, &mut t, &arb, n_apid);
+                        }
                     }
                 }
             }
         }
     }
+
 
     // IPA fws：ADSP PAS 三步全 0 之后。先 STE+七票，再 pas_go(0xf)。
     // 禁 ceeb6fd 链首（IPA-before-ADSP）。CDSP 仅在本段 IPA 绿后、modem 前。

@@ -157,6 +157,7 @@ MODE="heartbeat"
 [ "${1:-}" = "--s62" ] && MODE="s62"
 [ "${1:-}" = "--s63" ] && MODE="s63"
 [ "${1:-}" = "--s64" ] && MODE="s64"
+[ "${1:-}" = "--s65" ] && MODE="s65"
 mkdir -p "${OUTDIR}"
 ELF="${OUTDIR}/heartbeat.elf"
 
@@ -1402,6 +1403,18 @@ elif [ "${MODE}" = "s64" ]; then
   ELF="${OUTDIR}/s64.elf"
   cp "${HERE}/target/aarch64-unknown-none-softfloat/release/redfin-bare" "${ELF}"
   BIN="${OUTDIR}/s64.bin"; IMG="${OUTDIR}/boot-s64.img"
+elif [ "${MODE}" = "s65" ]; then
+  # 刀 G65（只起 modem）：收据三十六——Linux 消融实验（abl-run）：去掉 IPA 触发/
+  # pm-service/CDSP/ADSP/整个 WLAN 栈（全去也行）wlan_pd 照起、so 阶梯 7 步照走、
+  # 0x29/0x45 照出；Linux 所需 AP 侧最小集=qrtr-ns+tftp+rmt_storage+pd-mapper，
+  # 正是我们已有的。又：sm af=（ADSP_SFR）证明我方起的 ADSP 自己 sensor_process
+  # 断言崩溃。本刀 MODEM_ONLY=true：不起 ADSP（IPA/CDSP 门随之跳过），其余不动。
+  # 判读：墙(85 包 ~64s)是否移动——rqr>0x55 / pn 越过 kernel/elf_loader /
+  # px 出现 seek=4096 / q 出现 0x45。af= 应为空（ADSP 未起）。
+  (cd "${HERE}" && cargo build --release --target aarch64-unknown-none-softfloat) || { echo "cargo build FAILED (${MODE}) -- 不拷陈旧件" >&2; exit 1; }
+  ELF="${OUTDIR}/s65.elf"
+  cp "${HERE}/target/aarch64-unknown-none-softfloat/release/redfin-bare" "${ELF}"
+  BIN="${OUTDIR}/s65.bin"; IMG="${OUTDIR}/boot-s65.img"
 elif [ "${MODE}" = "s55" ]; then
   # 刀 G55（集发生器+受理环）：三层故障栈第①层（重启环未闭合=阶梯冻结
   # 根因）补齐——真杠杆=SCM PAS（lito.dtsi pil_modem=pil-tz-generic
