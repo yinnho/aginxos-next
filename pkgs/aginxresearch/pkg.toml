@@ -10,6 +10,21 @@
 # status 健康面（深度分布/今日判死/水位）。引擎仓 4bfa776（v0.1.6 继承 priority）。
 # v0.1.5 2026-10-13 扇出子题继承父 priority（禁写死 0 冲淡主线）。
 # v0.1.6 2026-10-13 噪声命中丢弃（扫描页/微软系统帮助/验证标题）。
+# v0.3.1 2026-10-24 断代收账上机：v0.2.0 评价地基（channel 三角色
+# synth/judge/meta×grok/claude/codex、judge≠synth 宪法、verify 引用
+# 回验机械锚、golden 金标题、eval 测量）+ v0.3.0 进化回路（evolve/
+# rollback：五文件可进化面白名单、提案协议、probe 同卷对比、硬门
+# 零回归+软面增益、采纳限速 2/日、经验库正负同册）+ d0725d3 记账
+# 堵漏（缺分按 0 入均值、thin 只进分母、快照先行、回滚沿 parent、
+# fails 排序+6h stale 回收、字节截断、URL 去尾标点）+ 本版收账
+# （media/dir 兑现省 format:html 二跳、--rounds 引擎真实现）。引擎仓
+# a2683e8。
+# v0.3.2 2026-10-24 codex 腿 spawn 自带 HOME=/home（grok 同律）——
+# X2 首装实锤：loop 单元无 HOME 裸 spawn 落 root 家认证死。引擎仓
+# 15ddfcc。
+# v0.3.3 2026-10-24 fresh 实例建表：ensure_schema 进 seed/run——
+# X2 试点首撞 no such table（redfin 库全是 pg2sqlite 迁移货，schema
+# 从没被引擎自建过）。引擎仓 73877e5。
 # 真身=独立仓 ~/Documents/aginxresearch（与 aginxbrowser 同级、独立
 # 开发线），本仓只装配不仿制（aginx-gateway 同模式）。v0.1.1 起
 # [service] 常驻=树内 wrapper（files/libexec/research-loop，轮转四实例
@@ -22,10 +37,10 @@
 # 依赖面（运行时，非 depends）：aginxbrowser :8089（搜索/抓页/下载）
 # + /var/bin/grok（综合腿，socks5h 代理 env 由引擎自带）。
 name = "aginxresearch"
-version = "0.1.6"
-summary = "深度研究引擎：取题→aginxbrowser 取材（含一手源《篇名》→维基文库）→grok 综合（HOME=/home 钉家）→SQLite 条目+新题；附件收割保留；断网阵韧性；队列三闸（水位/谱系深度/零结果死信带金丝雀）；扇出继承 priority；噪声命中过滤；research-loop 常驻轮磨"
+version = "0.3.4"
+summary = "深度研究引擎：取题→aginxbrowser 取材（一手源《篇名》→维基文库；/fetch 同趟 media 线索+/download dir 子目录）→synth 综合→SQLite 条目+新题；附件收割；断网阵韧性；队列三闸；channel 三角色（judge≠synth）；verify 引用回验+golden+eval 评价地基；evolve/rollback 无人进化回路（五文件白名单+机械门槛+经验库）；--rounds 真多轮；research-loop 常驻轮磨"
 group = "agent"
-url = "https://pkgs.aginx.net/aginxresearch/v0.1.6/aginxresearch-v0.1.6-4pc.tar"
+url = "https://pkgs.aginx.net/aginxresearch/v0.3.4/aginxresearch-v0.3.4-4pc.tar"
 
 exec = "bin/aginxresearch"
 

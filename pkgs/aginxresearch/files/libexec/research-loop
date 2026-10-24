@@ -10,8 +10,13 @@ export HOME=/root
 export PATH=/usr/sbin:/usr/bin:/sbin:/bin
 export TZ=CST-8
 mkdir -p /home/research/logs
+# Machines are data (D14): a host without these instance dirs (fresh X2
+# pilot) must idle politely, not error-loop or busy-spin.
 while :; do
+    ran=0
     for name in duanju taishigong qujiu baize; do
+        [ -d /home/research/$name ] || continue
+        ran=1
         log=/home/research/logs/$name.log
         echo "=== $(date '+%F %T') $name (loop) ===" >> "$log"
         /var/bin/aginxresearch run /home/research/$name >> "$log" 2>&1
@@ -23,4 +28,5 @@ while :; do
             sleep 5
         fi
     done
+    [ $ran -eq 0 ] && sleep 300
 done
