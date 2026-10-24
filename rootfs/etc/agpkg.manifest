@@ -108,3 +108,10 @@ sqlite3        https://pkgs.aginx.net/sqlite3/v3.54.0/sqlite3-v3.54.0-4pc.tar 1a
 # SYS/CC；v0.1.2 加深放焊 0 证据门自愈（bms<1 且 VBAT≥4.35V 且 Full/Taper）。
 # 只对有 /dev/qg 的板有用（无 /dev/qg 的服务器板勿 opt-in）。
 aginx-fg       https://pkgs.aginx.net/aginx-fg/v0.1.2/aginx-fg-v0.1.2-4pc.tar 5d69e88f64b41be5b29ac689cfbe2bc6d11ecf832e6c478c636d8ae6a3ee0ac8 opt
+# jq (2026-10-24, dev CLI 补齐四件之二) — Alpine v3.22 aarch64 jq+
+# oniguruma+musl 闭包 3 apk（sha256 钉表在 build-pkg.sh jq) 分支；dl-cdn
+# 当夜不通，源钉 tuna 镜像（apk 文件与 dl-cdn 同源同 sha）。wrapper 面
+# bin/jq 同 git 工艺简化版（loader 自链先到先得）。主用例：JSON 信封
+# 解码（relay 会话 JSONL/ACP 响应、duphub manifest）。PATH 面 CLI
+# （D12 agent-CLI 口味），不注册 aginx 命令面。
+jq             https://pkgs.aginx.net/jq/v1.8.2/jq-v1.8.2-4pc.tar a80611d3f52c8b4b473aa98060fba3bd6367c0cadfcd4b587123077c32ce83dc opt
