@@ -866,7 +866,7 @@ IPCC 补踢刷机后 `gq` 仍 `408.3d0`、`fp=3`、无 `0x45`——门铃假设�
 
 ## 2026-10-18 夜：READ_NOTIF + tx hex（已刷证伪）+ 下一刀跳过 register RX_DONE
 
-刷 `cc7c775`/`boot-s20`：GATE 串号 `13201FDD4001N8`。
+刷 `cc7c775`/`boot-s20`：GATE 串号 `<REDFIN_FASTBOOT_SERIAL@serials.env>`。
 
 `tx` 实读（Asia/Shanghai）：
 - `gq=410.3d0` `rn=1` `gd=1.1` `ix=0` `ru=0`
@@ -981,7 +981,7 @@ TFTP WRQ→ACK0、sm 缓冲 1536。
 对账：`rs=02010001000e0002` = type2 txn1 msgid1 msglen0x0e + TLV2 起 —— 与 libqrtr/
 qmi_rmtfs OPEN 成功应答一致；`caller_id` 仍 1（TLV16 在后 4 字节未进 rs 窗）。
 
-实测（GATE `13201FDD4001N8`，boot-s20）：
+实测（GATE `<REDFIN_FASTBOOT_SERIAL@serials.env>`，boot-s20）：
 - `rh=1.0.101.0.0.0` → **只收到 msgid=1 txn=1 一次**，无 msgid 4/3
 - `rf=1./boot/modem_fs1.1.1.0.0` `es=f.13` `gn=L5:…` `tf=.0.0`
 - `q=42.b401,2b.1202` **无 0x45**；`s→107`；`rk=8` `cf=0`
@@ -1029,7 +1029,7 @@ init 卡在 EFS 未 IOVEC——主链已钉死。
 
 ### 下一棒怎么接
 
-1. 恢复设备 USB（若 tries 耗尽回 b：`fastboot -s 13201FDD4001N8 set_active a` + 重刷
+1. 恢复设备 USB（若 tries 耗尽回 b：`fastboot -s <REDFIN_FASTBOOT_SERIAL@serials.env> set_active a` + 重刷
    `boot-s20.img`），采 `sm`：看 `pm=` / `qp=` / `rf=` / `rh=`。
 2. 若 `pm>0`：按 QMI 0x35（pm-service）补真实应答，再观察是否出现 ALLOC。
 3. 若 `pm=0` 且 `qp` 仍只有 `0x10/OPEN` + `0x12/pddump`：停裸机 RFS 猜谜，
@@ -1044,11 +1044,11 @@ init 卡在 EFS 未 IOVEC——主链已钉死。
 RESP result 成功；SHUTDOWN/RESTART 再发 IND TLV01 status=1（SERVICED）；
 PERIPHERAL_RESTART 只 RESP；未知 msgid 失败 RESP。不 reboot。
 
-GATE：串号 `13201FDD4001N8`，`flash boot_a` + `set_active a` + reboot（01:28:25）。
+GATE：串号 `<REDFIN_FASTBOOT_SERIAL@serials.env>`，`flash boot_a` + `set_active a` + reboot（01:28:25）。
 其后 ≥10 min 无 ping / 无 adb / 无 fastboot（USB 掉线，与上一轮 0x35 探针刷后相同）。
 **sm 未采到**；ALLOC / 0x45 无证据。代码已本地 commit `b28c223`，未推。
 
-恢复：Power 硬复位或等 tries 烧尽回 b；`fastboot -s 13201FDD4001N8 set_active a`
+恢复：Power 硬复位或等 tries 烧尽回 b；`fastboot -s <REDFIN_FASTBOOT_SERIAL@serials.env> set_active a`
 重刷 `.local/device/redfin/boot-out/boot-s20.img` 后再采 `pm=`/`qp=`/`rf=`/`rh=`/`q=`/`s=`。
 
 ### 本轮：0x35 NEW_SERVER 提前 + LOOKUP 应答（Asia/Shanghai 2026-10-19 ~04:10）
@@ -1058,7 +1058,7 @@ GATE：串号 `13201FDD4001N8`，`flash boot_a` + `set_active a` + reboot（01:2
 2. 收到对本机服务的 `NEW_LOOKUP`(10) 立刻回 `NEW_SERVER`（`lk=` 计数）。
 3. 曾试同轮连发 4 条 NEW_SERVER → `rf=0`/`qp=0`（疑似复用同一 GLINK intent）；已改回 **一 tick 一包**。
 
-GATE 刷验（串号 `13201FDD4001N8`，`fb`→flash→set_active a）：
+GATE 刷验（串号 `<REDFIN_FASTBOOT_SERIAL@serials.env>`，`fb`→flash→set_active a）：
 - 关键 sm（连发版，04:11–04:13）：`hh=1` **`lk=0.0.4`**（HOST_ADV=4，0x35 已进公告）
   `pm=0.0.0` **`LOOK_N=0`** `qp=0` `rf=0` `rh=0` `pr=0`
   `q=42.b401,2b.1202` `s=107` `d=150.288.348.348`
@@ -1074,7 +1074,7 @@ GATE 刷验（串号 `13201FDD4001N8`，`fb`→flash→set_active a）：
 
 目标：在一次 **能到 wlan 或至少 modem ONLINE** 的库存启动里，证明有无 QRTR 0x35 / pm-service 流量。
 
-1. `fastboot set_active b` + `reboot`（或 tries 回滚）进 Linux；确认 `androidboot.serialno=13201FDD4001N8`。
+1. `fastboot set_active b` + `reboot`（或 tries 回滚）进 Linux；确认 `androidboot.serialno=<REDFIN_FASTBOOT_SERIAL@serials.env>`。
 2. 开机后立刻（modem 起来前后）：
    - `ps | grep -E 'pm-service|pm-proxy|Peripheral'`
    - 若有 `qrtr-lookup`：`qrtr-lookup` / `qrtr-lookup 0x35`；或读 `/dev/socket` 无则用：
@@ -1110,7 +1110,7 @@ Size 1572864），再 `IOVEC`（msgid=3）。
 **刀**：`RF_SEEN` 改为 `client_port<<16|txn`；seen 时 `RF_DROP|=1`；同轮 RF 处理
 上限 4→8。
 
-**刷验**（GATE `13201FDD4001N8`，boot-s20）：
+**刷验**（GATE `<REDFIN_FASTBOOT_SERIAL@serials.env>`，boot-s20）：
 - `rf=3./boot/modem_fs2.2.6.280000.0` — 多笔应答；`RF_SZ=0x280000`；`as=0` hyp_assign 成功
 - `rh=6.3.…d000104.e000103` — **msgid=4 ALLOC** 与 **msgid=3 IOVEC** 已进 hist
 - 仍 `s=107`、`q=42.b401,2b.1202`（无 0x45）；下一刀另论 wlan_pd / 0x45
@@ -1131,7 +1131,7 @@ IOVEC 回失败 → 旧证 `fs_rmts_pm.c:1038` DOG。RFS 窗口 `0x280000` 本�
 **刀**：`SH_SIZE` → `0x280000`（仍止于 `0x9EC80000` < cdsp_sec`@9f400000`）；
 `ik=`/`RF_IOK`·`RF_IFAIL` 计数。
 
-**刷验**（GATE `13201FDD4001N8`，boot-s20，`set_active a`）：
+**刷验**（GATE `<REDFIN_FASTBOOT_SERIAL@serials.env>`，boot-s20，`set_active a`）：
 - `ik=4.0` — **IOVEC 4 成功 0 失败**
 - `es=f` `gn=L5:modemst1,L5:modemst2,L5:fsc,L5:fsg` — 四槽灌影
 - `rf=…8.280000.0` `rh=8.3.…d000104.e000103`
@@ -1162,7 +1162,7 @@ modem INTENT 未等 RX_DONE。
 **刷验**：刀 1 第二/三刷后设备无 ping/无 adb/无 fb（06:37 起）；人工硬复位回 fb。
 
 **刀 2 上机**（Asia/Shanghai 2026-10-19 ~07:02）：tip `ee60b5a`，GATE
-`13201FDD4001N8`，`flash boot_a` + `set_active a` + `reboot` OK。
+`<REDFIN_FASTBOOT_SERIAL@serials.env>`，`flash boot_a` + `set_active a` + `reboot` OK。
 `boot-s20.img` 98304 B @06:42。
 
 **结果：仍硬挂**。USB/Aginx ECM `en10` 枚举且 active（host MAC
@@ -1181,7 +1181,7 @@ incomplete、ping 全丢、2323 不可达；等到 ~07:08（>5min，远超 90s �
 
 ### 本轮：基线复活刷 `92393f6`（2026-10-19 ~07:14 Asia/Shanghai）
 
-意图刀 2（`ee60b5a` 飞行锁）硬挂后，GATE `13201FDD4001N8` 刷已知好镜像
+意图刀 2（`ee60b5a` 飞行锁）硬挂后，GATE `<REDFIN_FASTBOOT_SERIAL@serials.env>` 刷已知好镜像
 `.local/device/redfin/boot-out/boot-s20-92393f6.img`
 （sha256 `bc14b7705f30f3b01b5542a05a3a0b262c2f48537923ebb0c19a00ef3bcb0a84`，
 `SH_SIZE=0x280000`，无飞行锁）。tip 仍停 `ee60b5a`，**未推、未刷 tip**。
@@ -1222,7 +1222,7 @@ incomplete、ping 全丢、2323 不可达；等到 ~07:08（>5min，远超 90s �
 
 ### 本轮结果：intent 池 RR 亦硬挂（2026-10-19 ~07:23 Asia/Shanghai）
 
-刷 tip `1119de1`（池 RR + cmd5 multi-count）GATE `13201FDD4001N8`：
+刷 tip `1119de1`（池 RR + cmd5 multi-count）GATE `<REDFIN_FASTBOOT_SERIAL@serials.env>`：
 `flash boot_a` + `set_active a` + reboot OK。
 
 **结果：硬挂**（与飞行锁同类）。en10 ECM active、host link-local 在，
@@ -1345,7 +1345,7 @@ sm 新键：`sr=`、`rp=`。成功判据仍：`q=` 含 `45.1`。
 
 ### 本轮：PDR 刀已刷采样（2026-10-19 07:34–07:35 Asia/Shanghai）
 
-进 fb：活体 2323 上发 `fb` / `reboot` → GATE `13201FDD4001N8`。
+进 fb：活体 2323 上发 `fb` / `reboot` → GATE `<REDFIN_FASTBOOT_SERIAL@serials.env>`。
 刷：`9523f1d` `boot-s20.img` → `boot_a` + `set_active a` + `reboot` OK。
 起：ping ~52s，**未挂**。
 
@@ -1363,7 +1363,7 @@ sm×2 同：`ik=4.0 pm=0.0.0 sr=0.ffffffff rp=0.ffffffff`
 tip=`206821a`（允许 QRTR node 0；sm `sp=node.port`）。镜像
 `.local/device/redfin/boot-out/boot-s20.img` 与 tip 对齐（07:38 编）。
 
-Mac 回线后设备在 GATE `13201FDD4001N8` fastboot。两次
+Mac 回线后设备在 GATE `<REDFIN_FASTBOOT_SERIAL@serials.env>` fastboot。两次
 `fastboot flash boot_a`：**无任何输出、>45s 无进展** → 已 kill。
 `getvar product` 同样挂死。判定 **USB/fastboot 通道粘滞**，
 不是镜像问题。未完成 set_active / reboot；**未采样** `sr`/`sp`。
@@ -1412,7 +1412,7 @@ chunk=48）；REGISTER 因带 state TLV 刚好 chunk=56 才过关。
 2. 听 `STATE_UPDATED` IND msgid `0x22` → 更新 state + `SET_ACK` `0x23`
 3. RX 门槛降至 `chunk>=48`；sm `sr=hit.state.res` + `si=ind_n`
 
-**刷验**：2323→fb，GATE `13201FDD4001N8`，`boot-s20.img` OK。
+**刷验**：2323→fb，GATE `<REDFIN_FASTBOOT_SERIAL@serials.env>`，`boot-s20.img` OK。
 未挂。sm×2（~09:24）：
 `ik=4.0 sr=1.7fffffff.0 si=0 sp=0.2 rp=0.ffffffff pm=0.0.0`
 `q=42.b401,2b.1202,...` — **无 `45`**。
@@ -1444,7 +1444,7 @@ chunk=48）；REGISTER 因带 state TLV 刚好 chunk=56 才过关。
 
 未推。待 GATE 刷验。
 
-**刷验（365d1f4，GATE `13201FDD4001N8`，Asia/Shanghai ~09:33）**：`flash boot_a` +
+**刷验（365d1f4，GATE `<REDFIN_FASTBOOT_SERIAL@serials.env>`，Asia/Shanghai ~09:33）**：`flash boot_a` +
 `set_active a` + reboot OK。en10 ECM UP（host `02:00:00:00:00:01`），但对
 `169.254.1.1` **ARP incomplete** ≥3 min，无 ping / 无 2323。**无 sm。硬挂**
 （与 TX-intent / 过早 PDR 同类：链路在、IP 不应答）。
@@ -1485,7 +1485,7 @@ chunk=48）；REGISTER 因带 state TLV 刚好 chunk=56 才过关。
 4. 探针候选：`image/modem_pr/so/549_38_0.mbn`、根上 `modem_pr/so/…`、带 `.1.32`
 5. **仍不 DATA 真喂**；不放宽 `glink_tx_payload`（文件 ≫ 256/512）
 
-**刷验**（GATE `13201FDD4001N8`，2323→fb）：未挂。
+**刷验**（GATE `<REDFIN_FASTBOOT_SERIAL@serials.env>`，2323→fb）：未挂。
 `tz=1.eb43c.1a67` → 命中，**实长 0xEB43C = 963132 B（~941 KiB）**，
 簇 `0x1A67`。本 boot 早期 `ik=0` / `q=` 空、`s=107`（sensor EF 旧症），
 无 `45.`——与「几何已证」正交。下一刀：按现有 glink 帽做分块 RRQ
@@ -1510,7 +1510,7 @@ README 样例）。经典 TFTP 512 块 → payload 516 > 256 帽，且短块=EOF
 4. sm：`tz=st.sz.cl` 保留探针；新增 `tb=st.blk.acks`
 5. **不**改 `glink_tx_payload` 上限
 
-**刷验**（GATE `13201FDD4001N8`，2323→fb，`boot-s20.img`/`25df6d3`，
+**刷验**（GATE `<REDFIN_FASTBOOT_SERIAL@serials.env>`，2323→fb，`boot-s20.img`/`25df6d3`，
 Asia/Shanghai ~10:00）：flash+set_active a+reboot OK。en10 ECM UP
 （host 得新 link-local），但对 `169.254.1.1` **ARP incomplete** ≥90s，
 无 ping / 无 2323。**硬挂**（与 `365d1f4` 抬帽真喂同形：链路在、IP 不应答）。
@@ -1823,7 +1823,7 @@ tip 上 OACK（`8a761ad`）TFTP 已回退，main 与 f73c9bb TFTP 一致后再�
 
 ### 刷验（2026-10-19 ~10:50 Asia/Shanghai）— 软成功，无 0x45
 
-`c38a6cd` / `boot-s20.img`（98304 B）经 2323→fb GATE `13201FDD4001N8`
+`c38a6cd` / `boot-s20.img`（98304 B）经 2323→fb GATE `<REDFIN_FASTBOOT_SERIAL@serials.env>`
 `flash boot_a` + `set_active a` + reboot。ping ~32s；2323 OK。
 
 | 字段 | 值 |
@@ -1901,7 +1901,7 @@ flash-safe 仍 **`c38a6cd`**（⊇ `f73c9bb`）；复活 `boot-s20-f73c9bb.img` 
 未切槽、未刷、无 timeline。收据目录
 `.local/device/redfin/slot-b-timeline-20261019-105839/ABORT.txt`。
 
-**下一步**：人工硬复位进 fb（GATE `13201FDD4001N8`）后重跑；restore 镜像
+**下一步**：人工硬复位进 fb（GATE `<REDFIN_FASTBOOT_SERIAL@serials.env>`）后重跑；restore 镜像
 已在 `.local/device/redfin/boot-out/boot-s20-c38a6cd.img`。
 
 未推。
@@ -1981,7 +1981,7 @@ PIL 顺序（内核秒）：
 
 ### 本轮：IPA-before-ADSP PAS 硬挂（`ceeb6fd`，2026-10-19 ~11:24 Asia/Shanghai）
 
-**基线 restore**：`c38a6cd` 刷验 OK（GATE `13201FDD4001N8`，~11:21 flash →
+**基线 restore**：`c38a6cd` 刷验 OK（GATE `<REDFIN_FASTBOOT_SERIAL@serials.env>`，~11:21 flash →
 ping ~11:23）。`sm`：`ik=4.0` `sr=1.7fffffff.0` `sp=0.2` `me=1.2.0`
 `pn=kernel/elf_loader.1.30` `tf=.../549_38_0.mbn` `tz=1.eb43c.1a67`
 `q=42.b401,2b.1202,...`（**无 `0x45`**）。
