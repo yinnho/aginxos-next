@@ -7274,3 +7274,35 @@ modem 正常启动；qrtr-lookup 终态+dmesg-raw+ps）。
   lseek/上游调用者阻塞（不可观测）、RF 初始化链（0x29 缺）、IPA uC/GSI 半栈
   （CMPLT 0x35 不来）。
 - 现场终态：设备挂死待手动强关；槽 a=s64。
+
+## 收据三十五：Linux 实机 TFTP 阶梯到手——「Linux 不靠 TFTP」是错的
+
+采集：`adb` 进槽 b（Linux L0）后 `/proc/<pid>/io` + `/tmp/*.log`（厂商守护进程自己
+写日志）。数据：`.local/device/redfin/linux-qrtr-cap/KEEP-daemon-logs/`
+（tftp_server.log 44KB / rmt_storage / cnss-daemon / pd-mapper 等）。内核无
+DEBUG_FS/KPROBES（IPC 日志环与 kprobe 均不可用），tracefs 需手挂但无 qrtr 事件。
+
+- **推翻旧判**：TIMELINE「dmesg 零 tftp⇒Linux 不靠 TFTP 起 wlan_pd」错——
+  tftp_server `rchar=5,923,097`(646 次读)，日志逐条记了每个 RRQ。Linux 的 modem
+  **完整读了 so 文件**，随后读 `wlanmdsp.mbn`(3,811,096B)。
+- **Linux 对 so/549_38_0.mbn 的完整阶梯**（OACK 选项按到达序）：
+  ① tsize 查询→OACK tsize=963644，客户端随后发 ERROR9「End of Transfer」收口；
+  ② seek=0 rsize=52（1 块）；③ seek=52 rsize=160（1 块）；
+  ④ **seek=4096 rsize=8192（2 块，8192B）**=哈希段；
+  ⑤ seek=0 rsize=4096；⑥ seek=12288 rsize=71507(0x11753)；
+  ⑦ seek=86016 rsize=877628(0xd643c)。——与收据二十七的装载器译码一致
+  （④=p_memsz 读）。全部毫秒内连发。**我们停在③之后，④从未出现。**
+- **文件内容无差**：设备 Linux 服务的 549_38_0.mbn md5=293765b3…，与我们
+  `.local/device/redfin/modem/so/549_38_0.mbn` 完全一致；TFTP 层 OACK 选项、块
+  数（③=1 块 160B）与 Linux 同形。⇒ 差别在 modem 内部（③→④之间：phdr 扫描、
+  `mmap(8192)` QDI、`lseek`），不在我们送的数据。
+- **wlanmdsp 真实搜索序**（Linux 日志）：①`readonly/vendor/firmware/wlanmdsp.otaupdate`
+  (ENOENT)；②`readonly/vendor/firmware_mnt/image/wlanmdsp.mbn`(ENOENT)；
+  ③`readonly/vendor/firmware/wlanmdsp.mbn`(命中 3811096B，tsize 查询+整读)。
+  （收据二十四曾记 /readonly/firmware/image/wlanmdsp.mbn 为第一级——与 Linux 实录
+  不符；我们按名尾 `wlanmdsp.mbn` 匹配，路径无关，暂无害。）
+- 其余：`readwrite/modem_efs`→ENOENT、`ota_firewall/ruleset`→ENOENT（均 ERROR 1）；
+  `server_check.txt` WRQ 仅 OACK 后无后续（与我们同）；modem 在 wlan_pd 起来后读
+  mcfg.tmp/mbn_hw.dig/mbn_sw.dig。
+- 小偏差（非卡点）：OACK `seek=0` 我们不回显，上游 tqftpserv `seek>=0` 回显。
+- 现场：手机在 Linux(槽 b)；需手动硬复位进 fastboot 后 `set_active a`。
