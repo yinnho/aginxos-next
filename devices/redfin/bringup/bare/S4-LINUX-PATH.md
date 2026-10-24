@@ -7180,3 +7180,23 @@ modem 等待的服务；查 d80a885c 所在镜像是否可取。
   PAS 停机后读=全零（清零）。**AP 侧无法直接观测 modem 内部状态**。
   进度环 (7,0xb) 假说因此仍是未证推断（mmap 失败只是静态分析的嫌疑点）。
 - 现场终态：手机在跑 s63，modem 已被 ms 停机；做完收据未重启。
+
+## 收据三十一（案头）：调用链上溯——c05f0f98 是 ELF 装载库 open 回调（AAnchor17）
+
+- 调用链：`FUN_c05f0f98`（读头/头表/哈希段）← `c07fe460`（strip "./" shim）
+  ← `c078ea60`（open 回调本体）← 两路：`c0797610`（fopen 风格：mode 位→open
+  flags）与 `c075fd68`。
+- `c075fd68` = **装载库初始化**（配置结构 0x84B 写入全局 `DAT_ccf9337c`）：
+  注册回调表 open=c078ea60 / read=c05f1500 / seek=c078ea68 / mmap=c07d7a90 /
+  munmap=c07d7b8c / c07d7bd0…，另带三组可选函数指针（**verify / uimg /
+  streaming hash**，报错串「If one verify fn ptr specified, all must be」等）。
+  ⇒ 读头→头表→哈希段=**签名镜像的元数据读取，读完哈希段才送验证函数**；
+  mmap(c07d7a90) 在这里是装载库给元数据缓冲的分配回调（QDI 调用
+  FUN_c01f5fc8，句柄无效时报「Invalid QDI handle %d, method %d」）。
+- 现有证据仍只到：头表 160B 已服务，其后无任何入站。stall 点=头表读完到
+  哈希段读之间（lseek 外部函数 / mmap QDI 分配 / 或装载器被其上游调用者
+  阻塞）。三者静态无法再分；AP 侧不能读 modem 内存（收据二十九/三十）。
+- 方向裁决（用户选 2：逆向 modem 在等什么）：此处逆向的边际收益已低——
+  装载库回调表确认，但「谁在什么时机调 dlopen、失败后为何不重试」需要
+  整条 PD 派生链。候选：①取 Linux 参考流量对照 85 包之后 Linux 多收发
+  什么（证据最近）；②继续逆向 dlopen 上游（PD 派生器）。
