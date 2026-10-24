@@ -155,6 +155,7 @@ MODE="heartbeat"
 [ "${1:-}" = "--s60" ] && MODE="s60"
 [ "${1:-}" = "--s61" ] && MODE="s61"
 [ "${1:-}" = "--s62" ] && MODE="s62"
+[ "${1:-}" = "--s63" ] && MODE="s63"
 mkdir -p "${OUTDIR}"
 ELF="${OUTDIR}/heartbeat.elf"
 
@@ -1374,6 +1375,20 @@ elif [ "${MODE}" = "s62" ]; then
   ELF="${OUTDIR}/s62.elf"
   cp "${HERE}/target/aarch64-unknown-none-softfloat/release/redfin-bare" "${ELF}"
   BIN="${OUTDIR}/s62.bin"; IMG="${OUTDIR}/boot-s62.img"
+elif [ "${MODE}" = "s63" ]; then
+  # 刀 G63（只读窥 modem 内存）：收据二十八——s61 复跑证实 so 链路停在
+  # 「头表读完之后、哈希段读之前」，两次开机入站环均 85 包后永静默。装载器
+  # 该段只剩 mmap(NULL,p_memsz=8192,RW,私有匿名)（FUN_c07d7a90，失败
+  # errno=0xb→装载器错 0xb 不再发读）。进度环 DAT_caca0cf0（100 对字节，
+  # 下标 DAT_caca0db8）PA=0x96ca0cf0/0x96ca0db8（modem.full.elf seg24：
+  # va c8b00000→pa 94b00000）。本刀加控制台 mq <addr-hex> <n-hex> 只读窥
+  # [0x8c000000,0x9d800000) 内最多 96B；服务面=s62 原样。风险：XPU 若锁
+  # AP 读 → 保护违例复位（可 fastboot 恢复）。判读：尾对 (7,0xb)=mmap 失败
+  # 实锤；全零≠没写（modem L2 回写未必落 DDR）。
+  (cd "${HERE}" && cargo build --release --target aarch64-unknown-none-softfloat) || { echo "cargo build FAILED (${MODE}) -- 不拷陈旧件" >&2; exit 1; }
+  ELF="${OUTDIR}/s63.elf"
+  cp "${HERE}/target/aarch64-unknown-none-softfloat/release/redfin-bare" "${ELF}"
+  BIN="${OUTDIR}/s63.bin"; IMG="${OUTDIR}/boot-s63.img"
 elif [ "${MODE}" = "s55" ]; then
   # 刀 G55（集发生器+受理环）：三层故障栈第①层（重启环未闭合=阶梯冻结
   # 根因）补齐——真杠杆=SCM PAS（lito.dtsi pil_modem=pil-tz-generic

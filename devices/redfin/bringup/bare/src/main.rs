@@ -8055,6 +8055,13 @@ static mut TF_PEND_AT: u64 = 0;
 // 臂求值时解析结果落此，体 32 消费。
 static mut MX_F: u64 = 0;
 static mut MX_A: u64 = 0;
+/// s63：mq <addr-hex> <n-hex>——只读窥 modem 区内存（装载器进度环
+/// DAT_caca0cf0 的 PA=0x96ca0cf0，下标 0x96ca0db8）。地址限定在
+/// [0x8c000000, 0x9d800000)，最多 96 字节，读前 civac 同步（modem
+/// 侧 L2 回写不保证，全零≠没写过）。
+static mut MQ_A: u64 = 0;
+static mut MQ_N: u64 = 0;
+static mut MQ_HAVE: u32 = 0;
 static mut MX_HAVE: u32 = 0;
 /// s55：SCM PAS 三连发结果账（mp/ms/mr 命令写）：cmd.a0.a1——
 /// AUTH_AND_RESET 命中即集发生器补齐（新集全链=0x25 吞点下轮可测）。
@@ -14764,6 +14771,20 @@ fn ctrl_service(
                             }
                         } {
                             32
+                        } else if {
+                            match ctrl_line_hex2(b"mq") {
+                                Some((a, n)) => {
+                                    unsafe {
+                                        MQ_A = a;
+                                        MQ_N = n;
+                                        MQ_HAVE = 1;
+                                    }
+                                    true
+                                }
+                                None => false,
+                            }
+                        } {
+                            34
                         } else if ctrl_line_num(b"lg").is_some() {
                             22
                         } else if ctrl_line_num(b"lm").is_some() {
@@ -17158,6 +17179,26 @@ fn ctrl_service(
                                 push_str(reply, &mut rn, " a1=");
                                 push_hex(reply, &mut rn, a1);
                                 push_str(reply, &mut rn, "\n");
+                            }
+                            34 => {
+                                // s63：mq——只读窥 modem 区内存（见 MQ_A 注释）。
+                                let (qa, qn) = unsafe { (MQ_A, MQ_N.min(96)) };
+                                if qa < 0x8c00_0000 || qa + qn > 0x9d80_0000 || qn == 0 {
+                                    push_str(reply, &mut rn, "mq range 8c000000..9d800000 n<=60\n");
+                                } else {
+                                    dcache_civac(qa & !63, (qn + 127) & !63);
+                                    push_str(reply, &mut rn, "mq ");
+                                    push_hex(reply, &mut rn, qa);
+                                    push_str(reply, &mut rn, " ");
+                                    let mut i = 0u64;
+                                    while i < qn {
+                                        let b = rd8(qa + i);
+                                        push_hex(reply, &mut rn, (b >> 4) as u64);
+                                        push_hex(reply, &mut rn, (b & 0xF) as u64);
+                                        i += 1;
+                                    }
+                                    push_str(reply, &mut rn, "\n");
+                                }
                             }
                             32 => {
                                 // s56b：参数已在分派臂捕获（行缓冲此时已
