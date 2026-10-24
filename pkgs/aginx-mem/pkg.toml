@@ -5,11 +5,16 @@
 # v0.2.0（2026-10-10，日循环线上机）：+day/digest 两子命令 + 本 wrapper
 # + [cron] 23:47 腿——系统每晚自己整理当天（材料化→codex 分析→落账
 # knowledge/，缺口喂次日晨报）。设计=docs/日循环.md；day 材料绝不出设备。
+# v0.2.1（2026-10-24，裁决采集上线）：lifecycle 契约 KnowledgeCandidate
+# +kind/knowledge|ruling/+trigger——用户对系统行为的纠偏一律
+# kind:"ruling" 落 type: ruling 件（场景+钦定双段，confidence=DECIDED），
+# 日循环 Leg B prompt 同步教契约；digest 汇总/晨报自查段计裁决数；
+# 新面 `k rulings` 枚举裁决账（将来进化回路回放考卷的出口）。
 name = "aginx-mem"
-version = "0.2.0"
-summary = "记忆面工具：kv/tree/knowledge/flows + 日循环腿（day/digest 材料化落账，23:47 自整理）"
+version = "0.2.1"
+summary = "记忆面工具：kv/tree/knowledge/flows + 日循环腿（day/digest 材料化落账，23:47 自整理）+ 裁决采集（ruling 一等件+考卷面）"
 group = "mem"
-url = "https://pkgs.aginx.net/aginx-mem/v0.2.0/aginx-mem-v0.2.0-4pc.tar"
+url = "https://pkgs.aginx.net/aginx-mem/v0.2.1/aginx-mem-v0.2.1-4pc.tar"
 
 exec = "bin/aginx-mem"
 

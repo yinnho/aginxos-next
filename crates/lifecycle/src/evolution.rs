@@ -55,15 +55,29 @@ const TRIVIAL_INPUTS: &[&str] = &[
 pub struct KnowledgeCandidate {
     /// Short title (used as filename, English or pinyin preferred).
     pub title: String,
-    /// Full knowledge content.
+    /// Full knowledge content. For kind="ruling" this is the decreed
+    /// behavior (钦定行为) — the trigger lives in `trigger`.
     pub content: String,
     /// Scope: "shared" (any user benefits) or "private" (user-specific).
     #[serde(default = "default_scope")]
     pub scope: String,
+    /// Entry kind: "knowledge" (default — 事实/配方/踩坑/偏好) or
+    /// "ruling" — 用户对系统行为的纠偏/钦定。裁决是将来进化回路的
+    /// 回放考卷（场景+钦定行为缺一不可），与普通知识分层入册。
+    #[serde(default = "default_kind")]
+    pub kind: String,
+    /// What triggered the ruling (旧行为/请求场景)。Only meaningful for
+    /// kind="ruling"; plain knowledge entries leave it out.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub trigger: Option<String>,
 }
 
 fn default_scope() -> String {
     "shared".to_string()
+}
+
+fn default_kind() -> String {
+    "knowledge".to_string()
 }
 
 /// Result of analyzing a conversation turn.
@@ -106,7 +120,7 @@ pub fn build_analysis_prompt() -> String {
 {
   "has_new_knowledge": true/false,
   "knowledge": [
-    {"title": "简短标题（英文或拼音，用作文件名）", "content": "知识内容（保留原文关键信息）", "scope": "shared或private"}
+    {"title": "简短标题（英文或拼音，用作文件名）", "content": "知识内容（保留原文关键信息）", "scope": "shared或private", "kind": "knowledge或ruling", "trigger": "仅ruling条目：触发场景"}
   ],
   "gaps": ["发现的知识缺口（分身应该知道但不知道的东西）"]
 }
@@ -119,6 +133,12 @@ pub fn build_analysis_prompt() -> String {
 5. 知识内容要完整准确，保留关键细节
 6. 如果没有新知识，返回 {"has_new_knowledge": false, "knowledge": [], "gaps": []}
 7. 只返回 JSON，不要其他文字
+
+kind 判断规则：
+- knowledge（缺省）：客观知识——事实、配方、踩坑、技术规范
+- ruling：用户对系统行为的纠偏/钦定（「不对，应该这样」「以后都…」）——
+  必带 trigger（什么行为/请求触发了这次裁决）+ content=钦定的正确做法；
+  场景与钦定缺一不可，将来要当回放考卷
 
 scope 判断规则：
 - shared：通用知识，任何用户都受益（技术规范、行业知识、工具用法、业务规则）
@@ -313,11 +333,29 @@ fn write_knowledge(workspace: &Path, candidate: &KnowledgeCandidate) -> Result<P
 
         updated
     } else {
-        // New file — create with compiled truth + initial timeline entry
+        // New file — create with compiled truth + initial timeline entry.
+        // ruling 一等件：场景+钦定双段入正文（回放考卷的题面+答案），
+        // confidence=DECIDED（用户裁的，非推断）。
+        let (fm_type, confidence, body) = if candidate.kind == "ruling" {
+            let trigger = candidate
+                .trigger
+                .as_deref()
+                .filter(|t| !t.trim().is_empty())
+                .unwrap_or("（未记录触发场景）");
+            (
+                "ruling",
+                "DECIDED",
+                format!("**场景**：{trigger}\n\n**裁决**：{}", candidate.content),
+            )
+        } else {
+            ("knowledge", "INFERRED", candidate.content.clone())
+        };
         let content = format!(
-            "---\nname: {}\nsource: evolution\ntype: knowledge\nconfidence: INFERRED\n---\n\n{}\n\n---\n\n- {}: created from conversation\n",
+            "---\nname: {}\nsource: evolution\ntype: {}\nconfidence: {}\n---\n\n{}\n\n---\n\n- {}: created from conversation\n",
             candidate.title,
-            candidate.content,
+            fm_type,
+            confidence,
+            body,
             date
         );
 
@@ -679,6 +717,45 @@ mod tests {
     }
 
     #[test]
+    fn test_parse_ruling_roundtrip_and_legacy_default() {
+        // 裁决条目：kind/trigger 全载；老形状（无 kind）缺省回落 knowledge。
+        let json = r#"{"has_new_knowledge": true, "knowledge": [
+            {"title": "reply-in-chinese", "content": "回复一律中文，技术名词照留英文", "scope": "private", "kind": "ruling", "trigger": "连续英文回复后用户要求说中文"},
+            {"title": "refund-policy", "content": "7天内可退款"}]}"#;
+        let result = parse_analysis_response(json).unwrap();
+        assert_eq!(result.knowledge.len(), 2);
+        let ruling = &result.knowledge[0];
+        assert_eq!(ruling.kind, "ruling");
+        assert_eq!(ruling.trigger.as_deref(), Some("连续英文回复后用户要求说中文"));
+        let legacy = &result.knowledge[1];
+        assert_eq!(legacy.kind, "knowledge");
+        assert!(legacy.trigger.is_none());
+        // 序列化往返：缺省字段不外溢、裁决字段不丢。
+        let back = serde_json::to_string(&result.knowledge).unwrap();
+        assert!(back.contains(r#""kind":"ruling""#));
+        assert!(!back.contains(r#""trigger":null"#));
+    }
+
+    #[test]
+    fn test_write_knowledge_ruling_shape() {
+        let t = TempDir::new().unwrap();
+        let ws = t.path();
+        let candidate = KnowledgeCandidate {
+            title: "reply-in-chinese".to_string(),
+            content: "回复一律中文，技术名词照留英文".to_string(),
+            scope: "shared".into(),
+            kind: "ruling".into(),
+            trigger: Some("连续英文回复后用户要求说中文".into()),
+        };
+        let path = write_knowledge(ws, &candidate).unwrap();
+        let text = std::fs::read_to_string(&path).unwrap();
+        assert!(text.contains("type: ruling"));
+        assert!(text.contains("confidence: DECIDED"));
+        assert!(text.contains("**场景**：连续英文回复后用户要求说中文"));
+        assert!(text.contains("**裁决**：回复一律中文"));
+    }
+
+    #[test]
     fn test_should_skip_trivial_input() {
         assert!(should_skip("谢谢", "这是一段足够长的回复内容，超过一百个字符以确保不会因为长度被跳过。这是一段足够长的回复内容。"));
     }
@@ -740,6 +817,8 @@ mod tests {
                 title: "refund-policy".to_string(),
                 content: "7天内可退款".to_string(),
                 scope: "shared".to_string(),
+                kind: "knowledge".to_string(),
+                trigger: None,
             }],
             gaps: vec!["退货流程".to_string()],
             trivial: false,
@@ -780,6 +859,8 @@ mod tests {
             title: "test-knowledge".to_string(),
             content: "original".to_string(),
             scope: "shared".to_string(),
+            kind: "knowledge".to_string(),
+            trigger: None,
         };
 
         // First write — creates file
@@ -792,6 +873,8 @@ mod tests {
                 title: "test-knowledge".to_string(),
                 content: "updated info".to_string(),
                 scope: "shared".to_string(),
+                kind: "knowledge".to_string(),
+                trigger: None,
             }],
             gaps: vec![],
             trivial: false,

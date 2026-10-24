@@ -287,6 +287,9 @@ async fn build_prompt(materials: &Value, day: &str) -> String {
 流程要求：
 1. 主料=codex 会话（当天全部对话回合）；晨报/研究/频道账是辅证
 2. 对照已知索引只提取新增：业务事实、裁决、配方、踩坑、偏好都算知识
+2b. 用户对系统行为的纠偏/钦定一律 kind:"ruling" 且必带 trigger（触发
+    场景）+content=钦定做法——裁决是进化回路的回放考卷，场景+钦定
+    缺一不可；同一裁决已入册的只算重复不入列
 3. gaps=系统应该知道但材料显露它不知道的缺口
 4. 只返回 JSON，不要其他文字"#,
         carrier_lifecycle::evolution::build_analysis_prompt()
@@ -342,6 +345,15 @@ pub async fn apply_and_summarize(workspace: &Path, out: &Path, raw: &str) -> Res
     } else {
         carrier_lifecycle::evolution::apply_evolution(&workspace, &analysis, None, None, None)
     };
+    // 裁决计账（回放考卷的积累面）：落盘件 frontmatter 数 type: ruling。
+    let rulings_saved = saved
+        .iter()
+        .filter(|p| {
+            fs::read_to_string(p)
+                .map(|t| t.lines().take(6).any(|l| l.trim_start() == "type: ruling"))
+                .unwrap_or(false)
+        })
+        .count();
 
     let lint = crate::knowledge::knowledge_lint(Some(&workspace))
         .await
@@ -359,7 +371,11 @@ pub async fn apply_and_summarize(workspace: &Path, out: &Path, raw: &str) -> Res
     if degraded {
         body.push_str(&format!("- 原因：codex 输出不是合法分析 JSON（{reason}）；本日知识未落账\n"));
     }
-    body.push_str(&format!("- 新学 {} 条\n", saved.len()));
+    body.push_str(&format!(
+        "- 新学 {} 条（其中裁决 {} 条）\n",
+        saved.len(),
+        rulings_saved
+    ));
     for p in &saved {
         body.push_str(&format!("  - {}\n", p.file_name().map(|f| f.to_string_lossy()).unwrap_or_default()));
     }
@@ -379,6 +395,7 @@ pub async fn apply_and_summarize(workspace: &Path, out: &Path, raw: &str) -> Res
         "ok": !degraded,
         "status": status,
         "saved": saved.iter().map(|p| p.to_string_lossy()).collect::<Vec<_>>(),
+        "rulings": rulings_saved,
         "gaps": analysis.gaps,
         "lint_errors": lint_errors,
         "out": out.to_string_lossy(),
@@ -463,23 +480,35 @@ mod tests {
             futures_block_on(apply_and_summarize(ws, out, raw)).unwrap()
         };
 
-        // ① 正常落账：一条知识 + 一个缺口。
+        // ① 正常落账：一条知识 + 一条裁决 + 一个缺口。
         let (ws, out) = mk("ok");
         let (rc, summary) = run(
             &ws,
             &out,
-            r#"{"has_new_knowledge":true,"knowledge":[{"title":"wifi-psk-law","content":"PSK 走 AGINX_WIFI_PSK env，不进 conf。","scope":"shared"}],"gaps":["短剧分账规则还没有条目"]}"#,
+            r#"{"has_new_knowledge":true,"knowledge":[{"title":"wifi-psk-law","content":"PSK 走 AGINX_WIFI_PSK env，不进 conf。","scope":"shared"},{"title":"reply-in-chinese","content":"回复一律中文，技术名词照留英文","scope":"shared","kind":"ruling","trigger":"连续英文回复后用户要求说中文"}],"gaps":["短剧分账规则还没有条目"]}"#,
         );
         assert_eq!(rc, 0);
         assert_eq!(summary["status"], "ok");
+        assert_eq!(summary["rulings"], 1);
         let kf = ws.join("knowledge/wifi-psk-law.md");
         let ktext = fs::read_to_string(&kf).unwrap();
         assert!(ktext.starts_with("---\nname: wifi-psk-law"));
         assert!(ktext.contains("AGINX_WIFI_PSK"));
+        // 裁决件：type/场景/裁决三特征 + 考卷面可见。
+        let rf = ws.join("knowledge/reply-in-chinese.md");
+        let rtext = fs::read_to_string(&rf).unwrap();
+        assert!(rtext.contains("type: ruling"));
+        assert!(rtext.contains("**场景**：连续英文回复后用户要求说中文"));
+        assert!(rtext.contains("**裁决**：回复一律中文"));
+        let rulings = futures_block_on(crate::knowledge::knowledge_rulings(Some(&ws)))
+            .unwrap();
+        assert!(rulings.contains("reply-in-chinese"));
+        assert!(rulings.contains("说中文"));
         let mem = fs::read_to_string(ws.join("MEMORY.md")).unwrap();
         assert!(mem.contains("wifi-psk-law.md"));
         let dr = fs::read_to_string(&out).unwrap();
         assert!(dr.contains("状态：ok"));
+        assert!(dr.contains("裁决 1 条"));
         assert!(dr.contains("短剧分账规则还没有条目"));
         // 版本留痕：JSONL 有当天行（timestamp 是 UTC rfc3339，日期断言用 UTC）。
         let vjson = fs::read_to_string(ws.join("history/versions.jsonl")).unwrap();

@@ -59,6 +59,7 @@ pub const TOOL_NAMES: &[&str] = &[
     "kv_delete",
     "memory_tree",
     "knowledge_list",
+    "knowledge_rulings",
     "knowledge_read",
     "knowledge_add",
     "knowledge_update",
@@ -222,6 +223,7 @@ pub async fn execute_tool(
         // knowledge/flows 面：纯 workspace 文件树操作（不吃库），
         // tokio::fs 与上游 runtime 同款执行形状。
         "knowledge_list" => Some(knowledge::knowledge_list(ws.as_deref()).await),
+        "knowledge_rulings" => Some(knowledge::knowledge_rulings(ws.as_deref()).await),
         "knowledge_read" => Some(knowledge::knowledge_read(input, ws.as_deref()).await),
         "knowledge_add" => Some(knowledge::knowledge_add(input, ws.as_deref()).await),
         "knowledge_update" => Some(knowledge::knowledge_update(input, ws.as_deref()).await),
@@ -341,10 +343,11 @@ mod tests {
     fn tool_names_are_the_contract() {
         // runtime 桥按这个名字表对齐 definitions；改名 = 破金样本。
         // apply_patch / session_summarize 刻意缺席：留守 runtime。
-        assert_eq!(TOOL_NAMES.len(), 19);
+        assert_eq!(TOOL_NAMES.len(), 20);
         assert!(TOOL_NAMES.contains(&"kv_get"));
         assert!(TOOL_NAMES.contains(&"memory_tree"));
         assert!(TOOL_NAMES.contains(&"knowledge_list"));
+        assert!(TOOL_NAMES.contains(&"knowledge_rulings"));
         assert!(TOOL_NAMES.contains(&"flow_load"));
         assert!(!TOOL_NAMES.contains(&"apply_patch"));
         assert!(!TOOL_NAMES.contains(&"session_summarize"));

@@ -1,6 +1,11 @@
 # aginx-mem
 
-记忆面工具 CLI（D13 改姓自 `agmem`，2026-09-26）。双消费面：
+记忆面工具 CLI（D13 改姓自 `agmem`，2026-09-26）。v0.2.1 起裁决采集一等：
+日循环把用户对系统行为的纠偏按 kind:"ruling" 落 `knowledge/`
+（type: ruling 件=场景+钦定双段）；`aginx-mem k rulings --workspace /home`
+枚举裁决账——将来人格进化回路（DESIGN.md §二）的回放考卷面。
+
+双消费面：
 
 - **母体桥**：runtime 的 agmem_bridge spawn `aginx-mem tool <name>`，
   stdin 喂入参 JSON（含 `_ctx` 的 agent/owner/user 三元组），stdout 收

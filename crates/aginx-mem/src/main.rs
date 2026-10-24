@@ -171,6 +171,8 @@ enum Command {
 enum KCmd {
     /// 列出知识文件（带 frontmatter 标题）
     Ls,
+    /// 列裁决账（type: ruling 的知识件——场景+钦定，进化回路考卷面）
+    Rulings,
     /// 读一个知识文件（未知文件名时列出可用清单）
     Read {
         /// 文件名（支持模糊匹配：精确 → 前缀 → 子串）
@@ -446,6 +448,7 @@ fn args_to_input(cmd: &Command) -> anyhow::Result<(&'static str, serde_json::Map
         }
         Command::K { action } => match action {
             KCmd::Ls => Ok(("knowledge_list", m)),
+            KCmd::Rulings => Ok(("knowledge_rulings", m)),
             KCmd::Read { filename } => {
                 m.insert("filename".into(), json!(filename));
                 Ok(("knowledge_read", m))

@@ -20,6 +20,68 @@ use std::path::{Path, PathBuf};
 // Knowledge list / read
 // ---------------------------------------------------------------------------
 
+/// 裁决账（金题面）：列 knowledge/ 里 frontmatter type: ruling 的条目，
+/// 场景+钦定一并出——将来进化回路回放考卷的枚举口。
+pub async fn knowledge_rulings(workspace_root: Option<&Path>) -> CarrierResult<String> {
+    let root = workspace_root.ok_or(CarrierError::Internal(
+        "knowledge_rulings requires a workspace root".to_string(),
+    ))?;
+    let knowledge_dir = root.join("knowledge");
+
+    if !knowledge_dir.exists() {
+        return Ok("No rulings yet (knowledge/ does not exist).".to_string());
+    }
+
+    let mut entries = tokio::fs::read_dir(&knowledge_dir)
+        .await
+        .map_err(|e| CarrierError::Internal(format!("Failed to read knowledge directory: {e}")))?;
+
+    let mut files = Vec::new();
+    while let Some(entry) = entries
+        .next_entry()
+        .await
+        .map_err(|e| CarrierError::Internal(format!("Failed to read entry: {e}")))?
+    {
+        let path = entry.path();
+        if path.extension().map(|e| e == "md").unwrap_or(false) {
+            let Ok(content) = tokio::fs::read_to_string(&path).await else {
+                continue;
+            };
+            // 只认 frontmatter 声明的裁决件；正文双段（场景/裁决）各取首句。
+            let is_ruling = content
+                .lines()
+                .take(6)
+                .any(|l| l.trim_start() == "type: ruling");
+            if !is_ruling {
+                continue;
+            }
+            let name = entry.file_name().to_string_lossy().to_string();
+            let title = extract_knowledge_title(&content).unwrap_or_else(|| name.clone());
+            let pick = |tag: &str| {
+                content
+                    .lines()
+                    .find(|l| l.starts_with(&format!("**{tag}**")))
+                    .map(|l| l[format!("**{tag}**：").len()..].to_string())
+                    .unwrap_or_default()
+            };
+            files.push(format!(
+                "- {}（{}）：{} ⇒ {}",
+                title,
+                name,
+                pick("场景"),
+                pick("裁决")
+            ));
+        }
+    }
+
+    files.sort();
+    if files.is_empty() {
+        Ok("No rulings yet (nothing with type: ruling).".to_string())
+    } else {
+        Ok(files.join("\n"))
+    }
+}
+
 pub async fn knowledge_list(workspace_root: Option<&Path>) -> CarrierResult<String> {
     let root = workspace_root.ok_or(CarrierError::Internal(
         "knowledge_list requires a workspace root".to_string(),
@@ -434,6 +496,8 @@ pub async fn knowledge_extract(
         title: title.to_string(),
         content: content.to_string(),
         scope: "shared".to_string(),
+        kind: "knowledge".to_string(),
+        trigger: None,
     };
     let analysis = lifecycle::evolution::EvolutionAnalysis {
         knowledge: vec![candidate],
