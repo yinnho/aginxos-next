@@ -7,5 +7,8 @@
 mode = "direct"
 host = "127.0.0.1"
 port = 8686
-# 仅回环可及（绑定即门）；ACP 客户端（频道桥）无 authToken 腿。
+# 仅回环可及（127.0.0.1 绑定即门）。桥带 authToken 腿：[[local_clients]]
+# 表铸 principal（token/name/principal 三字段，如 weixin 桥=
+# svc:weixin-bridge），token 真源设备侧 /etc/aginx/env，随桥单元
+# env_file 注入；无 token 的本机匿名客户端仍走 anon（PseudoBound）。
 access = "public"

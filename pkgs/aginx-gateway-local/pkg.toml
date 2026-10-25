@@ -18,13 +18,18 @@
 #   files/bin/，SEED=pkgfiles/<name>/etc/… 原本就按树路径写好。
 # - 单元补 env_file=/etc/aginx/env：ACP prompt 经 agent 条目打
 #   brain，key 住 env——缺这条腿=每回合 Auth 错误。
+# v0.1.3（2026-10-25）：出厂壳注释翻新——桥自此带 authToken 腿
+# （[[local_clients]] token→svc:weixin-bridge，真身随 aginx-gateway
+# v0.2.2 起 [access]/local_clients 在役，壳 exec 真身自动吃到）。
+# 壳与行为零变化，出包只为准时换掉树上过时的「桥无 authToken 腿」
+# 缺省注释（/etc 已存在的在役机不覆写）。
 name = "aginx-gateway-local"
-version = "0.1.2"
+version = "0.1.3"
 summary = "本机 ACP 口：真aginx direct 127.0.0.1:8686（频道桥窄接口对端；名册链回主 gateway）"
 group = "net"
 depends = "aginx-gateway"
 exec = "bin/aginx-gateway-local"
-url = "https://pkgs.aginx.net/aginx-gateway-local/v0.1.2/aginx-gateway-local-v0.1.2-4pc.tar"
+url = "https://pkgs.aginx.net/aginx-gateway-local/v0.1.3/aginx-gateway-local-v0.1.3-4pc.tar"
 
 [service]
 cmd = "/var/bin/aginx-gateway-local"
