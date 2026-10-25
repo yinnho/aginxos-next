@@ -241,11 +241,13 @@ fn write_system_entry(
     let header = "# 由 AginxOS kernel boot 期 ensure_system_entry 自动写——系统本人\n\
                   # 的对外直通条目：agent://<机>.relay.aginx.net/system。刀④-2 换芯\n\
                   # codex（引擎商品化）；人格=home 根 AGENTS.md；CODEX_HOME 钉死\n\
-                  # <home>/.codex（#450）。\n";
-    std::fs::write(
-        dir.join("aginx.toml"),
-        codex_entry_toml(header, name, display, desc, home, home, 900),
-    )
+                  # <home>/.codex（#450）。\n\
+                  # [access] 名册 ACL（安全线 2026-10-25，生态仓 v0.2.1）：system=\n\
+                  # 本机 root shell 面，只许 owner/relay；本腿匿名/客户端 token 拒。\n";
+    let mut body = codex_entry_toml(header, name, display, desc, home, home, 900);
+    // boot 重写无条件覆盖——ACL 必须在模板里，设备侧手改会被洗掉
+    body.push_str("\n[access]\nprincipals = [\"owner\", \"relay\"]\n");
+    std::fs::write(dir.join("aginx.toml"), body)
 }
 
 /// ② workflows.md 行 upsert（按键 `- `name`:` 替换；全册按名排序，重写
@@ -445,6 +447,9 @@ mod tests {
         // #450：CODEX_HOME 钉死 <home>/.codex
         assert!(toml.contains(&format!("CODEX_HOME = \"{}\"", home.join(".codex").display())));
         assert!(!toml.contains("acp"), "system 不再走 carrier acp 桥");
+        // 安全线（2026-10-25）：system 名册 ACL=owner/relay，匿名本腿拒
+        assert!(toml.contains("[access]"));
+        assert!(toml.contains("principals = [\"owner\", \"relay\"]"));
         // upsert 覆盖重写
         write_system_entry(&d, &home, "system", "系统", "改").unwrap();
         let t2 = std::fs::read_to_string(d.join("agents/system/aginx.toml")).unwrap();

@@ -1,4 +1,9 @@
 # aginx-gateway — 对外面守护的包形态（v0.2.0 换真身，2026-09-27 刀1）。
+# v0.2.1（2026-10-25）：安全面 P1-P3 上机（生态仓 4d69574）——principal
+# 贯通+名册 [access] ACL+台账 caller。装机侧随配：敏感注册项
+# （system/claude/codex）设备侧 aginx.toml 加 [access]
+# principals=["owner","relay"]；频道桥/包装 cron 目标（无 [access]）缺省
+# 全放行不受阻。X2 owner 运维腿=relay principal，不在门外。
 # 裁决：aginx/agc/aginxbrowser/aginxbrain 四项目独立专人开发，本仓只
 # 装配不仿制——v0.1.x 的 crates/gateway 仿制品退役（刀4 删源）。真身=
 # 生态仓 ~/Documents/aginx/aginx（HEAD 5658af7）cargo zigbuild 的
@@ -23,11 +28,11 @@
 # depends=aginx-secretd 只保安装序；启动序由 requires_weak 延到 secretd
 # ready（弱依赖，secretd 后死不拖累）。
 name = "aginx-gateway"
-version = "0.2.0"
+version = "0.2.1"
 summary = "对外面守护（真 aginx）：8443 relay 长连、private 默认不对外、pair/auth 凭据面"
 group = "net"
 depends = "aginx-secretd"
-url = "https://pkgs.aginx.net/aginx-gateway/v0.2.0/aginx-gateway-v0.2.0-4pc.tar"
+url = "https://pkgs.aginx.net/aginx-gateway/v0.2.1/aginx-gateway-v0.2.1-4pc.tar"
 exec = "bin/aginx-gateway"
 
 [service]
