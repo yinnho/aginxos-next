@@ -86,6 +86,11 @@ aginx-mem      https://pkgs.aginx.net/aginx-mem/v0.2.0/aginx-mem-v0.2.0-4pc.tar 
 # grok is optional since M23 (选装 tier): an agent CLI like codex, but
 # self-built and not needed for the phone's own loop — pick it via "+".
 grok           https://pkgs.aginx.net/grok/v1.0.41/grok-v1.0.41-aarch64-unknown-linux-musl 7c0b8c973af6a78e2037f19ed93033471b8c5e722f9ff04b86b092e066e60d74 opt
+# aginx-proxy (2026-09-26 redfin 首装；2026-10-26 上架)：stunnel client
+# 树包 → 本机 socks5 127.0.0.1:8800，agent 机境外腿（grok/aginxbrowser
+# 穿行）。conf/PSK 不进包——设备侧 /etc/stunnel/ 是真源，缺 conf 启动
+# 即退=预期，先写 conf 再装。
+aginx-proxy    https://pkgs.aginx.net/aginx-proxy/v0.1.1/aginx-proxy-v0.1.1-4pc.tar f4138b25e8daed06acdfd413f6241f03f2db78dedf76ad168248459e5a0872b0 opt 0.1.1
 # git (L0 缺口刀C, 2026-09-12) — Alpine v3.22 aarch64 apk 闭包整树
 # （route D）：git 2.49.1 全功能 + musl 1.2.5 loader + https 传输闭包
 # （libcurl/openssl…，CA 走镜像烤入的 /etc/ssl/certs 绝对路径）。
