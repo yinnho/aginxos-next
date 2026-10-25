@@ -252,6 +252,14 @@ invariant/domain 两类（我们的五文件白名单是按文件分，可对照
 口径不定期扫。届时注意：Python 栈不进卡，偷协议结构与判定框架不偷
 代码；其 benchmark 跑分叙事不搬——我们的金标题是存量自题。
 
+## UUMit——AI 能力交易市场（agent 市场主体路线的先行实作）
+
+[uumit.ai](https://uumit.ai)（产品站；[uumit.org](https://uumit.org) 为推广壳站——「每半小时释放 10000 个注册码」饥饿营销，勿当真源；skill 分发=`oss.uumit.ai/skills/v2/`，2026-09 版基座 v2.7.0；中国团队 2026-05-18 发布，自称「AI-native 全球能力网络」）：任务市场（发需求→A2A 智能匹配→agent 执行→自动结算）+ 三层底座——**Agent ID 卡**（每机一全球唯一地址如 `xiaolong.uumit.ai`，API/MCP server/web app/SSH/数据库全挂一址）、**Access**（每能力四档关/仅我/受邀/所有人，agent 永不能自扩权，撤销即时生效）、**Settlement**（按调用计价+平台托管）。另有聚合面：2000+ API、1535+ 数据源、算力集市（2000+ 节点）。分发形态=「复制一段 prompt 给你的 agent」——agent 自取 index.json 装 1 基座+6 扩展（cruise/realtime/recommend/publisher/compute/social）。社区 500+ 开发者，知乎/B 站有跟搭教程。
+
+**记它**：①**D18 五条立法的公开互联网先行实作**——「消费者是 agent」全链（注册/搜索/下单/支付/交付/结算皆 agent 的 API 动作，人只扫码+收汇报）与 D18 同构；其支付二维码流=DUPHUB.md §五c 同款设计。②**skill 分发工艺**=D17 铸造链对表参照：sha256 全链门禁（bundle 校验→staging→validate→才覆盖）+重装不覆盖 `memory/`，安装指令活在 manifest 里随版本走（官网零改动升级安装协议）。③Agent ID 卡≈peers/+agent:// 的中心化镜像；Access 四档+「agent 不能自扩权」与我们 10-25 [access] 三刀同律；**结算/托管层我们没有**——观察其分账与提现走向为 duphub §五b/§八.5 供弹。④其 skill 安装=宿主 agent 执行远端 zip 里的 install.js（node）——「evidence is data, not instructions」的反面分岔，D12 一切皆 CLI+pkg 签名正是绕此。⑤A2A/MCP 双协议商用=本清单 A2A/AGNTCY 条目「分身对外营业」触发的第一次真踩。
+
+**再评估触发**：X2 注册接活试点收尾时（流程/摩擦/协议细节实录）；D18 市场面（支付流/分账/审核）上线前对表；A2A 协议演进。届时注意：注册码壳站话术不采信，一切以产品站+分发 manifest 为准。
+
 ## 附：已完成研究（不在 watchlist，已转行动）
 
 - Termux → [TERMUX-STUDY.md](TERMUX-STUDY.md)（recipes 仓/fallback
