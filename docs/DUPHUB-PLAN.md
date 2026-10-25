@@ -16,7 +16,7 @@ diting（执行手）、`aginxos-next/crates/dup`（VCS CLI，本批不动）。
 | diting | flow_install 走 dup 协议 ✓（kind 过滤用旧名 `agx-flow`）；/open + qr 面板模板 ✓；tmpl.rs 两层模板 ✓ | kind 对齐、付费 flow 的 purchase 门接入、panel-template 进货、`diting update` |
 | diting activation.rs | 2026-10-25 上午按自造 7 端点写的（未进 main） | 按真实 hub 端点重写（§批次 3） |
 
-## 批次 1 —— hub：kind 五分 + agent 可购买（最小可上线）
+## 批次 1 —— hub：kind 五分 + agent 可购买（最小可上线）✅ 已落地（hub bf93740，2026-10-25；验收全绿另修两存量 bug：template.json 静默回退 400 化、serial INT4 列型 BIGINT 对齐）
 
 **改动面：export.rs 一行 + handlers.rs purchase/错误体 + 一个 migration。**
 
