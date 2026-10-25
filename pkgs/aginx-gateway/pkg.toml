@@ -1,4 +1,9 @@
 # aginx-gateway — 对外面守护的包形态（v0.2.0 换真身，2026-09-27 刀1）。
+# v0.2.2（2026-10-25 部署窗）：安全三刀+token hash 化全量上机（生态仓
+# 350595b）——刀A PseudoBound/认领制 device_secret/刀B local_clients/
+# 刀C TLS+fail-closed+4MB、85685cc auth/binding 落盘只存 hash（存量明
+# 文加载自动折算迁移）。relay 腿换 [relay] device_secret（v2 认领制；
+# relay_secret 旧形兼容读）。
 # v0.2.1（2026-10-25）：安全面 P1-P3 上机（生态仓 4d69574）——principal
 # 贯通+名册 [access] ACL+台账 caller。装机侧随配：敏感注册项
 # （system/claude/codex）设备侧 aginx.toml 加 [access]
@@ -28,11 +33,11 @@
 # depends=aginx-secretd 只保安装序；启动序由 requires_weak 延到 secretd
 # ready（弱依赖，secretd 后死不拖累）。
 name = "aginx-gateway"
-version = "0.2.1"
+version = "0.2.2"
 summary = "对外面守护（真 aginx）：8443 relay 长连、private 默认不对外、pair/auth 凭据面"
 group = "net"
 depends = "aginx-secretd"
-url = "https://pkgs.aginx.net/aginx-gateway/v0.2.1/aginx-gateway-v0.2.1-4pc.tar"
+url = "https://pkgs.aginx.net/aginx-gateway/v0.2.2/aginx-gateway-v0.2.2-4pc.tar"
 exec = "bin/aginx-gateway"
 
 [service]
