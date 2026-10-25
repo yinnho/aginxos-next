@@ -535,12 +535,14 @@ case "${PKG}" in
     # sha256 逐件钉死（TOFU 于下载日）。conf/PSK 不进包——设备侧
     # /etc/stunnel/ 是真源（缺 conf 启动即退=预期，先写后装）。
     APK_DIR="${ROOT}/out/apk-cache"
-    ALPINE_MAIN="https://dl-cdn.alpinelinux.org/alpine/v3.22/main/aarch64"
-    ALPINE_COMMUNITY="https://dl-cdn.alpinelinux.org/alpine/v3.22/community/aarch64"
+    # 源走 tuna 镜像（jq/bash 同例：镜像与 dl-cdn 同源同 sha，dl-cdn
+    # 当夜连不通；sha256 钉表不变）。
+    ALPINE_MAIN="https://mirrors.tuna.tsinghua.edu.cn/alpine/v3.22/main/aarch64"
+    ALPINE_COMMUNITY="https://mirrors.tuna.tsinghua.edu.cn/alpine/v3.22/community/aarch64"
     PROXY_APKS="
-      musl-1.2.5-r12:ac281d1e7f9e9c447c51e309317b975f48be6edaf3ab91ae73b959cf86703782
-      libssl3-3.5.8-r0:2b175c982f9ff9a80fc88fa587f6db0ae1c58eef4b3f7fe69e8f066be9ff1090
-      libcrypto3-3.5.8-r0:094c5816644ade889f74387e8d91aad89dc9a05eda150494e3f91b80ffc15460
+      musl-1.2.5-r13:d616c430bcbe0bf452b7f6ea2669f2cad14e85644a7599f4f495115d021742ef
+      libssl3-3.5.9-r0:338c9f6154582b4b76455a59f95538bcea8df039c5c72916dd2d8d0d844c9583
+      libcrypto3-3.5.9-r0:ede2ef7eca3b65a42e902aaf7890f9c5647dca0c55123a817179ad9f3bc6ef24
       stunnel-5.75-r0:deae6ff3fe03e6a696bbefd9a7ba01062067625cc147c9fedb3f8354ab4c422e
     "
     mkdir -p "${APK_DIR}" "${STAGE}/files"
