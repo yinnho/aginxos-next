@@ -29,6 +29,9 @@ pub const DEFAULT_TIMEOUT_SECS: u64 = 1200;
 pub struct AcpClient {
     pub addr: String,
     pub timeout: Duration,
+    /// 机内服务凭证（刀B）：网关 [[local_clients]] 表的 token——
+    /// initialize 时经 _meta.authToken 上呈，principal=声明式身份。
+    pub token: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -184,6 +187,10 @@ impl AcpClient {
         Self {
             addr: std::env::var("AGINX_CHANNELS_ACP_ADDR")
                 .unwrap_or_else(|_| DEFAULT_ADDR.to_string()),
+            token: std::env::var("AGINX_CHANNELS_ACP_TOKEN")
+                .ok()
+                .map(|t| t.trim().to_string())
+                .filter(|t| !t.is_empty()),
             timeout: Duration::from_secs(timeout),
         }
     }
@@ -203,15 +210,20 @@ impl AcpClient {
         stream.set_read_timeout(Some(connect_timeout)).ok();
         stream.set_write_timeout(Some(connect_timeout)).ok();
 
-        // initialize
+        // initialize（带机内服务凭证时经 _meta.authToken 上呈——网关
+        // local_clients 表换 Authorized+声明式 principal，不再是匿名 PseudoBound）
+        let mut init_params = serde_json::json!({
+            "protocolVersion": "0.1.0",
+            "clientInfo": { "name": "aginx-channels", "version": env!("CARGO_PKG_VERSION") },
+        });
+        if let Some(ref token) = self.token {
+            init_params["_meta"] = serde_json::json!({ "authToken": token });
+        }
         let init = serde_json::json!({
             "jsonrpc": "2.0",
             "id": 1,
             "method": "initialize",
-            "params": {
-                "protocolVersion": "0.1.0",
-                "clientInfo": { "name": "aginx-channels", "version": env!("CARGO_PKG_VERSION") },
-            },
+            "params": init_params,
         });
         self.send_line(&mut stream, &init)?;
         self.wait_response(&mut stream, 1, deadline, None)?; // 无 chunk 期

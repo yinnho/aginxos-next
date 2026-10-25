@@ -41,7 +41,7 @@ fn main() {
                        aginx-channels send <名> <uid> <text>\n\
                        aginx-channels send <名> <uid> --image|--video|--file <path>\n\
                  词表频道：weixin。数据家 /home/channels/<名>/（AGINX_HOME 下）。\n\
-                 环境变量：AGINX_HOME（默认 /home）、AGINX_CHANNELS_ACP_ADDR（默认 {addr}）、AGINX_CHANNELS_ACP_TIMEOUT_SECS（默认 {tmo}）",
+                 环境变量：AGINX_HOME（默认 /home）、AGINX_CHANNELS_ACP_ADDR（默认 {addr}）、AGINX_CHANNELS_ACP_TIMEOUT_SECS（默认 {tmo}）、AGINX_CHANNELS_ACP_TOKEN（机内服务凭证，配网关 [[local_clients]] 表）",
                  ver = env!("CARGO_PKG_VERSION"),
                  addr = acp::DEFAULT_ADDR,
                  tmo = acp::DEFAULT_TIMEOUT_SECS,
