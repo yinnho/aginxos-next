@@ -73,3 +73,12 @@ base64(hex ASCII)，`mid_size`/`video_size`=密文长）。
 ACP 回信媒体（窄扩展）：引擎可用 content 块 `{type:image,path:/…}` 或
 正文标记 `[[aginx-media:image|/abs/path]]`；桥剥离标记后 CDN 上传发送。
 无媒体形状时与 v0.1.4 相同（纯文本）。
+
+## 入站文件落盘（v0.1.8）
+
+iLink 协议腿收到文件消息就拉本体（CDN 下载+AES 解密，走 channel.rs
+`ITEM_TYPE_FILE`）。v0.1 的桥把字节扔了只留文件名；v0.1.8 起桥先落盘
+`{AGINX_HOME}/files/<净化名>`（basename 化防路径逃逸；同名覆写
+new-wins）再进分身回合，分身收到的文本是「收到文件 X（N B），已存
+/home/files/X」，直接拿路径干活。CDN 下载失败或文件名不可用=如实
+回「本体未落盘」。图片/语音本体仍弃（后续刀）。

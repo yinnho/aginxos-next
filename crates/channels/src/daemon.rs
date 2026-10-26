@@ -13,7 +13,9 @@
 //!    新扫码，换绑同路拾取——文件字段即真源）。
 //! 3. 桥循环：PluginMessage → 选 agent（账号 bind_agent 字段 →
 //!    channel.toml default_agent → "system"）→ 每发信人一个串行锁
-//!    （跨发信人并行；ACP 回合可能数分钟，不能全局串）。
+//!    （跨发信人并行；ACP 回合可能数分钟，不能全局串）。入站文件
+//!    本体（协议腿已从 CDN 拉下）先落 `{AGINX_HOME}/files/` 再进桥
+//!    （v0.1.8 前桥只留文件名，data 字节当场扔）。
 //!
 //! gw.json：`senders/<peer>/gw.json` {agent, session_id}——该发信人当前
 //! 对话挂在哪个 agent、哪条引擎会话上；换绑（bind 字段改了）后第一条
@@ -212,8 +214,17 @@ fn bridge_one(
         PluginContent::Text(t) => t.clone(),
         PluginContent::Voice { .. } => "（语音消息：本频道 v0.1 只接文字）".to_string(),
         PluginContent::Image { .. } => "（图片消息：本频道 v0.1 只接文字）".to_string(),
-        PluginContent::File { filename, .. } => {
-            format!("（收到文件 {filename}：本频道 v0.1 只接文字）")
+        PluginContent::File { filename, data, .. } => {
+            match save_inbound_file(filename, data.as_deref()) {
+                Some(path) => format!(
+                    "收到文件 {filename}（{} B），已存 {}",
+                    data.as_deref().map_or(0, <[u8]>::len),
+                    path.display()
+                ),
+                None => format!(
+                    "（收到文件 {filename}：本体未落盘——CDN 下载失败或文件名不可用，请重发）"
+                ),
+            }
         }
         PluginContent::Video { .. } => "（视频消息：本频道 v0.1 只接文字）".to_string(),
         other => format!("（暂不支持的消息类型 {other:?}）"),
@@ -282,6 +293,74 @@ fn bridge_one(
 
 fn gw_json_path(root: &Path, sender: &str) -> PathBuf {
     root.join("senders").join(sender).join("gw.json")
+}
+
+/// 频道来的文件名净化：basename 化（`/` 与 `\` 都算分隔），空/
+/// `.`/`..` 拒收——频道字符串不可信，落盘前必须过这一关。
+fn sanitize_filename(raw: &str) -> Option<&str> {
+    let name = raw.rsplit(['/', '\\']).next()?.trim();
+    (!name.is_empty() && name != "." && name != "..").then_some(name)
+}
+
+/// 入站文件本体落盘。iLink 协议腿早就会拉本体（channel.rs 的
+/// ITEM_TYPE_FILE：CDN 下载+AES 解密，5528B/200ms 实证），v0.1 的
+/// 桥把 data 字节扔了只留文件名——本函数补上落盘：
+/// `{AGINX_HOME}/files/<净化名>`，同名新件覆写（new-wins，同迁移律）。
+/// 返回落盘路径；data 缺失（CDN 下载失败）或名字不可用 = None，
+/// 调用方如实转告发信人。
+fn save_inbound_file(filename: &str, data: Option<&[u8]>) -> Option<PathBuf> {
+    save_inbound_file_at(&crate::vocab::home_dir(), filename, data)
+}
+
+fn save_inbound_file_at(base: &Path, filename: &str, data: Option<&[u8]>) -> Option<PathBuf> {
+    let bytes = data?;
+    let name = sanitize_filename(filename)?;
+    let dir = base.join("files");
+    let path = dir.join(name);
+    match std::fs::create_dir_all(&dir).and_then(|_| std::fs::write(&path, bytes)) {
+        Ok(()) => {
+            info!(path = %path.display(), size = bytes.len(), "inbound file saved");
+            Some(path)
+        }
+        Err(e) => {
+            warn!(path = %path.display(), error = %e, "inbound file save failed");
+            None
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn sanitize_keeps_basename_only() {
+        assert_eq!(sanitize_filename("report.md"), Some("report.md"));
+        assert_eq!(sanitize_filename("/etc/passwd"), Some("passwd"));
+        assert_eq!(sanitize_filename("..\\..\\evil.txt"), Some("evil.txt"));
+        assert_eq!(sanitize_filename("  spaced.md "), Some("spaced.md"));
+        assert_eq!(sanitize_filename(""), None);
+        assert_eq!(sanitize_filename("."), None);
+        assert_eq!(sanitize_filename(".."), None);
+        assert_eq!(sanitize_filename("a/b/"), None);
+    }
+
+    #[test]
+    fn save_inbound_file_lands_bytes() {
+        let base = std::env::temp_dir().join(format!("aginx-ch-files-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        let p = save_inbound_file_at(&base, "../../../etc/passwd", Some(b"body".as_slice()))
+            .expect("save ok");
+        assert_eq!(p, base.join("files").join("passwd"));
+        assert_eq!(std::fs::read(&p).unwrap(), b"body");
+        // 同名覆写 new-wins
+        save_inbound_file_at(&base, "/etc/passwd", Some(b"new".as_slice())).unwrap();
+        assert_eq!(std::fs::read(&p).unwrap(), b"new");
+        // CDN 下载失败（data=None）不落盘；坏名字不落盘
+        assert!(save_inbound_file_at(&base, "x.md", None).is_none());
+        assert!(save_inbound_file_at(&base, "..", Some(b"y".as_slice())).is_none());
+        assert!(std::fs::remove_dir_all(&base).is_ok());
+    }
 }
 
 fn read_gw(path: &Path) -> GwState {
