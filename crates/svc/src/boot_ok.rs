@@ -210,6 +210,17 @@ fn ab_disks() -> Vec<String> {
             }
         }
     }
+    if disks.is_empty() {
+        // Raw-boot machines (mainline, no Android by-name tree): scan the
+        // UFS LUN set directly — Gpt::open's EFI PART + CRC gates make this
+        // a no-op on non-GPT disks. // D14-exempt: provenance (enchilada, 2026-10-26)
+        for c in b'a'..=b'z' {
+            let dev = format!("/dev/sd{}", c as char);
+            if std::fs::metadata(&dev).is_ok() {
+                disks.push(dev);
+            }
+        }
+    }
     disks.sort();
     disks
 }

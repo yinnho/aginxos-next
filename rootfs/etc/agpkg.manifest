@@ -130,3 +130,8 @@ jq             https://pkgs.aginx.net/jq/v1.8.2/jq-v1.8.2-4pc.tar a80611d3f52c8b
 # deps=bash：Bash 工具腿硬找 bash（busybox 无 applet），随闭包带入。
 bash           https://pkgs.aginx.net/bash/v5.2.37/bash-v5.2.37-4pc.tar c7cf6faa6f88895a6b36c50bc82aaf1992a18576d2cf27cff3940a50b3c1d75b opt 5.2.37
 claude         https://pkgs.aginx.net/claude/v2.1.310/claude-v2.1.310-4pc.tar a33643c2b08a8b1bb2513cf88b99213b08b13505ac5df812285aae38ae489bdd opt 2.1.310 bash
+# aginx-boot-ok（2026-10-26 首上架）：A/B 槽 successful 标记器，债 #346
+# 刀——L0 无标记器则 ABL 每靴排水，7 烧尽回退另一槽（#548 实录）。
+# oneshot_async 等 done ok 后写 GPT attrs（Qualcomm r3-0.6 位法）。
+# 无 A/B 的板（X2）不装；redfin 走烤内 rcS 路径不装；enchilada 首用户。
+aginx-boot-ok  https://pkgs.aginx.net/aginx-boot-ok/v0.1.0/aginx-boot-ok-v0.1.0-4pc.tar 1cac823ae9c623bd7b2eaecccbc7dd4470ddeee3743d078016d770761ab138aa opt 0.1.0

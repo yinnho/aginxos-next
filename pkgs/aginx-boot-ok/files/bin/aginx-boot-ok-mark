@@ -1,0 +1,11 @@
+#!/bin/sh
+# aginx:summary=A/B 槽标记 wrapper——等 boot.state done ok 后 exec 标记器
+# aginx:pkg=aginx-boot-ok
+# 等 done ok（同 rcS redfin 块：最多 150×2s），再把当前槽标 successful。
+n=0
+while [ $n -lt 150 ]; do
+  grep -q '^done ok' /run/boot.state 2>/dev/null && break
+  sleep 2
+  n=$((n+1))
+done
+exec /var/bin/aginx-boot-ok

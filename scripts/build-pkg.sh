@@ -54,6 +54,11 @@
 #                       — redfin qpnp-qg 用户态 FG（crates/fg musl）；
 #                         unlock/hold/run + [service]；服务器板可不装
 #                         （2026-10-12 首包 v0.1.0）
+#   A/B 标记包  aginx-boot-ok
+#                       — 债 #346 刀（2026-10-26）：GPT attrs successful
+#                         标记器（crates/svc）+ 等 done ok wrapper，
+#                         oneshot_async 单元；enchilada 首用户（redfin
+#                         走烤内 rcS 路径不装，无 A/B 的板不装）
 #
 # 产物 out/pkgs/<name>-v<ver>-4pc.tar + .sha256（裸 hex），尾行打一行
 # manifest 片段（name url sha opt version [deps]）——L0 清单组装（刀4）
@@ -662,8 +667,22 @@ case "${PKG}" in
       || { echo "FATAL: aginx-fg 非 musl 静态（$(file "${STAGE}/files/bin/aginx-fg")）" >&2; exit 1; }
     MEMBERS="pkg.toml SKILL.md files"
     ;;
+  aginx-boot-ok)
+    # A/B 标记包（2026-10-26，债 #346 刀）：crates/svc 的 aginx-boot-ok
+    # musl 静态 + 等 done ok 的 wrapper 面；oneshot_async 单元。无 A/B
+    # 的板（X2）不装；redfin 走烤内 rcS 路径不装。
+    echo "==> zigbuild aginx-svc（musl，缓存则秒过）"
+    (cd "${ROOT}" && cargo zigbuild --release --target aarch64-unknown-linux-musl -p aginx-svc)
+    mkdir -p "${STAGE}/files/bin"
+    install -m 755 "${TARGET_DIR}/aginx-boot-ok" "${STAGE}/files/bin/aginx-boot-ok"
+    file "${STAGE}/files/bin/aginx-boot-ok" | grep -q "statically linked" \
+      || { echo "FATAL: aginx-boot-ok 非 musl 静态（$(file "${STAGE}/files/bin/aginx-boot-ok")）" >&2; exit 1; }
+    install -m 755 "${ROOT}/pkgs/aginx-boot-ok/files/bin/aginx-boot-ok-mark" \
+      "${STAGE}/files/bin/aginx-boot-ok-mark"
+    MEMBERS="pkg.toml SKILL.md files"
+    ;;
   *)
-    echo "FATAL: 未知包名 ${PKG}（两裸包/换芯树包/两树包/工具双包/三树包/刀F三包 zigbuild / 上游树包 git / sqlite3 / aginx-proxy / 频道两包 / aginxresearch / morning-report / aginx-fg）" >&2
+    echo "FATAL: 未知包名 ${PKG}（两裸包/换芯树包/两树包/工具双包/三树包/刀F三包 zigbuild / 上游树包 git / sqlite3 / aginx-proxy / 频道两包 / aginxresearch / morning-report / aginx-fg / aginx-boot-ok）" >&2
     exit 1
     ;;
 esac
