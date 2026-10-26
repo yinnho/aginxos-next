@@ -2,9 +2,9 @@
 
 A/B 槽 successful 标记器（可选包，债 #346 刀，2026-10-26）。ABL 每靴
 排水一条命，L0 无标记器则 7 靴烧尽回退另一槽（enchilada #548 实录）。
-本包装完由 svcd 拉起 oneshot_async：等 `/run/boot.state` 出 `done ok`
-（≤300s），把**当前槽**标 successful（succ+满 tries+ACTIVE，清
-unbootable）。
+本包装完由 svcd 拉起 oneshot_async：单元 args 内嵌等 `/run/boot.state`
+出 `done ok`（≤300s）的循环，再把**当前槽**标 successful（succ+满
+tries+ACTIVE，清 unbootable）。
 
 - `aginx-boot-ok` — 标记当前槽（单元/wrapper 调）
 - `aginx-boot-ok status` — 只读倒 GPT slot 表

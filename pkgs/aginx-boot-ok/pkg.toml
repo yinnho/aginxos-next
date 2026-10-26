@@ -1,19 +1,23 @@
 # aginx-boot-ok — A/B 槽 successful 标记（可选包，2026-10-26，债 #346 刀）。
 # L0 无标记器 → ABL 每靴排水一条命，7 烧尽回退另一槽（10-26 enchilada
-# #548 实录）。本包 = 标记器 + 等 done ok 的 oneshot_async 单元（同 rcS
-# redfin 块的 150×2s 等待）。redfin 走烤内 rcS 路径不装；无 A/B 的板
-# （X2）不装；第一用户=enchilada（boot_a/boot_b 在 sdf GPT attrs，
+# #548 实录）。本包 = 标记器 + oneshot_async 单元（单元内嵌等 done ok 的
+# 150×2s 循环，同 rcS redfin 块）。redfin 走烤内 rcS 路径不装；无 A/B
+# 的板（X2）不装；第一用户=enchilada（boot_a/boot_b 在 sdf GPT attrs，
 # Qualcomm r3-0.6 位法 10-26 活体定谳——rcS 旧注「AOSP 位法」已被推翻，
 # 以 #549 收据为准）。
 # v0.1.0（2026-10-26）：boot_ok.rs 补 by-name 缺失时 sd* 直扫（mainline
-# 无 /dev/block/by-name）。
+# 无 /dev/block/by-name）。**废**：单元 cmd 指 wrapper face，旧代安装器
+# 只给 exec 造 face → svcd 永判 absent。
+# v0.1.1（2026-10-26）：去 wrapper 文件，等待逻辑内嵌单元 args（cmd=
+# /bin/sh，任何机都存在）。
 name = "aginx-boot-ok"
-version = "0.1.0"
+version = "0.1.1"
 summary = "A/B 槽 successful 标记器：等 done ok 后写 GPT attrs，停 ABL 排水（A/B 机型可选）"
 group = "boot"
-url = "https://pkgs.aginx.net/aginx-boot-ok/v0.1.0/aginx-boot-ok-v0.1.0-4pc.tar"
+url = "https://pkgs.aginx.net/aginx-boot-ok/v0.1.1/aginx-boot-ok-v0.1.1-4pc.tar"
 exec = "bin/aginx-boot-ok"
 
 [service]
-cmd = "/var/bin/aginx-boot-ok-mark"
+cmd = "/bin/sh"
+args = ["-c", "n=0; while [ $n -lt 150 ]; do grep -q '^done ok' /run/boot.state 2>/dev/null && break; sleep 2; n=$((n+1)); done; exec /var/bin/aginx-boot-ok"]
 type = "oneshot_async"

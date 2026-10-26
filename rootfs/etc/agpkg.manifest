@@ -134,4 +134,6 @@ claude         https://pkgs.aginx.net/claude/v2.1.310/claude-v2.1.310-4pc.tar a3
 # 刀——L0 无标记器则 ABL 每靴排水，7 烧尽回退另一槽（#548 实录）。
 # oneshot_async 等 done ok 后写 GPT attrs（Qualcomm r3-0.6 位法）。
 # 无 A/B 的板（X2）不装；redfin 走烤内 rcS 路径不装；enchilada 首用户。
-aginx-boot-ok  https://pkgs.aginx.net/aginx-boot-ok/v0.1.0/aginx-boot-ok-v0.1.0-4pc.tar 1cac823ae9c623bd7b2eaecccbc7dd4470ddeee3743d078016d770761ab138aa opt 0.1.0
+# v0.1.1：单元 cmd 改 /bin/sh+内嵌等待（v0.1.0 的 wrapper face 旧代
+# 安装器不造 → svcd absent）。
+aginx-boot-ok  https://pkgs.aginx.net/aginx-boot-ok/v0.1.1/aginx-boot-ok-v0.1.1-4pc.tar 62001cb88210d7c716439f84470b1ca646e1f5bff9c5dd3e4e78a8be1dc7b43d opt 0.1.1

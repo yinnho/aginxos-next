@@ -669,7 +669,8 @@ case "${PKG}" in
     ;;
   aginx-boot-ok)
     # A/B 标记包（2026-10-26，债 #346 刀）：crates/svc 的 aginx-boot-ok
-    # musl 静态 + 等 done ok 的 wrapper 面；oneshot_async 单元。无 A/B
+    # musl 静态；等待逻辑内嵌单元 args（v0.1.1——wrapper face 旧代安装
+    # 器不造，cmd 指 /bin/sh 才不 absent）。oneshot_async 单元。无 A/B
     # 的板（X2）不装；redfin 走烤内 rcS 路径不装。
     echo "==> zigbuild aginx-svc（musl，缓存则秒过）"
     (cd "${ROOT}" && cargo zigbuild --release --target aarch64-unknown-linux-musl -p aginx-svc)
@@ -677,8 +678,6 @@ case "${PKG}" in
     install -m 755 "${TARGET_DIR}/aginx-boot-ok" "${STAGE}/files/bin/aginx-boot-ok"
     file "${STAGE}/files/bin/aginx-boot-ok" | grep -q "statically linked" \
       || { echo "FATAL: aginx-boot-ok 非 musl 静态（$(file "${STAGE}/files/bin/aginx-boot-ok")）" >&2; exit 1; }
-    install -m 755 "${ROOT}/pkgs/aginx-boot-ok/files/bin/aginx-boot-ok-mark" \
-      "${STAGE}/files/bin/aginx-boot-ok-mark"
     MEMBERS="pkg.toml SKILL.md files"
     ;;
   *)
