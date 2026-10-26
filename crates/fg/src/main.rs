@@ -322,26 +322,39 @@ fn cmd_run(args: &[String]) -> ExitCode {
     let seed = match seed_soco_raw() {
         Ok(s) => s,
         Err(FgError::SocForbidden { .. }) => {
-            // Welded-0 qg: self-heal on live evidence, else refuse as before.
-            match recover_from_zero(&dev_path) {
-                Ok(vbat) => {
-                    eprintln!(
-                        "aginx-fg run: zero-recovery: fg_reset + wrote canonical {RECOVER_SOCO} (vbat={vbat}uV)"
-                    );
-                    thread::sleep(Duration::from_secs(RECOVER_RESET_WAIT_SECS));
-                    match seed_soco_raw() {
-                        Ok(s) => s,
-                        Err(e) => {
-                            eprintln!("aginx-fg run: refusing start after zero-recovery: {e}");
-                            return ExitCode::from(3);
+            // Welded-0 qg: self-heal on live evidence. While the evidence
+            // is incomplete stay resident and re-probe — exiting here burns
+            // svcd's 5-crash breaker mid-charge, leaving nobody to write
+            // the recovery when the gate finally opens at Full/Taper.
+            let seed = loop {
+                match recover_from_zero(&dev_path) {
+                    Ok(vbat) => {
+                        eprintln!(
+                            "aginx-fg run: zero-recovery: fg_reset + wrote canonical {RECOVER_SOCO} (vbat={vbat}uV)"
+                        );
+                        thread::sleep(Duration::from_secs(RECOVER_RESET_WAIT_SECS));
+                        match seed_soco_raw() {
+                            Ok(s) => break s,
+                            Err(e) => {
+                                eprintln!("aginx-fg run: refusing start after zero-recovery: {e}");
+                                return ExitCode::from(3);
+                            }
                         }
                     }
+                    Err(e @ FgError::RecoverRefused { .. }) => {
+                        eprintln!(
+                            "aginx-fg run: zero-recovery gate closed, resident wait {0}s ({e})",
+                            ba.interval_secs
+                        );
+                        thread::sleep(Duration::from_secs(ba.interval_secs));
+                    }
+                    Err(e) => {
+                        eprintln!("aginx-fg run: refusing start: {e}");
+                        return ExitCode::from(3);
+                    }
                 }
-                Err(e) => {
-                    eprintln!("aginx-fg run: refusing start: {e}");
-                    return ExitCode::from(3);
-                }
-            }
+            };
+            seed
         }
         Err(e) => {
             eprintln!("aginx-fg run: refusing start: {e}");

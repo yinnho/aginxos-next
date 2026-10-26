@@ -1,13 +1,17 @@
 # aginx-fg — redfin qpnp-qg 用户态电量计（可选包，2026-10-12）。
 # L0 无 stock FG daemon → msoc 冻结；本包补 unlock/hold/run 面。
-# 服务器板（无 /dev/qg）可不装。face /var/bin/aginx-fg；[service]
+# 服务器板（无 /dev/qg）可不装。
+# v0.1.3（2026-10-26）：run 模式零恢复门拒改常驻等待（每 interval 重探）
+# ——旧版门拒即 exit，svcd 五撞断路器躺死，充到 Taper/Full 时无人写回
+# （10-26 redfin 二次深放实录 #546）。真实错误照旧退出。
+# face /var/bin/aginx-fg；[service]
 # 常驻 hold/run（库仑积分未完成前 = 周期复戳 SYS/CC，防掉电后无写者）。
 # 二进制真源 crates/fg；产品面只 Rust。
 name = "aginx-fg"
-version = "0.1.2"
+version = "0.1.3"
 summary = "qpnp-qg 用户态 FG：144B udata unlock + hold/run daemon（redfin 可选）"
 group = "power"
-url = "https://pkgs.aginx.net/aginx-fg/v0.1.2/aginx-fg-v0.1.2-4pc.tar"
+url = "https://pkgs.aginx.net/aginx-fg/v0.1.3/aginx-fg-v0.1.3-4pc.tar"
 exec = "bin/aginx-fg"
 
 [service]
